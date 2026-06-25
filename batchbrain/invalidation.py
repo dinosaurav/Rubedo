@@ -62,7 +62,8 @@ def invalidate(selection: Selection, reason: str) -> dict:
             
             return {
                 "run_id": run_id,
-                "invalidated_count": invalidated_count
+                "invalidated_count": invalidated_count,
+                "materialization_ids": mat_ids
             }
         except Exception as e:
             run.status = "failed"
