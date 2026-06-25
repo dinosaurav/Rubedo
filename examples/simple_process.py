@@ -25,15 +25,12 @@ def count_lines(path: str) -> ProcessResult:
     )
 
 if __name__ == "__main__":
-    input_dir = os.path.join(os.path.dirname(__file__), "input")
-    
-    summary = process(
-        folder=input_dir,
-        fn=count_lines,
-        code_version="count-lines-v2",
-        workers=4,
+    from batchbrain.processor_runner import run_processor
+    summary = run_processor(
+        "count-lines",
+        inputs={"min_lines": 0, "include_text_preview": False},
     )
-    print(f"Run {summary.run_id} finished with status: {summary.status}")
+    print(f"Run {summary.run_id} finished")
     print(f"Created: {summary.created_count}")
     print(f"Reused: {summary.reused_count}")
     print(f"Failed: {summary.failed_count}")

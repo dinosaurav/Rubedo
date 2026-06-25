@@ -41,3 +41,14 @@ def count_lines(path: str, inputs: CountLinesInputs) -> ProcessResult:
         },
         metadata=metadata,
     )
+
+if __name__ == "__main__":
+    from batchbrain.processor_runner import run_processor
+    summary = run_processor(
+        "count-lines",
+        inputs={"min_lines": 0, "include_text_preview": False},
+    )
+    print("\nScript Wrapper Completed.")
+    print(f"Run ID: {summary.run_id}")
+    print(f"Total processed: {summary.created_count + summary.reused_count + summary.failed_count}")
+    print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")

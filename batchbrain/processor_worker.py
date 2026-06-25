@@ -25,37 +25,15 @@ def run_worker(execution_id: str):
         workers_override = req.workers_override
         
     try:
-        spec = get_processor(processor_id)
+        from batchbrain.processor_runner import run_processor
         input_dict = json.loads(input_json_str) if input_json_str else {}
         
-        if spec.input_model:
-            validated_inputs = spec.input_model.model_validate(input_dict)
-            validated_json = validated_inputs.model_dump(mode="json")
-            bound_fn = lambda path: spec.fn(path, validated_inputs)
-        else:
-            validated_json = {}
-            bound_fn = spec.fn
-            
-        effective_folder = folder_override if folder_override and spec.allow_folder_override else spec.folder
-        if folder_override and not spec.allow_folder_override:
-            raise ValueError(f"Processor '{processor_id}' does not allow folder overrides.")
-            
-        effective_workers = workers_override if workers_override is not None else spec.workers
-        
-        effective_config = {
-            "processor_id": spec.id,
-            "processor_static_config": spec.config or {},
-            "processor_inputs": validated_json
-        }
-        
-        summary = process(
-            folder=effective_folder,
-            fn=bound_fn,
-            code_version=spec.code_version,
-            config=effective_config,
-            step=spec.step,
-            workers=effective_workers,
-            force=force
+        summary = run_processor(
+            processor_id=processor_id,
+            inputs=input_dict,
+            force=force,
+            folder=folder_override,
+            workers=workers_override
         )
         
         with get_session() as session:
