@@ -180,7 +180,13 @@ def run_process(
                                         mat = task_session.query(Materialization).filter_by(output_address=output_address).first()
                                         if not mat:
                                             raise db_e
-                                    
+                                            
+                                        # If it was previously invalidated, we just recomputed it and got the exact same output!
+                                        # We should clear the invalidation so it can be reused again.
+                                        if mat.invalidated_at is not None:
+                                            mat.invalidated_at = None
+                                            mat.invalidated_by_run_id = None
+                                            mat.invalidation_reason = None
                                     # Insert/update current outputs
                                     stmt = insert(CurrentOutput).values(
                                         source_folder=folder,
