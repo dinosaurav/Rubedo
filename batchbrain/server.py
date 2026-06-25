@@ -46,11 +46,13 @@ def get_runs():
             created = sum(1 for c in coords if c.status == "created")
             reused = sum(1 for c in coords if c.status == "reused")
             failed = sum(1 for c in coords if c.status == "failed")
+            removed = sum(1 for c in coords if c.status == "removed")
             
             d = _to_dict(run)
             d['created_count'] = created
             d['reused_count'] = reused
             d['failed_count'] = failed
+            d['removed_count'] = removed
             results.append(d)
         return results
 
@@ -66,11 +68,13 @@ def get_run(run_id: str):
         created = sum(1 for c in coords if c.status == "created")
         reused = sum(1 for c in coords if c.status == "reused")
         failed = sum(1 for c in coords if c.status == "failed")
+        removed = sum(1 for c in coords if c.status == "removed")
         
         d = _to_dict(run)
         d['created_count'] = created
         d['reused_count'] = reused
         d['failed_count'] = failed
+        d['removed_count'] = removed
         return d
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateOut])
@@ -213,8 +217,13 @@ def run_diff(left_run_id: str, right_run_id: str):
             rc = right_coords.get(k)
             
             status = "changed"
-            if not lc: status = "added"
-            elif not rc: status = "removed"
+            if not lc or lc.status == "removed":
+                if rc and rc.status != "removed":
+                    status = "added"
+                else:
+                    status = "unchanged" # removed to removed
+            elif not rc or rc.status == "removed":
+                status = "removed"
             elif lc.output_address == rc.output_address and lc.status == rc.status:
                 status = "unchanged"
                 

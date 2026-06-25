@@ -33,7 +33,7 @@ export default function RunDetail() {
       cell: (info) => {
         const val = info.getValue();
         return (
-          <span className={`badge badge-${val === 'created' ? 'success' : val === 'failed' ? 'error' : 'info'}`}>
+          <span className={`badge badge-${val === 'created' ? 'success' : val === 'removed' ? 'warning' : val === 'failed' ? 'error' : 'info'}`}>
             {val}
           </span>
         );
@@ -117,6 +117,10 @@ export default function RunDetail() {
         <div className="card stat-card">
           <div className="stat-label">Failed</div>
           <div className="stat-value" style={{ color: 'var(--status-error)' }}>{run.failed_count}</div>
+        </div>
+        <div className="card stat-card">
+          <div className="stat-label">Removed</div>
+          <div className="stat-value" style={{ color: 'var(--status-warning)' }}>{run.removed_count}</div>
         </div>
       </div>
 

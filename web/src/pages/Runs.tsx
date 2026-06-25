@@ -39,6 +39,22 @@ export default function Runs() {
       cell: (info) => new Date(info.getValue()).toLocaleString(),
     },
     {
+      accessorKey: 'created_count',
+      header: 'Created',
+    },
+    {
+      accessorKey: 'reused_count',
+      header: 'Reused',
+    },
+    {
+      accessorKey: 'failed_count',
+      header: 'Failed',
+    },
+    {
+      accessorKey: 'removed_count',
+      header: 'Removed',
+    },
+    {
       id: 'actions',
       header: 'Actions',
       enableColumnFilter: false,

@@ -83,6 +83,46 @@ def run_process(
                 )
                 session.execute(stmt)
             session.commit()
+            
+            scanned_coordinates = {sf.coordinate for sf in scanned_files}
+            prior_current = session.query(CurrentOutput).filter_by(
+                source_folder=folder,
+                step=step,
+                code_version=code_version,
+                config_hash=config_hash
+            ).all()
+            
+            prior_coords = {pc.coordinate: pc for pc in prior_current}
+            removed_coordinates = set(prior_coords.keys()) - scanned_coordinates
+            
+            removed_count = 0
+            for coord in removed_coordinates:
+                old = prior_coords[coord]
+                session.delete(old)
+                
+                rc = RunCoordinate(
+                    run_id=run_id,
+                    source_folder=folder,
+                    coordinate=coord,
+                    input_hash=old.input_hash,
+                    output_address=old.output_address,
+                    materialization_id=old.materialization_id,
+                    status="removed"
+                )
+                session.add(rc)
+                
+                _emit_event(
+                    session, run_id, "info", "coordinate_removed",
+                    coordinate=coord,
+                    message="Coordinate removed from current outputs because source file is absent",
+                    data={
+                        "previous_output_address": old.output_address,
+                        "previous_materialization_id": old.materialization_id,
+                    }
+                )
+                removed_count += 1
+                
+            session.commit()
 
             tasks = []
             
@@ -279,7 +319,8 @@ def run_process(
                 status=final_status,
                 created_count=created_count,
                 reused_count=reused_count,
-                failed_count=failed_count
+                failed_count=failed_count,
+                removed_count=removed_count
             )
             
         except Exception as e:

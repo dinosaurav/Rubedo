@@ -97,3 +97,4 @@ class RunSummary(BaseModel):
     created_count: int = 0
     reused_count: int = 0
     failed_count: int = 0
+    removed_count: int = 0

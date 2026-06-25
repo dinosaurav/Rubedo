@@ -162,3 +162,78 @@ def test_invalidated_result_not_reused():
         coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()}
         assert coords["a.txt"].status == "reused"
         assert coords["b.txt"].status == "created" # Recomputed because it was invalidated
+
+def test_logical_deletion():
+    orig_dir = os.getcwd()
+    db.init_db('./test_db.sqlite')
+    
+    # 1. First run, create files
+    res1 = process('test_input', count_lines, code_version='v1')
+    assert res1.created_count == 2
+    assert res1.reused_count == 0
+    assert res1.removed_count == 0
+    
+    # Verify current outputs has 2 items
+    with db.get_session() as session:
+        currents = session.query(CurrentOutput).all()
+        assert len(currents) == 2
+        
+        # Verify materializations
+        mats = session.query(Materialization).all()
+        assert len(mats) == 2
+    
+    # 2. Delete one file
+    os.remove('test_input/a.txt')
+    
+    # 3. Second run
+    res2 = process('test_input', count_lines, code_version='v1')
+    assert res2.created_count == 0
+    assert res2.reused_count == 1
+    assert res2.removed_count == 1
+    
+    with db.get_session() as session:
+        # Current outputs should drop to 1
+        currents = session.query(CurrentOutput).all()
+        assert len(currents) == 1
+        assert currents[0].coordinate == 'b.txt'
+        
+        # Run coordinates should have 1 reused and 1 removed
+        run_coords = session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()
+        assert len(run_coords) == 2
+        statuses = {rc.coordinate: rc.status for rc in run_coords}
+        assert statuses['a.txt'] == 'removed'
+        assert statuses['b.txt'] == 'reused'
+        
+        # Materialization for a.txt is STILL there and valid
+        mats = session.query(Materialization).all()
+        assert len(mats) == 2
+        for m in mats:
+            assert m.invalidated_at is None
+            
+    db.Base.metadata.drop_all(db.engine)
+    db.engine.dispose()
+    os.chdir(orig_dir)
+
+def test_restore_deleted_reuses_cache():
+    orig_dir = os.getcwd()
+    db.init_db('./test_db.sqlite')
+    
+    with open('test_input/a.txt', 'w') as f: f.write('a')
+    
+    process('test_input', count_lines, code_version='v1')
+    os.remove('test_input/a.txt')
+    process('test_input', count_lines, code_version='v1')
+    
+    # Restore file with exact same content
+    with open('test_input/a.txt', 'w') as f: f.write('a')
+    
+    # Third run should REUSE, not create
+    res3 = process('test_input', count_lines, code_version='v1')
+    assert res3.created_count == 0
+    assert res3.reused_count == 2 # a.txt and b.txt
+    assert res3.removed_count == 0
+    
+    db.Base.metadata.drop_all(db.engine)
+    db.engine.dispose()
+    os.chdir(orig_dir)
+
