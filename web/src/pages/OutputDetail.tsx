@@ -58,7 +58,7 @@ export default function OutputDetail() {
           <pre className="pre-block">{JSON.stringify(obj.preview_json, null, 2)}</pre>
         ) : obj.preview_text ? (
           <pre className="pre-block">{obj.preview_text}</pre>
-        ) : obj.preview_binary ? (
+        ) : obj.preview_kind === 'binary' ? (
           <div style={{ color: 'var(--text-secondary)' }}>Binary file, preview not available. Please download.</div>
         ) : (
           <div style={{ color: 'var(--text-secondary)' }}>No preview available.</div>

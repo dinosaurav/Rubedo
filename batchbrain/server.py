@@ -126,13 +126,28 @@ def get_object_metadata(output_address: str):
         except UnicodeDecodeError:
             pass # It's binary
             
+    # Fetch the materialization data
+    mat_data = {}
+    with get_session() as session:
+        mat = session.query(Materialization).filter_by(output_address=output_address).first()
+        if mat:
+            mat_data = {
+                "step": mat.step,
+                "code_version": mat.code_version,
+                "created_by_run_id": mat.created_by_run_id,
+                "created_at": mat.created_at,
+                "invalidated_at": mat.invalidated_at,
+                "output_content_hash": mat.output_content_hash,
+            }
+
     return {
         "output_address": output_address,
         "exists": True,
         "size_bytes": size,
         "preview_kind": preview_kind,
         "preview_text": preview_text,
-        "preview_json": preview_json
+        "preview_json": preview_json,
+        **mat_data
     }
 
 @app.get("/api/objects/{output_address}/download")
