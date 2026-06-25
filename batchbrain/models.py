@@ -87,6 +87,23 @@ class CurrentOutput(Base):
     updated_at = Column(String, nullable=False)
     __table_args__ = (UniqueConstraint('source_folder', 'coordinate', 'step', 'code_version', 'config_hash', name='_curr_output_uc'),)
 
+class ExecutionRequest(Base):
+    __tablename__ = 'execution_requests'
+    id = Column(String, primary_key=True)
+    processor_id = Column(String, nullable=False)
+    status = Column(String, nullable=False) # queued, running, succeeded, failed
+    requested_at = Column(String, nullable=False)
+    started_at = Column(String)
+    finished_at = Column(String)
+    run_id = Column(String)
+    force = Column(Integer, nullable=False, default=0)
+    input_json = Column(String, nullable=False, default='{}')
+    folder_override = Column(String)
+    workers_override = Column(Integer)
+    error_message = Column(String)
+    stdout_path = Column(String)
+    stderr_path = Column(String)
+
 class ProcessResult(BaseModel):
     value: Any
     metadata: Optional[Dict[str, Any]] = None

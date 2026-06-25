@@ -43,9 +43,8 @@ export default function SelectionBuilder() {
     if (selection.source_folder) cleanSel.source_folder = selection.source_folder;
     if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
     if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
-    
     const res = await previewSelection(cleanSel);
-    setPreview(res);
+    setPreview(res.items || []);
   };
 
   const handleInvalidate = async () => {

@@ -236,3 +236,128 @@ def run_diff(left_run_id: str, right_run_id: str):
                 "right_status": rc.status if rc else None,
             })
         return diff
+
+from datetime import datetime, timezone
+import uuid
+import subprocess
+from .registry import list_processors, get_processor
+from .models import ExecutionRequest
+from .schemas import ProcessorSpecOut, RunProcessorRequest, RunProcessorResponse, ExecutionRequestOut
+
+@app.get('/api/processors', response_model=List[ProcessorSpecOut])
+def get_processors_api():
+    processors = list_processors()
+    out = []
+    for p in processors:
+        schema = None
+        defaults = None
+        if p.input_model:
+            schema = p.input_model.model_json_schema()
+            # Extract defaults if any
+            defaults = {k: v.default for k, v in p.input_model.model_fields.items() if not v.is_required()}
+            
+        out.append(ProcessorSpecOut(
+            id=p.id,
+            name=p.name,
+            folder=p.folder,
+            step=p.step,
+            code_version=p.code_version,
+            workers=p.workers,
+            allow_folder_override=p.allow_folder_override,
+            input_schema=schema,
+            default_inputs=defaults or {}
+        ))
+    return out
+
+@app.post('/api/processors/{processor_id}/run', response_model=RunProcessorResponse)
+def run_processor_api(processor_id: str, req: RunProcessorRequest):
+    spec = get_processor(processor_id)
+    
+    if req.folder and not spec.allow_folder_override:
+        raise HTTPException(400, 'Folder override not allowed for this processor')
+        
+    if spec.input_model:
+        try:
+            # Validate against model
+            spec.input_model.model_validate(req.inputs)
+        except Exception as e:
+            raise HTTPException(400, f'Invalid inputs: {str(e)}')
+            
+    exec_id = f'exec_{uuid.uuid4().hex[:12]}'
+    
+    with get_session() as session:
+        ex = ExecutionRequest(
+            id=exec_id,
+            processor_id=processor_id,
+            status='queued',
+            requested_at=datetime.now(timezone.utc).isoformat(),
+            force=int(req.force),
+            input_json=json.dumps(req.inputs),
+            folder_override=req.folder,
+            workers_override=req.workers
+        )
+        
+        # Prepare log paths
+        base_dir = os.path.join('.batchbrain', 'executions', exec_id)
+        os.makedirs(base_dir, exist_ok=True)
+        out_path = os.path.join(base_dir, 'stdout.log')
+        err_path = os.path.join(base_dir, 'stderr.log')
+        
+        ex.stdout_path = out_path
+        ex.stderr_path = err_path
+        
+        session.add(ex)
+        session.commit()
+        
+    import sys
+    out_f = open(out_path, 'w')
+    err_f = open(err_path, 'w')
+    
+    subprocess.Popen(
+        [sys.executable, '-m', 'batchbrain.processor_worker', exec_id],
+        stdout=out_f,
+        stderr=err_f,
+        cwd=os.getcwd(),
+        env=os.environ.copy()
+    )
+    
+    out_f.close()
+    err_f.close()
+    
+    return RunProcessorResponse(execution_id=exec_id, status='queued')
+
+@app.get('/api/executions', response_model=List[ExecutionRequestOut])
+def get_executions():
+    with get_session() as session:
+        reqs = session.query(ExecutionRequest).order_by(ExecutionRequest.requested_at.desc()).all()
+        return [_to_dict(r) for r in reqs]
+
+@app.get('/api/executions/{execution_id}', response_model=ExecutionRequestOut)
+def get_execution(execution_id: str):
+    with get_session() as session:
+        req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
+        if not req:
+            raise HTTPException(404, 'Execution not found')
+        # Map force back to boolean
+        d = _to_dict(req)
+        d['force'] = bool(d['force'])
+        return d
+
+@app.get('/api/executions/{execution_id}/stdout')
+def get_execution_stdout(execution_id: str):
+    with get_session() as session:
+        req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
+        if not req or not req.stdout_path or not os.path.exists(req.stdout_path):
+            return PlainTextResponse('')
+        with open(req.stdout_path, 'r') as f:
+            return PlainTextResponse(f.read())
+
+@app.get('/api/executions/{execution_id}/stderr')
+def get_execution_stderr(execution_id: str):
+    with get_session() as session:
+        req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
+        if not req or not req.stderr_path or not os.path.exists(req.stderr_path):
+            return PlainTextResponse('')
+        with open(req.stderr_path, 'r') as f:
+            return PlainTextResponse(f.read())
+
