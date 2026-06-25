@@ -1,8 +1,6 @@
 import os
 import sys
-
-# Add engine to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "engine")))
+import time
 
 from batchbrain import ProcessResult, process
 

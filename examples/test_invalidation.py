@@ -1,9 +1,8 @@
 import os
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "engine")))
-
-from batchbrain import process, select, invalidate, recompute
+import shutil
+from batchbrain import process
+from batchbrain.invalidation import invalidate, recompute
+from batchbrain.db import get_session
 
 def count_lines(path: str) -> dict:
     text = open(path, "r", encoding="utf-8").read()
