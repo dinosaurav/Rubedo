@@ -189,10 +189,9 @@ async def preview_selection(request: Request):
 @app.post("/api/selection/invalidate", response_model=SelectionInvalidateResponse)
 async def invalidate_selection(request: Request):
     data = await request.json()
-    sel_data = data.get("selection", {})
-    reason = data.get("reason", "UI Invalidation")
+    reason = request.query_params.get("reason", "UI Invalidation")
     
-    sel = Selection(**sel_data)
+    sel = Selection(**data)
     result = invalidate(sel, reason)
     
     return {

@@ -96,12 +96,30 @@ def test_selection_preview():
     assert data["items"][0]["metadata"]["line_count"] == 2
 
 def test_selection_invalidate():
-    response = client.post("/api/selection/invalidate", json={
-        "selection": {
-            "source_folder": "test_input",
-            "coordinate_glob": "*a.txt"
-        },
-        "reason": "api test"
+    response = client.post("/api/selection/invalidate?reason=api test", json={
+        "source_folder": "test_input",
+        "coordinate_glob": "*a.txt"
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert data["invalidated_count"] == 1
+    assert len(data["materialization_ids"]) == 1
+    
+    # Verify current outputs reduced to 1
+    cur_resp = client.get("/api/current-outputs")
+    assert len(cur_resp.json()) == 1
+
+def test_selection_invalidate_output_address():
+    # Get all current outputs from the setup
+    cur_resp = client.get("/api/current-outputs")
+    outputs = cur_resp.json()
+    assert len(outputs) == 2
+    
+    target_address = outputs[0]["output_address"]
+    
+    # Invalidate by output_address
+    response = client.post("/api/selection/invalidate?reason=api test", json={
+        "output_address": target_address
     })
     assert response.status_code == 200
     data = response.json()
