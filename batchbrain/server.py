@@ -99,8 +99,7 @@ def get_current_outputs():
 
 @app.get("/api/objects/{output_address}")
 def get_object_metadata(output_address: str):
-    obj_dir = os.path.abspath(".batchbrain/objects")
-    obj_path = os.path.join(obj_dir, output_address)
+    obj_path = os.path.abspath(os.path.join(".batchbrain/objects", output_address[:2], output_address[2:4], output_address))
     
     if not os.path.exists(obj_path):
         raise HTTPException(404, "Object not found")
@@ -152,8 +151,7 @@ def get_object_metadata(output_address: str):
 
 @app.get("/api/objects/{output_address}/download")
 def download_object(output_address: str):
-    obj_dir = os.path.abspath(".batchbrain/objects")
-    obj_path = os.path.join(obj_dir, output_address)
+    obj_path = os.path.abspath(os.path.join(".batchbrain/objects", output_address[:2], output_address[2:4], output_address))
     
     if not os.path.exists(obj_path):
         raise HTTPException(404, "Object not found")
