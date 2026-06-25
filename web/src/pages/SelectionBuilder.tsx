@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { previewSelection, invalidateSelection } from '../api';
+import { DataTable } from '../components/DataTable';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Link } from 'react-router-dom';
 
 export default function SelectionBuilder() {
   const [selection, setSelection] = useState({
@@ -56,6 +59,35 @@ export default function SelectionBuilder() {
     alert(`Invalidated ${res.invalidated_count} materializations. Run process again to recompute.`);
     setPreview([]);
   };
+
+  const previewColumns: ColumnDef<any, any>[] = [
+    {
+      accessorKey: 'id',
+      header: 'ID',
+    },
+    {
+      accessorKey: 'output_address',
+      header: 'Output Address',
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
+      },
+    },
+    {
+      id: 'status',
+      accessorFn: (row) => row.invalidated_at ? 'Invalidated' : 'Valid',
+      header: 'Status',
+      meta: { filterVariant: 'select' },
+      cell: (info) => {
+        const val = info.getValue();
+        return val === 'Invalidated' ? (
+          <span className="badge badge-error">Invalidated</span>
+        ) : (
+          <span className="badge badge-success">Valid</span>
+        );
+      },
+    }
+  ];
 
   return (
     <div>
@@ -119,28 +151,7 @@ export default function SelectionBuilder() {
         <div>
           <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>Preview Results ({preview.length})</h2>
           {preview.length > 0 ? (
-            <div className="card table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Output Address</th>
-                    <th>Invalidated?</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.map(p => (
-                    <tr key={p.id}>
-                      <td>{p.id}</td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{p.output_address.slice(0, 16)}...</td>
-                      <td>
-                        {p.invalidated_at ? <span className="badge badge-error">Yes</span> : <span className="badge badge-success">No</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable data={preview} columns={previewColumns} />
           ) : (
             <div className="card" style={{ color: 'var(--text-secondary)' }}>
               No materializations match the selection, or preview not generated yet.

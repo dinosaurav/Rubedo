@@ -313,3 +313,129 @@ tr:hover td {
   font-size: 0.875rem;
   color: #e2e8f0;
 }
+
+/* DataTable specific styling */
+.table-header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.table-header-content:hover {
+  color: var(--text-primary);
+}
+
+.sort-indicator {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.table-filter-input {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  margin-top: 0.5rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 400;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.table-filter-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.table-filter-select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  margin-top: 0.5rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+/* Spreadsheet-like Menu Styling */
+.table-menu-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.table-menu-button:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.table-menu-button.active {
+  color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.table-header-cell {
+  position: relative;
+}
+
+.table-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 4px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.5);
+  padding: 0.5rem;
+  min-width: 200px;
+  font-weight: normal;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.table-popover-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 0.25rem 0;
+}
+
+.table-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  transition: background 0.2s;
+}
+
+.table-popover-item:hover {
+  background-color: var(--bg-secondary);
+}
+
+.table-popover-item.active {
+  background-color: rgba(59, 130, 246, 0.1);
+  color: var(--accent-primary);
+}
+

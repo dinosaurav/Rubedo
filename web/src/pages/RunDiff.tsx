@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { fetchRuns, diffRuns } from '../api';
 import { Link } from 'react-router-dom';
+import { DataTable } from '../components/DataTable';
+import type { ColumnDef } from '@tanstack/react-table';
 
 export default function RunDiff() {
   const [runs, setRuns] = useState<any[]>([]);
@@ -24,6 +26,56 @@ export default function RunDiff() {
     setDiff(res);
   };
 
+  const columns: ColumnDef<any, any>[] = [
+    {
+      accessorKey: 'coordinate',
+      header: 'Coordinate',
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      meta: { filterVariant: 'select' },
+      cell: (info) => {
+        const val = info.getValue();
+        return (
+          <span className={`badge badge-${val === 'unchanged' ? 'info' : val === 'changed' ? 'warning' : val === 'added' ? 'success' : 'error'}`}>
+            {val}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'left_output_address',
+      header: 'Left Output Address',
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? (
+          <Link to={`/objects/${val}`} style={{fontFamily:'monospace'}}>{val.slice(0, 16)}...</Link>
+        ) : '-';
+      },
+    },
+    {
+      accessorKey: 'right_output_address',
+      header: 'Right Output Address',
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? (
+          <Link to={`/objects/${val}`} style={{fontFamily:'monospace'}}>{val.slice(0, 16)}...</Link>
+        ) : '-';
+      },
+    },
+    {
+      accessorKey: 'left_status',
+      header: 'Left Status',
+      meta: { filterVariant: 'select' },
+    },
+    {
+      accessorKey: 'right_status',
+      header: 'Right Status',
+      meta: { filterVariant: 'select' },
+    }
+  ];
+
   return (
     <div>
       <div className="page-header">
@@ -45,46 +97,7 @@ export default function RunDiff() {
         </div>
       </div>
 
-      {diff.length > 0 && (
-        <div className="card table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Coordinate</th>
-                <th>Status</th>
-                <th>Left Output Address</th>
-                <th>Right Output Address</th>
-                <th>Left Status</th>
-                <th>Right Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {diff.map((d, i) => (
-                <tr key={i}>
-                  <td>{d.coordinate}</td>
-                  <td>
-                    <span className={`badge badge-${d.status === 'unchanged' ? 'info' : d.status === 'changed' ? 'warning' : d.status === 'added' ? 'success' : 'error'}`}>
-                      {d.status}
-                    </span>
-                  </td>
-                  <td>
-                    {d.left_output_address ? (
-                      <Link to={`/objects/${d.left_output_address}`} style={{fontFamily:'monospace'}}>{d.left_output_address.slice(0, 16)}...</Link>
-                    ) : '-'}
-                  </td>
-                  <td>
-                    {d.right_output_address ? (
-                      <Link to={`/objects/${d.right_output_address}`} style={{fontFamily:'monospace'}}>{d.right_output_address.slice(0, 16)}...</Link>
-                    ) : '-'}
-                  </td>
-                  <td>{d.left_status || '-'}</td>
-                  <td>{d.right_status || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {diff.length > 0 && <DataTable data={diff} columns={columns} />}
     </div>
   );
 }

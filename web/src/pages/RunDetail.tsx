@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchRun, fetchRunCoordinates, fetchRunEvents } from '../api';
+import { DataTable } from '../components/DataTable';
+import type { ColumnDef } from '@tanstack/react-table';
 
 export default function RunDetail() {
   const { runId } = useParams();
@@ -18,6 +20,77 @@ export default function RunDetail() {
   }, [runId]);
 
   if (!run) return <div>Loading...</div>;
+
+  const coordColumns: ColumnDef<any, any>[] = [
+    {
+      accessorKey: 'coordinate',
+      header: 'Coordinate',
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      meta: { filterVariant: 'select' },
+      cell: (info) => {
+        const val = info.getValue();
+        return (
+          <span className={`badge badge-${val === 'created' ? 'success' : val === 'failed' ? 'error' : 'info'}`}>
+            {val}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'output_address',
+      header: 'Output Address',
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
+      },
+    },
+    {
+      accessorKey: 'error_message',
+      header: 'Error',
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? <span style={{ color: 'var(--status-error)' }}>{val}</span> : '-';
+      },
+    }
+  ];
+
+  const eventColumns: ColumnDef<any, any>[] = [
+    {
+      accessorKey: 'timestamp',
+      header: 'Time',
+      cell: (info) => new Date(info.getValue()).toLocaleString(),
+    },
+    {
+      accessorKey: 'level',
+      header: 'Level',
+      meta: { filterVariant: 'select' },
+      cell: (info) => {
+        const val = info.getValue();
+        return (
+          <span className={`badge badge-${val === 'error' ? 'error' : val === 'warning' ? 'warning' : 'info'}`}>
+            {val}
+          </span>
+        );
+      },
+    },
+    {
+      accessorKey: 'event_type',
+      header: 'Event Type',
+      meta: { filterVariant: 'select' },
+    },
+    {
+      accessorKey: 'coordinate',
+      header: 'Coordinate',
+      cell: (info) => info.getValue() || '-',
+    },
+    {
+      accessorKey: 'message',
+      header: 'Message',
+    }
+  ];
 
   return (
     <div>
@@ -52,67 +125,8 @@ export default function RunDetail() {
         <button className={`btn ${tab === 'events' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('events')}>Events</button>
       </div>
 
-      {tab === 'coords' && (
-        <div className="card table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Coordinate</th>
-                <th>Status</th>
-                <th>Output Address</th>
-                <th>Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {coords.map(c => (
-                <tr key={c.id}>
-                  <td>{c.coordinate}</td>
-                  <td>
-                    <span className={`badge badge-${c.status === 'created' ? 'success' : c.status === 'failed' ? 'error' : 'info'}`}>
-                      {c.status}
-                    </span>
-                  </td>
-                  <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                    {c.output_address ? <Link to={`/objects/${c.output_address}`}>{c.output_address.slice(0, 16)}...</Link> : '-'}
-                  </td>
-                  <td>{c.error_message ? <span style={{ color: 'var(--status-error)' }}>{c.error_message}</span> : '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {tab === 'events' && (
-        <div className="card table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Level</th>
-                <th>Event Type</th>
-                <th>Coordinate</th>
-                <th>Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map(e => (
-                <tr key={e.id}>
-                  <td>{new Date(e.timestamp).toLocaleString()}</td>
-                  <td>
-                    <span className={`badge badge-${e.level === 'error' ? 'error' : e.level === 'warning' ? 'warning' : 'info'}`}>
-                      {e.level}
-                    </span>
-                  </td>
-                  <td>{e.event_type}</td>
-                  <td>{e.coordinate || '-'}</td>
-                  <td>{e.message}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {tab === 'coords' && <DataTable data={coords} columns={coordColumns} />}
+      {tab === 'events' && <DataTable data={events} columns={eventColumns} />}
     </div>
   );
 }
