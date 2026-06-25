@@ -21,7 +21,7 @@ export default function OutputDetail() {
   const handleInvalidate = async () => {
     if (!confirm("Invalidate this output?")) return;
     await invalidateSelection({
-      output_content_hash: obj.output_content_hash
+      output_address: obj.output_address
     }, "Invalidated from UI");
     alert("Invalidated. Please reload.");
   };

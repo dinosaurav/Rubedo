@@ -18,6 +18,7 @@ class Selection(BaseModel):
     coordinate_glob: Optional[str] = None
     step: Optional[str] = None
     code_version: Optional[str] = None
+    output_address: Optional[str] = None
     output_content_hash: Optional[str] = None
     metadata: Optional[List[MetadataFilter]] = None
     invalidated: Optional[bool] = None
@@ -29,6 +30,8 @@ def get_selection_materialization_ids(session: Session, selection: Selection) ->
         query = query.filter(Materialization.step == selection.step)
     if selection.code_version:
         query = query.filter(Materialization.code_version == selection.code_version)
+    if selection.output_address:
+        query = query.filter(Materialization.output_address == selection.output_address)
     if selection.output_content_hash:
         query = query.filter(Materialization.output_content_hash == selection.output_content_hash)
     if selection.invalidated is not None:
