@@ -8,10 +8,10 @@ Batchit is a batch processing framework designed to efficiently run custom "proc
 
 ### Key Capabilities:
 1. **Processor Framework:** Developers can define custom processors using a simple `@processor` decorator. Processors can define specific input schemas (using Pydantic validation), target specific folders, and control concurrency (worker counts).
-2. **Caching & Invalidation:** The engine avoids redundant work by hashing file contents and tracking execution inputs and code versions. If a file hasn't changed and the input parameters are the same, it skips recomputation.
+2. **Durable Materialization & Invalidation:** The engine treats processing as a durable, content-addressed materialization pipeline. It uses point-in-time `Manifest` snapshots to robustly track the state of input folders and skips recomputation if the input hashes, configuration, and code versions haven't changed.
 3. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to process files in parallel.
 4. **Database Storage:** Results, metadata, runs, and caching statuses are tracked in a SQL database (via SQLAlchemy).
-5. **CLI Interface:** A built-in command-line interface (`batchbrain list`, `batchbrain show`, `batchbrain run`) to inspect and trigger processors easily.
+5. **CLI Interface:** A built-in command-line interface (`batchbrain list`, `batchbrain show`, `batchbrain run`, `batchbrain explain`, `batchbrain show-materialization`) to inspect outputs, explain addressing logic, and trigger processors easily.
 6. **API Server:** A FastAPI-based server exposing the processor states, runs, and potentially providing endpoints for the frontend.
 7. **Web UI:** A React + Vite frontend for managing, visualizing, or monitoring the batch processes and their results.
 
@@ -42,6 +42,10 @@ Contains sample scripts and inputs to demonstrate how to use the framework.
 
 - **`input/`**: Sample text files or data used by example processors.
 - **`simple_process.py`, `test_invalidation.py`**: Scripts demonstrating processor definition, execution, and how the caching/invalidation system behaves.
+
+### `/docs/`
+Contains architectural documentation.
+- **`invariants.md`**: Defines the core vocabulary and systemic invariants that ensure the engine operates as a durable materialization system.
 
 ### `/tests/`
 The test suite for the Python backend.
