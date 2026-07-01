@@ -78,12 +78,7 @@ def test_get_materializations():
     assert len(mats) == 2
     assert mats[0]["output_address"] is not None
 
-def test_get_current_outputs():
-    response = client.get("/api/current-outputs")
-    assert response.status_code == 200
-    outputs = response.json()
-    assert len(outputs) == 2
-    assert outputs[0]["source_folder"] == "test_input"
+
 
 def test_selection_preview():
     response = client.post("/api/selection/preview", json={
@@ -105,28 +100,6 @@ def test_selection_invalidate():
     data = response.json()
     assert data["invalidated_count"] == 1
     assert len(data["materialization_ids"]) == 1
-    
-    # Verify current outputs reduced to 1
-    cur_resp = client.get("/api/current-outputs")
-    assert len(cur_resp.json()) == 1
 
-def test_selection_invalidate_output_address():
-    # Get all current outputs from the setup
-    cur_resp = client.get("/api/current-outputs")
-    outputs = cur_resp.json()
-    assert len(outputs) == 2
-    
-    target_address = outputs[0]["output_address"]
-    
-    # Invalidate by output_address
-    response = client.post("/api/selection/invalidate?reason=api test", json={
-        "output_address": target_address
-    })
-    assert response.status_code == 200
-    data = response.json()
-    assert data["invalidated_count"] == 1
-    assert len(data["materialization_ids"]) == 1
-    
-    # Verify current outputs reduced to 1
-    cur_resp = client.get("/api/current-outputs")
-    assert len(cur_resp.json()) == 1
+
+

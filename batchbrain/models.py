@@ -31,16 +31,30 @@ class Event(Base):
     message = Column(String)
     data_json = Column(String)
 
-class SourceFile(Base):
-    __tablename__ = 'source_files'
+class Manifest(Base):
+    __tablename__ = 'manifests'
+    id = Column(String, primary_key=True)
+    run_id = Column(String, nullable=False)
+    root_path = Column(String, nullable=False)
+    manifest_hash = Column(String, nullable=False)
+    created_at = Column(String, nullable=False)
+
+class ManifestEntry(Base):
+    __tablename__ = 'manifest_entries'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    source_folder = Column(String, nullable=False)
+    manifest_id = Column(String, nullable=False)
     coordinate = Column(String, nullable=False)
     content_hash = Column(String, nullable=False)
     size_bytes = Column(Integer)
     mtime_ns = Column(Integer)
-    observed_at = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('source_folder', 'coordinate', name='_source_coord_uc'),)
+    __table_args__ = (UniqueConstraint('manifest_id', 'coordinate', name='_manifest_coord_uc'),)
+
+class MaterializationEdge(Base):
+    __tablename__ = 'materialization_edges'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    parent_id = Column(Integer, nullable=False)
+    child_id = Column(Integer, nullable=False)
+    __table_args__ = (UniqueConstraint('parent_id', 'child_id', name='_mat_edge_uc'),)
 
 class Materialization(Base):
     __tablename__ = 'materializations'
@@ -73,19 +87,7 @@ class RunCoordinate(Base):
     metadata_json = Column(String)
     __table_args__ = (UniqueConstraint('run_id', 'coordinate', name='_run_coord_uc'),)
 
-class CurrentOutput(Base):
-    __tablename__ = 'current_outputs'
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source_folder = Column(String, nullable=False)
-    coordinate = Column(String, nullable=False)
-    step = Column(String, nullable=False)
-    code_version = Column(String, nullable=False)
-    config_hash = Column(String, nullable=False)
-    input_hash = Column(String, nullable=False)
-    output_address = Column(String, nullable=False)
-    materialization_id = Column(Integer, nullable=False)
-    updated_at = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('source_folder', 'coordinate', 'step', 'code_version', 'config_hash', name='_curr_output_uc'),)
+
 
 class ExecutionRequest(Base):
     __tablename__ = 'execution_requests'

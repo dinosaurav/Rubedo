@@ -4,7 +4,7 @@ import pytest
 from batchbrain import process
 from batchbrain.db import get_session, init_db
 import batchbrain.db as db
-from batchbrain.models import Base, Run, RunCoordinate, Materialization, CurrentOutput, ProcessResult
+from batchbrain.models import Base, Run, RunCoordinate, Materialization, Manifest, ManifestEntry, ProcessResult
 from batchbrain.selection import Selection
 from batchbrain.invalidation import invalidate
 
@@ -54,7 +54,8 @@ def test_first_run_creates_all():
         mats = session.query(Materialization).all()
         assert len(mats) == 2
         
-        cur = session.query(CurrentOutput).all()
+        manifest = session.query(Manifest).filter_by(run_id=res.run_id).first()
+        cur = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
         assert len(cur) == 2
 
 def test_second_run_reuses_all():
@@ -106,8 +107,7 @@ def test_failure_creates_no_materialization():
         mats = session.query(Materialization).all()
         assert len(mats) == 1
         
-        cur = session.query(CurrentOutput).all()
-        assert len(cur) == 1
+
 
 def test_select_by_coordinate_glob():
     process("test_input", count_lines, code_version="v1")
@@ -147,9 +147,7 @@ def test_invalidate_selected():
         mat = session.query(Materialization).filter(Materialization.id == res["materialization_ids"][0]).first()
         assert mat.invalidated_at is not None
         
-        # Check current output is deleted
-        cur = session.query(CurrentOutput).all()
-        assert len(cur) == 1 # only a.txt remains
+
 
 def test_invalidated_result_not_reused():
     process("test_input", count_lines, code_version="v1")
@@ -175,7 +173,8 @@ def test_logical_deletion():
     
     # Verify current outputs has 2 items
     with db.get_session() as session:
-        currents = session.query(CurrentOutput).all()
+        manifest = session.query(Manifest).filter_by(run_id=res1.run_id).first()
+        currents = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
         assert len(currents) == 2
         
         # Verify materializations
@@ -193,7 +192,8 @@ def test_logical_deletion():
     
     with db.get_session() as session:
         # Current outputs should drop to 1
-        currents = session.query(CurrentOutput).all()
+        manifest = session.query(Manifest).filter_by(run_id=res2.run_id).first()
+        currents = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
         assert len(currents) == 1
         assert currents[0].coordinate == 'b.txt'
         

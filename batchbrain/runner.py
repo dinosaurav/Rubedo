@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.sqlite import insert
 
 from .models import (
-    Run, Event, SourceFile, Materialization, 
-    RunCoordinate, CurrentOutput, RunSummary, ProcessResult
+    Run, Event, Manifest, ManifestEntry, Materialization, 
+    MaterializationEdge, RunCoordinate, RunSummary, ProcessResult
 )
 from .db import get_session
 from .scanner import scan_folder
@@ -61,66 +61,71 @@ def run_process(
             # Scan folder
             scanned_files = scan_folder(folder)
             
-            # Upsert source files
+            # Upsert source files -> Create Manifest
             now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+            manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
+            
+            # Compute manifest hash
+            sorted_files = sorted(scanned_files, key=lambda x: x.coordinate)
+            manifest_data = [{"coordinate": sf.coordinate, "hash": sf.content_hash} for sf in sorted_files]
+            manifest_hash_val = hash_json(manifest_data)
+            
+            manifest = Manifest(
+                id=manifest_id,
+                run_id=run_id,
+                root_path=folder,
+                manifest_hash=manifest_hash_val,
+                created_at=now_iso
+            )
+            session.add(manifest)
+            
             for sf in scanned_files:
-                stmt = insert(SourceFile).values(
-                    source_folder=folder,
+                entry = ManifestEntry(
+                    manifest_id=manifest_id,
                     coordinate=sf.coordinate,
                     content_hash=sf.content_hash,
                     size_bytes=sf.size_bytes,
-                    mtime_ns=sf.mtime_ns,
-                    observed_at=now_iso
+                    mtime_ns=sf.mtime_ns
                 )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=['source_folder', 'coordinate'],
-                    set_=dict(
-                        content_hash=stmt.excluded.content_hash,
-                        size_bytes=stmt.excluded.size_bytes,
-                        mtime_ns=stmt.excluded.mtime_ns,
-                        observed_at=stmt.excluded.observed_at
-                    )
-                )
-                session.execute(stmt)
+                session.add(entry)
             session.commit()
             
             scanned_coordinates = {sf.coordinate for sf in scanned_files}
-            prior_current = session.query(CurrentOutput).filter_by(
-                source_folder=folder,
-                step=step,
-                code_version=code_version,
-                config_hash=config_hash
-            ).all()
             
-            prior_coords = {pc.coordinate: pc for pc in prior_current}
-            removed_coordinates = set(prior_coords.keys()) - scanned_coordinates
+            # Find previous manifest to compute removed coordinates
+            prev_manifest = session.query(Manifest).filter(
+                Manifest.root_path == folder,
+                Manifest.id != manifest_id
+            ).order_by(Manifest.created_at.desc()).first()
             
             removed_count = 0
-            for coord in removed_coordinates:
-                old = prior_coords[coord]
-                session.delete(old)
-                
-                rc = RunCoordinate(
-                    run_id=run_id,
-                    source_folder=folder,
-                    coordinate=coord,
-                    input_hash=old.input_hash,
-                    output_address=old.output_address,
-                    materialization_id=old.materialization_id,
-                    status="removed"
-                )
-                session.add(rc)
-                
-                _emit_event(
-                    session, run_id, "info", "coordinate_removed",
-                    coordinate=coord,
-                    message="Coordinate removed from current outputs because source file is absent",
-                    data={
-                        "previous_output_address": old.output_address,
-                        "previous_materialization_id": old.materialization_id,
-                    }
-                )
-                removed_count += 1
+            if prev_manifest:
+                prev_entries = session.query(ManifestEntry).filter_by(manifest_id=prev_manifest.id).all()
+                for pe in prev_entries:
+                    if pe.coordinate not in scanned_coordinates:
+                        last_rc = session.query(RunCoordinate).filter(
+                            RunCoordinate.source_folder == folder,
+                            RunCoordinate.coordinate == pe.coordinate,
+                            RunCoordinate.status.in_(["created", "reused"])
+                        ).order_by(RunCoordinate.id.desc()).first()
+                        
+                        rc = RunCoordinate(
+                            run_id=run_id,
+                            source_folder=folder,
+                            coordinate=pe.coordinate,
+                            input_hash=pe.content_hash,
+                            output_address=last_rc.output_address if last_rc else None,
+                            materialization_id=last_rc.materialization_id if last_rc else None,
+                            status="removed"
+                        )
+                        session.add(rc)
+                        
+                        _emit_event(
+                            session, run_id, "info", "coordinate_removed",
+                            coordinate=pe.coordinate,
+                            message="Coordinate removed because source file is absent in latest manifest",
+                        )
+                        removed_count += 1
                 
             session.commit()
 
@@ -227,28 +232,7 @@ def run_process(
                                             mat.invalidated_at = None
                                             mat.invalidated_by_run_id = None
                                             mat.invalidation_reason = None
-                                    # Insert/update current outputs
-                                    stmt = insert(CurrentOutput).values(
-                                        source_folder=folder,
-                                        coordinate=coordinate,
-                                        step=step,
-                                        code_version=code_version,
-                                        config_hash=config_hash,
-                                        input_hash=input_hash,
-                                        output_address=output_address,
-                                        materialization_id=mat.id,
-                                        updated_at=datetime.datetime.utcnow().isoformat() + "Z"
-                                    )
-                                    stmt = stmt.on_conflict_do_update(
-                                        index_elements=['source_folder', 'coordinate', 'step', 'code_version', 'config_hash'],
-                                        set_=dict(
-                                            input_hash=stmt.excluded.input_hash,
-                                            output_address=stmt.excluded.output_address,
-                                            materialization_id=stmt.excluded.materialization_id,
-                                            updated_at=stmt.excluded.updated_at
-                                        )
-                                    )
-                                    task_session.execute(stmt)
+                                    # [DELETED] CurrentOutput is removed in favor of manifests
                                     
                                     # Insert run coordinate
                                     rc = RunCoordinate(

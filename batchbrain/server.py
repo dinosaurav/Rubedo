@@ -7,12 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from .db import get_session, init_db
-from .models import Run, Event, Materialization, RunCoordinate, CurrentOutput
+from .models import Run, Event, Materialization, RunCoordinate
 from .selection import Selection
 from .invalidation import invalidate, recompute
 from .schemas import (
     RunListItem, RunDetailOut, RunCoordinateOut, EventOut,
-    MaterializationOut, CurrentOutputOut, SelectionPreviewResponse,
+    MaterializationOut, SelectionPreviewResponse,
     SelectionPreviewItem, SelectionInvalidateResponse
 )
 
@@ -95,11 +95,6 @@ def get_materializations(limit: int = Query(100, ge=1, le=1000), offset: int = Q
         mats = session.query(Materialization).order_by(Materialization.id.desc()).limit(limit).offset(offset).all()
         return [_to_dict(m) for m in mats]
 
-@app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
-def get_current_outputs():
-    with get_session() as session:
-        outputs = session.query(CurrentOutput).all()
-        return [_to_dict(o) for o in outputs]
 
 @app.get("/api/objects/{output_address}")
 def get_object_metadata(output_address: str):

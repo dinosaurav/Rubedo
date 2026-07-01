@@ -2,7 +2,7 @@ import uuid
 import datetime
 from typing import Any, Callable, Optional
 from sqlalchemy.orm import Session
-from .models import Run, Materialization, CurrentOutput, Event, RunSummary
+from .models import Run, Materialization, Event, RunSummary
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .runner import run_process
@@ -43,8 +43,7 @@ def invalidate(selection: Selection, reason: str) -> dict:
                     mat.invalidated_by_run_id = run_id
                     mat.invalidation_reason = reason
                     
-                    # Remove from current outputs
-                    session.query(CurrentOutput).filter_by(materialization_id=mat_id).delete()
+
                     invalidated_count += 1
             
             run.status = "succeeded"
