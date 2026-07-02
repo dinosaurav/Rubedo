@@ -1,9 +1,11 @@
+import threading
+import time
 import uuid
 import json
 import traceback
 import concurrent.futures
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -391,6 +393,33 @@ def _record_planned(
             )
 
 
+class _RateLimiter:
+    """Paces calls evenly across a step's worker threads."""
+
+    def __init__(self, count: int, period_seconds: float):
+        self.min_interval = period_seconds / count
+        self._lock = threading.Lock()
+        self._next_free = 0.0
+
+    def acquire(self):
+        with self._lock:
+            now = time.monotonic()
+            wait = self._next_free - now
+            self._next_free = max(now, self._next_free) + self.min_interval
+        if wait > 0:
+            time.sleep(wait)
+
+
+@dataclass
+class ExecutionOutcome:
+    decision: StepDecision
+    success: bool
+    result: Any = None
+    error_trace: Optional[str] = None
+    attempts: int = 1
+    attempt_errors: List[str] = field(default_factory=list)
+
+
 def _execute_step(
     step: StepSpec,
     decisions: List[StepDecision],
@@ -398,28 +427,61 @@ def _execute_step(
     params: Optional[dict],
     accepts_params: bool,
     workers: Optional[int],
-) -> Iterator[Tuple[StepDecision, bool, Any, Optional[str]]]:
-    """Run the step function for each execute decision; yield as completed."""
+) -> Iterator[ExecutionOutcome]:
+    """Run the step function for each execute decision; yield as completed.
 
-    def process(decision: StepDecision):
-        try:
-            # Root steps get the source payload positionally; dependent steps
-            # get parent outputs by parameter name. Either kind may declare
-            # `params`.
-            if not step.depends_on:
-                args = [source.load(decision.item)]
-                kwargs = {}
-            else:
-                args = []
-                kwargs = {
-                    dep: read_materialization_output(decision.parent_mats[dep])
-                    for dep in step.depends_on
-                }
-            if accepts_params:
-                kwargs["params"] = _build_step_params(step, params)
-            return decision, True, step.fn(*args, **kwargs), None
-        except Exception:
-            return decision, False, None, traceback.format_exc()
+    Honors the step's rate limit (shared across workers, retries included)
+    and retry policy (only exceptions matching retry_on are retried).
+    """
+    limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
+
+    def call(decision: StepDecision):
+        # Root steps get the source payload positionally; dependent steps
+        # get parent outputs by parameter name. Either kind may declare
+        # `params`.
+        if not step.depends_on:
+            args = [source.load(decision.item)]
+            kwargs = {}
+        else:
+            args = []
+            kwargs = {
+                dep: read_materialization_output(decision.parent_mats[dep])
+                for dep in step.depends_on
+            }
+        if accepts_params:
+            kwargs["params"] = _build_step_params(step, params)
+        return step.fn(*args, **kwargs)
+
+    def process(decision: StepDecision) -> ExecutionOutcome:
+        attempt_errors: List[str] = []
+        delay = step.retry_delay
+        for attempt in range(1, step.retries + 2):
+            if limiter:
+                limiter.acquire()
+            try:
+                result = call(decision)
+                return ExecutionOutcome(
+                    decision,
+                    True,
+                    result=result,
+                    attempts=attempt,
+                    attempt_errors=attempt_errors,
+                )
+            except Exception as e:
+                trace = traceback.format_exc()
+                retryable = attempt <= step.retries and isinstance(e, step.retry_on)
+                if not retryable:
+                    return ExecutionOutcome(
+                        decision,
+                        False,
+                        error_trace=trace,
+                        attempts=attempt,
+                        attempt_errors=attempt_errors,
+                    )
+                attempt_errors.append(trace)
+                if delay > 0:
+                    time.sleep(delay)
+                delay *= step.retry_backoff
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=workers or step.workers
@@ -534,6 +596,7 @@ def _record_failure(
     error_message: str,
     error_type: str,
     event_message: str,
+    metadata_json: Optional[str] = None,
 ):
     session.add(
         RunCoordinateStatus(
@@ -547,6 +610,7 @@ def _record_failure(
             status="failed",
             error_message=error_message,
             error_type=error_type,
+            metadata_json=metadata_json,
             created_at=utcnow_iso(),
         )
     )
@@ -564,25 +628,38 @@ def _record_failure(
     ctx.coord_step_mats[(decision.coordinate, step.name)] = "failed"
 
 
-def _commit_execution_result(
-    ctx: _RunContext,
-    step: StepSpec,
-    decision: StepDecision,
-    success: bool,
-    result: Any,
-    error_trace: Optional[str],
-):
+def _commit_execution_result(ctx: _RunContext, step: StepSpec, outcome: ExecutionOutcome):
     """Persist one execution outcome in its own transaction."""
+    decision = outcome.decision
+    result = outcome.result
+    attempts_meta = (
+        json.dumps({"attempts": outcome.attempts}) if outcome.attempts > 1 else None
+    )
+
     with get_session() as session:
-        if not success:
+        for i, attempt_trace in enumerate(outcome.attempt_errors, start=1):
+            _emit_event(
+                session,
+                ctx.run_id,
+                "warning",
+                "step_attempt_failed",
+                pipeline_id=ctx.pipeline_id,
+                step_name=step.name,
+                coordinate=decision.coordinate,
+                message=attempt_trace,
+                data={"attempt": i, "max_attempts": step.retries + 1},
+            )
+
+        if not outcome.success:
             _record_failure(
                 session,
                 ctx,
                 step,
                 decision,
-                error_message=error_trace,
+                error_message=outcome.error_trace,
                 error_type="ExecutionError",
-                event_message=error_trace,
+                event_message=outcome.error_trace,
+                metadata_json=attempts_meta,
             )
             session.commit()
             return
@@ -632,6 +709,7 @@ def _commit_execution_result(
                     output_address=decision.output_address,
                     materialization_id=mat.id,
                     status="created",
+                    metadata_json=attempts_meta,
                     created_at=utcnow_iso(),
                 )
             )
@@ -662,6 +740,7 @@ def _commit_execution_result(
                 error_message=traceback.format_exc(),
                 error_type="StagingError",
                 event_message=str(e),
+                metadata_json=attempts_meta,
             )
 
         session.commit()
@@ -1029,12 +1108,10 @@ def run_pipeline(
                 session.commit()
 
                 to_execute = [d for d in decisions if d.action == "execute"]
-                for decision, success, result, error_trace in _execute_step(
+                for outcome in _execute_step(
                     step, to_execute, source, params, accepts_params, workers
                 ):
-                    _commit_execution_result(
-                        ctx, step, decision, success, result, error_trace
-                    )
+                    _commit_execution_result(ctx, step, outcome)
 
             return _finish_run(ctx)
 

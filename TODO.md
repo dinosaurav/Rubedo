@@ -40,11 +40,11 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## Step policies (`@step(...)`) **[needs split]**
 
-- [ ] Retries — `retries=`, `retry_on=(exception types)`, backoff; attempts recorded
-      as RunEvents, final outcome on RunCoordinateStatus. Default to retrying nothing
-      (retrying a deterministic bug on an LLM step just multiplies cost).
-- [ ] Rate limits — shared limiter across a step's workers (`rate_limit="10/min"`);
-      per-step barrier execution makes this simple
+- [x] Retries — `retries=`, `retry_on=`, `retry_delay=`/`retry_backoff=`; attempts
+      recorded as `step_attempt_failed` events, attempt count on the coordinate
+      status metadata
+- [x] Rate limits — `rate_limit="10/min"`: even pacing shared across a step's
+      workers, retries included
 - [ ] Staleness / TTL — outputs expire (`stale_after="24h"`); fits the lifecycle model:
       planning treats expired generations as non-live, recompute supersedes them.
       Natural for scraping/LLM outputs.

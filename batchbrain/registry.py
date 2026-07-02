@@ -1,4 +1,5 @@
-from typing import Callable, Optional, Dict, Any, Type, List
+import re
+from typing import Callable, Optional, Dict, Any, Tuple, Type, List
 from pydantic import BaseModel
 from dataclasses import dataclass
 import importlib.util
@@ -6,6 +7,23 @@ import sys
 import os
 
 from .sources import Source
+
+_RATE_PERIODS = {"s": 1.0, "sec": 1.0, "second": 1.0,
+                 "m": 60.0, "min": 60.0, "minute": 60.0,
+                 "h": 3600.0, "hour": 3600.0}
+
+
+def parse_rate_limit(spec: str) -> Tuple[int, float]:
+    """'10/min' -> (10, 60.0). Raises on anything unparseable."""
+    m = re.fullmatch(r"\s*(\d+)\s*/\s*([a-z]+)\s*", spec.lower())
+    if not m or m.group(2) not in _RATE_PERIODS:
+        raise ValueError(
+            f"Invalid rate_limit {spec!r}: expected '<count>/<s|min|hour>'"
+        )
+    count = int(m.group(1))
+    if count < 1:
+        raise ValueError(f"Invalid rate_limit {spec!r}: count must be >= 1")
+    return count, _RATE_PERIODS[m.group(2)]
 
 
 @dataclass
@@ -20,6 +38,11 @@ class StepSpec:
     workers: int = 4
     code_hash: Optional[str] = None
     code_mode: str = "warn"  # warn | auto
+    retries: int = 0
+    retry_on: Tuple[Type[BaseException], ...] = (Exception,)
+    retry_delay: float = 0.0
+    retry_backoff: float = 1.0
+    rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
 
 
 @dataclass
@@ -56,6 +79,11 @@ def step(
     config: Optional[Dict[str, Any]] = None,
     workers: int = 4,
     code: str = "warn",
+    retries: int = 0,
+    retry_on=Exception,
+    retry_delay: float = 0.0,
+    retry_backoff: float = 1.0,
+    rate_limit: Optional[str] = None,
 ):
     """Declare a step.
 
@@ -70,6 +98,16 @@ def step(
       - "auto": the function's source hash joins the cache identity, so any
         edit recomputes — no version bump needed. Right for cheap,
         deterministic steps.
+
+    retries re-runs a failed execution up to `retries` extra times, but only
+    for exceptions matching retry_on — narrow it to transient error types
+    (timeouts, rate-limit responses); retrying a deterministic bug on an
+    expensive step just multiplies its cost. retry_delay seconds separate
+    attempts, multiplied by retry_backoff each time. Attempts are recorded
+    as run events.
+
+    rate_limit ("10/min", "2/s", "500/hour") paces the step's executions
+    across all of its workers, retries included.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
@@ -78,6 +116,11 @@ def step(
             f"Step '{name}': version is a semantic label; use code='auto' "
             "to derive cache identity from the source instead"
         )
+    if retries < 0:
+        raise ValueError(f"Step '{name}': retries must be >= 0")
+    if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
+        retry_on = (retry_on,)
+    parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
 
     def decorator(fn: Callable):
         from .hashing import hash_json
@@ -101,6 +144,11 @@ def step(
             workers=workers,
             code_hash=code_hash,
             code_mode=code,
+            retries=retries,
+            retry_on=tuple(retry_on),
+            retry_delay=retry_delay,
+            retry_backoff=retry_backoff,
+            rate_limit=parsed_rate,
         )
 
     return decorator

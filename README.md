@@ -59,6 +59,17 @@ pipeline(id="enrich-leads", name="Enrich Leads",
 
 `key` names the column(s) that identify a row and is deliberately required: it keeps coordinates stable when rows are edited or inserted, so only changed rows recompute. Pass `key=None` to opt into content-addressed coordinates, where an edited row shows up as removed + created instead.
 
+Steps carry their own execution policies — built for flaky work like LLM calls and scraping:
+
+```python
+@step(name="enrich", version="1.0.0",
+      retries=3, retry_on=(TimeoutError, ConnectionError), retry_delay=1, retry_backoff=2,
+      rate_limit="30/min")
+def enrich(row: dict): ...
+```
+
+Retries apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost); every attempt is recorded in the run event log, and the final status notes the attempt count. `rate_limit` paces the step evenly across all its workers, retries included.
+
 A step consumes up to three things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed), **params** (run-level knobs, validated against `params_model` and hashed for exactly the steps that declare a `params` parameter), and **static config** (`@step(config=...)`, fixed at registration). Root steps receive the payload positionally; dependent steps receive parent outputs by parameter name, matching `depends_on`.
 
 State lives in `.batchbrain/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
