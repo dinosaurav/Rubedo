@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from batchbrain import ProcessResult, processor
+from batchbrain import ProcessResult, step, pipeline
 
 class CountLinesInputs(BaseModel):
     min_lines: int = Field(
@@ -12,18 +12,17 @@ class CountLinesInputs(BaseModel):
         description="Whether to include a short text preview in metadata",
     )
 
-@processor(
-    id="count-lines",
-    name="Count Lines",
-    folder="examples/input",
-    code_version="count-lines-v1",
-    input_model=CountLinesInputs,
-    workers=4,
-)
-def count_lines(path: str, inputs: CountLinesInputs) -> ProcessResult:
+@step(name="read_lines", version="read-v1", input_model=CountLinesInputs)
+def read_lines(path: str, inputs: CountLinesInputs):
     text = open(path).read()
     lines = text.splitlines()
+    return {"lines": lines, "inputs": inputs.model_dump()}
 
+@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
+def count_lines(read_lines: dict) -> ProcessResult:
+    lines = read_lines["lines"]
+    inputs = CountLinesInputs(**read_lines["inputs"])
+    
     metadata = {
         "line_count": len(lines),
         "empty": len(lines) == 0,
@@ -32,7 +31,7 @@ def count_lines(path: str, inputs: CountLinesInputs) -> ProcessResult:
     }
 
     if inputs.include_text_preview:
-        metadata["preview"] = text[:80]
+        metadata["preview"] = "".join(lines)[:80]
 
     return ProcessResult(
         value={
@@ -41,6 +40,13 @@ def count_lines(path: str, inputs: CountLinesInputs) -> ProcessResult:
         },
         metadata=metadata,
     )
+
+pipeline(
+    id="count-lines",
+    name="Count Lines DAG",
+    folder="examples/input",
+    steps=[read_lines, count_lines]
+)
 
 if __name__ == "__main__":
     from batchbrain.processor_runner import run_processor
