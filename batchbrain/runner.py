@@ -490,10 +490,24 @@ def run_pipeline(
                                         for dep_name, p_mat in task_spec[
                                             "parent_mats"
                                         ].items():
-                                            edge = MaterializationEdge(
-                                                parent_id=p_mat.id, child_id=mat.id
+                                            # A resurrected materialization already
+                                            # has its lineage edges from when it was
+                                            # first created
+                                            edge_exists = (
+                                                task_session.query(MaterializationEdge)
+                                                .filter_by(
+                                                    parent_id=p_mat.id,
+                                                    child_id=mat.id,
+                                                )
+                                                .first()
                                             )
-                                            task_session.add(edge)
+                                            if not edge_exists:
+                                                task_session.add(
+                                                    MaterializationEdge(
+                                                        parent_id=p_mat.id,
+                                                        child_id=mat.id,
+                                                    )
+                                                )
 
                                         rc = RunCoordinateStatus(
                                             run_id=run_id,

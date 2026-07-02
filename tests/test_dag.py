@@ -175,6 +175,73 @@ def test_cache_hit():
         assert statuses[0].status == "reused"
 
 
+def test_invalidate_downstream_then_rerun():
+    from batchbrain import Selection
+    from batchbrain.invalidation import invalidate
+
+    @step(name="read", version="1")
+    def read(path):
+        return open(path).read().strip()
+
+    @step(name="upper", version="1", depends_on=["read"])
+    def upper(read):
+        return read.upper()
+
+    pipeline(id="p4", name="p4", folder=TEST_FOLDER, steps=[read, upper])
+
+    create_file("f1.txt", "hello")
+    run_processor("p4", workers=1)
+
+    res = invalidate(Selection(step="upper"), reason="bad output")
+    assert res["invalidated_count"] == 1
+
+    # Recompute resurrects the tombstoned materialization; its lineage
+    # edges already exist and must not be inserted twice
+    summary = run_processor("p4", workers=1)
+    assert summary.created_count == 1
+    assert summary.failed_count == 0
+
+    with get_session() as session:
+        mat = (
+            session.query(Materialization)
+            .filter_by(step_name="upper")
+            .one()
+        )
+        assert mat.invalidated_at is None
+        edges = (
+            session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
+        )
+        assert len(edges) == 1
+
+
+def test_duplicate_content_files_share_materialization():
+    @step(name="read", version="1")
+    def read(path):
+        return open(path).read().strip()
+
+    @step(name="upper", version="1", depends_on=["read"])
+    def upper(read):
+        return read.upper()
+
+    pipeline(id="p5", name="p5", folder=TEST_FOLDER, steps=[read, upper])
+
+    # Same content -> same output addresses; both coordinates resolve to one
+    # materialization and one lineage edge, without a unique-constraint crash
+    create_file("f1.txt", "hello")
+    create_file("f2.txt", "hello")
+
+    summary = run_processor("p5", workers=1)
+    assert summary.failed_count == 0
+
+    with get_session() as session:
+        mats = session.query(Materialization).filter_by(step_name="upper").all()
+        assert len(mats) == 1
+        edges = (
+            session.query(MaterializationEdge).filter_by(child_id=mats[0].id).all()
+        )
+        assert len(edges) == 1
+
+
 def test_dag_blocked_on_failure():
     @step(name="read", version="1")
     def read(path):
