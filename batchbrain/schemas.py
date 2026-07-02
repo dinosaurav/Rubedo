@@ -18,19 +18,25 @@ class RunListItem(BaseModel):
 class RunDetailOut(RunListItem):
     error_message: Optional[str] = None
 
-class RunCoordinateOut(BaseModel):
+class RunCoordinateStatusOut(BaseModel):
     coordinate: str
     status: str
+    processor_name: Optional[str] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
     materialization_id: Optional[int] = None
+    previous_output_address: Optional[str] = None
+    previous_materialization_id: Optional[int] = None
     error_message: Optional[str] = None
+    error_type: Optional[str] = None
     metadata_json: Optional[str] = None
+    created_at: Optional[str] = None
 
-class EventOut(BaseModel):
+class RunEventOut(BaseModel):
     timestamp: str
     level: str
     event_type: str
+    processor_name: Optional[str] = None
     coordinate: Optional[str] = None
     message: Optional[str] = None
     data_json: Optional[str] = None
@@ -46,7 +52,6 @@ class MaterializationOut(BaseModel):
     created_at: str
     invalidated_at: Optional[str] = None
     invalidation_reason: Optional[str] = None
-
 
 
 class SelectionPreviewItem(BaseModel):

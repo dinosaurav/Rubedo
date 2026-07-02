@@ -6,7 +6,7 @@ from sqlalchemy import or_, and_
 import glob
 import fnmatch
 
-from .models import Materialization, RunCoordinate
+from .models import Materialization, RunCoordinateStatus
 
 class MetadataFilter(BaseModel):
     key: str
@@ -22,6 +22,7 @@ class Selection(BaseModel):
     output_content_hash: Optional[str] = None
     metadata: Optional[List[MetadataFilter]] = None
     invalidated: Optional[bool] = None
+    coordinates: Optional[List[str]] = None
 
 def get_selection_materialization_ids(session: Session, selection: Selection) -> List[int]:
     query = session.query(Materialization)
@@ -40,11 +41,13 @@ def get_selection_materialization_ids(session: Session, selection: Selection) ->
         else:
             query = query.filter(Materialization.invalidated_at.is_(None))
             
-    if selection.source_folder or selection.coordinate_glob:
-        # Join with RunCoordinate to filter by coordinate or source_folder
-        query = query.join(RunCoordinate, RunCoordinate.materialization_id == Materialization.id)
+    if selection.source_folder or selection.coordinate_glob or selection.coordinates:
+        # Join with RunCoordinateStatus to filter by coordinate or source_folder
+        query = query.join(RunCoordinateStatus, RunCoordinateStatus.materialization_id == Materialization.id)
         if selection.source_folder:
-            query = query.filter(RunCoordinate.source_folder == selection.source_folder)
+            query = query.filter(RunCoordinateStatus.source_folder == selection.source_folder)
+        if selection.coordinates:
+            query = query.filter(RunCoordinateStatus.coordinate.in_(selection.coordinates))
             
     mats = query.all()
     
@@ -55,7 +58,7 @@ def get_selection_materialization_ids(session: Session, selection: Selection) ->
         if selection.coordinate_glob:
             # We need the coordinate for this materialization. We joined above if glob was present.
             # Easiest way is to fetch current output for it
-            co = session.query(RunCoordinate).filter_by(materialization_id=m.id).order_by(RunCoordinate.id.desc()).first()
+            co = session.query(RunCoordinateStatus).filter_by(materialization_id=m.id).order_by(RunCoordinateStatus.id.desc()).first()
             if not co or not fnmatch.fnmatch(co.coordinate, selection.coordinate_glob):
                 continue
                 

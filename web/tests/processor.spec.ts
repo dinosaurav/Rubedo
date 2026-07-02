@@ -22,7 +22,7 @@ test.beforeAll(async () => {
   fs.copyFileSync(rootProcessors, path.join(tmpDir, 'batchbrain_processors.py'));
   
   backendProcess = spawn(
-    path.join(process.cwd(), '..', '.venv', 'Scripts', 'python.exe'),
+    os.platform() === 'win32' ? path.join(process.cwd(), '..', '.venv', 'Scripts', 'python.exe') : path.join(process.cwd(), '..', '.venv', 'bin', 'python'),
     ['-m', 'uvicorn', 'batchbrain.server:app', '--port', BACKEND_PORT.toString()],
     { 
       cwd: tmpDir,

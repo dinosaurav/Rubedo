@@ -4,7 +4,7 @@ import pytest
 from batchbrain import process
 from batchbrain.db import get_session, init_db
 import batchbrain.db as db
-from batchbrain.models import Base, Run, RunCoordinate, Materialization, Manifest, ManifestEntry, ProcessResult
+from batchbrain.models import Base, Run, RunCoordinateStatus, Materialization, Manifest, ManifestEntry, ProcessResult
 from batchbrain.selection import Selection
 from batchbrain.invalidation import invalidate
 
@@ -44,9 +44,9 @@ def test_first_run_creates_all():
     
     with get_session() as session:
         run = session.query(Run).filter_by(id=res.run_id).first()
-        assert run.status == "succeeded"
+        assert run.status == "completed"
         
-        coords = session.query(RunCoordinate).filter_by(run_id=res.run_id).all()
+        coords = session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
         assert len(coords) == 2
         for c in coords:
             assert c.status == "created"
@@ -63,7 +63,7 @@ def test_second_run_reuses_all():
     res2 = process("test_input", count_lines, code_version="v1")
     
     with get_session() as session:
-        coords = session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()
+        coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         assert len(coords) == 2
         for c in coords:
             assert c.status == "reused"
@@ -76,7 +76,7 @@ def test_edit_one_file_recreates_one():
     res2 = process("test_input", count_lines, code_version="v1")
     
     with get_session() as session:
-        coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()}
+        coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()}
         assert coords["a.txt"].status == "created"
         assert coords["b.txt"].status == "reused"
 
@@ -85,7 +85,7 @@ def test_change_code_version_recreates_all():
     res2 = process("test_input", count_lines, code_version="v2")
     
     with get_session() as session:
-        coords = session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()
+        coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         for c in coords:
             assert c.status == "created"
 
@@ -99,7 +99,7 @@ def test_failure_creates_no_materialization():
     res = process("test_input", failing_processor, code_version="v1")
     
     with get_session() as session:
-        coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=res.run_id).all()}
+        coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()}
         assert coords["a.txt"].status == "failed"
         assert coords["b.txt"].status == "created"
         
@@ -157,7 +157,7 @@ def test_invalidated_result_not_reused():
     
     res2 = process("test_input", count_lines, code_version="v1")
     with get_session() as session:
-        coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()}
+        coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()}
         assert coords["a.txt"].status == "reused"
         assert coords["b.txt"].status == "created" # Recomputed because it was invalidated
 
@@ -198,7 +198,7 @@ def test_logical_deletion():
         assert currents[0].coordinate == 'b.txt'
         
         # Run coordinates should have 1 reused and 1 removed
-        run_coords = session.query(RunCoordinate).filter_by(run_id=res2.run_id).all()
+        run_coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         assert len(run_coords) == 2
         statuses = {rc.coordinate: rc.status for rc in run_coords}
         assert statuses['a.txt'] == 'removed'

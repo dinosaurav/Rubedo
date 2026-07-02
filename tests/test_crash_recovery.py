@@ -3,7 +3,7 @@ import tempfile
 import pytest
 from unittest.mock import patch
 from batchbrain.db import init_db, get_session
-from batchbrain.models import Run, Materialization, RunCoordinate
+from batchbrain.models import Run, Materialization, RunCoordinateStatus
 from batchbrain.runner import run_process
 from batchbrain.store import stage_and_commit
 
@@ -48,7 +48,7 @@ def test_crash_before_processing(setup_teardown):
     # Rerun should attempt again (and still fail if we use the crashing one, 
     # but let's use the normal one to show it recovers)
     summary2 = run_process(str(temp_workspace), dummy_processor, "v1", step="test", workers=1)
-    assert summary2.status == "succeeded"
+    assert summary2.status == "completed"
     assert summary2.created_count == 2
     assert summary2.reused_count == 0
 
@@ -71,7 +71,7 @@ def test_crash_during_staging(setup_teardown):
         
     # Rerun normally
     summary2 = run_process(str(temp_workspace), dummy_processor, "v1", step="test", workers=1)
-    assert summary2.status == "succeeded"
+    assert summary2.status == "completed"
     assert summary2.created_count == 2
 
 def test_crash_after_staging_before_db_commit(setup_teardown):
@@ -96,17 +96,17 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
     # The output address will be exactly the same. 
     # Because stage_and_commit does an atomic os.replace, it will harmlessly overwrite the orphaned file.
     summary2 = run_process(str(temp_workspace), dummy_processor, "v1", step="test", workers=1)
-    assert summary2.status == "succeeded"
+    assert summary2.status == "completed"
     assert summary2.created_count == 2
 
 def test_success_and_reuse(setup_teardown):
     temp_workspace = setup_teardown
     summary1 = run_process(str(temp_workspace), dummy_processor, "v1", step="test", workers=1)
-    assert summary1.status == "succeeded"
+    assert summary1.status == "completed"
     assert summary1.created_count == 2
     
     # Rerun should skip
     summary2 = run_process(str(temp_workspace), dummy_processor, "v1", step="test", workers=1)
-    assert summary2.status == "succeeded"
+    assert summary2.status == "completed"
     assert summary2.created_count == 0
     assert summary2.reused_count == 2

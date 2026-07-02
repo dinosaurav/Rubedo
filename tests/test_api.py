@@ -49,7 +49,7 @@ def test_get_runs():
     assert run["reused_count"] == 0
     assert run["failed_count"] == 0
     assert run["removed_count"] == 0
-    assert run["status"] == "succeeded"
+    assert run["status"] == "completed"
 
 def test_get_run_detail():
     runs = client.get("/api/runs").json()

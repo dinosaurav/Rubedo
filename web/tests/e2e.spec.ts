@@ -26,7 +26,7 @@ process('test_input', count_lines, code_version='v1')
 `;
   const runBatch1Path = path.join(tmpdir, 'run1.py');
   fs.writeFileSync(runBatch1Path, scriptContent);
-  const pythonExe = path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
+  const pythonExe = os.platform() === 'win32' ? path.join(projectRoot, '.venv', 'Scripts', 'python.exe') : path.join(projectRoot, '.venv', 'bin', 'python');
 
   execSync(`"${pythonExe}" run1.py`, { cwd: tmpdir, env: { ...process.env, PYTHONPATH: projectRoot } });
   

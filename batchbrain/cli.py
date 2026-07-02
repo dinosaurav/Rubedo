@@ -4,7 +4,7 @@ import json
 from batchbrain.registry import list_processors, get_processor
 from batchbrain.processor_runner import run_processor
 from batchbrain.db import get_session
-from batchbrain.models import Materialization, RunCoordinate
+from batchbrain.models import Materialization, RunCoordinateStatus, Run, RunEvent
 from batchbrain.hashing import hash_json, compute_output_address
 from batchbrain.scanner import scan_file
 
@@ -86,6 +86,54 @@ def show_mat_cmd(args):
         print(f"Invalidated By Run: {mat.invalidated_by_run_id}")
         print(f"Invalidation Reason: {mat.invalidation_reason}")
 
+def show_run_cmd(args):
+    with get_session() as session:
+        run = session.query(Run).filter_by(id=args.run_id).first()
+        if not run:
+            print(f"Run {args.run_id} not found")
+            return
+            
+        print(f"Run {run.id}")
+        print(f"Processor: {run.processor_name or run.step}")
+        print(f"Status: {run.status}")
+        print(f"Started: {run.started_at}")
+        print(f"Finished: {run.finished_at}")
+        
+        summary = {}
+        if run.summary_json:
+            try:
+                summary = json.loads(run.summary_json)
+            except:
+                pass
+                
+        print("\nSummary:")
+        print(f"  created: {summary.get('created', 0)}")
+        print(f"  reused: {summary.get('reused', 0)}")
+        print(f"  failed: {summary.get('failed', 0)}")
+        print(f"  removed: {summary.get('removed', 0)}")
+        
+        if args.verbose:
+            query = session.query(RunCoordinateStatus).filter_by(run_id=run.id)
+            if args.status:
+                query = query.filter_by(status=args.status)
+            coords = query.all()
+            
+            if coords:
+                print("\nCoordinates:")
+                for c in coords:
+                    print(f"  {c.coordinate:<30} {c.status:<10} {c.output_address or '-'}")
+
+def show_events_cmd(args):
+    with get_session() as session:
+        events = session.query(RunEvent).filter_by(run_id=args.run_id).order_by(RunEvent.id).all()
+        if not events:
+            print(f"No events found for run {args.run_id}")
+            return
+            
+        for e in events:
+            coord_str = f" {e.coordinate}" if e.coordinate else ""
+            print(f"{e.timestamp} {e.event_type}{coord_str}")
+
 def explain_cmd(args):
     import os
     p = get_processor(args.processor_id)
@@ -114,7 +162,7 @@ def explain_cmd(args):
         mat = session.query(Materialization).filter_by(output_address=output_address).first()
         print(f"materialized: {'yes' if mat else 'no'}")
         
-        last_rc = session.query(RunCoordinate).filter_by(coordinate=coord, output_address=output_address).order_by(RunCoordinate.id.desc()).first()
+        last_rc = session.query(RunCoordinateStatus).filter_by(coordinate=coord, output_address=output_address).order_by(RunCoordinateStatus.id.desc()).first()
         if last_rc:
             print(f"status: {last_rc.status} from run {last_rc.run_id}")
         else:
@@ -152,6 +200,16 @@ def main():
     show_mat_parser = subparsers.add_parser("show-materialization", help="Show materialization by output address")
     show_mat_parser.add_argument("address", help="The output address")
     show_mat_parser.set_defaults(func=show_mat_cmd)
+    
+    show_run_parser = subparsers.add_parser("show-run", help="Show details of a specific run")
+    show_run_parser.add_argument("run_id", help="The ID of the run")
+    show_run_parser.add_argument("--verbose", action="store_true", help="Show coordinate details")
+    show_run_parser.add_argument("--status", help="Filter coordinates by status (e.g. created, reused)", default=None)
+    show_run_parser.set_defaults(func=show_run_cmd)
+    
+    show_events_parser = subparsers.add_parser("show-events", help="Show event log of a specific run")
+    show_events_parser.add_argument("run_id", help="The ID of the run")
+    show_events_parser.set_defaults(func=show_events_cmd)
     
     args = parser.parse_args()
     args.func(args)

@@ -19,15 +19,20 @@ class Run(Base):
     started_at = Column(String, nullable=False)
     finished_at = Column(String)
     error_message = Column(String)
+    manifest_id = Column(String)
+    parent_manifest_id = Column(String)
+    summary_json = Column(String)
+    processor_name = Column(String, index=True)
 
-class Event(Base):
-    __tablename__ = 'events'
+class RunEvent(Base):
+    __tablename__ = 'run_events'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String)
+    run_id = Column(String, index=True)
     timestamp = Column(String, nullable=False)
     level = Column(String, nullable=False)
-    event_type = Column(String, nullable=False)
-    coordinate = Column(String)
+    event_type = Column(String, nullable=False, index=True)
+    processor_name = Column(String, index=True)
+    coordinate = Column(String, index=True)
     message = Column(String)
     data_json = Column(String)
 
@@ -73,18 +78,23 @@ class Materialization(Base):
     invalidated_by_run_id = Column(String)
     invalidation_reason = Column(String)
 
-class RunCoordinate(Base):
-    __tablename__ = 'run_coordinates'
+class RunCoordinateStatus(Base):
+    __tablename__ = 'run_coordinate_statuses'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, nullable=False)
+    run_id = Column(String, nullable=False, index=True)
+    processor_name = Column(String, index=True)
     source_folder = Column(String, nullable=False)
-    coordinate = Column(String, nullable=False)
+    coordinate = Column(String, nullable=False, index=True)
     input_hash = Column(String)
     output_address = Column(String)
     materialization_id = Column(Integer)
-    status = Column(String, nullable=False)
+    previous_output_address = Column(String)
+    previous_materialization_id = Column(Integer)
+    status = Column(String, nullable=False, index=True)
     error_message = Column(String)
+    error_type = Column(String, index=True)
     metadata_json = Column(String)
+    created_at = Column(String, nullable=False)
     __table_args__ = (UniqueConstraint('run_id', 'coordinate', name='_run_coord_uc'),)
 
 

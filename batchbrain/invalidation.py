@@ -2,7 +2,7 @@ import uuid
 import datetime
 from typing import Any, Callable, Optional
 from sqlalchemy.orm import Session
-from .models import Run, Materialization, Event, RunSummary
+from .models import Run, Materialization, RunEvent, RunSummary
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .runner import run_process
@@ -22,7 +22,7 @@ def invalidate(selection: Selection, reason: str) -> dict:
         session.add(run)
         
         # Log event
-        event = Event(
+        event = RunEvent(
             run_id=run_id,
             timestamp=datetime.datetime.utcnow().isoformat() + "Z",
             level="info",
@@ -46,14 +46,14 @@ def invalidate(selection: Selection, reason: str) -> dict:
 
                     invalidated_count += 1
             
-            run.status = "succeeded"
+            run.status = "completed"
             run.finished_at = datetime.datetime.utcnow().isoformat() + "Z"
             
-            event = Event(
+            event = RunEvent(
                 run_id=run_id,
                 timestamp=datetime.datetime.utcnow().isoformat() + "Z",
                 level="info",
-                event_type="run_finished",
+                event_type="run_completed",
                 message=f"Invalidation {run_id} finished, invalidated {invalidated_count} materializations"
             )
             session.add(event)

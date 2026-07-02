@@ -7,11 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from .db import get_session, init_db
-from .models import Run, Event, Materialization, RunCoordinate
+from .models import Run, RunEvent, Materialization, RunCoordinateStatus
 from .selection import Selection
 from .invalidation import invalidate, recompute
 from .schemas import (
-    RunListItem, RunDetailOut, RunCoordinateOut, EventOut,
+    RunListItem, RunDetailOut, RunCoordinateStatusOut, RunEventOut,
     MaterializationOut, SelectionPreviewResponse,
     SelectionPreviewItem, SelectionInvalidateResponse
 )
@@ -41,18 +41,17 @@ def get_runs():
         runs = session.query(Run).order_by(Run.started_at.desc()).all()
         results = []
         for run in runs:
-            # calculate counts
-            coords = session.query(RunCoordinate).filter_by(run_id=run.id).all()
-            created = sum(1 for c in coords if c.status == "created")
-            reused = sum(1 for c in coords if c.status == "reused")
-            failed = sum(1 for c in coords if c.status == "failed")
-            removed = sum(1 for c in coords if c.status == "removed")
-            
             d = _to_dict(run)
-            d['created_count'] = created
-            d['reused_count'] = reused
-            d['failed_count'] = failed
-            d['removed_count'] = removed
+            summary = {}
+            if run.summary_json:
+                try:
+                    summary = json.loads(run.summary_json)
+                except:
+                    pass
+            d['created_count'] = summary.get('created', 0)
+            d['reused_count'] = summary.get('reused', 0)
+            d['failed_count'] = summary.get('failed', 0)
+            d['removed_count'] = summary.get('removed', 0)
             results.append(d)
         return results
 
@@ -63,30 +62,29 @@ def get_run(run_id: str):
         if not run:
             raise HTTPException(404, "Run not found")
         
-        # calculate counts
-        coords = session.query(RunCoordinate).filter_by(run_id=run_id).all()
-        created = sum(1 for c in coords if c.status == "created")
-        reused = sum(1 for c in coords if c.status == "reused")
-        failed = sum(1 for c in coords if c.status == "failed")
-        removed = sum(1 for c in coords if c.status == "removed")
-        
         d = _to_dict(run)
-        d['created_count'] = created
-        d['reused_count'] = reused
-        d['failed_count'] = failed
-        d['removed_count'] = removed
+        summary = {}
+        if run.summary_json:
+            try:
+                summary = json.loads(run.summary_json)
+            except:
+                pass
+        d['created_count'] = summary.get('created', 0)
+        d['reused_count'] = summary.get('reused', 0)
+        d['failed_count'] = summary.get('failed', 0)
+        d['removed_count'] = summary.get('removed', 0)
         return d
 
-@app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateOut])
+@app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])
 def get_run_coordinates(run_id: str):
     with get_session() as session:
-        coords = session.query(RunCoordinate).filter_by(run_id=run_id).all()
+        coords = session.query(RunCoordinateStatus).filter_by(run_id=run_id).all()
         return [_to_dict(c) for c in coords]
 
-@app.get("/api/runs/{run_id}/events", response_model=List[EventOut])
+@app.get("/api/runs/{run_id}/events", response_model=List[RunEventOut])
 def get_run_events(run_id: str):
     with get_session() as session:
-        events = session.query(Event).filter_by(run_id=run_id).order_by(Event.id).all()
+        events = session.query(RunEvent).filter_by(run_id=run_id).order_by(RunEvent.id).all()
         return [_to_dict(e) for e in events]
 
 @app.get("/api/materializations", response_model=List[MaterializationOut])
@@ -202,8 +200,8 @@ async def invalidate_selection(request: Request):
 @app.get("/api/runs/{left_run_id}/diff/{right_run_id}")
 def run_diff(left_run_id: str, right_run_id: str):
     with get_session() as session:
-        left_coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=left_run_id).all()}
-        right_coords = {c.coordinate: c for c in session.query(RunCoordinate).filter_by(run_id=right_run_id).all()}
+        left_coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=left_run_id).all()}
+        right_coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=right_run_id).all()}
         
         all_keys = set(left_coords.keys()) | set(right_coords.keys())
         diff = []
