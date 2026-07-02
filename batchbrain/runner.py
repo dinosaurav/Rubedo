@@ -166,6 +166,9 @@ class StepDecision:
     parent_mats: Dict[str, MatRef] = field(default_factory=dict)
     failed_parents: List[str] = field(default_factory=list)
     blocked_parents: List[str] = field(default_factory=list)
+    # Reusing an output whose code has changed since it was computed
+    # (same version string): legal, but worth a warning
+    code_drift: bool = False
 
 
 def _plan_step(
@@ -246,6 +249,11 @@ def _plan_step(
                         existing_mat.output_content_hash,
                         existing_mat.content_type,
                     ),
+                    code_drift=(
+                        step.code_hash is not None
+                        and existing_mat.code_hash is not None
+                        and step.code_hash != existing_mat.code_hash
+                    ),
                 )
             )
         else:
@@ -281,10 +289,34 @@ class _RunContext:
         self.by_step[step_name][outcome] += 1
 
 
+def _code_drift_message(step: StepSpec, drifted: int) -> str:
+    return (
+        f"Step '{step.name}' source code changed but version is still "
+        f"'{step.version}': reusing {drifted} cached output(s) computed by the "
+        "old code. Bump the version (or use version='auto') to recompute."
+    )
+
+
 def _record_planned(
     session: Session, ctx: _RunContext, step: StepSpec, decisions: List[StepDecision]
 ):
     """Persist the planned (non-executing) outcomes: reuses and blocks."""
+    drifted = sum(1 for d in decisions if d.code_drift)
+    if drifted:
+        import warnings
+
+        message = _code_drift_message(step, drifted)
+        warnings.warn(message, stacklevel=2)
+        _emit_event(
+            session,
+            ctx.run_id,
+            "warning",
+            "code_drift_detected",
+            pipeline_id=ctx.pipeline_id,
+            step_name=step.name,
+            message=message,
+        )
+
     for d in decisions:
         if d.action == "blocked":
             ctx.coord_step_mats[(d.coordinate, step.name)] = "blocked"
@@ -460,6 +492,7 @@ def _commit_materialization(
         pipeline_id=pipeline_id,
         step_name=step.name,
         code_version=step.version,
+        code_hash=step.code_hash,
         config_hash=step.config_hash,
         input_hash=input_hash,
         output_address=output_address,
@@ -805,12 +838,15 @@ class RunPlan:
     source_id: str
     items: List[PlannedCoordinate]
     counts: Dict[str, int]
+    warnings: List[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         lines = [
             f"Plan for '{self.pipeline_id}' over {self.source_id}: "
             + ", ".join(f"{v} {k}" for k, v in sorted(self.counts.items()))
         ]
+        for w in self.warnings:
+            lines.append(f"  ! {w}")
         for it in self.items:
             addr = f" @ {it.output_address[:12]}" if it.output_address else ""
             lines.append(f"  {it.action:<8} {it.step_name:<20} {it.coordinate}{addr}")
@@ -837,6 +873,7 @@ def plan(
     params_hash = hash_json(params or {})
 
     items: List[PlannedCoordinate] = []
+    plan_warnings: List[str] = []
     coord_step_mats: Dict[tuple, Any] = {}
 
     with get_session() as session:
@@ -871,6 +908,10 @@ def plan(
                 force,
                 accepts_params,
             )
+            drifted = sum(1 for d in decisions if d.code_drift)
+            if drifted:
+                plan_warnings.append(_code_drift_message(step, drifted))
+
             for d in decisions:
                 items.append(
                     PlannedCoordinate(
@@ -887,7 +928,11 @@ def plan(
         counts[it.action] = counts.get(it.action, 0) + 1
 
     return RunPlan(
-        pipeline_id=pipeline.id, source_id=source.id, items=items, counts=counts
+        pipeline_id=pipeline.id,
+        source_id=source.id,
+        items=items,
+        counts=counts,
+        warnings=plan_warnings,
     )
 
 

@@ -15,9 +15,11 @@ Living roadmap. Ordering within sections is rough priority; items marked
 - [x] **Plan/execute split of `run_pipeline`** — `_plan_step` (read-only StepDecision
       per coordinate) / `_record_planned` / `_execute_step` / `_commit_execution_result`,
       orchestrated by a slim `run_pipeline`.
-- [ ] **Code-change detection** — hash step function source alongside the manual
-      `version` string (or at least warn when source changed but version didn't).
-      The silent-stale-cache trap bites hardest for the iterate-on-LLM-steps persona.
+- [x] **Code-change detection** — `version="auto"` derives identity from the source
+      hash (edits recompute); manual versions warn on drift (UserWarning +
+      `code_drift_detected` event + `RunPlan.warnings`) without changing cache
+      semantics. Caveat: hashes the step function's own source only — edits to
+      helpers it calls are not detected.
 - [x] Explain / dry-run — `batchbrain.plan(pipeline, params=...)` returns a RunPlan
       (reuse / execute / pending / removed per coordinate-step, with addresses);
       still to do: surface it in the UI

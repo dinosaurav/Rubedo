@@ -67,7 +67,7 @@ State lives in `.batchbrain/` (SQLite database + content-addressed object store)
 
 See [docs/invariants.md](docs/invariants.md) for the core vocabulary (coordinate, materialization, output address, manifest) and the invariants the engine guarantees — most importantly: a materialization row exists only if its output bytes committed atomically, committed outputs are immutable, and invalidation is a logical tombstone, never a silent delete.
 
-**Caching caveat:** step identity comes from the manual `version` string. If you change a step's code, bump its version or the engine will happily reuse stale outputs.
+**Code changes and caching:** a step's cache identity comes from its `version`. Pass `version="auto"` to derive it from the function's source hash — any code edit recomputes automatically (right for cheap, deterministic steps). With a manual version, edits never trigger recomputes — but the engine detects the drift and warns (in the run output, the event log, and `plan()`) when it reuses an output whose code has changed, so recomputing an expensive LLM step stays a deliberate choice (bump the version, or invalidate a selection).
 
 ## Layout
 

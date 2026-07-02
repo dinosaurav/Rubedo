@@ -18,6 +18,7 @@ class StepSpec:
     params_model: Optional[Type[BaseModel]] = None
     config: Optional[Dict[str, Any]] = None
     workers: int = 4
+    code_hash: Optional[str] = None
 
 
 @dataclass
@@ -35,6 +36,17 @@ def clear_registry():
     _REGISTRY.clear()
 
 
+def _hash_source(fn: Callable) -> Optional[str]:
+    import inspect
+
+    from .hashing import hash_text
+
+    try:
+        return hash_text(inspect.getsource(fn))
+    except (OSError, TypeError):
+        return None
+
+
 def step(
     name: str,
     version: str,
@@ -43,19 +55,40 @@ def step(
     config: Optional[Dict[str, Any]] = None,
     workers: int = 4,
 ):
+    """Declare a step.
+
+    version is the step's cache identity. Pass "auto" to derive it from the
+    function's source hash — any code edit recomputes (right for cheap,
+    deterministic steps). With a manual version the engine never recomputes
+    on code edits, but warns when it reuses an output whose code has since
+    changed (right for expensive/non-deterministic steps where recompute
+    should be a deliberate choice).
+    """
+
     def decorator(fn: Callable):
         from .hashing import hash_json
+
+        code_hash = _hash_source(fn)
+        effective_version = version
+        if version == "auto":
+            if code_hash is None:
+                raise ValueError(
+                    f"Step '{name}': version='auto' requires an inspectable "
+                    "function source"
+                )
+            effective_version = f"auto-{code_hash[:12]}"
 
         config_hash = hash_json(config or {})
         return StepSpec(
             name=name,
             fn=fn,
-            version=version,
+            version=effective_version,
             depends_on=depends_on or [],
             config_hash=config_hash,
             params_model=params_model,
             config=config,
             workers=workers,
+            code_hash=code_hash,
         )
 
     return decorator

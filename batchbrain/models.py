@@ -97,6 +97,7 @@ class Materialization(Base):
     pipeline_id = Column(String, nullable=False, index=True)
     step_name = Column(String, nullable=False, index=True)
     code_version = Column(String, nullable=False)
+    code_hash = Column(String)  # source hash at creation time, for drift detection
     config_hash = Column(String, nullable=False)
     input_hash = Column(String, nullable=False)
     output_address = Column(String, nullable=False, index=True)

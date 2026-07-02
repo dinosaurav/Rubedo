@@ -7,6 +7,10 @@ def hash_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def hash_file(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
