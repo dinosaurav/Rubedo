@@ -6,7 +6,8 @@ class RunListItem(BaseModel):
     kind: str
     status: str
     source_folder: Optional[str] = None
-    step: Optional[str] = None
+    processor_name: Optional[str] = None
+    step_name: Optional[str] = None
     code_version: Optional[str] = None
     started_at: str
     finished_at: Optional[str] = None
@@ -14,6 +15,7 @@ class RunListItem(BaseModel):
     reused_count: int = 0
     failed_count: int = 0
     removed_count: int = 0
+    blocked_count: int = 0
 
 class RunDetailOut(RunListItem):
     error_message: Optional[str] = None
@@ -43,7 +45,8 @@ class RunEventOut(BaseModel):
 
 class MaterializationOut(BaseModel):
     id: int
-    step: str
+    processor_name: str
+    step_name: str
     code_version: str
     input_hash: str
     output_address: str
@@ -57,7 +60,8 @@ class CurrentOutputOut(BaseModel):
     source_folder: str
     coordinate: str
     status: str
-    step: Optional[str] = None
+    processor_name: Optional[str] = None
+    step_name: Optional[str] = None
     code_version: Optional[str] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
@@ -68,7 +72,8 @@ class CurrentOutputOut(BaseModel):
 class SelectionPreviewItem(BaseModel):
     materialization_id: int
     coordinate: Optional[str] = None
-    step: str
+    processor_name: str
+    step_name: str
     code_version: str
     output_address: str
     output_content_hash: str
@@ -89,7 +94,7 @@ class ProcessorSpecOut(BaseModel):
     id: str
     name: str
     folder: str
-    step: str
+    step_name: str
     code_version: str
     workers: int
     allow_folder_override: bool

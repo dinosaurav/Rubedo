@@ -129,3 +129,4 @@ class RunSummary(BaseModel):
     reused_count: int = 0
     failed_count: int = 0
     removed_count: int = 0
+    blocked_count: int = 0

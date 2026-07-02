@@ -2,19 +2,24 @@ import os
 import tempfile
 import pytest
 from fastapi.testclient import TestClient
-
-from batchbrain import process
+from batchbrain import step, pipeline, run_pipeline
 from batchbrain.server import app
 from batchbrain.db import get_session, init_db
 import batchbrain.db as db
 from batchbrain.models import Base, ProcessResult
+import uuid
+from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
 
 client = TestClient(app)
 
+@step(name="count-lines", version="v1")
 def count_lines(path: str) -> ProcessResult:
     text = open(path, "r", encoding="utf-8").read()
     lines = text.split("\n")
     return ProcessResult(value={"text": text}, metadata={"line_count": len(lines), "empty": len(text) == 0})
+
+test_pipeline = pipeline(id="p-test", name="Test Pipeline", folder="test_input", steps=[count_lines])
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
@@ -23,15 +28,27 @@ def setup_teardown():
     os.chdir(temp_dir)
     
     os.makedirs(".batchbrain/objects", exist_ok=True)
+    os.environ["BATCHBRAIN_DB_PATH"] = f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     init_db()
-    Base.metadata.create_all(db.engine)
+    
+    if db.engine is not None:
+        db.engine.dispose()
+    
+    db.engine = create_engine(
+        os.environ["BATCHBRAIN_DB_PATH"],
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool
+    )
+    Base.metadata.create_all(bind=db.engine)
+    from sqlalchemy.orm import sessionmaker
+    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
     
     os.makedirs("test_input", exist_ok=True)
     with open("test_input/a.txt", "w") as f: f.write("one\ntwo")
     with open("test_input/b.txt", "w") as f: f.write("one")
     
     # Run a process to populate DB
-    process("test_input", count_lines, code_version="v1")
+    run_pipeline(test_pipeline, "test_input", workers=1)
     
     yield
     

@@ -54,6 +54,7 @@ def get_runs():
             d['reused_count'] = summary.get('reused', 0)
             d['failed_count'] = summary.get('failed', 0)
             d['removed_count'] = summary.get('removed', 0)
+            d['blocked_count'] = summary.get('blocked', 0)
             results.append(d)
         return results
 
@@ -75,6 +76,7 @@ def get_run(run_id: str):
         d['reused_count'] = summary.get('reused', 0)
         d['failed_count'] = summary.get('failed', 0)
         d['removed_count'] = summary.get('removed', 0)
+        d['blocked_count'] = summary.get('blocked', 0)
         return d
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])
@@ -123,7 +125,8 @@ def get_current_outputs():
                 "source_folder": rc.source_folder,
                 "coordinate": rc.coordinate,
                 "status": rc.status,
-                "step": mat.step if mat else None,
+                "processor_name": mat.processor_name if mat else None,
+                "step_name": mat.step_name if mat else None,
                 "code_version": mat.code_version if mat else None,
                 "input_hash": rc.input_hash,
                 "output_address": rc.output_address,
@@ -167,7 +170,8 @@ def get_object_metadata(output_address: str):
         mat = session.query(Materialization).filter_by(output_address=output_address).first()
         if mat:
             mat_data = {
-                "step": mat.step,
+                "processor_name": mat.processor_name,
+                "step_name": mat.step_name,
                 "code_version": mat.code_version,
                 "created_by_run_id": mat.created_by_run_id,
                 "created_at": mat.created_at,
@@ -208,7 +212,8 @@ async def preview_selection(request: Request):
             items.append({
                 "materialization_id": m.id,
                 "coordinate": None,
-                "step": m.step,
+                "processor_name": m.processor_name,
+                "step_name": m.step_name,
                 "code_version": m.code_version,
                 "output_address": m.output_address,
                 "output_content_hash": m.output_content_hash,
@@ -295,7 +300,7 @@ def get_processors_api():
             id=p.id,
             name=p.name,
             folder=p.folder,
-            step=first_step.name if first_step else "",
+            step_name=first_step.name if first_step else "",
             code_version=first_step.version if first_step else "",
             workers=first_step.workers if first_step else 4,
             allow_folder_override=p.allow_folder_override,

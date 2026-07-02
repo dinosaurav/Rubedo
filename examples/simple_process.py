@@ -2,8 +2,9 @@ import os
 import sys
 import time
 
-from batchbrain import ProcessResult, process
+from batchbrain import ProcessResult, step, pipeline, run_pipeline
 
+@step(name="count-lines", version="1.0.0")
 def count_lines(path: str) -> ProcessResult:
     text = open(path, "r", encoding="utf-8").read()
     lines = text.splitlines()
@@ -24,12 +25,20 @@ def count_lines(path: str) -> ProcessResult:
         },
     )
 
+p = pipeline(id="line-counter", name="Line Counter", folder="examples/input", steps=[count_lines])
+
 if __name__ == "__main__":
-    from batchbrain.processor_runner import run_processor
-    summary = run_processor(
-        "count-lines",
-        inputs={"min_lines": 0, "include_text_preview": False},
+    from argparse import Namespace
+    from batchbrain.cli import run_cmd
+    
+    # We can use the CLI command logic or run_pipeline directly.
+    # Let's use run_pipeline directly to show programmatic usage.
+    summary = run_pipeline(
+        pipeline=p,
+        folder="examples/input",
+        workers=1,
     )
+    
     print(f"Run {summary.run_id} finished")
     print(f"Created: {summary.created_count}")
     print(f"Reused: {summary.reused_count}")

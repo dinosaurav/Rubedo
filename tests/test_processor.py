@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
-from batchbrain.registry import _REGISTRY, processor, get_processor
+from batchbrain.registry import _REGISTRY, step, pipeline, get_processor
 from batchbrain.models import ProcessResult, ExecutionRequest
 from batchbrain.db import get_session, init_db, engine
 from sqlalchemy.orm import close_all_sessions
@@ -14,24 +14,27 @@ from pydantic import BaseModel
 class MyInputs(BaseModel):
     my_val: int
 
-@processor(
-    id="test-proc",
-    name="Test Proc",
-    folder="some_dir",
-    code_version="v1",
-    input_model=MyInputs
-)
+@step(name="my-step", version="v1", input_model=MyInputs)
 def my_proc(path: str, inputs: MyInputs) -> ProcessResult:
     return ProcessResult(value={"val": inputs.my_val})
 
-@processor(
+p1 = pipeline(
+    id="test-proc",
+    name="Test Proc",
+    folder="some_dir",
+    steps=[my_proc]
+)
+
+@step(name="no-inputs", version="v1")
+def no_inputs_proc(path: str) -> ProcessResult:
+    return ProcessResult(value={"ok": True})
+
+p2 = pipeline(
     id="no-inputs",
     name="No Inputs",
     folder="some_dir",
-    code_version="v1"
+    steps=[no_inputs_proc]
 )
-def no_inputs_proc(path: str) -> ProcessResult:
-    return ProcessResult(value={"ok": True})
 
 client = TestClient(app)
 
@@ -43,13 +46,16 @@ def isolated_db():
         old_cwd = os.getcwd()
         os.chdir(tmp)
         db.init_db()
+        _REGISTRY[p1.id] = p1
+        _REGISTRY[p2.id] = p2
         yield
         close_all_sessions()
         if db.engine:
             db.engine.dispose()
         os.chdir(old_cwd)
 
-def test_list_processors():
+@patch("batchbrain.registry.load_processor_module")
+def test_list_processors(mock_load):
     res = client.get("/api/processors")
     assert res.status_code == 200
     data = res.json()
@@ -57,13 +63,15 @@ def test_list_processors():
     assert "test-proc" in ids
     assert "no-inputs" in ids
 
-def test_run_processor_invalid_input():
+@patch("batchbrain.registry.load_processor_module")
+def test_run_processor_invalid_input(mock_load):
     res = client.post("/api/processors/test-proc/run", json={"inputs": {"my_val": "not-an-int"}})
     assert res.status_code == 400
     assert "Invalid inputs" in res.json()["detail"]
 
 @patch("subprocess.Popen")
-def test_run_processor_success(mock_popen):
+@patch("batchbrain.registry.load_processor_module")
+def test_run_processor_success(mock_load, mock_popen):
     res = client.post("/api/processors/test-proc/run", json={"inputs": {"my_val": 42}})
     assert res.status_code == 200
     data = res.json()
@@ -81,7 +89,8 @@ def test_run_processor_success(mock_popen):
         assert json.loads(ex.input_json) == {"my_val": 42}
 
 @patch("subprocess.Popen")
-def test_run_no_inputs(mock_popen):
+@patch("batchbrain.registry.load_processor_module")
+def test_run_no_inputs(mock_load, mock_popen):
     res = client.post("/api/processors/no-inputs/run", json={})
     assert res.status_code == 200
 

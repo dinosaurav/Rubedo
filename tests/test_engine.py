@@ -1,20 +1,26 @@
 import os
 import tempfile
 import pytest
-from batchbrain import process
+from batchbrain import step, pipeline, run_pipeline
 from batchbrain.db import get_session, init_db
 import batchbrain.db as db
 from batchbrain.models import Base, Run, RunCoordinateStatus, Materialization, Manifest, ManifestEntry, ProcessResult
 from batchbrain.selection import Selection
 from batchbrain.invalidation import invalidate
+import uuid
+from sqlalchemy.pool import StaticPool
+from sqlalchemy import create_engine
 
 # A simple processor function for tests
-def count_lines(path: str) -> ProcessResult:
+@step(name="count-lines", version="v1")
+def count_lines(path: str) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
     text = open(path, "r", encoding="utf-8").read()
     lines = text.split("\n")
-    return ProcessResult(value={"text": text}, metadata={"line_count": len(lines), "empty": len(text) == 0})
+    return {"text": text, "line_count": len(lines), "empty": len(text) == 0}
+
+test_pipeline = pipeline(id="p-test", name="Test Pipeline", folder="test_input", steps=[count_lines])
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
@@ -23,8 +29,21 @@ def setup_teardown():
     os.chdir(temp_dir)
     
     os.makedirs(".batchbrain/objects", exist_ok=True)
+    
+    os.environ["BATCHBRAIN_DB_PATH"] = f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     init_db()
-    Base.metadata.create_all(db.engine)
+    
+    if db.engine is not None:
+        db.engine.dispose()
+    
+    db.engine = create_engine(
+        os.environ["BATCHBRAIN_DB_PATH"],
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool
+    )
+    Base.metadata.create_all(bind=db.engine)
+    from sqlalchemy.orm import sessionmaker
+    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
     
     # Create input dir
     os.makedirs("test_input", exist_ok=True)
@@ -39,7 +58,7 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 def test_first_run_creates_all():
-    res = process("test_input", count_lines, code_version="v1")
+    res = run_pipeline(test_pipeline, "test_input", workers=1)
     assert res.run_id is not None
     
     with get_session() as session:
@@ -59,8 +78,8 @@ def test_first_run_creates_all():
         assert len(cur) == 2
 
 def test_second_run_reuses_all():
-    res1 = process("test_input", count_lines, code_version="v1")
-    res2 = process("test_input", count_lines, code_version="v1")
+    res1 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
     
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -69,11 +88,11 @@ def test_second_run_reuses_all():
             assert c.status == "reused"
 
 def test_edit_one_file_recreates_one():
-    res1 = process("test_input", count_lines, code_version="v1")
+    res1 = run_pipeline(test_pipeline, "test_input", workers=1)
     
     with open("test_input/a.txt", "w") as f: f.write("one\ntwo\nthree")
     
-    res2 = process("test_input", count_lines, code_version="v1")
+    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
     
     with get_session() as session:
         coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()}
@@ -81,8 +100,14 @@ def test_edit_one_file_recreates_one():
         assert coords["b.txt"].status == "reused"
 
 def test_change_code_version_recreates_all():
-    res1 = process("test_input", count_lines, code_version="v1")
-    res2 = process("test_input", count_lines, code_version="v2")
+    res1 = run_pipeline(test_pipeline, "test_input", workers=1)
+    
+    @step(name="count-lines", version="v2")
+    def count_lines_v2(path: str) -> dict:
+        return {"ok": True}
+    p_v2 = pipeline(id="p-test", name="Test Pipeline", folder="test_input", steps=[count_lines_v2])
+    
+    res2 = run_pipeline(p_v2, "test_input", workers=1)
     
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -91,12 +116,14 @@ def test_change_code_version_recreates_all():
 
 def test_failure_creates_no_materialization():
     # Make a file unreadable or raise an error
+    @step(name="count-lines", version="v1")
     def failing_processor(path: str) -> dict:
         if "a.txt" in path:
             raise Exception("Failure in a.txt")
-        return count_lines(path)
+        return {"ok": True}
         
-    res = process("test_input", failing_processor, code_version="v1")
+    p_fail = pipeline(id="p-fail", name="Test", folder="test_input", steps=[failing_processor])
+    res = run_pipeline(p_fail, "test_input", workers=1)
     
     with get_session() as session:
         coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()}
@@ -110,7 +137,7 @@ def test_failure_creates_no_materialization():
 
 
 def test_select_by_coordinate_glob():
-    process("test_input", count_lines, code_version="v1")
+    run_pipeline(test_pipeline, "test_input", workers=1)
     
     sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
     from batchbrain.selection import get_selection_materialization_ids
@@ -121,7 +148,7 @@ def test_select_by_coordinate_glob():
         assert mats[0].input_hash is not None # belongs to b.txt
 
 def test_select_by_metadata():
-    process("test_input", count_lines, code_version="v1")
+    run_pipeline(test_pipeline, "test_input", workers=1)
     
     sel = Selection(source_folder="test_input", metadata=[{"key": "line_count", "op": "equals", "value": 2}])
     from batchbrain.selection import get_selection_materialization_ids
@@ -135,7 +162,7 @@ def test_select_by_metadata():
         pass
 
 def test_invalidate_selected():
-    process("test_input", count_lines, code_version="v1")
+    run_pipeline(test_pipeline, "test_input", workers=1)
     
     sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
     res = invalidate(sel, "test invalidation")
@@ -150,23 +177,20 @@ def test_invalidate_selected():
 
 
 def test_invalidated_result_not_reused():
-    process("test_input", count_lines, code_version="v1")
+    run_pipeline(test_pipeline, "test_input", workers=1)
     
     sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
     invalidate(sel, "test")
     
-    res2 = process("test_input", count_lines, code_version="v1")
+    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
     with get_session() as session:
         coords = {c.coordinate: c for c in session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()}
         assert coords["a.txt"].status == "reused"
         assert coords["b.txt"].status == "created" # Recomputed because it was invalidated
 
 def test_logical_deletion():
-    orig_dir = os.getcwd()
-    db.init_db('./test_db.sqlite')
-    
     # 1. First run, create files
-    res1 = process('test_input', count_lines, code_version='v1')
+    res1 = run_pipeline(test_pipeline, 'test_input', workers=1)
     assert res1.created_count == 2
     assert res1.reused_count == 0
     assert res1.removed_count == 0
@@ -185,7 +209,7 @@ def test_logical_deletion():
     os.remove('test_input/a.txt')
     
     # 3. Second run
-    res2 = process('test_input', count_lines, code_version='v1')
+    res2 = run_pipeline(test_pipeline, 'test_input', workers=1)
     assert res2.created_count == 0
     assert res2.reused_count == 1
     assert res2.removed_count == 1
@@ -209,31 +233,19 @@ def test_logical_deletion():
         assert len(mats) == 2
         for m in mats:
             assert m.invalidated_at is None
-            
-    db.Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
-    os.chdir(orig_dir)
 
 def test_restore_deleted_reuses_cache():
-    orig_dir = os.getcwd()
-    db.init_db('./test_db.sqlite')
-    
     with open('test_input/a.txt', 'w') as f: f.write('a')
     
-    process('test_input', count_lines, code_version='v1')
+    run_pipeline(test_pipeline, 'test_input', workers=1)
     os.remove('test_input/a.txt')
-    process('test_input', count_lines, code_version='v1')
+    run_pipeline(test_pipeline, 'test_input', workers=1)
     
     # Restore file with exact same content
     with open('test_input/a.txt', 'w') as f: f.write('a')
     
     # Third run should REUSE, not create
-    res3 = process('test_input', count_lines, code_version='v1')
+    res3 = run_pipeline(test_pipeline, 'test_input', workers=1)
     assert res3.created_count == 0
     assert res3.reused_count == 2 # a.txt and b.txt
     assert res3.removed_count == 0
-    
-    db.Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
-    os.chdir(orig_dir)
-
