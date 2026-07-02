@@ -45,9 +45,9 @@ Living roadmap. Ordering within sections is rough priority; items marked
       status metadata
 - [x] Rate limits — `rate_limit="10/min"`: even pacing shared across a step's
       workers, retries included
-- [ ] Staleness / TTL — outputs expire (`stale_after="24h"`); fits the lifecycle model:
-      planning treats expired generations as non-live, recompute supersedes them.
-      Natural for scraping/LLM outputs.
+- [x] Staleness / TTL — `stale_after="24h"`: planning treats expired outputs as
+      cache misses; recompute with different bytes supersedes, identical bytes
+      append a `refreshed` lifecycle row and reset the `refreshed_at` projection.
 - [ ] `skip_cache` / ephemeral steps — cheap steps recomputed inline instead of
       materialized. Design questions: lineage edges across the skipped hop; what
       blocked-propagation means for a step with no materialization.

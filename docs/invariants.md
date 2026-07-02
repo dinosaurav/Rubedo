@@ -33,11 +33,12 @@ Relationship between a run and a coordinate: created, reused, failed, skipped, o
 Removal from current/canonical eligibility, not necessarily physical deletion.
 
 **Liveness / lifecycle:**
-`Materialization.is_live` is a mutable projection; the append-only
-`materialization_lifecycle` table (invalidated / restored / superseded rows)
-is the truth about every liveness transition. Every `is_live` flip must be
-accompanied by a lifecycle row in the same transaction. Similarly, Run's
-status columns are a projection of the `run_events` log.
+`Materialization.is_live` and `refreshed_at` are mutable projections; the
+append-only `materialization_lifecycle` table (invalidated / restored /
+superseded / refreshed rows) is the truth about every liveness and freshness
+transition. Every projection change must be accompanied by a lifecycle row in
+the same transaction. Similarly, Run's status columns are a projection of the
+`run_events` log.
 
 ## Core Invariants
 

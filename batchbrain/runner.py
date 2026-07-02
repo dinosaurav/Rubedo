@@ -26,7 +26,7 @@ from .db import get_session
 from .sources import Source, SourceItem, coerce_source
 from .hashing import hash_json, compute_output_address
 from .store import stage_and_commit, read_materialization_output
-from .util import utcnow_iso
+from .util import iso_age_seconds, utcnow_iso
 
 
 class MatRef:
@@ -171,6 +171,9 @@ class StepDecision:
     # Reusing an output whose code has changed since it was computed
     # (same version string): legal, but worth a warning
     code_drift: bool = False
+    # Execute decision caused by an expired output rather than a cache miss:
+    # identical recompute bytes refresh the existing generation's clock
+    stale: bool = False
 
 
 def _plan_step(
@@ -240,7 +243,12 @@ def _plan_step(
             .first()
         )
 
-        if existing_mat and not force:
+        expired = False
+        if existing_mat and step.stale_after is not None:
+            freshness = existing_mat.refreshed_at or existing_mat.created_at
+            expired = iso_age_seconds(freshness) > step.stale_after
+
+        if existing_mat and not force and not expired:
             decisions.append(
                 StepDecision(
                     coordinate=coord,
@@ -271,6 +279,7 @@ def _plan_step(
                     input_hash=input_hash,
                     output_address=output_address,
                     parent_mats=parent_mats,
+                    stale=expired,
                 )
             )
     return decisions
@@ -390,6 +399,7 @@ def _record_planned(
                 pipeline_id=ctx.pipeline_id,
                 step_name=step.name,
                 coordinate=d.coordinate,
+                data={"reason": "stale"} if d.stale else None,
             )
 
 
@@ -503,6 +513,7 @@ def _commit_materialization(
     output_path: str,
     metadata_json: Optional[str],
     run_id: str,
+    refresh: bool = False,
 ) -> tuple[Materialization, str]:
     """Record an executed result at its address, honoring generations.
 
@@ -511,10 +522,13 @@ def _commit_materialization(
     non-live one); different bytes supersede the live generation so that
     downstream input hashes change and dependents recompute. Every liveness
     transition appends a materialization_lifecycle row — the append-only
-    truth that the is_live projection caches.
+    truth that the is_live/refreshed_at projections cache.
+
+    refresh marks a staleness-driven recompute: identical bytes then reset
+    the generation's freshness clock instead of being a silent no-op.
 
     Returns (materialization, action) with action one of
-    created | reused | restored | superseded.
+    created | reused | restored | superseded | refreshed.
     """
     live = (
         session.query(Materialization)
@@ -524,6 +538,18 @@ def _commit_materialization(
     superseded = None
     if live:
         if live.output_content_hash == output_content_hash:
+            if refresh:
+                live.refreshed_at = utcnow_iso()
+                session.add(
+                    MaterializationLifecycle(
+                        materialization_id=live.id,
+                        action="refreshed",
+                        run_id=run_id,
+                        reason="stale output re-verified byte-identical",
+                        created_at=utcnow_iso(),
+                    )
+                )
+                return live, "refreshed"
             return live, "reused"
         live.is_live = False
         # Demote before inserting the replacement so the one-live-per-address
@@ -683,6 +709,7 @@ def _commit_execution_result(ctx: _RunContext, step: StepSpec, outcome: Executio
                 output_path=final_path,
                 metadata_json=metadata_json,
                 run_id=ctx.run_id,
+                refresh=decision.stale,
             )
 
             for dep_name, p_mat in decision.parent_mats.items():

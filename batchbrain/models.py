@@ -108,6 +108,10 @@ class Materialization(Base):
     created_at = Column(String, nullable=False)
     created_by_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
     is_live = Column(Boolean, nullable=False, default=True)
+    # Projection of the latest "refreshed" lifecycle row: when a stale
+    # output was last re-verified byte-identical. Freshness clock is
+    # refreshed_at or created_at.
+    refreshed_at = Column(String)
     __table_args__ = (
         Index(
             "uq_live_output_address",
@@ -126,7 +130,7 @@ class MaterializationLifecycle(Base):
     materialization_id = Column(
         Integer, ForeignKey("materializations.id"), nullable=False, index=True
     )
-    action = Column(String, nullable=False)  # invalidated | restored | superseded
+    action = Column(String, nullable=False)  # invalidated | restored | superseded | refreshed
     run_id = Column(String, ForeignKey("runs.id"))
     reason = Column(String)
     superseded_by_id = Column(Integer, ForeignKey("materializations.id"))
@@ -182,7 +186,7 @@ _APPEND_ONLY = (
 
 _PROJECTION_COLUMNS = {
     Run: frozenset({"status", "finished_at", "error_message", "summary_json"}),
-    Materialization: frozenset({"is_live"}),
+    Materialization: frozenset({"is_live", "refreshed_at"}),
 }
 
 

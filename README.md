@@ -64,11 +64,11 @@ Steps carry their own execution policies — built for flaky work like LLM calls
 ```python
 @step(name="enrich", version="1.0.0",
       retries=3, retry_on=(TimeoutError, ConnectionError), retry_delay=1, retry_backoff=2,
-      rate_limit="30/min")
+      rate_limit="30/min", stale_after="24h")
 def enrich(row: dict): ...
 ```
 
-Retries apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost); every attempt is recorded in the run event log, and the final status notes the attempt count. `rate_limit` paces the step evenly across all its workers, retries included.
+Retries apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost); every attempt is recorded in the run event log, and the final status notes the attempt count. `rate_limit` paces the step evenly across all its workers, retries included. `stale_after` expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh its clock.
 
 A step consumes up to three things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed), **params** (run-level knobs, validated against `params_model` and hashed for exactly the steps that declare a `params` parameter), and **static config** (`@step(config=...)`, fixed at registration). Root steps receive the payload positionally; dependent steps receive parent outputs by parameter name, matching `depends_on`.
 

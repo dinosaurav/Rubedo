@@ -178,3 +178,118 @@ def test_bad_rate_limit_rejected_at_registration():
         @step(name="x", version="1", rate_limit="oops")
         def x(path):
             pass
+
+
+# ---------- staleness ----------
+
+
+def test_duration_parsing():
+    from batchbrain.registry import parse_duration
+
+    assert parse_duration("30s") == 30.0
+    assert parse_duration("15min") == 900.0
+    assert parse_duration("24h") == 86400.0
+    assert parse_duration("7d") == 604800.0
+    assert parse_duration("1.5h") == 5400.0
+    with pytest.raises(ValueError, match="Invalid duration"):
+        parse_duration("soon")
+
+
+def backdate_materializations(iso_timestamp):
+    """Raw SQL on purpose: ORM guards forbid mutating created_at."""
+    from sqlalchemy import text
+
+    with get_session() as session:
+        session.execute(
+            text("UPDATE materializations SET created_at = :ts"),
+            {"ts": iso_timestamp},
+        )
+        session.commit()
+
+
+def test_fresh_output_is_reused():
+    create_file("f1.txt", "hello")
+
+    @step(name="scrape", version="1", stale_after="1h")
+    def scrape(path):
+        return open(path).read()
+
+    pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
+    run("p", workers=1)
+    summary = run("p", workers=1)
+    assert (summary.created_count, summary.reused_count) == (0, 1)
+
+
+def test_expired_deterministic_output_is_refreshed():
+    from batchbrain.models import Materialization, MaterializationLifecycle
+
+    create_file("f1.txt", "hello")
+
+    @step(name="scrape", version="1", stale_after="1h")
+    def scrape(path):
+        return open(path).read()
+
+    pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
+    run("p", workers=1)
+    backdate_materializations("2020-01-01T00:00:00Z")
+
+    # Expired -> re-executes; identical bytes -> refreshed, not a new row
+    summary = run("p", workers=1)
+    assert (summary.created_count, summary.reused_count) == (1, 0)
+
+    with get_session() as session:
+        mat = session.query(Materialization).one()
+        assert mat.refreshed_at is not None
+        lc = (
+            session.query(MaterializationLifecycle)
+            .filter_by(materialization_id=mat.id)
+            .one()
+        )
+        assert lc.action == "refreshed"
+
+    # refreshed_at reset the clock: next run reuses again
+    summary3 = run("p", workers=1)
+    assert (summary3.created_count, summary3.reused_count) == (0, 1)
+
+
+def test_expired_nondeterministic_output_is_superseded():
+    import itertools
+
+    from batchbrain.models import Materialization
+
+    create_file("f1.txt", "hello")
+    counter = itertools.count()
+
+    @step(name="scrape", version="1", stale_after="1h")
+    def scrape(path):
+        return {"attempt": next(counter)}
+
+    pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
+    run("p", workers=1)
+    backdate_materializations("2020-01-01T00:00:00Z")
+
+    summary = run("p", workers=1)
+    assert summary.created_count == 1
+
+    with get_session() as session:
+        mats = session.query(Materialization).order_by(Materialization.id).all()
+        assert len(mats) == 2
+        assert mats[0].is_live is False, "old generation superseded"
+        assert mats[1].is_live is True
+
+
+def test_staleness_visible_in_plan():
+    from batchbrain import plan
+
+    create_file("f1.txt", "hello")
+
+    @step(name="scrape", version="1", stale_after="1h")
+    def scrape(path):
+        return open(path).read()
+
+    pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
+    run("p", workers=1)
+    backdate_materializations("2020-01-01T00:00:00Z")
+
+    p = plan("p")
+    assert p.counts == {"execute": 1}

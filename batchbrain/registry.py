@@ -26,6 +26,22 @@ def parse_rate_limit(spec: str) -> Tuple[int, float]:
     return count, _RATE_PERIODS[m.group(2)]
 
 
+_DURATION_UNITS = {"s": 1.0, "sec": 1.0, "second": 1.0,
+                   "m": 60.0, "min": 60.0, "minute": 60.0,
+                   "h": 3600.0, "hour": 3600.0,
+                   "d": 86400.0, "day": 86400.0}
+
+
+def parse_duration(spec: str) -> float:
+    """'24h' -> 86400.0 seconds. Raises on anything unparseable."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([a-z]+?)s?\s*", spec.lower())
+    if not m or m.group(2) not in _DURATION_UNITS:
+        raise ValueError(
+            f"Invalid duration {spec!r}: expected '<number><s|min|h|d>'"
+        )
+    return float(m.group(1)) * _DURATION_UNITS[m.group(2)]
+
+
 @dataclass
 class StepSpec:
     name: str
@@ -43,6 +59,7 @@ class StepSpec:
     retry_delay: float = 0.0
     retry_backoff: float = 1.0
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
+    stale_after: Optional[float] = None  # seconds; None = never stale
 
 
 @dataclass
@@ -84,6 +101,7 @@ def step(
     retry_delay: float = 0.0,
     retry_backoff: float = 1.0,
     rate_limit: Optional[str] = None,
+    stale_after: Optional[str] = None,
 ):
     """Declare a step.
 
@@ -108,6 +126,11 @@ def step(
 
     rate_limit ("10/min", "2/s", "500/hour") paces the step's executions
     across all of its workers, retries included.
+
+    stale_after ("24h", "30min", "7d") expires outputs: a cached output
+    older than this re-executes on the next run. A recompute that produces
+    different bytes supersedes the old generation; identical bytes refresh
+    its clock. Natural for scraped or otherwise time-sensitive data.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
@@ -121,6 +144,7 @@ def step(
     if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
         retry_on = (retry_on,)
     parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
+    parsed_stale = parse_duration(stale_after) if stale_after else None
 
     def decorator(fn: Callable):
         from .hashing import hash_json
@@ -149,6 +173,7 @@ def step(
             retry_delay=retry_delay,
             retry_backoff=retry_backoff,
             rate_limit=parsed_rate,
+            stale_after=parsed_stale,
         )
 
     return decorator
