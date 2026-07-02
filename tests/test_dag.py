@@ -4,8 +4,7 @@ import shutil
 from batchbrain.db import init_db, get_session
 from batchbrain.store import init_store
 from batchbrain.registry import step, pipeline, clear_registry
-from batchbrain.runner import topological_sort
-from batchbrain.processor_runner import run_processor
+from batchbrain.runner import run, topological_sort
 from batchbrain.models import RunCoordinateStatus, Materialization, MaterializationEdge
 import uuid
 from sqlalchemy import create_engine
@@ -112,7 +111,7 @@ def test_linear_dag():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
-    run_processor("p1", workers=1)
+    run("p1", workers=1)
 
     with get_session() as session:
         # Check coordinates created
@@ -154,7 +153,7 @@ def test_cache_hit():
     pipeline(id="p2", name="p2", folder=TEST_FOLDER, steps=[read])
 
     create_file("f1.txt", "hello")
-    run_processor("p2", workers=1)
+    run("p2", workers=1)
 
     with get_session() as session:
         statuses = session.query(RunCoordinateStatus).all()
@@ -162,7 +161,7 @@ def test_cache_hit():
         assert statuses[0].status == "created"
 
     # Run again, should be reused
-    run_processor("p2", workers=1)
+    run("p2", workers=1)
 
     with get_session() as session:
         # 1 from first run, 1 from second run
@@ -190,14 +189,14 @@ def test_invalidate_downstream_then_rerun():
     pipeline(id="p4", name="p4", folder=TEST_FOLDER, steps=[read, upper])
 
     create_file("f1.txt", "hello")
-    run_processor("p4", workers=1)
+    run("p4", workers=1)
 
     res = invalidate(Selection(step="upper"), reason="bad output")
     assert res["invalidated_count"] == 1
 
     # Recompute resurrects the tombstoned materialization; its lineage
     # edges already exist and must not be inserted twice
-    summary = run_processor("p4", workers=1)
+    summary = run("p4", workers=1)
     assert summary.created_count == 1
     assert summary.failed_count == 0
 
@@ -230,7 +229,7 @@ def test_duplicate_content_files_share_materialization():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "hello")
 
-    summary = run_processor("p5", workers=1)
+    summary = run("p5", workers=1)
     assert summary.failed_count == 0
 
     with get_session() as session:
@@ -255,7 +254,7 @@ def test_dag_blocked_on_failure():
 
     create_file("f1.txt", "hello")
 
-    run_processor("p3", workers=1)
+    run("p3", workers=1)
 
     with get_session() as session:
         rc_read = (

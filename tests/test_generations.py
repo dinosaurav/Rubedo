@@ -9,14 +9,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from batchbrain import Selection, invalidate, step, pipeline
+from batchbrain import Selection, invalidate, run, step, pipeline
 from batchbrain.db import init_db, get_session
 from batchbrain.models import (
     Materialization,
     MaterializationLifecycle,
     RunCoordinateStatus,
 )
-from batchbrain.processor_runner import run_processor
 from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
@@ -108,13 +107,13 @@ def test_invalidate_nondeterministic_creates_new_generation():
     make_nondeterministic_pipeline()
     create_file("f1.txt", "hello")
 
-    run_processor("gen", workers=1)
+    run("gen", workers=1)
     (gen1,) = get_mats("generate")
     (sum1,) = get_mats("summarize")
 
     invalidate(Selection(step="generate"), reason="bad output")
 
-    summary = run_processor("gen", workers=1)
+    summary = run("gen", workers=1)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -158,8 +157,8 @@ def test_force_nondeterministic_supersedes_live_generation():
     make_nondeterministic_pipeline()
     create_file("f1.txt", "hello")
 
-    run_processor("gen", workers=1)
-    summary = run_processor("gen", workers=1, force=True)
+    run("gen", workers=1)
+    summary = run("gen", workers=1, force=True)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -189,8 +188,8 @@ def test_force_deterministic_reuses_live_row():
     pipeline(id="det", name="det", folder=TEST_FOLDER, steps=[stable])
     create_file("f1.txt", "hello")
 
-    run_processor("det", workers=1)
-    run_processor("det", workers=1, force=True)
+    run("det", workers=1)
+    run("det", workers=1, force=True)
 
     mats = get_mats("stable")
     assert len(mats) == 1, "identical bytes are the same fact, not a new generation"
@@ -214,21 +213,21 @@ def test_params_are_part_of_cache_identity():
     pipeline(id="par", name="par", folder=TEST_FOLDER, steps=[score, label])
     create_file("f1.txt", "hello")
 
-    s1 = run_processor("par", params={"threshold": 1}, workers=1)
+    s1 = run("par", params={"threshold": 1}, workers=1)
     assert (s1.created_count, s1.reused_count) == (2, 0)
 
     # Same params: full cache hit
-    s2 = run_processor("par", params={"threshold": 1}, workers=1)
+    s2 = run("par", params={"threshold": 1}, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 2)
 
     # Different params, different answer: score recomputes (params are in
     # its address) and label follows through the content-hash chain
-    s3 = run_processor("par", params={"threshold": 100}, workers=1)
+    s3 = run("par", params={"threshold": 100}, workers=1)
     assert (s3.created_count, s3.reused_count) == (2, 0)
 
     # Different params, same answer: score recomputes but produces identical
     # bytes, so label is reused off the unchanged content hash
-    s4 = run_processor("par", params={"threshold": 2}, workers=1)
+    s4 = run("par", params={"threshold": 2}, workers=1)
     assert (s4.created_count, s4.reused_count) == (1, 1)
 
 
@@ -240,8 +239,8 @@ def test_params_do_not_churn_param_free_pipelines():
     pipeline(id="nopar", name="nopar", folder=TEST_FOLDER, steps=[upper])
     create_file("f1.txt", "hello")
 
-    run_processor("nopar", workers=1)
-    s2 = run_processor("nopar", params={"anything": 42}, workers=1)
+    run("nopar", workers=1)
+    s2 = run("nopar", params={"anything": 42}, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
 
@@ -258,7 +257,7 @@ def test_string_payload_round_trips_as_string():
     pipeline(id="types", name="types", folder=TEST_FOLDER, steps=[emit, check])
     create_file("f1.txt", "x")
 
-    summary = run_processor("types", workers=1)
+    summary = run("types", workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit")
     assert mat.content_type == "text"
@@ -277,7 +276,7 @@ def test_bytes_payload_round_trips_as_bytes():
     pipeline(id="types-b", name="types-b", folder=TEST_FOLDER, steps=[emit_b, check_b])
     create_file("f1.txt", "x")
 
-    summary = run_processor("types-b", workers=1)
+    summary = run("types-b", workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit_b")
     assert mat.content_type == "bytes"

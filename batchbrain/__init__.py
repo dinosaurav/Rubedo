@@ -9,7 +9,7 @@ from .models import ProcessResult, RunSummary
 from .selection import Selection
 from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate, recompute
-from .runner import run_pipeline
+from .runner import run
 
 __all__ = [
     "invalidate",
@@ -23,7 +23,7 @@ __all__ = [
     "CsvSource",
     "step",
     "pipeline",
-    "run_pipeline",
+    "run",
     "list_processors",
     "get_processor",
     "load_processor_module",

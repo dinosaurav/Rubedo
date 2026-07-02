@@ -29,7 +29,6 @@ export default function Processors() {
               <th>Source</th>
               <th>Code Version</th>
               <th>Workers</th>
-              <th>Source Override</th>
             </tr>
           </thead>
           <tbody>
@@ -40,7 +39,6 @@ export default function Processors() {
                 <td><code>{p.source_id}</code></td>
                 <td><code>{p.code_version}</code></td>
                 <td>{p.workers}</td>
-                <td>{p.allow_source_override ? 'allowed' : '—'}</td>
               </tr>
             ))}
           </tbody>

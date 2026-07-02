@@ -409,7 +409,6 @@ def get_processors_api():
                 step_name=first_step.name if first_step else "",
                 code_version=first_step.version if first_step else "",
                 workers=first_step.workers if first_step else 4,
-                allow_source_override=p.allow_source_override,
                 params_schema=schema,
                 default_params=defaults or {},
             )

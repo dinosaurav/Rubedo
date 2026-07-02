@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from batchbrain import ProcessResult, step, pipeline
+from batchbrain import ProcessResult, run, step, pipeline
 
 
 class CountLinesParams(BaseModel):
@@ -53,9 +53,8 @@ pipeline(
 )
 
 if __name__ == "__main__":
-    from batchbrain.processor_runner import run_processor
-
-    summary = run_processor(
+    
+    summary = run(
         "count-lines",
         params={"min_lines": 0, "include_text_preview": False},
     )

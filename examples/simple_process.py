@@ -1,4 +1,4 @@
-from batchbrain import ProcessResult, step, pipeline, run_pipeline
+from batchbrain import ProcessResult, step, pipeline, run
 
 
 @step(name="count-lines", version="1.0.0")
@@ -28,7 +28,7 @@ p = pipeline(
 )
 
 if __name__ == "__main__":
-    summary = run_pipeline(
+    summary = run(
         pipeline=p,
         source="examples/input",
         workers=1,

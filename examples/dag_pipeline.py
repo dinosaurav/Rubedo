@@ -1,5 +1,5 @@
 import os
-from batchbrain import step, pipeline, run_pipeline
+from batchbrain import step, pipeline, run
 
 
 # 1. First Step: Read file and split into lines
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         f.write("Another test file\nTo test caching and DAG logic.")
 
     print(f"Running DAG Pipeline '{dag_pipeline_spec.name}'...")
-    summary = run_pipeline(
+    summary = run(
         pipeline=dag_pipeline_spec,
         source=input_dir,
         workers=2,

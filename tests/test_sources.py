@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from batchbrain import CsvSource, FolderSource, step, pipeline, run_pipeline
+from batchbrain import CsvSource, FolderSource, step, pipeline, run
 from batchbrain.db import init_db, get_session
 from batchbrain.models import RunCoordinateStatus
 from batchbrain.registry import clear_registry
@@ -168,21 +168,21 @@ def test_csv_pipeline_row_level_caching():
     p = make_row_pipeline(csv_path)
 
     # First run: 3 rows x 2 steps
-    s1 = run_pipeline(p, workers=1)
+    s1 = run(p, workers=1)
     assert (s1.created_count, s1.reused_count) == (6, 0)
 
     # Same content: everything reused
-    s2 = run_pipeline(p, workers=1)
+    s2 = run(p, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 6)
 
     # Edit one row: only that coordinate recomputes (both steps)
     write_csv(csv_path, "id,name,score\n1,alice,80\n2,bob,90\n3,carol,60\n")
-    s3 = run_pipeline(p, workers=1)
+    s3 = run(p, workers=1)
     assert (s3.created_count, s3.reused_count) == (2, 4)
 
     # Insert a row at the top: coordinates are key-based, nothing shifts
     write_csv(csv_path, "id,name,score\n4,dave,10\n1,alice,80\n2,bob,90\n3,carol,60\n")
-    s4 = run_pipeline(p, workers=1)
+    s4 = run(p, workers=1)
     assert (s4.created_count, s4.reused_count) == (2, 6)
 
     # Dependent step saw the row payload, not a path
@@ -197,6 +197,6 @@ def test_csv_pipeline_row_level_caching():
 
     # Remove a row: marked removed for both steps
     write_csv(csv_path, "id,name,score\n1,alice,80\n2,bob,90\n3,carol,60\n")
-    s5 = run_pipeline(p, workers=1)
+    s5 = run(p, workers=1)
     assert s5.removed_count == 1
     assert (s5.created_count, s5.reused_count) == (0, 6)

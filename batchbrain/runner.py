@@ -2,7 +2,7 @@ import uuid
 import json
 import traceback
 import concurrent.futures
-from typing import Any, Optional, List, Dict
+from typing import Optional, List, Dict
 
 from sqlalchemy.orm import Session
 
@@ -222,10 +222,39 @@ def _build_step_params(step: StepSpec, params: Optional[dict]):
     return params or {}
 
 
+def run(
+    pipeline: PipelineSpec | str,
+    source: Optional[Source | str] = None,
+    *,
+    params: Optional[dict] = None,
+    workers: Optional[int] = None,
+    force: bool = False,
+) -> RunSummary:
+    """Run a pipeline — the single entry point.
+
+    Accepts a PipelineSpec or a registered pipeline id. Params are
+    validated against the first step's params_model whenever one is
+    declared, regardless of how the pipeline was obtained.
+    """
+    if isinstance(pipeline, str):
+        from .registry import get_processor
+
+        pipeline = get_processor(pipeline)
+
+    first = pipeline.steps[0] if pipeline.steps else None
+    if first and first.params_model:
+        params = first.params_model.model_validate(params or {}).model_dump(
+            mode="json"
+        )
+
+    return run_pipeline(
+        pipeline=pipeline, source=source, params=params, workers=workers, force=force
+    )
+
+
 def run_pipeline(
     pipeline: PipelineSpec,
     source: Optional[Source | str] = None,
-    config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
     force: bool = False,
     params: Optional[dict] = None,
@@ -233,8 +262,6 @@ def run_pipeline(
     source = pipeline.source if source is None else coerce_source(source)
     source_id = source.id
     run_id = f"run_{uuid.uuid4().hex[:12]}"
-    config = config or {}
-    config_hash = hash_json(config)
     processor_name = pipeline.id
 
     topo_steps = topological_sort(pipeline)
@@ -246,7 +273,7 @@ def run_pipeline(
             status="running",
             processor_name=processor_name,
             source_id=source_id,
-            config_hash=config_hash,
+            params_json=json.dumps(params or {}, sort_keys=True),
             started_at=utcnow_iso(),
         )
         session.add(run)

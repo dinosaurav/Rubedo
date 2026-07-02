@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pytest
-from batchbrain import step, pipeline, run_pipeline
+from batchbrain import step, pipeline, run
 from batchbrain.db import get_session, init_db
 import batchbrain.db as db
 from batchbrain.models import (
@@ -76,12 +76,12 @@ def setup_teardown():
 
 
 def test_first_run_creates_all():
-    res = run_pipeline(test_pipeline, "test_input", workers=1)
+    res = run(test_pipeline, "test_input", workers=1)
     assert res.run_id is not None
 
     with get_session() as session:
-        run = session.query(Run).filter_by(id=res.run_id).first()
-        assert run.status == "completed"
+        run_row = session.query(Run).filter_by(id=res.run_id).first()
+        assert run_row.status == "completed"
 
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
         assert len(coords) == 2
@@ -97,8 +97,8 @@ def test_first_run_creates_all():
 
 
 def test_second_run_reuses_all():
-    run_pipeline(test_pipeline, "test_input", workers=1)
-    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
+    res2 = run(test_pipeline, "test_input", workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -108,12 +108,12 @@ def test_second_run_reuses_all():
 
 
 def test_edit_one_file_recreates_one():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     with open("test_input/a.txt", "w") as f:
         f.write("one\ntwo\nthree")
 
-    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res2 = run(test_pipeline, "test_input", workers=1)
 
     with get_session() as session:
         coords = {
@@ -127,7 +127,7 @@ def test_edit_one_file_recreates_one():
 
 
 def test_change_code_version_recreates_all():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     @step(name="count-lines", version="v2")
     def count_lines_v2(path: str) -> dict:
@@ -137,7 +137,7 @@ def test_change_code_version_recreates_all():
         id="p-test", name="Test Pipeline", folder="test_input", steps=[count_lines_v2]
     )
 
-    res2 = run_pipeline(p_v2, "test_input", workers=1)
+    res2 = run(p_v2, "test_input", workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -156,7 +156,7 @@ def test_failure_creates_no_materialization():
     p_fail = pipeline(
         id="p-fail", name="Test", folder="test_input", steps=[failing_processor]
     )
-    res = run_pipeline(p_fail, "test_input", workers=1)
+    res = run(p_fail, "test_input", workers=1)
 
     with get_session() as session:
         coords = {
@@ -174,7 +174,7 @@ def test_failure_creates_no_materialization():
 
 
 def test_select_by_coordinate_glob():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     from batchbrain.selection import get_selection_materialization_ids
@@ -189,7 +189,7 @@ def test_select_by_coordinate_glob():
 
 
 def test_select_by_metadata():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     sel = Selection(
         source_id="folder:test_input",
@@ -210,7 +210,7 @@ def test_select_by_metadata():
 
 
 def test_invalidate_selected():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     res = invalidate(sel, "test invalidation")
@@ -228,12 +228,12 @@ def test_invalidate_selected():
 
 
 def test_invalidated_result_not_reused():
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     invalidate(sel, "test")
 
-    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res2 = run(test_pipeline, "test_input", workers=1)
     with get_session() as session:
         coords = {
             c.coordinate: c
@@ -249,7 +249,7 @@ def test_invalidated_result_not_reused():
 
 def test_logical_deletion():
     # 1. First run, create files
-    res1 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res1 = run(test_pipeline, "test_input", workers=1)
     assert res1.created_count == 2
     assert res1.reused_count == 0
     assert res1.removed_count == 0
@@ -268,7 +268,7 @@ def test_logical_deletion():
     os.remove("test_input/a.txt")
 
     # 3. Second run
-    res2 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res2 = run(test_pipeline, "test_input", workers=1)
     assert res2.created_count == 0
     assert res2.reused_count == 1
     assert res2.removed_count == 1
@@ -300,16 +300,16 @@ def test_restore_deleted_reuses_cache():
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
     os.remove("test_input/a.txt")
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     # Restore file with exact same content
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
     # Third run should REUSE, not create
-    res3 = run_pipeline(test_pipeline, "test_input", workers=1)
+    res3 = run(test_pipeline, "test_input", workers=1)
     assert res3.created_count == 0
     assert res3.reused_count == 2  # a.txt and b.txt
     assert res3.removed_count == 0

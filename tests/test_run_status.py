@@ -12,7 +12,7 @@ from batchbrain.models import (
     ManifestEntry,
     RunEvent,
 )
-from batchbrain.runner import run_pipeline
+from batchbrain.runner import run
 from batchbrain import step, pipeline
 import uuid
 from sqlalchemy.pool import StaticPool
@@ -83,7 +83,7 @@ p_fail = pipeline(id="p-fail", name="Fail", folder="input", steps=[failing_proce
 
 def test_first_run_creates_statuses(setup_teardown):
     input_dir = setup_teardown
-    res = run_pipeline(p_dummy, input_dir, workers=1)
+    res = run(p_dummy, input_dir, workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
@@ -93,8 +93,8 @@ def test_first_run_creates_statuses(setup_teardown):
             assert c.processor_name == "p-dummy"
             assert c.materialization_id is not None
 
-        run = session.query(Run).filter_by(id=res.run_id).first()
-        summary = json.loads(run.summary_json)
+        run_row = session.query(Run).filter_by(id=res.run_id).first()
+        summary = json.loads(run_row.summary_json)
         assert summary["created"] == 3
         assert summary["reused"] == 0
         assert summary["failed"] == 0
@@ -103,8 +103,8 @@ def test_first_run_creates_statuses(setup_teardown):
 
 def test_second_run_reuses_statuses(setup_teardown):
     input_dir = setup_teardown
-    run_pipeline(p_dummy, input_dir, workers=1)
-    res2 = run_pipeline(p_dummy, input_dir, workers=1)
+    run(p_dummy, input_dir, workers=1)
+    res2 = run(p_dummy, input_dir, workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -112,8 +112,8 @@ def test_second_run_reuses_statuses(setup_teardown):
         for c in coords:
             assert c.status == "reused"
 
-        run = session.query(Run).filter_by(id=res2.run_id).first()
-        summary = json.loads(run.summary_json)
+        run_row = session.query(Run).filter_by(id=res2.run_id).first()
+        summary = json.loads(run_row.summary_json)
         assert summary["reused"] == 3
         assert summary["created"] == 0
 
@@ -123,13 +123,13 @@ def test_second_run_reuses_statuses(setup_teardown):
 
 def test_changed_file_creates_one(setup_teardown):
     input_dir = setup_teardown
-    run_pipeline(p_dummy, input_dir, workers=1)
+    run(p_dummy, input_dir, workers=1)
 
     # modify one file
     with open(os.path.join(input_dir, "a.txt"), "w") as f:
         f.write("one_modified")
 
-    res2 = run_pipeline(p_dummy, input_dir, workers=1)
+    res2 = run(p_dummy, input_dir, workers=1)
 
     with get_session() as session:
         coords = {
@@ -142,8 +142,8 @@ def test_changed_file_creates_one(setup_teardown):
         assert coords["b.txt"].status == "reused"
         assert coords["c.txt"].status == "reused"
 
-        run = session.query(Run).filter_by(id=res2.run_id).first()
-        summary = json.loads(run.summary_json)
+        run_row = session.query(Run).filter_by(id=res2.run_id).first()
+        summary = json.loads(run_row.summary_json)
         assert summary["created"] == 1
         assert summary["reused"] == 2
 
@@ -153,7 +153,7 @@ def test_changed_file_creates_one(setup_teardown):
 
 def test_deleted_file_records_removed(setup_teardown):
     input_dir = setup_teardown
-    res1 = run_pipeline(p_dummy, input_dir, workers=1)
+    res1 = run(p_dummy, input_dir, workers=1)
 
     # get old address
     with get_session() as session:
@@ -166,7 +166,7 @@ def test_deleted_file_records_removed(setup_teardown):
 
     os.remove(os.path.join(input_dir, "a.txt"))
 
-    res2 = run_pipeline(p_dummy, input_dir, workers=1)
+    res2 = run(p_dummy, input_dir, workers=1)
 
     with get_session() as session:
         coords = {
@@ -180,8 +180,8 @@ def test_deleted_file_records_removed(setup_teardown):
         assert coords["b.txt"].status == "reused"
         assert coords["c.txt"].status == "reused"
 
-        run = session.query(Run).filter_by(id=res2.run_id).first()
-        summary = json.loads(run.summary_json)
+        run_row = session.query(Run).filter_by(id=res2.run_id).first()
+        summary = json.loads(run_row.summary_json)
         assert summary["removed"] == 1
         assert summary["reused"] == 2
 
@@ -200,7 +200,7 @@ def test_deleted_file_records_removed(setup_teardown):
 
 def test_failed_coordinate_records_failed(setup_teardown):
     input_dir = setup_teardown
-    res = run_pipeline(p_fail, input_dir, workers=1)
+    res = run(p_fail, input_dir, workers=1)
 
     with get_session() as session:
         coords = {
@@ -214,10 +214,10 @@ def test_failed_coordinate_records_failed(setup_teardown):
         assert coords["c.txt"].status == "created"
         assert "Failed on b.txt" in coords["b.txt"].error_message
 
-        run = session.query(Run).filter_by(id=res.run_id).first()
-        assert run.status == "completed_with_failures"
+        run_row = session.query(Run).filter_by(id=res.run_id).first()
+        assert run_row.status == "completed_with_failures"
 
-        summary = json.loads(run.summary_json)
+        summary = json.loads(run_row.summary_json)
         assert summary["failed"] == 1
         assert summary["created"] == 2
 
@@ -230,7 +230,7 @@ def test_failed_coordinate_records_failed(setup_teardown):
 
 def test_event_log_populated(setup_teardown):
     input_dir = setup_teardown
-    res = run_pipeline(p_dummy, input_dir, workers=1)
+    res = run(p_dummy, input_dir, workers=1)
 
     with get_session() as session:
         events = session.query(RunEvent).filter_by(run_id=res.run_id).all()

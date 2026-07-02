@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from batchbrain import Selection, invalidate, step, pipeline
+from batchbrain import Selection, invalidate, run, step, pipeline
 from batchbrain.db import init_db, get_session
 from batchbrain.models import (
     ImmutabilityError,
@@ -18,7 +18,6 @@ from batchbrain.models import (
     RunCoordinateStatus,
     RunEvent,
 )
-from batchbrain.processor_runner import run_processor
 from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
@@ -82,7 +81,7 @@ def run_simple_pipeline(pipe_id="imm"):
     pipeline(id=pipe_id, name=pipe_id, folder=TEST_FOLDER, steps=[read])
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
-    return run_processor(pipe_id, workers=1)
+    return run(pipe_id, workers=1)
 
 
 def test_append_only_rows_reject_updates():
@@ -126,13 +125,13 @@ def test_materialization_liveness_is_the_only_legal_update():
 def test_run_identity_is_immutable_but_lifecycle_is_not():
     summary = run_simple_pipeline()
     with get_session() as session:
-        run = session.get(Run, summary.run_id)
-        run.status = "completed"  # lifecycle projection: allowed
+        run_row = session.get(Run, summary.run_id)
+        run_row.status = "completed"  # lifecycle projection: allowed
         session.commit()
 
     with get_session() as session:
-        run = session.get(Run, summary.run_id)
-        run.source_id = "folder:elsewhere"
+        run_row = session.get(Run, summary.run_id)
+        run_row.source_id = "folder:elsewhere"
         with pytest.raises(ImmutabilityError, match="immutable"):
             session.commit()
         session.rollback()
@@ -143,7 +142,7 @@ def test_restore_preserves_invalidation_history():
 
     invalidate(Selection(step="read"), reason="looked wrong")
     # Deterministic step: rerun produces identical bytes -> restored, not new row
-    summary = run_processor("imm", workers=1)
+    summary = run("imm", workers=1)
     assert summary.created_count == 1
 
     with get_session() as session:

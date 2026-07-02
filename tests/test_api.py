@@ -2,7 +2,7 @@ import os
 import tempfile
 import pytest
 from fastapi.testclient import TestClient
-from batchbrain import step, pipeline, run_pipeline
+from batchbrain import step, pipeline, run
 from batchbrain.server import app
 from batchbrain.db import init_db
 import batchbrain.db as db
@@ -61,7 +61,7 @@ def setup_teardown():
         f.write("one")
 
     # Run a process to populate DB
-    run_pipeline(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, "test_input", workers=1)
 
     yield
 

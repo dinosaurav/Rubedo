@@ -27,7 +27,7 @@ class Run(Base):
     kind = Column(String, nullable=False)
     status = Column(String, nullable=False)
     source_id = Column(String)
-    config_hash = Column(String)
+    params_json = Column(String)
     selection_json = Column(String)
     started_at = Column(String, nullable=False)
     finished_at = Column(String)

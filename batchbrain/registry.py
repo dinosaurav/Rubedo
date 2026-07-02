@@ -26,7 +26,6 @@ class PipelineSpec:
     name: str
     source: Source
     steps: List[StepSpec]
-    allow_source_override: bool = False
 
 
 _REGISTRY: Dict[str, PipelineSpec] = {}
@@ -68,7 +67,6 @@ def pipeline(
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
     source: Optional[Source] = None,
-    allow_source_override: bool = False,
 ):
     if (source is None) == (folder is None):
         raise ValueError("Pass exactly one of source= or folder= (FolderSource sugar)")
@@ -83,7 +81,6 @@ def pipeline(
         name=name,
         source=source,
         steps=steps or [],
-        allow_source_override=allow_source_override,
     )
     _REGISTRY[pipe_id] = spec
     return spec
