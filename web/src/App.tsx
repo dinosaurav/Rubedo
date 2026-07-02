@@ -10,8 +10,6 @@ import SelectionBuilder from './pages/SelectionBuilder';
 import OutputDetail from './pages/OutputDetail';
 import RunDiff from './pages/RunDiff';
 import Processors from './pages/Processors';
-import Executions from './pages/Executions';
-import ExecutionDetail from './pages/ExecutionDetail';
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -43,9 +41,6 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavLink to="/processors" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Activity size={20} /> Processors
           </NavLink>
-          <NavLink to="/executions" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <Activity size={20} /> Executions
-          </NavLink>
         </div>
       </nav>
       <main className="main-content">
@@ -68,8 +63,6 @@ function App() {
           <Route path="/select" element={<SelectionBuilder />} />
           <Route path="/diff" element={<RunDiff />} />
           <Route path="/processors" element={<Processors />} />
-          <Route path="/executions" element={<Executions />} />
-          <Route path="/executions/:executionId" element={<ExecutionDetail />} />
           <Route path="/objects/:address" element={<OutputDetail />} />
         </Routes>
       </Layout>

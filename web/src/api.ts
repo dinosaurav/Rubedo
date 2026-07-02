@@ -66,36 +66,4 @@ export async function fetchProcessors() {
   return res.json();
 }
 
-export async function runProcessor(id: string, payload: any) {
-  const res = await fetch(`${API_URL}/processors/${id}/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const data = await res.json();
-    throw new Error(data.detail || 'Failed to run processor');
-  }
-  return res.json();
-}
-
-export async function fetchExecutions() {
-  const res = await fetch(`${API_URL}/executions`);
-  return res.json();
-}
-
-export async function fetchExecution(id: string) {
-  const res = await fetch(`${API_URL}/executions/${id}`);
-  return res.json();
-}
-
-export async function fetchExecutionStdout(id: string) {
-  const res = await fetch(`${API_URL}/executions/${id}/stdout`);
-  return res.text();
-}
-
-export async function fetchExecutionStderr(id: string) {
-  const res = await fetch(`${API_URL}/executions/${id}/stderr`);
-  return res.text();
-}
 
