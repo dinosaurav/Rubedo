@@ -87,10 +87,18 @@ def get_selection_materialization_ids(session: Session, selection: Selection) ->
                         passed = False; break
                     if f.op == "not equals" and val == f.value:
                         passed = False; break
-                    if f.op == "greater than" and not (val > f.value):
-                        passed = False; break
-                    if f.op == "less than" and not (val < f.value):
-                        passed = False; break
+                    if f.op == "greater than":
+                        try:
+                            if not (val > f.value):
+                                passed = False; break
+                        except TypeError:
+                            passed = False; break
+                    if f.op == "less than":
+                        try:
+                            if not (val < f.value):
+                                passed = False; break
+                        except TypeError:
+                            passed = False; break
             
             if not passed:
                 continue

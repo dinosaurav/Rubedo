@@ -1,9 +1,10 @@
 import os
 import json
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Request, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .db import get_session, init_db
@@ -12,7 +13,7 @@ from .selection import Selection
 from .invalidation import invalidate, recompute
 from .schemas import (
     RunListItem, RunDetailOut, RunCoordinateStatusOut, RunEventOut,
-    MaterializationOut, SelectionPreviewResponse,
+    MaterializationOut, CurrentOutputOut, SelectionPreviewResponse,
     SelectionPreviewItem, SelectionInvalidateResponse
 )
 
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 def _to_dict(obj):
@@ -88,10 +90,47 @@ def get_run_events(run_id: str):
         return [_to_dict(e) for e in events]
 
 @app.get("/api/materializations", response_model=List[MaterializationOut])
-def get_materializations(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+def get_materializations(response: Response, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
     with get_session() as session:
+        total = session.query(Materialization).count()
         mats = session.query(Materialization).order_by(Materialization.id.desc()).limit(limit).offset(offset).all()
+        response.headers["X-Total-Count"] = str(total)
         return [_to_dict(m) for m in mats]
+
+@app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
+def get_current_outputs():
+    with get_session() as session:
+        latest_ids_subq = (
+            session.query(func.max(RunCoordinateStatus.id).label("max_id"))
+            .group_by(RunCoordinateStatus.source_folder, RunCoordinateStatus.coordinate)
+            .subquery()
+        )
+        rows = (
+            session.query(RunCoordinateStatus)
+            .filter(RunCoordinateStatus.id.in_(session.query(latest_ids_subq.c.max_id)))
+            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
+            .all()
+        )
+
+        results = []
+        for rc in rows:
+            mat = None
+            if rc.materialization_id is not None:
+                mat = session.query(Materialization).filter_by(id=rc.materialization_id).first()
+            if mat and mat.invalidated_at is not None:
+                continue
+            results.append({
+                "source_folder": rc.source_folder,
+                "coordinate": rc.coordinate,
+                "status": rc.status,
+                "step": mat.step if mat else None,
+                "code_version": mat.code_version if mat else None,
+                "input_hash": rc.input_hash,
+                "output_address": rc.output_address,
+                "materialization_id": rc.materialization_id,
+                "run_id": rc.run_id,
+            })
+        return results
 
 
 @app.get("/api/objects/{output_address}")

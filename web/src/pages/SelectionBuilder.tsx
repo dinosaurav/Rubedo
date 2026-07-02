@@ -20,9 +20,13 @@ export default function SelectionBuilder() {
   const addMetaFilter = () => {
     if (!metaKey) return;
     let val: any = metaValue;
-    if (val === 'true') val = true;
-    if (val === 'false') val = false;
-    if (!isNaN(Number(val)) && val.trim() !== '') val = Number(val);
+    if (val === 'true') {
+      val = true;
+    } else if (val === 'false') {
+      val = false;
+    } else if (!isNaN(Number(val)) && val.trim() !== '') {
+      val = Number(val);
+    }
     
     setSelection({
       ...selection,

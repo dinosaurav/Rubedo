@@ -53,6 +53,17 @@ class MaterializationOut(BaseModel):
     invalidated_at: Optional[str] = None
     invalidation_reason: Optional[str] = None
 
+class CurrentOutputOut(BaseModel):
+    source_folder: str
+    coordinate: str
+    status: str
+    step: Optional[str] = None
+    code_version: Optional[str] = None
+    input_hash: Optional[str] = None
+    output_address: Optional[str] = None
+    materialization_id: Optional[int] = None
+    run_id: str
+
 
 class SelectionPreviewItem(BaseModel):
     materialization_id: int

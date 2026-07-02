@@ -4,11 +4,21 @@ import { fetchMaterializations } from '../api';
 import { DataTable } from '../components/DataTable';
 import type { ColumnDef } from '@tanstack/react-table';
 
+const PAGE_SIZE = 100;
+
 export default function Materializations() {
   const [mats, setMats] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+
+  const loadPage = (offset: number) => {
+    fetchMaterializations(PAGE_SIZE, offset).then(({ items, total }) => {
+      setMats(prev => offset === 0 ? items : [...prev, ...items]);
+      setTotal(total);
+    });
+  };
 
   useEffect(() => {
-    fetchMaterializations().then(setMats);
+    loadPage(0);
   }, []);
 
   const columns: ColumnDef<any, any>[] = [
@@ -70,6 +80,13 @@ export default function Materializations() {
         <h1 className="page-title">Materializations</h1>
       </div>
       <DataTable data={mats} columns={columns} />
+      {mats.length < total && (
+        <div style={{ marginTop: '1rem' }}>
+          <button className="btn btn-outline" onClick={() => loadPage(mats.length)}>
+            Load More ({mats.length} of {total})
+          </button>
+        </div>
+      )}
     </div>
   );
 }

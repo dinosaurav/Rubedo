@@ -20,9 +20,12 @@ export async function fetchRunEvents(id: string) {
   return res.json();
 }
 
-export async function fetchMaterializations() {
-  const res = await fetch(`${API_URL}/materializations`);
-  return res.json();
+export async function fetchMaterializations(limit = 100, offset = 0) {
+  const res = await fetch(`${API_URL}/materializations?limit=${limit}&offset=${offset}`);
+  const items = await res.json();
+  const totalHeader = res.headers.get('X-Total-Count');
+  const total = totalHeader !== null ? Number(totalHeader) : items.length;
+  return { items, total };
 }
 
 export async function fetchCurrentOutputs() {

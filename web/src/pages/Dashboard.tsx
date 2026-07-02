@@ -13,7 +13,7 @@ export default function Dashboard() {
       .then(([runs, mats, current]) => {
         setStats({
           runs: runs.length,
-          mats: mats.length,
+          mats: mats.total,
           current: current.length
         });
       });
