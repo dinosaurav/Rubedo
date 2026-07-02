@@ -1,8 +1,8 @@
 # Batchit
 
-A local-first batch processing engine that runs DAG pipelines over folders of files, with content-addressed caching, durable run history, and surgical invalidation.
+A local-first batch processing engine that runs DAG pipelines over collections of coordinates — files in a folder, rows in a CSV — with content-addressed caching, durable run history, and surgical invalidation.
 
-Every step output is stored immutably at a deterministic address — `hash(step, code_version, input_hash, config_hash)` — so re-running a pipeline only recomputes what actually changed. A run ledger records what happened to every file in every run (`created`, `reused`, `failed`, `blocked`, `removed`), and lineage edges connect each output to the outputs it was derived from.
+Every step output is stored immutably at a deterministic address — `hash(step, code_version, input_hash, config_hash)` — so re-running a pipeline only recomputes what actually changed. A run ledger records what happened to every coordinate in every run (`created`, `reused`, `failed`, `blocked`, `removed`), and lineage edges connect each output to the outputs it was derived from.
 
 ## Quickstart
 
@@ -41,6 +41,26 @@ cd web && npm run dev                            # UI on :5173
 
 Running and recomputing always happen from library code; the UI's only write action is invalidation.
 
+## Sources
+
+Coordinates come from a `Source` — anything that can enumerate `(coordinate, content_hash)` pairs and load payloads. `folder="..."` above is sugar for `FolderSource`, where each file is a coordinate and root steps receive its path. `CsvSource` makes each row a coordinate and hands root steps the row dict:
+
+```python
+from batchbrain import CsvSource, ProcessResult, step, pipeline
+
+@step(name="enrich", version="v1")
+def enrich(row: dict):
+    return {"email": row["email"], "summary": call_llm(row["notes"])}
+
+pipeline(id="enrich-leads", name="Enrich Leads",
+         source=CsvSource("data/leads.csv", key="email"),
+         steps=[enrich])
+```
+
+`key` names the column(s) that identify a row and is deliberately required: it keeps coordinates stable when rows are edited or inserted, so only changed rows recompute. Pass `key=None` to opt into content-addressed coordinates, where an edited row shows up as removed + created instead.
+
+Root steps receive the source payload as their first argument, and receive validated `inputs` if (and only if) they declare a parameter named `inputs`. Dependent steps receive parent outputs by parameter name, matching `depends_on`.
+
 State lives in `.batchbrain/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
 
 ## Concepts
@@ -51,7 +71,7 @@ See [docs/invariants.md](docs/invariants.md) for the core vocabulary (coordinate
 
 ## Layout
 
-- `batchbrain/` — engine (scanner, hashing, runner), SQLAlchemy models, object store, FastAPI server
+- `batchbrain/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
 - `web/` — React + Vite dashboard (runs, materializations, lineage, selection-based invalidation)
 - `examples/` — runnable demo pipelines
 - `tests/` — pytest suite (`uv run pytest`)

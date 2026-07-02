@@ -21,7 +21,10 @@ A user-triggered execution attempt over some scope.
 Something that happened during execution, successful or not.
 
 **Coordinate:**
-Human-facing selection key, e.g. file path.
+Human-facing selection key, e.g. a file path or a row key. Produced by a Source; must stay stable across scans so "changed" (same coordinate, new hash) is distinguishable from "removed + added".
+
+**Source:**
+Anything that can enumerate coordinates with content hashes and load their payloads (folder of files, CSV rows, table rows). Identified by a stable `source_id`.
 
 **Run-coordinate status:**
 Relationship between a run and a coordinate: created, reused, failed, skipped, out_of_scope, etc.

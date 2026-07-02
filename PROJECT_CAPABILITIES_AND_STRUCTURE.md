@@ -4,16 +4,17 @@ This document provides a detailed overview of the Batchit (also internally refer
 
 ## Project Overview & Capabilities
 
-Batchit is a batch processing framework designed to efficiently run custom "processors" over files and data. It is composed of a Python-based backend processing engine and a React-based frontend web application.
+Batchit is a batch processing framework designed to efficiently run custom "processors" over collections of coordinates — files in a folder, rows in a CSV. It is composed of a Python-based backend processing engine and a React-based frontend web application.
 
 ### Key Capabilities:
 1. **DAG Pipeline Framework:** Developers can define multi-step Directed Acyclic Graph (DAG) pipelines using `@step` and `pipeline()` decorators. Steps can declare explicit dependencies on upstream steps, allowing outputs to flow downstream seamlessly.
-2. **Durable Materialization & Invalidation:** The engine treats processing as a durable, content-addressed materialization pipeline. It uses point-in-time `Manifest` snapshots to robustly track the state of input folders and skips recomputation if the input hashes, configuration, and code versions haven't changed.
-3. **Durable Run Ledger & Lineage:** The system records exhaustive telemetry for each run. It creates a robust event ledger (`RunEvent`) and computes per-coordinate status summaries (`RunCoordinateStatus`) categorizing work as `created`, `reused`, `failed`, `blocked`, or `removed`. `MaterializationEdge` models persist parent-child lineage.
-4. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to topologically sort steps and process file tasks in parallel while correctly blocking on failed upstream dependencies.
-5. **Database Storage:** Results, metadata, runs, run ledgers, topological lineage, and caching statuses are tracked in a SQL database (via SQLAlchemy).
-6. **API Server:** A read-only FastAPI server exposing pipelines, runs, materializations, lineage, and current outputs to the frontend, plus selection-based invalidation as its single write action.
-7. **Web UI:** A React + Vite dashboard for browsing runs, outputs, and lineage, and surgically invalidating outputs. Runs themselves are triggered from library code (`run_processor` / `run_pipeline`), not the UI.
+2. **Pluggable Coordinate Sources:** A `Source` abstraction enumerates coordinates and loads their payloads. `FolderSource` (files, coordinate = relative path) and `CsvSource` (rows, coordinate = key column) ship built in; `folder=` on `pipeline()` is sugar for `FolderSource`.
+3. **Durable Materialization & Invalidation:** The engine treats processing as a durable, content-addressed materialization pipeline. It uses point-in-time `Manifest` snapshots to robustly track the state of input sources and skips recomputation if the input hashes, configuration, and code versions haven't changed.
+4. **Durable Run Ledger & Lineage:** The system records exhaustive telemetry for each run. It creates a robust event ledger (`RunEvent`) and computes per-coordinate status summaries (`RunCoordinateStatus`) categorizing work as `created`, `reused`, `failed`, `blocked`, or `removed`. `MaterializationEdge` models persist parent-child lineage.
+5. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to topologically sort steps and process file tasks in parallel while correctly blocking on failed upstream dependencies.
+6. **Database Storage:** Results, metadata, runs, run ledgers, topological lineage, and caching statuses are tracked in a SQL database (via SQLAlchemy).
+7. **API Server:** A read-only FastAPI server exposing pipelines, runs, materializations, lineage, and current outputs to the frontend, plus selection-based invalidation as its single write action.
+8. **Web UI:** A React + Vite dashboard for browsing runs, outputs, and lineage, and surgically invalidating outputs. Runs themselves are triggered from library code (`run_processor` / `run_pipeline`), not the UI.
 
 ## Folder Structure
 
@@ -23,7 +24,7 @@ Below is the breakdown of the top-level directories and critical files, and how 
 This is the core Python backend package containing the execution engine, database logic, API, and CLI.
 
 - **Execution & Pipeline Logic (`runner.py`, `registry.py`)**: Handles registering `@step`s and `pipeline()`s, topological sorting, managing concurrent executors, and flowing artifacts across graphs.
-- **State & Invalidation (`hashing.py`, `invalidation.py`, `scanner.py`)**: Responsible for scanning target directories, calculating file hashes, and determining if a coordinate's cached result is still valid.
+- **Sources & Invalidation (`sources.py`, `hashing.py`, `invalidation.py`)**: The `Source` protocol with `FolderSource`/`CsvSource`, content hashing, and logic for determining if a coordinate's cached result is still valid.
 - **Data Models & Storage (`db.py`, `models.py`, `schemas.py`, `store.py`, `selection.py`)**: SQLAlchemy database setup, ORM models (including tracking `MaterializationEdge`s), Pydantic schemas, and local object store logic.
 - **Run Entrypoint (`processor_runner.py`)**: `run_processor()` — validates inputs against the first step's schema, enforces folder-override rules, and dispatches to the engine. This is how library clients trigger runs.
 - **Server (`server.py`)**: Read-only FastAPI application for the frontend, plus the invalidation endpoint.
