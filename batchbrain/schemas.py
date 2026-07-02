@@ -7,7 +7,7 @@ class RunListItem(BaseModel):
     kind: str
     status: str
     source_id: Optional[str] = None
-    processor_name: Optional[str] = None
+    pipeline_id: Optional[str] = None
     started_at: str
     finished_at: Optional[str] = None
     created_count: int = 0
@@ -24,7 +24,7 @@ class RunDetailOut(RunListItem):
 class RunCoordinateStatusOut(BaseModel):
     coordinate: str
     status: str
-    processor_name: Optional[str] = None
+    pipeline_id: Optional[str] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
     materialization_id: Optional[int] = None
@@ -40,7 +40,7 @@ class RunEventOut(BaseModel):
     timestamp: str
     level: str
     event_type: str
-    processor_name: Optional[str] = None
+    pipeline_id: Optional[str] = None
     coordinate: Optional[str] = None
     message: Optional[str] = None
     data_json: Optional[str] = None
@@ -48,7 +48,7 @@ class RunEventOut(BaseModel):
 
 class MaterializationOut(BaseModel):
     id: int
-    processor_name: str
+    pipeline_id: str
     step_name: str
     code_version: str
     input_hash: str
@@ -64,7 +64,7 @@ class CurrentOutputOut(BaseModel):
     source_id: str
     coordinate: str
     status: str
-    processor_name: Optional[str] = None
+    pipeline_id: Optional[str] = None
     step_name: Optional[str] = None
     code_version: Optional[str] = None
     input_hash: Optional[str] = None
@@ -77,7 +77,7 @@ class CurrentOutputOut(BaseModel):
 class SelectionPreviewItem(BaseModel):
     materialization_id: int
     coordinate: Optional[str] = None
-    processor_name: str
+    pipeline_id: str
     step_name: str
     code_version: str
     output_address: str
@@ -98,7 +98,7 @@ class SelectionInvalidateResponse(BaseModel):
     materialization_ids: List[int]
 
 
-class ProcessorSpecOut(BaseModel):
+class PipelineOut(BaseModel):
     id: str
     name: str
     source_id: str

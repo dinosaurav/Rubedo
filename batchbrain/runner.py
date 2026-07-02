@@ -39,7 +39,7 @@ def _emit_event(
     run_id: str,
     level: str,
     event_type: str,
-    processor_name: Optional[str] = None,
+    pipeline_id: Optional[str] = None,
     step_name: Optional[str] = None,
     coordinate: Optional[str] = None,
     message: Optional[str] = None,
@@ -50,7 +50,7 @@ def _emit_event(
         timestamp=utcnow_iso(),
         level=level,
         event_type=event_type,
-        processor_name=processor_name,
+        pipeline_id=pipeline_id,
         step_name=step_name,
         coordinate=coordinate,
         message=message,
@@ -117,7 +117,7 @@ def _compute_step_input_hash(
 def _commit_materialization(
     session: Session,
     *,
-    processor_name: str,
+    pipeline_id: str,
     step: StepSpec,
     input_hash: str,
     output_address: str,
@@ -178,7 +178,7 @@ def _commit_materialization(
             return prior, "restored"
 
     mat = Materialization(
-        processor_name=processor_name,
+        pipeline_id=pipeline_id,
         step_name=step.name,
         code_version=step.version,
         config_hash=step.config_hash,
@@ -237,9 +237,9 @@ def run(
     declared, regardless of how the pipeline was obtained.
     """
     if isinstance(pipeline, str):
-        from .registry import get_processor
+        from .registry import get_pipeline
 
-        pipeline = get_processor(pipeline)
+        pipeline = get_pipeline(pipeline)
 
     first = pipeline.steps[0] if pipeline.steps else None
     if first and first.params_model:
@@ -262,7 +262,7 @@ def run_pipeline(
     source = pipeline.source if source is None else coerce_source(source)
     source_id = source.id
     run_id = f"run_{uuid.uuid4().hex[:12]}"
-    processor_name = pipeline.id
+    pipeline_id = pipeline.id
 
     topo_steps = topological_sort(pipeline)
 
@@ -271,7 +271,7 @@ def run_pipeline(
             id=run_id,
             kind="process",
             status="running",
-            processor_name=processor_name,
+            pipeline_id=pipeline_id,
             source_id=source_id,
             params_json=json.dumps(params or {}, sort_keys=True),
             started_at=utcnow_iso(),
@@ -282,7 +282,7 @@ def run_pipeline(
             run_id,
             "info",
             "run_started",
-            processor_name=processor_name,
+            pipeline_id=pipeline_id,
             message=f"Starting run {run_id}",
         )
         session.commit()
@@ -332,7 +332,7 @@ def run_pipeline(
                 run_id,
                 "info",
                 "manifest_created",
-                processor_name=processor_name,
+                pipeline_id=pipeline_id,
                 data={
                     "manifest_id": manifest_id,
                     "parent_manifest_id": manifest.parent_manifest_id,
@@ -355,8 +355,8 @@ def run_pipeline(
                             last_rc = (
                                 session.query(RunCoordinateStatus)
                                 .filter(
-                                    RunCoordinateStatus.processor_name
-                                    == processor_name,
+                                    RunCoordinateStatus.pipeline_id
+                                    == pipeline_id,
                                     RunCoordinateStatus.source_id == source_id,
                                     RunCoordinateStatus.coordinate == pe.coordinate,
                                     RunCoordinateStatus.step_name == step.name,
@@ -370,7 +370,7 @@ def run_pipeline(
 
                             rc = RunCoordinateStatus(
                                 run_id=run_id,
-                                processor_name=processor_name,
+                                pipeline_id=pipeline_id,
                                 step_name=step.name,
                                 source_id=source_id,
                                 coordinate=pe.coordinate,
@@ -391,7 +391,7 @@ def run_pipeline(
                                 run_id,
                                 "info",
                                 "coordinate_removed",
-                                processor_name=processor_name,
+                                pipeline_id=pipeline_id,
                                 step_name=step.name,
                                 coordinate=pe.coordinate,
                                 message="Coordinate removed because it is absent from the latest manifest",
@@ -445,7 +445,7 @@ def run_pipeline(
                         coord_step_mats[(coord, step.name)] = "blocked"
                         rc = RunCoordinateStatus(
                             run_id=run_id,
-                            processor_name=processor_name,
+                            pipeline_id=pipeline_id,
                             step_name=step.name,
                             source_id=source_id,
                             coordinate=coord,
@@ -464,7 +464,7 @@ def run_pipeline(
                             run_id,
                             "info",
                             "step_blocked",
-                            processor_name=processor_name,
+                            pipeline_id=pipeline_id,
                             step_name=step.name,
                             coordinate=coord,
                         )
@@ -501,7 +501,7 @@ def run_pipeline(
                         )
                         rc = RunCoordinateStatus(
                             run_id=run_id,
-                            processor_name=processor_name,
+                            pipeline_id=pipeline_id,
                             step_name=step.name,
                             source_id=source_id,
                             coordinate=coord,
@@ -517,7 +517,7 @@ def run_pipeline(
                             run_id,
                             "info",
                             "step_cache_hit",
-                            processor_name=processor_name,
+                            pipeline_id=pipeline_id,
                             step_name=step.name,
                             coordinate=coord,
                         )
@@ -529,7 +529,7 @@ def run_pipeline(
                             run_id,
                             "info",
                             "step_processing_started",
-                            processor_name=processor_name,
+                            pipeline_id=pipeline_id,
                             step_name=step.name,
                             coordinate=coord,
                         )
@@ -596,7 +596,7 @@ def run_pipeline(
 
                                         mat, mat_action = _commit_materialization(
                                             task_session,
-                                            processor_name=processor_name,
+                                            pipeline_id=pipeline_id,
                                             step=step,
                                             input_hash=input_hash,
                                             output_address=output_address,
@@ -630,7 +630,7 @@ def run_pipeline(
 
                                         rc = RunCoordinateStatus(
                                             run_id=run_id,
-                                            processor_name=processor_name,
+                                            pipeline_id=pipeline_id,
                                             step_name=step.name,
                                             source_id=source_id,
                                             coordinate=coord,
@@ -647,7 +647,7 @@ def run_pipeline(
                                             run_id,
                                             "info",
                                             f"materialization_{mat_action}",
-                                            processor_name=processor_name,
+                                            pipeline_id=pipeline_id,
                                             step_name=step.name,
                                             coordinate=coord,
                                             data={"materialization_id": mat.id},
@@ -666,7 +666,7 @@ def run_pipeline(
                                         error_msg = traceback.format_exc()
                                         rc = RunCoordinateStatus(
                                             run_id=run_id,
-                                            processor_name=processor_name,
+                                            pipeline_id=pipeline_id,
                                             step_name=step.name,
                                             source_id=source_id,
                                             coordinate=coord,
@@ -683,7 +683,7 @@ def run_pipeline(
                                             run_id,
                                             "error",
                                             "step_failed",
-                                            processor_name=processor_name,
+                                            pipeline_id=pipeline_id,
                                             step_name=step.name,
                                             coordinate=coord,
                                             message=str(e),
@@ -694,7 +694,7 @@ def run_pipeline(
                                 else:
                                     rc = RunCoordinateStatus(
                                         run_id=run_id,
-                                        processor_name=processor_name,
+                                        pipeline_id=pipeline_id,
                                         step_name=step.name,
                                         source_id=source_id,
                                         coordinate=coord,
@@ -711,7 +711,7 @@ def run_pipeline(
                                         run_id,
                                         "error",
                                         "step_failed",
-                                        processor_name=processor_name,
+                                        pipeline_id=pipeline_id,
                                         step_name=step.name,
                                         coordinate=coord,
                                         message=error_trace,
@@ -750,7 +750,7 @@ def run_pipeline(
                     run_id,
                     "info",
                     "run_completed" if final_status != "failed" else "run_failed",
-                    processor_name=processor_name,
+                    pipeline_id=pipeline_id,
                     message=f"Run finished with status {final_run.status}",
                 )
                 final_session.commit()
@@ -776,7 +776,7 @@ def run_pipeline(
                         run_id,
                         "error",
                         "run_failed",
-                        processor_name=processor_name,
+                        pipeline_id=pipeline_id,
                         message=str(e),
                     )
                     err_session.commit()

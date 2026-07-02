@@ -26,10 +26,10 @@ from .schemas import (
     CurrentOutputOut,
     SelectionPreviewResponse,
     SelectionInvalidateResponse,
-    ProcessorSpecOut,
+    PipelineOut,
 )
 
-from .registry import list_processors
+from .registry import list_pipelines
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -165,7 +165,7 @@ def get_current_outputs():
                     "source_id": rc.source_id,
                     "coordinate": rc.coordinate,
                     "status": rc.status,
-                    "processor_name": mat.processor_name if mat else None,
+                    "pipeline_id": mat.pipeline_id if mat else None,
                     "step_name": mat.step_name if mat else None,
                     "code_version": mat.code_version if mat else None,
                     "input_hash": rc.input_hash,
@@ -246,7 +246,7 @@ def get_object_metadata(output_address: str):
                 invalidated_at = lc.created_at
                 invalidation_reason = lc.reason
         mat_data = {
-            "processor_name": mat.processor_name,
+            "pipeline_id": mat.pipeline_id,
             "step_name": mat.step_name,
             "code_version": mat.code_version,
             "created_by_run_id": mat.created_by_run_id,
@@ -301,7 +301,7 @@ async def preview_selection(request: Request):
                 {
                     "materialization_id": m.id,
                     "coordinate": None,
-                    "processor_name": m.processor_name,
+                    "pipeline_id": m.pipeline_id,
                     "step_name": m.step_name,
                     "code_version": m.code_version,
                     "output_address": m.output_address,
@@ -382,11 +382,10 @@ def run_diff(left_run_id: str, right_run_id: str):
 
 
 
-@app.get("/api/processors", response_model=List[ProcessorSpecOut])
-def get_processors_api():
-    processors = list_processors()
+@app.get("/api/pipelines", response_model=List[PipelineOut])
+def get_pipelines_api():
     out = []
-    for p in processors:
+    for p in list_pipelines():
         schema = None
         defaults = None
         first_step = p.steps[0] if p.steps else None
@@ -402,7 +401,7 @@ def get_processors_api():
             }
 
         out.append(
-            ProcessorSpecOut(
+            PipelineOut(
                 id=p.id,
                 name=p.name,
                 source_id=p.source.id,

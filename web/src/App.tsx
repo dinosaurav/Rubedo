@@ -9,7 +9,7 @@ import CurrentOutputs from './pages/CurrentOutputs';
 import SelectionBuilder from './pages/SelectionBuilder';
 import OutputDetail from './pages/OutputDetail';
 import RunDiff from './pages/RunDiff';
-import Processors from './pages/Processors';
+import Pipelines from './pages/Pipelines';
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -38,8 +38,8 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavLink to="/diff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Activity size={20} /> Compare Runs
           </NavLink>
-          <NavLink to="/processors" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <Activity size={20} /> Processors
+          <NavLink to="/pipelines" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <Activity size={20} /> Pipelines
           </NavLink>
         </div>
       </nav>
@@ -62,7 +62,7 @@ function App() {
           <Route path="/coordinates" element={<CurrentOutputs />} />
           <Route path="/select" element={<SelectionBuilder />} />
           <Route path="/diff" element={<RunDiff />} />
-          <Route path="/processors" element={<Processors />} />
+          <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/objects/:address" element={<OutputDetail />} />
         </Routes>
       </Layout>

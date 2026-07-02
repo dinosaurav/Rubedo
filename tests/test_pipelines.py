@@ -51,9 +51,9 @@ def isolated_db():
         os.chdir(old_cwd)
 
 
-@patch("batchbrain.registry.load_processor_module")
-def test_list_processors(mock_load):
-    res = client.get("/api/processors")
+@patch("batchbrain.registry.load_pipelines_module")
+def test_list_pipelines(mock_load):
+    res = client.get("/api/pipelines")
     assert res.status_code == 200
     data = res.json()
     ids = [p["id"] for p in data]

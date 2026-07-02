@@ -6,7 +6,7 @@ Every step output is stored immutably at a deterministic address — `hash(step,
 
 ## Quickstart
 
-Define a pipeline in `batchbrain_processors.py` at the repo root (override the path with the `BATCHBRAIN_PROCESSORS` env var):
+Define a pipeline in `batchbrain_pipelines.py` at the repo root (override the path with the `BATCHBRAIN_PIPELINES` env var):
 
 ```python
 from batchbrain import ProcessResult, step, pipeline
@@ -26,9 +26,9 @@ pipeline(id="count-lines", name="Count Lines", folder="examples/input",
 Run it programmatically:
 
 ```python
-from batchbrain.processor_runner import run_processor
+import batchbrain
 
-summary = run_processor("count-lines")
+summary = batchbrain.run("count-lines", params={"min_lines": 1})
 print(summary.created_count, summary.reused_count)
 ```
 
@@ -59,7 +59,7 @@ pipeline(id="enrich-leads", name="Enrich Leads",
 
 `key` names the column(s) that identify a row and is deliberately required: it keeps coordinates stable when rows are edited or inserted, so only changed rows recompute. Pass `key=None` to opt into content-addressed coordinates, where an edited row shows up as removed + created instead.
 
-Root steps receive the source payload as their first argument, and receive validated `inputs` if (and only if) they declare a parameter named `inputs`. Dependent steps receive parent outputs by parameter name, matching `depends_on`.
+A step consumes up to three things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed), **params** (run-level knobs, validated against `params_model` and hashed for exactly the steps that declare a `params` parameter), and **static config** (`@step(config=...)`, fixed at registration). Root steps receive the payload positionally; dependent steps receive parent outputs by parameter name, matching `depends_on`.
 
 State lives in `.batchbrain/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
 

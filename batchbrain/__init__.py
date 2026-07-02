@@ -1,7 +1,7 @@
 from .registry import (
-    list_processors,
-    get_processor,
-    load_processor_module,
+    list_pipelines,
+    get_pipeline,
+    load_pipelines_module,
     step,
     pipeline,
 )
@@ -24,7 +24,7 @@ __all__ = [
     "step",
     "pipeline",
     "run",
-    "list_processors",
-    "get_processor",
-    "load_processor_module",
+    "list_pipelines",
+    "get_pipeline",
+    "load_pipelines_module",
 ]

@@ -61,8 +61,8 @@ export async function fetchObject(outputAddress: string) {
   return res.json();
 }
 
-export async function fetchProcessors() {
-  const res = await fetch(`${API_URL}/processors`);
+export async function fetchPipelines() {
+  const res = await fetch(`${API_URL}/pipelines`);
   return res.json();
 }
 

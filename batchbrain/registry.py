@@ -86,23 +86,23 @@ def pipeline(
     return spec
 
 
-def list_processors() -> List[PipelineSpec]:
-    load_processor_module()
+def list_pipelines() -> List[PipelineSpec]:
+    load_pipelines_module()
     return list(_REGISTRY.values())
 
 
-def get_processor(processor_id: str) -> PipelineSpec:
-    load_processor_module()
-    if processor_id not in _REGISTRY:
-        raise ValueError(f"Processor/Pipeline '{processor_id}' not found.")
-    return _REGISTRY[processor_id]
+def get_pipeline(pipeline_id: str) -> PipelineSpec:
+    load_pipelines_module()
+    if pipeline_id not in _REGISTRY:
+        raise ValueError(f"Pipeline '{pipeline_id}' not found.")
+    return _REGISTRY[pipeline_id]
 
 
-def load_processor_module(path: Optional[str] = None):
+def load_pipelines_module(path: Optional[str] = None):
     if path is None:
-        path = os.environ.get("BATCHBRAIN_PROCESSORS", "batchbrain_processors.py")
+        path = os.environ.get("BATCHBRAIN_PIPELINES", "batchbrain_pipelines.py")
     if os.path.exists(path):
-        module_name = "batchbrain_processors"
+        module_name = "batchbrain_pipelines"
         if module_name not in sys.modules:
             spec = importlib.util.spec_from_file_location(
                 module_name, os.path.abspath(path)

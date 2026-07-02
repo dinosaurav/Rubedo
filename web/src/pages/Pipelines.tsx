@@ -1,23 +1,23 @@
 import { useEffect, useState } from 'react';
-import { fetchProcessors } from '../api';
+import { fetchPipelines } from '../api';
 
-export default function Processors() {
-  const [processors, setProcessors] = useState<any[]>([]);
+export default function Pipelines() {
+  const [pipelines, setPipelines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchProcessors().then(data => {
-      setProcessors(data);
+    fetchPipelines().then(data => {
+      setPipelines(data);
       setLoading(false);
     });
   }, []);
 
-  if (loading) return <div>Loading processors...</div>;
+  if (loading) return <div>Loading pipelines...</div>;
 
   return (
     <div className="page-container">
       <div className="page-header">
-        <h1>Processors</h1>
+        <h1>Pipelines</h1>
       </div>
 
       <div className="card">
@@ -32,7 +32,7 @@ export default function Processors() {
             </tr>
           </thead>
           <tbody>
-            {processors.map(p => (
+            {pipelines.map(p => (
               <tr key={p.id}>
                 <td><code>{p.id}</code></td>
                 <td>{p.name}</td>

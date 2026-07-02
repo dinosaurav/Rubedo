@@ -90,7 +90,7 @@ def test_first_run_creates_statuses(setup_teardown):
         assert len(coords) == 3
         for c in coords:
             assert c.status == "created"
-            assert c.processor_name == "p-dummy"
+            assert c.pipeline_id == "p-dummy"
             assert c.materialization_id is not None
 
         run_row = session.query(Run).filter_by(id=res.run_id).first()

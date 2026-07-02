@@ -33,7 +33,7 @@ class Run(Base):
     finished_at = Column(String)
     error_message = Column(String)
     summary_json = Column(String)
-    processor_name = Column(String, index=True)
+    pipeline_id = Column(String, index=True)
 
 
 class RunEvent(Base):
@@ -43,7 +43,7 @@ class RunEvent(Base):
     timestamp = Column(String, nullable=False)
     level = Column(String, nullable=False)
     event_type = Column(String, nullable=False, index=True)
-    processor_name = Column(String, index=True)
+    pipeline_id = Column(String, index=True)
     step_name = Column(String, index=True)
     coordinate = Column(String, index=True)
     message = Column(String)
@@ -94,7 +94,7 @@ class Materialization(Base):
 
     __tablename__ = "materializations"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    processor_name = Column(String, nullable=False, index=True)
+    pipeline_id = Column(String, nullable=False, index=True)
     step_name = Column(String, nullable=False, index=True)
     code_version = Column(String, nullable=False)
     config_hash = Column(String, nullable=False)
@@ -136,7 +136,7 @@ class RunCoordinateStatus(Base):
     __tablename__ = "run_coordinate_statuses"
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String, ForeignKey("runs.id"), nullable=False, index=True)
-    processor_name = Column(String, index=True)
+    pipeline_id = Column(String, index=True)
     step_name = Column(String, nullable=False, index=True)
     source_id = Column(String, nullable=False)
     coordinate = Column(String, nullable=False, index=True)
