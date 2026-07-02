@@ -9,9 +9,10 @@ Batchit is a batch processing framework designed to efficiently run custom "proc
 ### Key Capabilities:
 1. **Processor Framework:** Developers can define custom processors using a simple `@processor` decorator. Processors can define specific input schemas (using Pydantic validation), target specific folders, and control concurrency (worker counts).
 2. **Durable Materialization & Invalidation:** The engine treats processing as a durable, content-addressed materialization pipeline. It uses point-in-time `Manifest` snapshots to robustly track the state of input folders and skips recomputation if the input hashes, configuration, and code versions haven't changed.
-3. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to process files in parallel.
-4. **Database Storage:** Results, metadata, runs, and caching statuses are tracked in a SQL database (via SQLAlchemy).
-5. **CLI Interface:** A built-in command-line interface (`batchbrain list`, `batchbrain show`, `batchbrain run`, `batchbrain explain`, `batchbrain show-materialization`) to inspect outputs, explain addressing logic, and trigger processors easily.
+3. **Durable Run Ledger:** The system records exhaustive telemetry for each run. It creates a robust event ledger (`RunEvent`) and computes per-coordinate status summaries (`RunCoordinateStatus`) categorizing work as `created`, `reused`, `failed`, or `removed`.
+4. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to process files in parallel.
+5. **Database Storage:** Results, metadata, runs, run ledgers, and caching statuses are tracked in a SQL database (via SQLAlchemy).
+6. **CLI Interface:** A built-in command-line interface (`batchbrain list`, `batchbrain show`, `batchbrain run`, `batchbrain explain`, `batchbrain show-materialization`, `batchbrain show-run`, `batchbrain show-events`) to inspect outputs, explain addressing logic, trigger processors, and trace execution history easily.
 6. **API Server:** A FastAPI-based server exposing the processor states, runs, and potentially providing endpoints for the frontend.
 7. **Web UI:** A React + Vite frontend for managing, visualizing, or monitoring the batch processes and their results.
 
