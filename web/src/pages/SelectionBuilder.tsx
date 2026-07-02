@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { previewSelection, invalidateSelection } from '../api';
 import { DataTable } from '../components/DataTable';
 import type { ColumnDef } from '@tanstack/react-table';

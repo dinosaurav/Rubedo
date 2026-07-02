@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { fetchRuns, fetchMaterializations, fetchCurrentOutputs } from '../api';
 
 export default function Dashboard() {

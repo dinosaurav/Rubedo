@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { fetchRuns, diffRuns } from '../api';
 import { Link } from 'react-router-dom';
 import { DataTable } from '../components/DataTable';
