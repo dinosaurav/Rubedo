@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
 from batchbrain.registry import get_processor
-from batchbrain.api import process_pipeline, RunSummary
+from batchbrain.models import RunSummary
+from batchbrain.runner import run_pipeline
 
 
 def run_processor(
@@ -12,7 +13,7 @@ def run_processor(
     workers: Optional[int] = None,
 ) -> RunSummary:
     """
-    Shared runner that turns a PipelineSpec + inputs into a process_pipeline(...) call.
+    Shared runner that turns a PipelineSpec + inputs into a run_pipeline(...) call.
     """
     spec = get_processor(processor_id)
     input_dict = inputs or {}
@@ -34,8 +35,8 @@ def run_processor(
     # 3. Build effective config
     effective_config = {"processor_id": spec.id, "processor_inputs": validated_json}
 
-    # 4. Call process_pipeline
-    return process_pipeline(
+    # 4. Call run_pipeline
+    return run_pipeline(
         pipeline=spec,
         folder=effective_folder,
         config=effective_config,

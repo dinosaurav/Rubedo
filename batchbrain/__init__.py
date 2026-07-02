@@ -1,4 +1,3 @@
-from .api import process_pipeline, select
 from .registry import (
     list_processors,
     get_processor,
@@ -12,8 +11,6 @@ from .invalidation import invalidate, recompute
 from .runner import run_pipeline
 
 __all__ = [
-    "process_pipeline",
-    "select",
     "invalidate",
     "recompute",
     "ProcessResult",

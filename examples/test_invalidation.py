@@ -1,7 +1,6 @@
 import os
-from batchbrain import step, pipeline, run_pipeline
+from batchbrain import Selection, step, pipeline, run_pipeline
 from batchbrain.invalidation import invalidate
-from batchbrain.selection import select
 
 
 @step(name="count-lines", version="1")
@@ -20,7 +19,7 @@ if __name__ == "__main__":
     print(f"Run 1: Created {summary.created_count}, Reused {summary.reused_count}")
 
     # 2. Select coordinate glob
-    sel = select(source_folder=input_dir, coordinate_glob="*b.txt*")
+    sel = Selection(source_folder=input_dir, coordinate_glob="*b.txt*")
 
     # 3. Invalidate
     res = invalidate(sel, reason="testing invalidation")
