@@ -12,9 +12,8 @@ Batchit is a batch processing framework designed to efficiently run custom "proc
 3. **Durable Run Ledger & Lineage:** The system records exhaustive telemetry for each run. It creates a robust event ledger (`RunEvent`) and computes per-coordinate status summaries (`RunCoordinateStatus`) categorizing work as `created`, `reused`, `failed`, `blocked`, or `removed`. `MaterializationEdge` models persist parent-child lineage.
 4. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to topologically sort steps and process file tasks in parallel while correctly blocking on failed upstream dependencies.
 5. **Database Storage:** Results, metadata, runs, run ledgers, topological lineage, and caching statuses are tracked in a SQL database (via SQLAlchemy).
-6. **CLI Interface:** A built-in command-line interface (`batchbrain list`, `batchbrain show-dag`, `batchbrain run`, `batchbrain explain`, `batchbrain show-materialization`, `batchbrain show-run`, `batchbrain show-events`) to inspect pipelines, explain addressing logic, trigger pipelines, and trace execution history easily.
-7. **API Server:** A FastAPI-based server exposing the processor states, runs, and potentially providing endpoints for the frontend.
-8. **Web UI:** A React + Vite frontend for managing, visualizing, or monitoring the batch processes and their results.
+6. **API Server:** A read-only FastAPI server exposing pipelines, runs, materializations, lineage, and current outputs to the frontend, plus selection-based invalidation as its single write action.
+7. **Web UI:** A React + Vite dashboard for browsing runs, outputs, and lineage, and surgically invalidating outputs. Runs themselves are triggered from library code (`run_processor` / `run_pipeline`), not the UI.
 
 ## Folder Structure
 
@@ -26,8 +25,8 @@ This is the core Python backend package containing the execution engine, databas
 - **Execution & Pipeline Logic (`runner.py`, `registry.py`)**: Handles registering `@step`s and `pipeline()`s, topological sorting, managing concurrent executors, and flowing artifacts across graphs.
 - **State & Invalidation (`hashing.py`, `invalidation.py`, `scanner.py`)**: Responsible for scanning target directories, calculating file hashes, and determining if a coordinate's cached result is still valid.
 - **Data Models & Storage (`db.py`, `models.py`, `schemas.py`, `store.py`, `selection.py`)**: SQLAlchemy database setup, ORM models (including tracking `MaterializationEdge`s), Pydantic schemas, and local object store logic.
-- **Server & API (`api.py`, `server.py`)**: Implements a FastAPI application to expose the batch engine's capabilities over HTTP.
-- **CLI (`cli.py`)**: Provides terminal commands to interact with the engine.
+- **Run Entrypoint (`processor_runner.py`)**: `run_processor()` — validates inputs against the first step's schema, enforces folder-override rules, and dispatches to the engine. This is how library clients trigger runs.
+- **Server (`server.py`)**: Read-only FastAPI application for the frontend, plus the invalidation endpoint.
 
 ### `/web/`
 This directory contains the Frontend User Interface. It is a modern single-page application built with React, TypeScript, and Vite.

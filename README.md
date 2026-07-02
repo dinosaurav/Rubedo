@@ -32,12 +32,14 @@ summary = run_processor("count-lines")
 print(summary.created_count, summary.reused_count)
 ```
 
-Or through the web UI:
+Then inspect it in the web UI — a read-only browser over runs, materializations, lineage, and current outputs, plus surgical invalidation ("this output is bad, redo it"):
 
 ```bash
 uv run uvicorn batchbrain.server:app --reload   # API on :8000
 cd web && npm run dev                            # UI on :5173
 ```
+
+Running and recomputing always happen from library code; the UI's only write action is invalidation.
 
 State lives in `.batchbrain/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
 
