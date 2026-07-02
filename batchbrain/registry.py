@@ -79,46 +79,6 @@ def pipeline(
     return spec
 
 
-def processor(
-    id: str,
-    name: str,
-    folder: str,
-    code_version: str,
-    step: str = "process_file",
-    input_model: Optional[Type[BaseModel]] = None,
-    config: Optional[Dict[str, Any]] = None,
-    workers: int = 4,
-    allow_folder_override: bool = False,
-):
-    """Legacy single-step processor. Internally mapped to a 1-node DAG."""
-
-    def decorator(fn: Callable):
-        from .hashing import hash_json
-
-        config_hash = hash_json(config or {})
-        s = StepSpec(
-            name=step,
-            fn=fn,
-            version=code_version,
-            depends_on=[],
-            config_hash=config_hash,
-            input_model=input_model,
-            config=config,
-            workers=workers,
-        )
-        p = PipelineSpec(
-            id=id,
-            name=name,
-            folder=folder,
-            steps=[s],
-            allow_folder_override=allow_folder_override,
-        )
-        _REGISTRY[id] = p
-        return fn
-
-    return decorator
-
-
 def list_processors() -> List[PipelineSpec]:
     load_processor_module()
     return list(_REGISTRY.values())
