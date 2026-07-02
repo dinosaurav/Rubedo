@@ -12,20 +12,6 @@ class ScannedFile:
     content_hash: str
 
 
-def scan_file(folder: str, coordinate: str) -> ScannedFile:
-    base_path = os.path.abspath(folder)
-    abs_path = os.path.join(base_path, coordinate)
-    st = os.stat(abs_path)
-    content_hash = hash_file(abs_path)
-    return ScannedFile(
-        coordinate=coordinate,
-        absolute_path=abs_path,
-        size_bytes=st.st_size,
-        mtime_ns=st.st_mtime_ns,
-        content_hash=content_hash,
-    )
-
-
 def scan_folder(folder: str) -> list[ScannedFile]:
     files = []
     base_path = os.path.abspath(folder)

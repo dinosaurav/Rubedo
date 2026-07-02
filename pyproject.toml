@@ -13,9 +13,6 @@ dependencies = [
     "uvicorn"
 ]
 
-[project.scripts]
-batchbrain = "batchbrain.cli:main"
-
 [tool.setuptools]
 packages = ["batchbrain"]
 

@@ -5,8 +5,7 @@ from batchbrain.db import init_db, get_session
 from batchbrain.store import init_store
 from batchbrain.registry import step, pipeline, clear_registry
 from batchbrain.runner import topological_sort
-from batchbrain.cli import run_cmd
-from argparse import Namespace
+from batchbrain.processor_runner import run_processor
 from batchbrain.models import RunCoordinateStatus, Materialization, MaterializationEdge
 import uuid
 from sqlalchemy import create_engine
@@ -113,9 +112,7 @@ def test_linear_dag():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
-    run_cmd(
-        Namespace(processor_id="p1", inputs=None, force=False, folder=None, workers=1)
-    )
+    run_processor("p1", workers=1)
 
     with get_session() as session:
         # Check coordinates created
@@ -157,9 +154,7 @@ def test_cache_hit():
     pipeline(id="p2", name="p2", folder=TEST_FOLDER, steps=[read])
 
     create_file("f1.txt", "hello")
-    run_cmd(
-        Namespace(processor_id="p2", inputs=None, force=False, folder=None, workers=1)
-    )
+    run_processor("p2", workers=1)
 
     with get_session() as session:
         statuses = session.query(RunCoordinateStatus).all()
@@ -167,9 +162,7 @@ def test_cache_hit():
         assert statuses[0].status == "created"
 
     # Run again, should be reused
-    run_cmd(
-        Namespace(processor_id="p2", inputs=None, force=False, folder=None, workers=1)
-    )
+    run_processor("p2", workers=1)
 
     with get_session() as session:
         # 1 from first run, 1 from second run
@@ -195,9 +188,7 @@ def test_dag_blocked_on_failure():
 
     create_file("f1.txt", "hello")
 
-    run_cmd(
-        Namespace(processor_id="p3", inputs=None, force=False, folder=None, workers=1)
-    )
+    run_processor("p3", workers=1)
 
     with get_session() as session:
         rc_read = (
