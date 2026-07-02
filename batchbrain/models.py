@@ -12,7 +12,6 @@ class Run(Base):
     kind = Column(String, nullable=False)
     status = Column(String, nullable=False)
     source_folder = Column(String)
-    step = Column(String)
     code_version = Column(String)
     config_hash = Column(String)
     selection_json = Column(String)
@@ -32,6 +31,7 @@ class RunEvent(Base):
     level = Column(String, nullable=False)
     event_type = Column(String, nullable=False, index=True)
     processor_name = Column(String, index=True)
+    step_name = Column(String, index=True)
     coordinate = Column(String, index=True)
     message = Column(String)
     data_json = Column(String)
@@ -64,7 +64,8 @@ class MaterializationEdge(Base):
 class Materialization(Base):
     __tablename__ = 'materializations'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    step = Column(String, nullable=False)
+    processor_name = Column(String, nullable=False, index=True)
+    step_name = Column(String, nullable=False, index=True)
     code_version = Column(String, nullable=False)
     config_hash = Column(String, nullable=False)
     input_hash = Column(String, nullable=False)
@@ -83,6 +84,7 @@ class RunCoordinateStatus(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String, nullable=False, index=True)
     processor_name = Column(String, index=True)
+    step_name = Column(String, nullable=False, index=True)
     source_folder = Column(String, nullable=False)
     coordinate = Column(String, nullable=False, index=True)
     input_hash = Column(String)
@@ -95,7 +97,7 @@ class RunCoordinateStatus(Base):
     error_type = Column(String, index=True)
     metadata_json = Column(String)
     created_at = Column(String, nullable=False)
-    __table_args__ = (UniqueConstraint('run_id', 'coordinate', name='_run_coord_uc'),)
+    __table_args__ = (UniqueConstraint('run_id', 'coordinate', 'step_name', name='_run_coord_uc'),)
 
 
 

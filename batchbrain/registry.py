@@ -1,24 +1,74 @@
-from typing import Callable, Optional, Dict, Any, Type
+from typing import Callable, Optional, Dict, Any, Type, List
 from pydantic import BaseModel
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib.util
 import sys
 import os
 
 @dataclass
-class ProcessorSpec:
-    id: str
+class StepSpec:
     name: str
-    folder: str
-    code_version: str
     fn: Callable
-    step: str = "process_file"
+    version: str
+    depends_on: List[str]
+    config_hash: str
     input_model: Optional[Type[BaseModel]] = None
     config: Optional[Dict[str, Any]] = None
     workers: int = 4
+
+@dataclass
+class PipelineSpec:
+    id: str
+    name: str
+    folder: str
+    steps: List[StepSpec]
     allow_folder_override: bool = False
 
-_REGISTRY: Dict[str, ProcessorSpec] = {}
+_REGISTRY: Dict[str, PipelineSpec] = {}
+
+def clear_registry():
+    _REGISTRY.clear()
+
+def step(
+    name: str,
+    version: str,
+    depends_on: Optional[List[str]] = None,
+    input_model: Optional[Type[BaseModel]] = None,
+    config: Optional[Dict[str, Any]] = None,
+    workers: int = 4,
+):
+    def decorator(fn: Callable):
+        from .hashing import hash_json
+        config_hash = hash_json(config or {})
+        return StepSpec(
+            name=name,
+            fn=fn,
+            version=version,
+            depends_on=depends_on or [],
+            config_hash=config_hash,
+            input_model=input_model,
+            config=config,
+            workers=workers,
+        )
+    return decorator
+
+def pipeline(
+    name: str,
+    folder: str,
+    steps: List[StepSpec],
+    id: Optional[str] = None,
+    allow_folder_override: bool = False,
+):
+    pipe_id = id or name
+    spec = PipelineSpec(
+        id=pipe_id,
+        name=name,
+        folder=folder,
+        steps=steps,
+        allow_folder_override=allow_folder_override
+    )
+    _REGISTRY[pipe_id] = spec
+    return spec
 
 def processor(
     id: str,
@@ -31,31 +81,39 @@ def processor(
     workers: int = 4,
     allow_folder_override: bool = False,
 ):
+    """Legacy single-step processor. Internally mapped to a 1-node DAG."""
     def decorator(fn: Callable):
-        spec = ProcessorSpec(
+        from .hashing import hash_json
+        config_hash = hash_json(config or {})
+        s = StepSpec(
+            name=step,
+            fn=fn,
+            version=code_version,
+            depends_on=[],
+            config_hash=config_hash,
+            input_model=input_model,
+            config=config,
+            workers=workers
+        )
+        p = PipelineSpec(
             id=id,
             name=name,
             folder=folder,
-            code_version=code_version,
-            fn=fn,
-            step=step,
-            input_model=input_model,
-            config=config,
-            workers=workers,
-            allow_folder_override=allow_folder_override,
+            steps=[s],
+            allow_folder_override=allow_folder_override
         )
-        _REGISTRY[id] = spec
+        _REGISTRY[id] = p
         return fn
     return decorator
 
-def list_processors() -> list[ProcessorSpec]:
+def list_processors() -> List[PipelineSpec]:
     load_processor_module()
     return list(_REGISTRY.values())
 
-def get_processor(processor_id: str) -> ProcessorSpec:
+def get_processor(processor_id: str) -> PipelineSpec:
     load_processor_module()
     if processor_id not in _REGISTRY:
-        raise ValueError(f"Processor '{processor_id}' not found.")
+        raise ValueError(f"Processor/Pipeline '{processor_id}' not found.")
     return _REGISTRY[processor_id]
 
 def load_processor_module(path: str = "batchbrain_processors.py"):

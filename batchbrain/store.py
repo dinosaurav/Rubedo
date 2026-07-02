@@ -66,3 +66,25 @@ def stage_and_commit(run_id: str, coordinate: str, output_address: str, result: 
     os.replace(staging_path, final_path)
     
     return final_path, output_content_hash
+
+def read_materialization_output(materialization) -> Any:
+    """Reads and deserializes a materialization output from the store."""
+    if not materialization or not materialization.output_address:
+        return None
+    obj_path = _get_object_path(materialization.output_address)
+    if not os.path.exists(obj_path):
+        return None
+        
+    with open(obj_path, 'rb') as f:
+        raw_data = f.read()
+        
+    try:
+        # Try JSON first
+        return json.loads(raw_data.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        try:
+            # Try text
+            return raw_data.decode('utf-8')
+        except UnicodeDecodeError:
+            # Fallback to bytes
+            return raw_data

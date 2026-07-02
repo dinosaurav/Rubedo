@@ -283,18 +283,21 @@ def get_processors_api():
     for p in processors:
         schema = None
         defaults = None
-        if p.input_model:
-            schema = p.input_model.model_json_schema()
+        first_step = p.steps[0] if p.steps else None
+        input_model = first_step.input_model if first_step else None
+        
+        if input_model:
+            schema = input_model.model_json_schema()
             # Extract defaults if any
-            defaults = {k: v.default for k, v in p.input_model.model_fields.items() if not v.is_required()}
+            defaults = {k: v.default for k, v in input_model.model_fields.items() if not v.is_required()}
             
         out.append(ProcessorSpecOut(
             id=p.id,
             name=p.name,
             folder=p.folder,
-            step=p.step,
-            code_version=p.code_version,
-            workers=p.workers,
+            step=first_step.name if first_step else "",
+            code_version=first_step.version if first_step else "",
+            workers=first_step.workers if first_step else 4,
             allow_folder_override=p.allow_folder_override,
             input_schema=schema,
             default_inputs=defaults or {}
@@ -304,14 +307,16 @@ def get_processors_api():
 @app.post('/api/processors/{processor_id}/run', response_model=RunProcessorResponse)
 def run_processor_api(processor_id: str, req: RunProcessorRequest):
     spec = get_processor(processor_id)
+    first_step = spec.steps[0] if spec.steps else None
+    input_model = first_step.input_model if first_step else None
     
     if req.folder and not spec.allow_folder_override:
         raise HTTPException(400, 'Folder override not allowed for this processor')
         
-    if spec.input_model:
+    if input_model:
         try:
             # Validate against model
-            spec.input_model.model_validate(req.inputs)
+            input_model.model_validate(req.inputs)
         except Exception as e:
             raise HTTPException(400, f'Invalid inputs: {str(e)}')
             

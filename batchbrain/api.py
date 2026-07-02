@@ -1,6 +1,5 @@
 from typing import Callable, Any, Optional
 from .models import RunSummary, ProcessResult
-from .runner import run_process
 from .selection import Selection
 from .invalidation import invalidate, recompute
 
@@ -37,25 +36,24 @@ def select(
         invalidated=invalidated
     )
 
-def process(
+def process_pipeline(
+    pipeline, # PipelineSpec
     folder: str,
-    fn: Callable[[str], Any],
     *,
-    code_version: str,
     config: Optional[dict[str, Any]] = None,
-    step: str = "process_file",
-    workers: int = 4,
+    workers: Optional[int] = None,
     force: bool = False,
+    inputs: Optional[dict] = None
 ) -> RunSummary:
     """
-    Process a folder of files with a given function.
+    Process a folder of files using a DAG PipelineSpec.
     """
-    return run_process(
+    from .runner import run_pipeline
+    return run_pipeline(
+        pipeline=pipeline,
         folder=folder,
-        fn=fn,
-        code_version=code_version,
         config=config,
-        step=step,
         workers=workers,
-        force=force
+        force=force,
+        inputs=inputs
     )

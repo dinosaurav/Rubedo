@@ -19,12 +19,30 @@ def _ensure_gitignore(directory: str):
         except Exception:
             pass
 
-def init_db(db_path: str = DB_PATH):
+def init_db(db_path: str = None):
     global engine, SessionLocal
-    db_dir = os.path.dirname(db_path)
-    os.makedirs(db_dir, exist_ok=True)
-    _ensure_gitignore(db_dir)
-    engine = create_engine(f"sqlite:///{db_path}")
+    if engine is not None:
+        try:
+            engine.dispose()
+        except:
+            pass
+            
+    if db_path is None:
+        db_path = os.environ.get("BATCHBRAIN_DB_PATH", DB_PATH)
+        # Strip sqlite:/// prefix if present to get the dir
+        dir_path = db_path.replace("sqlite:///", "") if db_path.startswith("sqlite:///") else db_path
+    else:
+        dir_path = db_path.replace("sqlite:///", "") if db_path.startswith("sqlite:///") else db_path
+
+    db_dir = os.path.dirname(dir_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+        _ensure_gitignore(db_dir)
+    if db_path.startswith("sqlite:///"):
+        engine_url = db_path
+    else:
+        engine_url = f"sqlite:///{db_path}"
+    engine = create_engine(engine_url)
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

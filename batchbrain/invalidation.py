@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from .models import Run, Materialization, RunEvent, RunSummary
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
-from .runner import run_process
+from .runner import run_pipeline
 
 def invalidate(selection: Selection, reason: str) -> dict:
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -43,7 +43,6 @@ def invalidate(selection: Selection, reason: str) -> dict:
                     mat.invalidated_by_run_id = run_id
                     mat.invalidation_reason = reason
                     
-
                     invalidated_count += 1
             
             run.status = "completed"
@@ -73,27 +72,25 @@ def invalidate(selection: Selection, reason: str) -> dict:
 
 def recompute(
     selection: Selection,
-    fn: Callable[[str], Any],
-    code_version: str,
+    pipeline, # PipelineSpec
     config: Optional[dict[str, Any]] = None,
-    step: str = "process_file",
-    workers: int = 4,
-    force: bool = True
+    workers: Optional[int] = None,
+    force: bool = True,
+    inputs: Optional[dict] = None
 ) -> RunSummary:
     """
-    For MVP, recompute invalidates the selection and then runs the process on the source folder.
+    For MVP, recompute invalidates the selection and then runs the pipeline on the source folder.
     """
     if not selection.source_folder:
         raise ValueError("Recompute requires source_folder in MVP")
     
     invalidate(selection, reason="Recompute triggered")
     
-    return run_process(
+    return run_pipeline(
+        pipeline=pipeline,
         folder=selection.source_folder,
-        fn=fn,
-        code_version=code_version,
         config=config,
-        step=step,
         workers=workers,
-        force=False # Since we invalidated, they will be recreated
+        force=False, # Since we invalidated, they will be recreated
+        inputs=inputs
     )
