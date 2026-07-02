@@ -11,7 +11,7 @@ class Run(Base):
     id = Column(String, primary_key=True)
     kind = Column(String, nullable=False)
     status = Column(String, nullable=False)
-    source_folder = Column(String)
+    source_id = Column(String)
     code_version = Column(String)
     config_hash = Column(String)
     selection_json = Column(String)
@@ -42,7 +42,7 @@ class Manifest(Base):
     __tablename__ = "manifests"
     id = Column(String, primary_key=True)
     run_id = Column(String, nullable=False)
-    root_path = Column(String, nullable=False)
+    source_id = Column(String, nullable=False)
     manifest_hash = Column(String, nullable=False)
     created_at = Column(String, nullable=False)
 
@@ -93,7 +93,7 @@ class RunCoordinateStatus(Base):
     run_id = Column(String, nullable=False, index=True)
     processor_name = Column(String, index=True)
     step_name = Column(String, nullable=False, index=True)
-    source_folder = Column(String, nullable=False)
+    source_id = Column(String, nullable=False)
     coordinate = Column(String, nullable=False, index=True)
     input_hash = Column(String)
     output_address = Column(String)

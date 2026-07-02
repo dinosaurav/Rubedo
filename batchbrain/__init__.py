@@ -7,6 +7,7 @@ from .registry import (
 )
 from .models import ProcessResult, RunSummary
 from .selection import Selection
+from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate, recompute
 from .runner import run_pipeline
 
@@ -16,10 +17,14 @@ __all__ = [
     "ProcessResult",
     "RunSummary",
     "Selection",
+    "Source",
+    "SourceItem",
+    "FolderSource",
+    "CsvSource",
     "step",
     "pipeline",
     "run_pipeline",
     "list_processors",
     "get_processor",
-    "load_processor_module"
+    "load_processor_module",
 ]

@@ -5,6 +5,8 @@ import importlib.util
 import sys
 import os
 
+from .sources import Source
+
 
 @dataclass
 class StepSpec:
@@ -22,9 +24,9 @@ class StepSpec:
 class PipelineSpec:
     id: str
     name: str
-    folder: str
+    source: Source
     steps: List[StepSpec]
-    allow_folder_override: bool = False
+    allow_source_override: bool = False
 
 
 _REGISTRY: Dict[str, PipelineSpec] = {}
@@ -62,18 +64,26 @@ def step(
 
 def pipeline(
     name: str,
-    folder: str,
-    steps: List[StepSpec],
+    folder: Optional[str] = None,
+    steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
-    allow_folder_override: bool = False,
+    source: Optional[Source] = None,
+    allow_source_override: bool = False,
 ):
+    if (source is None) == (folder is None):
+        raise ValueError("Pass exactly one of source= or folder= (FolderSource sugar)")
+    if source is None:
+        from .sources import FolderSource
+
+        source = FolderSource(folder)
+
     pipe_id = id or name
     spec = PipelineSpec(
         id=pipe_id,
         name=name,
-        folder=folder,
-        steps=steps,
-        allow_folder_override=allow_folder_override,
+        source=source,
+        steps=steps or [],
+        allow_source_override=allow_source_override,
     )
     _REGISTRY[pipe_id] = spec
     return spec

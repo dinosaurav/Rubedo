@@ -74,22 +74,19 @@ def invalidate(selection: Selection, reason: str) -> dict:
 def recompute(
     selection: Selection,
     pipeline,  # PipelineSpec
+    source=None,  # Source | str; defaults to the pipeline's source
     config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
-    force: bool = True,
     inputs: Optional[dict] = None,
 ) -> RunSummary:
     """
-    For MVP, recompute invalidates the selection and then runs the pipeline on the source folder.
+    Recompute invalidates the selection and then re-runs the pipeline on its source.
     """
-    if not selection.source_folder:
-        raise ValueError("Recompute requires source_folder in MVP")
-
     invalidate(selection, reason="Recompute triggered")
 
     return run_pipeline(
         pipeline=pipeline,
-        folder=selection.source_folder,
+        source=source,
         config=config,
         workers=workers,
         force=False,  # Since we invalidated, they will be recreated

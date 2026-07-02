@@ -6,7 +6,7 @@ import { Link } from 'react-router-dom';
 
 export default function SelectionBuilder() {
   const [selection, setSelection] = useState({
-    source_folder: '',
+    source_id: '',
     coordinate_glob: '',
     metadata: [] as any[]
   });
@@ -44,7 +44,7 @@ export default function SelectionBuilder() {
 
   const handlePreview = async () => {
     const cleanSel: any = {};
-    if (selection.source_folder) cleanSel.source_folder = selection.source_folder;
+    if (selection.source_id) cleanSel.source_id = selection.source_id;
     if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
     if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
     const res = await previewSelection(cleanSel);
@@ -54,7 +54,7 @@ export default function SelectionBuilder() {
   const handleInvalidate = async () => {
     if (!confirm("Are you sure you want to invalidate these materializations?")) return;
     const cleanSel: any = {};
-    if (selection.source_folder) cleanSel.source_folder = selection.source_folder;
+    if (selection.source_id) cleanSel.source_id = selection.source_id;
     if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
     if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
     
@@ -103,12 +103,12 @@ export default function SelectionBuilder() {
           <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>Filters</h2>
           
           <div className="form-group">
-            <label className="form-label">Source Folder</label>
+            <label className="form-label">Source</label>
             <input 
               className="form-control" 
-              value={selection.source_folder} 
-              onChange={e => setSelection({...selection, source_folder: e.target.value})}
-              placeholder="e.g. examples/input"
+              value={selection.source_id} 
+              onChange={e => setSelection({...selection, source_id: e.target.value})}
+              placeholder="e.g. folder:examples/input"
             />
           </div>
 

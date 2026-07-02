@@ -28,11 +28,9 @@ p = pipeline(
 )
 
 if __name__ == "__main__":
-    # We can use the CLI command logic or run_pipeline directly.
-    # Let's use run_pipeline directly to show programmatic usage.
     summary = run_pipeline(
         pipeline=p,
-        folder="examples/input",
+        source="examples/input",
         workers=1,
     )
 

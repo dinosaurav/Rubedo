@@ -6,7 +6,7 @@ class RunListItem(BaseModel):
     id: str
     kind: str
     status: str
-    source_folder: Optional[str] = None
+    source_id: Optional[str] = None
     processor_name: Optional[str] = None
     step_name: Optional[str] = None
     code_version: Optional[str] = None
@@ -63,7 +63,7 @@ class MaterializationOut(BaseModel):
 
 
 class CurrentOutputOut(BaseModel):
-    source_folder: str
+    source_id: str
     coordinate: str
     status: str
     processor_name: Optional[str] = None
@@ -102,10 +102,10 @@ class SelectionInvalidateResponse(BaseModel):
 class ProcessorSpecOut(BaseModel):
     id: str
     name: str
-    folder: str
+    source_id: str
     step_name: str
     code_version: str
     workers: int
-    allow_folder_override: bool
+    allow_source_override: bool
     input_schema: Optional[Dict[str, Any]] = None
     default_inputs: Optional[Dict[str, Any]] = None

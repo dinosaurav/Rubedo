@@ -43,7 +43,7 @@ if __name__ == "__main__":
     print(f"Running DAG Pipeline '{dag_pipeline_spec.name}'...")
     summary = run_pipeline(
         pipeline=dag_pipeline_spec,
-        folder=input_dir,
+        source=input_dir,
         workers=2,
     )
 

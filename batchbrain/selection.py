@@ -14,7 +14,7 @@ class MetadataFilter(BaseModel):
 
 
 class Selection(BaseModel):
-    source_folder: Optional[str] = None
+    source_id: Optional[str] = None
     coordinate_glob: Optional[str] = None
     step: Optional[str] = None
     code_version: Optional[str] = None
@@ -31,7 +31,7 @@ def get_selection_materialization_ids(
     query = session.query(Materialization)
 
     if selection.step:
-        query = query.filter(Materialization.step == selection.step)
+        query = query.filter(Materialization.step_name == selection.step)
     if selection.code_version:
         query = query.filter(Materialization.code_version == selection.code_version)
     if selection.output_address:
@@ -46,15 +46,15 @@ def get_selection_materialization_ids(
         else:
             query = query.filter(Materialization.invalidated_at.is_(None))
 
-    if selection.source_folder or selection.coordinate_glob or selection.coordinates:
-        # Join with RunCoordinateStatus to filter by coordinate or source_folder
+    if selection.source_id or selection.coordinate_glob or selection.coordinates:
+        # Join with RunCoordinateStatus to filter by coordinate or source_id
         query = query.join(
             RunCoordinateStatus,
             RunCoordinateStatus.materialization_id == Materialization.id,
         )
-        if selection.source_folder:
+        if selection.source_id:
             query = query.filter(
-                RunCoordinateStatus.source_folder == selection.source_folder
+                RunCoordinateStatus.source_id == selection.source_id
             )
         if selection.coordinates:
             query = query.filter(

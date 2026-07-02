@@ -133,7 +133,7 @@ def get_current_outputs():
     with get_session() as session:
         latest_ids_subq = (
             session.query(func.max(RunCoordinateStatus.id).label("max_id"))
-            .group_by(RunCoordinateStatus.source_folder, RunCoordinateStatus.coordinate)
+            .group_by(RunCoordinateStatus.source_id, RunCoordinateStatus.coordinate)
             .subquery()
         )
         rows = (
@@ -156,7 +156,7 @@ def get_current_outputs():
                 continue
             results.append(
                 {
-                    "source_folder": rc.source_folder,
+                    "source_id": rc.source_id,
                     "coordinate": rc.coordinate,
                     "status": rc.status,
                     "processor_name": mat.processor_name if mat else None,
@@ -375,11 +375,11 @@ def get_processors_api():
             ProcessorSpecOut(
                 id=p.id,
                 name=p.name,
-                folder=p.folder,
+                source_id=p.source.id,
                 step_name=first_step.name if first_step else "",
                 code_version=first_step.version if first_step else "",
                 workers=first_step.workers if first_step else 4,
-                allow_folder_override=p.allow_folder_override,
+                allow_source_override=p.allow_source_override,
                 input_schema=schema,
                 default_inputs=defaults or {},
             )

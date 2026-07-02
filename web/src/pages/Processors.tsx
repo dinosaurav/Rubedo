@@ -26,10 +26,10 @@ export default function Processors() {
             <tr>
               <th>ID</th>
               <th>Name</th>
-              <th>Folder</th>
+              <th>Source</th>
               <th>Code Version</th>
               <th>Workers</th>
-              <th>Folder Override</th>
+              <th>Source Override</th>
             </tr>
           </thead>
           <tbody>
@@ -37,10 +37,10 @@ export default function Processors() {
               <tr key={p.id}>
                 <td><code>{p.id}</code></td>
                 <td>{p.name}</td>
-                <td><code>{p.folder}</code></td>
+                <td><code>{p.source_id}</code></td>
                 <td><code>{p.code_version}</code></td>
                 <td>{p.workers}</td>
-                <td>{p.allow_folder_override ? 'allowed' : '—'}</td>
+                <td>{p.allow_source_override ? 'allowed' : '—'}</td>
               </tr>
             ))}
           </tbody>

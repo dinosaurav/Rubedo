@@ -13,8 +13,8 @@ export default function CurrentOutputs() {
 
   const columns: ColumnDef<any, any>[] = [
     {
-      accessorKey: 'source_folder',
-      header: 'Source Folder',
+      accessorKey: 'source_id',
+      header: 'Source',
       meta: { filterVariant: 'select' },
     },
     {

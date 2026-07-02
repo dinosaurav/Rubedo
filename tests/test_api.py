@@ -116,7 +116,7 @@ def test_get_materializations():
 def test_selection_preview():
     response = client.post(
         "/api/selection/preview",
-        json={"source_folder": "test_input", "coordinate_glob": "*a.txt"},
+        json={"source_id": "folder:test_input", "coordinate_glob": "*a.txt"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -128,7 +128,7 @@ def test_selection_preview():
 def test_selection_invalidate():
     response = client.post(
         "/api/selection/invalidate?reason=api test",
-        json={"source_folder": "test_input", "coordinate_glob": "*a.txt"},
+        json={"source_id": "folder:test_input", "coordinate_glob": "*a.txt"},
     )
     assert response.status_code == 200
     data = response.json()

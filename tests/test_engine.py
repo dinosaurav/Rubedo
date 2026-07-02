@@ -176,7 +176,7 @@ def test_failure_creates_no_materialization():
 def test_select_by_coordinate_glob():
     run_pipeline(test_pipeline, "test_input", workers=1)
 
-    sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
+    sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     from batchbrain.selection import get_selection_materialization_ids
 
     with get_session() as session:
@@ -192,7 +192,7 @@ def test_select_by_metadata():
     run_pipeline(test_pipeline, "test_input", workers=1)
 
     sel = Selection(
-        source_folder="test_input",
+        source_id="folder:test_input",
         metadata=[{"key": "line_count", "op": "equals", "value": 2}],
     )
     from batchbrain.selection import get_selection_materialization_ids
@@ -212,7 +212,7 @@ def test_select_by_metadata():
 def test_invalidate_selected():
     run_pipeline(test_pipeline, "test_input", workers=1)
 
-    sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
+    sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     res = invalidate(sel, "test invalidation")
 
     assert res["invalidated_count"] == 1
@@ -230,7 +230,7 @@ def test_invalidate_selected():
 def test_invalidated_result_not_reused():
     run_pipeline(test_pipeline, "test_input", workers=1)
 
-    sel = Selection(source_folder="test_input", coordinate_glob="*b.txt")
+    sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
     invalidate(sel, "test")
 
     res2 = run_pipeline(test_pipeline, "test_input", workers=1)

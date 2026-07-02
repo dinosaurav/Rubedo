@@ -19,7 +19,7 @@ from .models import (
 )
 from .registry import PipelineSpec, StepSpec
 from .db import get_session
-from .scanner import scan_folder
+from .sources import Source, coerce_source
 from .hashing import hash_json, compute_output_address
 from .store import stage_and_commit, read_materialization_output
 from .util import utcnow_iso
@@ -112,14 +112,28 @@ def _compute_step_input_hash(
     return hash_json(parent_hashes)
 
 
+def _step_accepts_inputs(step: StepSpec) -> bool:
+    import inspect
+
+    return "inputs" in inspect.signature(step.fn).parameters
+
+
+def _build_step_inputs(step: StepSpec, inputs: Optional[dict]):
+    if step.input_model:
+        return step.input_model(**(inputs or {}))
+    return inputs or {}
+
+
 def run_pipeline(
     pipeline: PipelineSpec,
-    folder: str,
+    source: Optional[Source | str] = None,
     config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
     force: bool = False,
     inputs: Optional[dict] = None,
 ) -> RunSummary:
+    source = pipeline.source if source is None else coerce_source(source)
+    source_id = source.id
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     config = config or {}
     config_hash = hash_json(config)
@@ -134,7 +148,7 @@ def run_pipeline(
             kind="process",
             status="running",
             processor_name=processor_name,
-            source_folder=folder,
+            source_id=source_id,
             code_version=code_version,
             config_hash=config_hash,
             started_at=utcnow_iso(),
@@ -151,34 +165,34 @@ def run_pipeline(
         session.commit()
 
         try:
-            scanned_files = scan_folder(folder)
+            scanned_items = source.scan()
 
             now_iso = utcnow_iso()
             manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
 
-            sorted_files = sorted(scanned_files, key=lambda x: x.coordinate)
+            sorted_items = sorted(scanned_items, key=lambda x: x.coordinate)
             manifest_data = [
-                {"coordinate": sf.coordinate, "hash": sf.content_hash}
-                for sf in sorted_files
+                {"coordinate": it.coordinate, "hash": it.content_hash}
+                for it in sorted_items
             ]
             manifest_hash_val = hash_json(manifest_data)
 
             manifest = Manifest(
                 id=manifest_id,
                 run_id=run_id,
-                root_path=folder,
+                source_id=source_id,
                 manifest_hash=manifest_hash_val,
                 created_at=now_iso,
             )
             session.add(manifest)
 
-            for sf in scanned_files:
+            for it in scanned_items:
                 entry = ManifestEntry(
                     manifest_id=manifest_id,
-                    coordinate=sf.coordinate,
-                    content_hash=sf.content_hash,
-                    size_bytes=sf.size_bytes,
-                    mtime_ns=sf.mtime_ns,
+                    coordinate=it.coordinate,
+                    content_hash=it.content_hash,
+                    size_bytes=it.metadata.get("size_bytes"),
+                    mtime_ns=it.metadata.get("mtime_ns"),
                 )
                 session.add(entry)
 
@@ -193,11 +207,11 @@ def run_pipeline(
             )
             session.commit()
 
-            scanned_coordinates = {sf.coordinate for sf in scanned_files}
+            scanned_coordinates = {it.coordinate for it in scanned_items}
 
             prev_manifest = (
                 session.query(Manifest)
-                .filter(Manifest.root_path == folder, Manifest.id != manifest_id)
+                .filter(Manifest.source_id == source_id, Manifest.id != manifest_id)
                 .order_by(Manifest.created_at.desc())
                 .first()
             )
@@ -216,7 +230,7 @@ def run_pipeline(
                             last_rc = (
                                 session.query(RunCoordinateStatus)
                                 .filter(
-                                    RunCoordinateStatus.source_folder == folder,
+                                    RunCoordinateStatus.source_id == source_id,
                                     RunCoordinateStatus.coordinate == pe.coordinate,
                                     RunCoordinateStatus.step_name == step.name,
                                     RunCoordinateStatus.status.in_(
@@ -231,7 +245,7 @@ def run_pipeline(
                                 run_id=run_id,
                                 processor_name=processor_name,
                                 step_name=step.name,
-                                source_folder=folder,
+                                source_id=source_id,
                                 coordinate=pe.coordinate,
                                 input_hash=pe.content_hash,  # Best approximation for removed
                                 previous_output_address=last_rc.output_address
@@ -253,7 +267,7 @@ def run_pipeline(
                                 processor_name=processor_name,
                                 step_name=step.name,
                                 coordinate=pe.coordinate,
-                                message="Coordinate removed because source file is absent in latest manifest",
+                                message="Coordinate removed because it is absent from the latest manifest",
                             )
                         removed_count += 1
             session.commit()
@@ -281,8 +295,9 @@ def run_pipeline(
 
             for step in topo_steps:
                 tasks = []
-                for sf in scanned_files:
-                    coord = sf.coordinate
+                accepts_inputs = _step_accepts_inputs(step)
+                for it in scanned_items:
+                    coord = it.coordinate
 
                     parent_mats = {}
                     is_blocked = False
@@ -303,7 +318,7 @@ def run_pipeline(
                             run_id=run_id,
                             processor_name=processor_name,
                             step_name=step.name,
-                            source_folder=folder,
+                            source_id=source_id,
                             coordinate=coord,
                             status="blocked",
                             metadata_json=json.dumps({"blocked_by": step.depends_on}),
@@ -324,7 +339,7 @@ def run_pipeline(
                         continue
 
                     input_hash = _compute_step_input_hash(
-                        step, coord, sf.content_hash, parent_mats
+                        step, coord, it.content_hash, parent_mats
                     )
                     output_address = compute_output_address(
                         step.name, step.version, input_hash, step.config_hash
@@ -346,7 +361,7 @@ def run_pipeline(
                             run_id=run_id,
                             processor_name=processor_name,
                             step_name=step.name,
-                            source_folder=folder,
+                            source_id=source_id,
                             coordinate=coord,
                             input_hash=input_hash,
                             output_address=output_address,
@@ -380,7 +395,7 @@ def run_pipeline(
                         tasks.append(
                             {
                                 "coordinate": coord,
-                                "absolute_path": sf.absolute_path,
+                                "item": it,
                                 "input_hash": input_hash,
                                 "output_address": output_address,
                                 "parent_mats": parent_mats,
@@ -393,32 +408,23 @@ def run_pipeline(
 
                     def process_task(task_spec):
                         try:
-                            # Build arguments
+                            # Root steps get the source payload positionally;
+                            # dependent steps get parent outputs by parameter
+                            # name. Either kind may declare an `inputs` param.
                             if not step.depends_on:
-                                import inspect
-
-                                sig = inspect.signature(step.fn)
+                                args = [source.load(task_spec["item"])]
                                 kwargs = {}
-                                if len(sig.parameters) >= 1:
-                                    kwargs[list(sig.parameters.keys())[0]] = task_spec[
-                                        "absolute_path"
-                                    ]
-                                if len(sig.parameters) >= 2 and inputs is not None:
-                                    if step.input_model:
-                                        kwargs[list(sig.parameters.keys())[1]] = (
-                                            step.input_model(**inputs)
-                                        )
-                                    else:
-                                        kwargs[list(sig.parameters.keys())[1]] = inputs
-                                result = step.fn(**kwargs)
                             else:
-                                kwargs = {}
-                                for dep in step.depends_on:
-                                    parent_val = read_materialization_output(
+                                args = []
+                                kwargs = {
+                                    dep: read_materialization_output(
                                         task_spec["parent_mats"][dep]
                                     )
-                                    kwargs[dep] = parent_val
-                                result = step.fn(**kwargs)
+                                    for dep in step.depends_on
+                                }
+                            if accepts_inputs:
+                                kwargs["inputs"] = _build_step_inputs(step, inputs)
+                            result = step.fn(*args, **kwargs)
                             return True, task_spec, result, None
                         except Exception:
                             return False, task_spec, None, traceback.format_exc()
@@ -493,7 +499,7 @@ def run_pipeline(
                                             run_id=run_id,
                                             processor_name=processor_name,
                                             step_name=step.name,
-                                            source_folder=folder,
+                                            source_id=source_id,
                                             coordinate=coord,
                                             input_hash=input_hash,
                                             output_address=output_address,
@@ -527,7 +533,7 @@ def run_pipeline(
                                             run_id=run_id,
                                             processor_name=processor_name,
                                             step_name=step.name,
-                                            source_folder=folder,
+                                            source_id=source_id,
                                             coordinate=coord,
                                             input_hash=input_hash,
                                             output_address=output_address,
@@ -555,7 +561,7 @@ def run_pipeline(
                                         run_id=run_id,
                                         processor_name=processor_name,
                                         step_name=step.name,
-                                        source_folder=folder,
+                                        source_id=source_id,
                                         coordinate=coord,
                                         input_hash=input_hash,
                                         output_address=output_address,
