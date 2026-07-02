@@ -82,36 +82,55 @@ def body_v2(path):
     return open(path).read().strip().upper()  # the "edit"
 
 
-def register(fn, version):
+def register(fn, version, code="warn"):
     clear_registry()
-    spec = step(name="work", version=version)(fn)
+    spec = step(name="work", version=version, code=code)(fn)
     pipeline(id="cd", name="cd", folder=TEST_FOLDER, steps=[spec])
     return spec
 
 
-def test_auto_version_recomputes_on_code_change():
+def test_code_auto_recomputes_on_code_change():
     create_file("f1.txt", "hello")
 
-    register(body_v1, "auto")
+    register(body_v1, "1.0.0", code="auto")
     s1 = run("cd", workers=1)
     assert s1.created_count == 1
 
     # Same code: cache hit
-    register(body_v1, "auto")
+    register(body_v1, "1.0.0", code="auto")
     s2 = run("cd", workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
     # Edited code: identity changed, recompute without any version bump
-    register(body_v2, "auto")
+    register(body_v2, "1.0.0", code="auto")
     s3 = run("cd", workers=1)
     assert (s3.created_count, s3.reused_count) == (1, 0)
 
+    # code='auto' never drift-warns: identity already tracks the source
+    import warnings
 
-def test_auto_version_is_derived_from_source():
-    spec1 = register(body_v1, "auto")
-    assert spec1.version.startswith("auto-")
-    spec2 = register(body_v2, "auto")
-    assert spec2.version != spec1.version
+    register(body_v2, "1.0.0", code="auto")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        s4 = run("cd", workers=1)
+    assert s4.reused_count == 1
+
+
+def test_version_and_code_are_independent_axes():
+    create_file("f1.txt", "hello")
+
+    register(body_v1, "1.0.0", code="auto")
+    run("cd", workers=1)
+
+    # Same code, bumped version: version alone changes identity
+    register(body_v1, "2.0.0", code="auto")
+    s = run("cd", workers=1)
+    assert (s.created_count, s.reused_count) == (1, 0)
+
+
+def test_version_auto_is_rejected():
+    with pytest.raises(ValueError, match="code='auto'"):
+        step(name="work", version="auto")(body_v1)
 
 
 def test_manual_version_warns_on_drift_but_reuses():

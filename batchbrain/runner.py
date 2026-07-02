@@ -227,6 +227,9 @@ def _plan_step(
             # consumes them; downstream steps pick up param changes through
             # the content-hash chain
             params_hash=params_hash if accepts_params else None,
+            # code='auto': source edits change identity; code='warn': they
+            # don't, but reuse of outdated outputs is flagged below
+            code_hash=step.code_hash if step.code_mode == "auto" else None,
         )
 
         existing_mat = (
@@ -250,7 +253,8 @@ def _plan_step(
                         existing_mat.content_type,
                     ),
                     code_drift=(
-                        step.code_hash is not None
+                        step.code_mode == "warn"
+                        and step.code_hash is not None
                         and existing_mat.code_hash is not None
                         and step.code_hash != existing_mat.code_hash
                     ),

@@ -19,6 +19,7 @@ class StepSpec:
     config: Optional[Dict[str, Any]] = None
     workers: int = 4
     code_hash: Optional[str] = None
+    code_mode: str = "warn"  # warn | auto
 
 
 @dataclass
@@ -54,41 +55,52 @@ def step(
     params_model: Optional[Type[BaseModel]] = None,
     config: Optional[Dict[str, Any]] = None,
     workers: int = 4,
+    code: str = "warn",
 ):
     """Declare a step.
 
-    version is the step's cache identity. Pass "auto" to derive it from the
-    function's source hash — any code edit recomputes (right for cheap,
-    deterministic steps). With a manual version the engine never recomputes
-    on code edits, but warns when it reuses an output whose code has since
-    changed (right for expensive/non-deterministic steps where recompute
-    should be a deliberate choice).
+    version is the step's semantic identity — bump it for deliberate
+    behavior changes (also the escape hatch for edits code hashing can't
+    see, like helpers the step calls).
+
+    code decides what a *source edit* means, independently of version:
+      - "warn" (default): edits never recompute; reusing an output whose
+        code has since changed produces a loud warning. Right for
+        expensive/non-deterministic steps.
+      - "auto": the function's source hash joins the cache identity, so any
+        edit recomputes — no version bump needed. Right for cheap,
+        deterministic steps.
     """
+    if code not in ("warn", "auto"):
+        raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
+    if version == "auto":
+        raise ValueError(
+            f"Step '{name}': version is a semantic label; use code='auto' "
+            "to derive cache identity from the source instead"
+        )
 
     def decorator(fn: Callable):
         from .hashing import hash_json
 
         code_hash = _hash_source(fn)
-        effective_version = version
-        if version == "auto":
-            if code_hash is None:
-                raise ValueError(
-                    f"Step '{name}': version='auto' requires an inspectable "
-                    "function source"
-                )
-            effective_version = f"auto-{code_hash[:12]}"
+        if code == "auto" and code_hash is None:
+            raise ValueError(
+                f"Step '{name}': code='auto' requires an inspectable "
+                "function source"
+            )
 
         config_hash = hash_json(config or {})
         return StepSpec(
             name=name,
             fn=fn,
-            version=effective_version,
+            version=version,
             depends_on=depends_on or [],
             config_hash=config_hash,
             params_model=params_model,
             config=config,
             workers=workers,
             code_hash=code_hash,
+            code_mode=code,
         )
 
     return decorator

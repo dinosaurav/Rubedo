@@ -15,11 +15,21 @@ Living roadmap. Ordering within sections is rough priority; items marked
 - [x] **Plan/execute split of `run_pipeline`** — `_plan_step` (read-only StepDecision
       per coordinate) / `_record_planned` / `_execute_step` / `_commit_execution_result`,
       orchestrated by a slim `run_pipeline`.
-- [x] **Code-change detection** — `version="auto"` derives identity from the source
-      hash (edits recompute); manual versions warn on drift (UserWarning +
-      `code_drift_detected` event + `RunPlan.warnings`) without changing cache
-      semantics. Caveat: hashes the step function's own source only — edits to
-      helpers it calls are not detected.
+- [x] **Code-change detection** — orthogonal axes: `version` (semantic label) and
+      `code="auto"|"warn"` (source hash joins identity vs. drift warnings via
+      UserWarning + `code_drift_detected` event + `RunPlan.warnings`). Caveat:
+      hashes the step function's own source only — helper edits are what the
+      version bump is for. Possible middle ground later: hash the step's whole
+      defining module (coarse but catches same-file helpers); full closure
+      hashing deliberately rejected (dynamic dispatch + dependency upgrades
+      make it unsound at real complexity cost).
+- [ ] Semantic version ordering — parse `version` with `packaging` (PEP 440)
+      wherever ordering matters: version-range selection ("invalidate everything
+      computed by < 2.0") and UI sorting. Policy: no validation at registration;
+      parseable versions order properly, unparseable ones ("read-v1") stay opaque
+      labels — equality only, range operations skip them. Frontend gets a small
+      semver-aware comparator for table sorting. Build alongside the selection
+      language, which is its main consumer.
 - [x] Explain / dry-run — `batchbrain.plan(pipeline, params=...)` returns a RunPlan
       (reuse / execute / pending / removed per coordinate-step, with addresses);
       still to do: surface it in the UI

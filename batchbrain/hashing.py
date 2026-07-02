@@ -30,10 +30,14 @@ def compute_output_address(
     input_hash: str,
     config_hash: str,
     params_hash: str = None,
+    code_hash: str = None,
 ) -> str:
-    """Cache identity: code + data + static config, plus run params for
-    steps that consume them (params_hash is None for steps that don't)."""
+    """Cache identity: version + data + static config, plus run params for
+    steps that consume them and the source hash for steps with code='auto'.
+    Optional segments are labeled so their absence/presence can't collide."""
     combined = f"{step}:{code_version}:{input_hash}:{config_hash}"
     if params_hash is not None:
-        combined += f":{params_hash}"
+        combined += f":params:{params_hash}"
+    if code_hash is not None:
+        combined += f":code:{code_hash}"
     return hashlib.sha256(combined.encode("utf-8")).hexdigest()
