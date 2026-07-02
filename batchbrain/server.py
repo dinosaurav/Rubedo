@@ -8,7 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 
 from .db import get_session, init_db
-from .models import Run, RunEvent, Materialization, RunCoordinateStatus
+from .models import (
+    Run,
+    RunEvent,
+    Materialization,
+    MaterializationLifecycle,
+    RunCoordinateStatus,
+)
 from .selection import Selection
 from .invalidation import invalidate
 from .schemas import (
@@ -152,7 +158,7 @@ def get_current_outputs():
                     .filter_by(id=rc.materialization_id)
                     .first()
                 )
-            if mat and mat.invalidated_at is not None:
+            if mat and not mat.is_live:
                 continue
             results.append(
                 {
@@ -166,6 +172,9 @@ def get_current_outputs():
                     "output_address": rc.output_address,
                     "materialization_id": rc.materialization_id,
                     "run_id": rc.run_id,
+                    # when the output bytes were produced, not when a run
+                    # last confirmed them (reuse bumps rc rows every run)
+                    "updated_at": mat.created_at if mat else rc.created_at,
                 }
             )
         return results
@@ -175,7 +184,7 @@ def _resolve_materialization(session, output_address: str):
     """Latest generation at an address, preferring the live one."""
     live = (
         session.query(Materialization)
-        .filter_by(output_address=output_address, invalidated_at=None)
+        .filter_by(output_address=output_address, is_live=True)
         .first()
     )
     if live:
@@ -220,16 +229,31 @@ def get_object_metadata(output_address: str):
         except UnicodeDecodeError:
             pass  # It's binary
 
-    # Fetch the materialization data
+    # Fetch the materialization data; when/why it stopped being live is
+    # derived from the append-only lifecycle log
     with get_session() as session:
         mat = _resolve_materialization(session, output_address)
+        invalidated_at = None
+        invalidation_reason = None
+        if not mat.is_live:
+            lc = (
+                session.query(MaterializationLifecycle)
+                .filter_by(materialization_id=mat.id)
+                .order_by(MaterializationLifecycle.id.desc())
+                .first()
+            )
+            if lc:
+                invalidated_at = lc.created_at
+                invalidation_reason = lc.reason
         mat_data = {
             "processor_name": mat.processor_name,
             "step_name": mat.step_name,
             "code_version": mat.code_version,
             "created_by_run_id": mat.created_by_run_id,
             "created_at": mat.created_at,
-            "invalidated_at": mat.invalidated_at,
+            "is_live": mat.is_live,
+            "invalidated_at": invalidated_at,
+            "invalidation_reason": invalidation_reason,
             "output_content_hash": mat.output_content_hash,
             "content_type": mat.content_type,
         }
@@ -283,7 +307,7 @@ async def preview_selection(request: Request):
                     "output_address": m.output_address,
                     "output_content_hash": m.output_content_hash,
                     "metadata": json.loads(m.metadata_json) if m.metadata_json else {},
-                    "invalidated": m.invalidated_at is not None,
+                    "invalidated": not m.is_live,
                 }
             )
 

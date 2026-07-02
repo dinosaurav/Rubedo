@@ -1,6 +1,12 @@
 import uuid
 from typing import Any, Optional
-from .models import Run, Materialization, RunEvent, RunSummary
+from .models import (
+    Run,
+    Materialization,
+    MaterializationLifecycle,
+    RunEvent,
+    RunSummary,
+)
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .runner import run_pipeline
@@ -38,11 +44,17 @@ def invalidate(selection: Selection, reason: str) -> dict:
             invalidated_count = 0
             for mat_id in mat_ids:
                 mat = session.get(Materialization, mat_id)
-                if mat and mat.invalidated_at is None:
-                    mat.invalidated_at = utcnow_iso()
-                    mat.invalidated_by_run_id = run_id
-                    mat.invalidation_reason = reason
-
+                if mat and mat.is_live:
+                    mat.is_live = False
+                    session.add(
+                        MaterializationLifecycle(
+                            materialization_id=mat.id,
+                            action="invalidated",
+                            run_id=run_id,
+                            reason=reason,
+                            created_at=utcnow_iso(),
+                        )
+                    )
                     invalidated_count += 1
 
             run.status = "completed"

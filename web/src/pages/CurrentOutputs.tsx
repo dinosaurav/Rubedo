@@ -22,7 +22,7 @@ export default function CurrentOutputs() {
       header: 'Coordinate',
     },
     {
-      accessorKey: 'step',
+      accessorKey: 'step_name',
       header: 'Step',
       meta: { filterVariant: 'select' },
     },
@@ -42,7 +42,10 @@ export default function CurrentOutputs() {
     {
       accessorKey: 'updated_at',
       header: 'Updated At',
-      cell: (info) => new Date(info.getValue()).toLocaleString(),
+      cell: (info) => {
+        const val = info.getValue();
+        return val ? new Date(val).toLocaleString() : '-';
+      },
     }
   ];
 

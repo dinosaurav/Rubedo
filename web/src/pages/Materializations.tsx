@@ -51,7 +51,7 @@ export default function Materializations() {
     },
     {
       id: 'status',
-      accessorFn: (row) => row.invalidated_at ? 'Invalidated' : 'Valid',
+      accessorFn: (row) => row.is_live ? 'Valid' : 'Invalidated',
       header: 'Status',
       meta: { filterVariant: 'select' },
       cell: (info) => {

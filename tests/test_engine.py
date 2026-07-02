@@ -224,7 +224,7 @@ def test_invalidate_selected():
             .filter(Materialization.id == res["materialization_ids"][0])
             .first()
         )
-        assert mat.invalidated_at is not None
+        assert mat.is_live is False
 
 
 def test_invalidated_result_not_reused():
@@ -293,7 +293,7 @@ def test_logical_deletion():
         mats = session.query(Materialization).all()
         assert len(mats) == 2
         for m in mats:
-            assert m.invalidated_at is None
+            assert m.is_live
 
 
 def test_restore_deleted_reuses_cache():

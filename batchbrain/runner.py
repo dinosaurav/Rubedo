@@ -13,6 +13,7 @@ from .models import (
     ManifestEntry,
     Materialization,
     MaterializationEdge,
+    MaterializationLifecycle,
     RunCoordinateStatus,
     RunSummary,
     ProcessResult,
@@ -125,44 +126,56 @@ def _commit_materialization(
     output_path: str,
     metadata_json: Optional[str],
     run_id: str,
-) -> Materialization:
+) -> tuple[Materialization, str]:
     """Record an executed result at its address, honoring generations.
 
     An address may accumulate generations over time; at most one is live.
-    Identical bytes are the same fact (reuse the live row, or resurrect a
-    tombstoned one); different bytes supersede the live generation so that
-    downstream input hashes change and dependents recompute.
+    Identical bytes are the same fact (reuse the live row, or restore a
+    non-live one); different bytes supersede the live generation so that
+    downstream input hashes change and dependents recompute. Every liveness
+    transition appends a materialization_lifecycle row — the append-only
+    truth that the is_live projection caches.
+
+    Returns (materialization, action) with action one of
+    created | reused | restored | superseded.
     """
     live = (
         session.query(Materialization)
-        .filter_by(output_address=output_address, invalidated_at=None)
+        .filter_by(output_address=output_address, is_live=True)
         .first()
     )
+    superseded = None
     if live:
         if live.output_content_hash == output_content_hash:
-            return live
-        live.invalidated_at = utcnow_iso()
-        live.invalidated_by_run_id = run_id
-        live.invalidation_reason = "superseded: recompute produced different output"
+            return live, "reused"
+        live.is_live = False
+        # Demote before inserting the replacement so the one-live-per-address
+        # index never sees two live generations
         session.flush()
+        superseded = live
     else:
         prior = (
             session.query(Materialization)
             .filter_by(
                 output_address=output_address,
                 output_content_hash=output_content_hash,
+                is_live=False,
             )
-            .filter(Materialization.invalidated_at.isnot(None))
             .order_by(Materialization.id.desc())
             .first()
         )
         if prior:
-            prior.invalidated_at = None
-            prior.invalidated_by_run_id = None
-            prior.invalidation_reason = None
-            if prior.content_type is None:
-                prior.content_type = content_type
-            return prior
+            prior.is_live = True
+            session.add(
+                MaterializationLifecycle(
+                    materialization_id=prior.id,
+                    action="restored",
+                    run_id=run_id,
+                    reason="recompute produced identical output",
+                    created_at=utcnow_iso(),
+                )
+            )
+            return prior, "restored"
 
     mat = Materialization(
         processor_name=processor_name,
@@ -177,10 +190,24 @@ def _commit_materialization(
         metadata_json=metadata_json,
         created_at=utcnow_iso(),
         created_by_run_id=run_id,
+        is_live=True,
     )
     session.add(mat)
     session.flush()
-    return mat
+
+    if superseded is not None:
+        session.add(
+            MaterializationLifecycle(
+                materialization_id=superseded.id,
+                action="superseded",
+                run_id=run_id,
+                reason="recompute produced different output",
+                superseded_by_id=mat.id,
+                created_at=utcnow_iso(),
+            )
+        )
+        return mat, "superseded"
+    return mat, "created"
 
 
 def _step_accepts_inputs(step: StepSpec) -> bool:
@@ -246,11 +273,19 @@ def run_pipeline(
             ]
             manifest_hash_val = hash_json(manifest_data)
 
+            prev_manifest = (
+                session.query(Manifest)
+                .filter(Manifest.source_id == source_id)
+                .order_by(Manifest.created_at.desc())
+                .first()
+            )
+
             manifest = Manifest(
                 id=manifest_id,
                 run_id=run_id,
                 source_id=source_id,
                 manifest_hash=manifest_hash_val,
+                parent_manifest_id=prev_manifest.id if prev_manifest else None,
                 created_at=now_iso,
             )
             session.add(manifest)
@@ -265,29 +300,23 @@ def run_pipeline(
                 )
                 session.add(entry)
 
-            run.manifest_id = manifest_id
             _emit_event(
                 session,
                 run_id,
                 "info",
                 "manifest_created",
                 processor_name=processor_name,
-                data={"manifest_id": manifest_id},
+                data={
+                    "manifest_id": manifest_id,
+                    "parent_manifest_id": manifest.parent_manifest_id,
+                },
             )
             session.commit()
 
             scanned_coordinates = {it.coordinate for it in scanned_items}
 
-            prev_manifest = (
-                session.query(Manifest)
-                .filter(Manifest.source_id == source_id, Manifest.id != manifest_id)
-                .order_by(Manifest.created_at.desc())
-                .first()
-            )
-
             removed_count = 0
             if prev_manifest:
-                run.parent_manifest_id = prev_manifest.id
                 prev_entries = (
                     session.query(ManifestEntry)
                     .filter_by(manifest_id=prev_manifest.id)
@@ -423,7 +452,7 @@ def run_pipeline(
 
                     existing_mat = (
                         session.query(Materialization)
-                        .filter_by(output_address=output_address, invalidated_at=None)
+                        .filter_by(output_address=output_address, is_live=True)
                         .first()
                     )
 
@@ -529,7 +558,7 @@ def run_pipeline(
                                         ):
                                             metadata_json = json.dumps(result.metadata)
 
-                                        mat = _commit_materialization(
+                                        mat, mat_action = _commit_materialization(
                                             task_session,
                                             processor_name=processor_name,
                                             step=step,
@@ -581,10 +610,11 @@ def run_pipeline(
                                             task_session,
                                             run_id,
                                             "info",
-                                            "step_materialization_committed",
+                                            f"materialization_{mat_action}",
                                             processor_name=processor_name,
                                             step_name=step.name,
                                             coordinate=coord,
+                                            data={"materialization_id": mat.id},
                                         )
                                         total_summary["created"] += 1
                                         step_summary[step.name]["created"] += 1

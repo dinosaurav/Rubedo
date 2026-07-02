@@ -32,6 +32,13 @@ Relationship between a run and a coordinate: created, reused, failed, skipped, o
 **Invalidation:**
 Removal from current/canonical eligibility, not necessarily physical deletion.
 
+**Liveness / lifecycle:**
+`Materialization.is_live` is a mutable projection; the append-only
+`materialization_lifecycle` table (invalidated / restored / superseded rows)
+is the truth about every liveness transition. Every `is_live` flip must be
+accompanied by a lifecycle row in the same transaction. Similarly, Run's
+status columns are a projection of the `run_events` log.
+
 ## Core Invariants
 
 1. No materialization row exists unless the output committed successfully.
@@ -41,3 +48,6 @@ Removal from current/canonical eligibility, not necessarily physical deletion.
 5. Users enumerate through manifests/current views, never raw object storage.
 6. Run status lives on the run-coordinate edge, not on output bytes.
 7. Invalidation never silently deletes historical facts.
+8. Ledger tables are append-only, enforced by ORM guards; the only legal
+   updates anywhere are the projection columns (Run lifecycle,
+   Materialization.is_live).

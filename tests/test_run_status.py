@@ -238,5 +238,5 @@ def test_event_log_populated(setup_teardown):
         assert "run_started" in types
         assert "manifest_created" in types
         assert "step_processing_started" in types
-        assert "step_materialization_committed" in types
+        assert "materialization_created" in types
         assert "run_completed" in types

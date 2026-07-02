@@ -1,20 +1,27 @@
 from typing import Any, Optional, Dict
 from pydantic import BaseModel
 from sqlalchemy import (
+    Boolean,
     Column,
     ForeignKey,
     Index,
     Integer,
     String,
     UniqueConstraint,
+    event,
     text,
 )
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
 
 class Run(Base):
+    """One execution attempt. Identity columns are written once at creation;
+    the lifecycle columns (status, finished_at, error_message, summary_json)
+    are a projection of the run_events log and are the only legal updates."""
+
     __tablename__ = "runs"
     id = Column(String, primary_key=True)
     kind = Column(String, nullable=False)
@@ -25,8 +32,6 @@ class Run(Base):
     started_at = Column(String, nullable=False)
     finished_at = Column(String)
     error_message = Column(String)
-    manifest_id = Column(String)
-    parent_manifest_id = Column(String)
     summary_json = Column(String)
     processor_name = Column(String, index=True)
 
@@ -51,6 +56,7 @@ class Manifest(Base):
     run_id = Column(String, ForeignKey("runs.id"), nullable=False)
     source_id = Column(String, nullable=False, index=True)
     manifest_hash = Column(String, nullable=False)
+    parent_manifest_id = Column(String, ForeignKey("manifests.id"))
     created_at = Column(String, nullable=False)
 
 
@@ -78,6 +84,14 @@ class MaterializationEdge(Base):
 
 
 class Materialization(Base):
+    """A committed output. Every column except is_live is immutable.
+
+    is_live is a projection: the append-only materialization_lifecycle table
+    is the truth about invalidations, restorations, and supersessions, and
+    every is_live flip must be accompanied by a lifecycle row. An address can
+    accumulate generations over time (recomputes of non-deterministic steps);
+    at most one may be live at once."""
+
     __tablename__ = "materializations"
     id = Column(Integer, primary_key=True, autoincrement=True)
     processor_name = Column(String, nullable=False, index=True)
@@ -85,8 +99,6 @@ class Materialization(Base):
     code_version = Column(String, nullable=False)
     config_hash = Column(String, nullable=False)
     input_hash = Column(String, nullable=False)
-    # An address can accumulate generations over time (recomputes of
-    # non-deterministic steps); at most one may be live at once.
     output_address = Column(String, nullable=False, index=True)
     output_content_hash = Column(String, nullable=False)
     content_type = Column(String)  # bytes | text | json
@@ -94,17 +106,30 @@ class Materialization(Base):
     metadata_json = Column(String)
     created_at = Column(String, nullable=False)
     created_by_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
-    invalidated_at = Column(String)
-    invalidated_by_run_id = Column(String, ForeignKey("runs.id"))
-    invalidation_reason = Column(String)
+    is_live = Column(Boolean, nullable=False, default=True)
     __table_args__ = (
         Index(
             "uq_live_output_address",
             "output_address",
             unique=True,
-            sqlite_where=text("invalidated_at IS NULL"),
+            sqlite_where=text("is_live"),
         ),
     )
+
+
+class MaterializationLifecycle(Base):
+    """Append-only record of every liveness transition of a materialization."""
+
+    __tablename__ = "materialization_lifecycle"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    materialization_id = Column(
+        Integer, ForeignKey("materializations.id"), nullable=False, index=True
+    )
+    action = Column(String, nullable=False)  # invalidated | restored | superseded
+    run_id = Column(String, ForeignKey("runs.id"))
+    reason = Column(String)
+    superseded_by_id = Column(Integer, ForeignKey("materializations.id"))
+    created_at = Column(String, nullable=False)
 
 
 class RunCoordinateStatus(Base):
@@ -128,6 +153,74 @@ class RunCoordinateStatus(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "coordinate", "step_name", name="_run_coord_uc"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Immutability guards
+#
+# The ledger is append-only: history is recorded by inserting new rows, never
+# by rewriting old ones. These listeners make that physical instead of
+# conventional. Run and Materialization carry a small set of projection
+# columns (caches of the run_events / materialization_lifecycle logs) that
+# are the only legal updates anywhere in the schema.
+# ---------------------------------------------------------------------------
+
+
+class ImmutabilityError(RuntimeError):
+    pass
+
+
+_APPEND_ONLY = (
+    RunEvent,
+    Manifest,
+    ManifestEntry,
+    MaterializationEdge,
+    MaterializationLifecycle,
+    RunCoordinateStatus,
+)
+
+_PROJECTION_COLUMNS = {
+    Run: frozenset({"status", "finished_at", "error_message", "summary_json"}),
+    Materialization: frozenset({"is_live"}),
+}
+
+
+def _reject_update(mapper, connection, target):
+    raise ImmutabilityError(
+        f"{type(target).__name__} rows are append-only and cannot be updated"
+    )
+
+
+def _reject_delete(mapper, connection, target):
+    raise ImmutabilityError(
+        f"{type(target).__name__} rows are ledger history and cannot be deleted"
+    )
+
+
+def _projection_guard(allowed):
+    def guard(mapper, connection, target):
+        changed = {
+            attr.key
+            for attr in sa_inspect(target).attrs
+            if attr.history.has_changes()
+        }
+        illegal = changed - allowed
+        if illegal:
+            raise ImmutabilityError(
+                f"{type(target).__name__} columns {sorted(illegal)} are immutable; "
+                f"only {sorted(allowed)} may be updated"
+            )
+
+    return guard
+
+
+for _model in _APPEND_ONLY:
+    event.listen(_model, "before_update", _reject_update)
+    event.listen(_model, "before_delete", _reject_delete)
+
+for _model, _allowed in _PROJECTION_COLUMNS.items():
+    event.listen(_model, "before_update", _projection_guard(_allowed))
+    event.listen(_model, "before_delete", _reject_delete)
 
 
 class ProcessResult(BaseModel):

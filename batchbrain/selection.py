@@ -41,10 +41,7 @@ def get_selection_materialization_ids(
             Materialization.output_content_hash == selection.output_content_hash
         )
     if selection.invalidated is not None:
-        if selection.invalidated:
-            query = query.filter(Materialization.invalidated_at.isnot(None))
-        else:
-            query = query.filter(Materialization.invalidated_at.is_(None))
+        query = query.filter(Materialization.is_live.is_(not selection.invalidated))
 
     if selection.source_id or selection.coordinate_glob or selection.coordinates:
         # Join with RunCoordinateStatus to filter by coordinate or source_id

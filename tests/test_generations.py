@@ -11,7 +11,11 @@ from sqlalchemy.pool import StaticPool
 
 from batchbrain import Selection, invalidate, step, pipeline
 from batchbrain.db import init_db, get_session
-from batchbrain.models import Materialization, RunCoordinateStatus
+from batchbrain.models import (
+    Materialization,
+    MaterializationLifecycle,
+    RunCoordinateStatus,
+)
 from batchbrain.processor_runner import run_processor
 from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
@@ -116,10 +120,21 @@ def test_invalidate_nondeterministic_creates_new_generation():
     gens = get_mats("generate")
     assert len(gens) == 2, "recompute with different bytes must be a new generation"
     assert gens[0].id == gen1.id
-    assert gens[0].invalidated_at is not None, "tombstone is history, not deleted"
-    assert gens[1].invalidated_at is None
+    assert gens[0].is_live is False, "old generation stays as history, not deleted"
+    assert gens[1].is_live is True
     assert gens[0].output_address == gens[1].output_address
     assert gens[0].output_content_hash != gens[1].output_content_hash
+
+    # The lifecycle log preserves the full story: invalidated by the user
+    with get_session() as session:
+        lifecycle = (
+            session.query(MaterializationLifecycle)
+            .filter_by(materialization_id=gen1.id)
+            .order_by(MaterializationLifecycle.id)
+            .all()
+        )
+        assert [lc.action for lc in lifecycle] == ["invalidated"]
+        assert lifecycle[0].reason == "bad output"
 
     # Old bytes survive on disk (immutability of committed outputs)
     assert os.path.exists(gens[0].output_path)
@@ -149,9 +164,17 @@ def test_force_nondeterministic_supersedes_live_generation():
 
     gens = get_mats("generate")
     assert len(gens) == 2
-    assert gens[0].invalidated_at is not None
-    assert "superseded" in gens[0].invalidation_reason
-    assert gens[1].invalidated_at is None
+    assert gens[0].is_live is False
+    assert gens[1].is_live is True
+
+    with get_session() as session:
+        lc = (
+            session.query(MaterializationLifecycle)
+            .filter_by(materialization_id=gens[0].id)
+            .one()
+        )
+        assert lc.action == "superseded"
+        assert lc.superseded_by_id == gens[1].id
 
     # Downstream recomputed off the new bytes rather than reusing stale output
     sums = get_mats("summarize")
@@ -171,7 +194,7 @@ def test_force_deterministic_reuses_live_row():
 
     mats = get_mats("stable")
     assert len(mats) == 1, "identical bytes are the same fact, not a new generation"
-    assert mats[0].invalidated_at is None
+    assert mats[0].is_live is True
 
 
 def test_string_payload_round_trips_as_string():

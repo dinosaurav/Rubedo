@@ -78,7 +78,7 @@ export default function SelectionBuilder() {
     },
     {
       id: 'status',
-      accessorFn: (row) => row.invalidated_at ? 'Invalidated' : 'Valid',
+      accessorFn: (row) => row.invalidated ? 'Invalidated' : 'Valid',
       header: 'Status',
       meta: { filterVariant: 'select' },
       cell: (info) => {

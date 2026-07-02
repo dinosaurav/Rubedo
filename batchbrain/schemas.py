@@ -57,8 +57,7 @@ class MaterializationOut(BaseModel):
     content_type: Optional[str] = None
     metadata_json: Optional[str] = None
     created_at: str
-    invalidated_at: Optional[str] = None
-    invalidation_reason: Optional[str] = None
+    is_live: bool
 
 
 class CurrentOutputOut(BaseModel):
@@ -72,6 +71,7 @@ class CurrentOutputOut(BaseModel):
     output_address: Optional[str] = None
     materialization_id: Optional[int] = None
     run_id: str
+    updated_at: Optional[str] = None
 
 
 class SelectionPreviewItem(BaseModel):

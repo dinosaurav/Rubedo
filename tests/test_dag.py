@@ -207,7 +207,7 @@ def test_invalidate_downstream_then_rerun():
             .filter_by(step_name="upper")
             .one()
         )
-        assert mat.invalidated_at is None
+        assert mat.is_live
         edges = (
             session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
         )
