@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
+
 class RunListItem(BaseModel):
     id: str
     kind: str
@@ -17,8 +18,10 @@ class RunListItem(BaseModel):
     removed_count: int = 0
     blocked_count: int = 0
 
+
 class RunDetailOut(RunListItem):
     error_message: Optional[str] = None
+
 
 class RunCoordinateStatusOut(BaseModel):
     coordinate: str
@@ -34,6 +37,7 @@ class RunCoordinateStatusOut(BaseModel):
     metadata_json: Optional[str] = None
     created_at: Optional[str] = None
 
+
 class RunEventOut(BaseModel):
     timestamp: str
     level: str
@@ -42,6 +46,7 @@ class RunEventOut(BaseModel):
     coordinate: Optional[str] = None
     message: Optional[str] = None
     data_json: Optional[str] = None
+
 
 class MaterializationOut(BaseModel):
     id: int
@@ -55,6 +60,7 @@ class MaterializationOut(BaseModel):
     created_at: str
     invalidated_at: Optional[str] = None
     invalidation_reason: Optional[str] = None
+
 
 class CurrentOutputOut(BaseModel):
     source_folder: str
@@ -80,15 +86,18 @@ class SelectionPreviewItem(BaseModel):
     metadata: Dict[str, Any]
     invalidated: bool
 
+
 class SelectionPreviewResponse(BaseModel):
     materialization_count: int
     coordinate_count: int
     items: List[SelectionPreviewItem]
 
+
 class SelectionInvalidateResponse(BaseModel):
     run_id: str
     invalidated_count: int
     materialization_ids: List[int]
+
 
 class ProcessorSpecOut(BaseModel):
     id: str
@@ -101,15 +110,18 @@ class ProcessorSpecOut(BaseModel):
     input_schema: Optional[Dict[str, Any]] = None
     default_inputs: Optional[Dict[str, Any]] = None
 
+
 class RunProcessorRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
     force: bool = False
     folder: Optional[str] = None
     workers: Optional[int] = None
 
+
 class RunProcessorResponse(BaseModel):
     execution_id: str
     status: str
+
 
 class ExecutionRequestOut(BaseModel):
     id: str
@@ -126,4 +138,3 @@ class ExecutionRequestOut(BaseModel):
     error_message: Optional[str] = None
     stdout_path: Optional[str] = None
     stderr_path: Optional[str] = None
-

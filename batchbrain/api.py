@@ -1,7 +1,7 @@
-from typing import Callable, Any, Optional
-from .models import RunSummary, ProcessResult
+from typing import Any, Optional
+from .models import RunSummary
 from .selection import Selection
-from .invalidation import invalidate, recompute
+
 
 def select(
     *,
@@ -17,6 +17,7 @@ def select(
     Create a selection object for invalidation or querying.
     """
     from .selection import MetadataFilter
+
     meta_filters = None
     if metadata:
         meta_filters = []
@@ -25,7 +26,7 @@ def select(
                 meta_filters.append(MetadataFilter(**m))
             elif isinstance(m, MetadataFilter):
                 meta_filters.append(m)
-                
+
     return Selection(
         source_folder=source_folder,
         coordinate_glob=coordinate_glob,
@@ -33,27 +34,29 @@ def select(
         code_version=code_version,
         output_content_hash=output_content_hash,
         metadata=meta_filters,
-        invalidated=invalidated
+        invalidated=invalidated,
     )
 
+
 def process_pipeline(
-    pipeline, # PipelineSpec
+    pipeline,  # PipelineSpec
     folder: str,
     *,
     config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
     force: bool = False,
-    inputs: Optional[dict] = None
+    inputs: Optional[dict] = None,
 ) -> RunSummary:
     """
     Process a folder of files using a DAG PipelineSpec.
     """
     from .runner import run_pipeline
+
     return run_pipeline(
         pipeline=pipeline,
         folder=folder,
         config=config,
         workers=workers,
         force=force,
-        inputs=inputs
+        inputs=inputs,
     )

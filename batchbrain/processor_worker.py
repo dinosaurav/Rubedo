@@ -4,8 +4,7 @@ import traceback
 from datetime import datetime, timezone
 from batchbrain.db import get_session
 from batchbrain.models import ExecutionRequest
-from batchbrain.registry import get_processor
-from batchbrain.api import process
+
 
 def run_worker(execution_id: str):
     with get_session() as session:
@@ -13,36 +12,37 @@ def run_worker(execution_id: str):
         if not req:
             print(f"Execution request {execution_id} not found.")
             sys.exit(1)
-        
+
         req.status = "running"
         req.started_at = datetime.now(timezone.utc).isoformat()
         session.commit()
-        
+
         processor_id = req.processor_id
         input_json_str = req.input_json
         force = bool(req.force)
         folder_override = req.folder_override
         workers_override = req.workers_override
-        
+
     try:
         from batchbrain.processor_runner import run_processor
+
         input_dict = json.loads(input_json_str) if input_json_str else {}
-        
+
         summary = run_processor(
             processor_id=processor_id,
             inputs=input_dict,
             force=force,
             folder=folder_override,
-            workers=workers_override
+            workers=workers_override,
         )
-        
+
         with get_session() as session:
             req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
             req.status = "succeeded"
             req.run_id = summary.run_id
             req.finished_at = datetime.now(timezone.utc).isoformat()
             session.commit()
-            
+
     except Exception as e:
         err_msg = traceback.format_exc()
         with get_session() as session:
@@ -52,6 +52,7 @@ def run_worker(execution_id: str):
             req.finished_at = datetime.now(timezone.utc).isoformat()
             session.commit()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

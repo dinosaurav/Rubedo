@@ -3,42 +3,40 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-
-from batchbrain.registry import _REGISTRY, step, pipeline, get_processor
-from batchbrain.models import ProcessResult, ExecutionRequest
-from batchbrain.db import get_session, init_db, engine
 from sqlalchemy.orm import close_all_sessions
+
+from batchbrain.registry import _REGISTRY, step, pipeline
+from batchbrain.models import ProcessResult, ExecutionRequest
+from batchbrain.db import get_session
+from batchbrain import db
 from batchbrain.server import app
 from pydantic import BaseModel
 
+
 class MyInputs(BaseModel):
     my_val: int
+
 
 @step(name="my-step", version="v1", input_model=MyInputs)
 def my_proc(path: str, inputs: MyInputs) -> ProcessResult:
     return ProcessResult(value={"val": inputs.my_val})
 
-p1 = pipeline(
-    id="test-proc",
-    name="Test Proc",
-    folder="some_dir",
-    steps=[my_proc]
-)
+
+p1 = pipeline(id="test-proc", name="Test Proc", folder="some_dir", steps=[my_proc])
+
 
 @step(name="no-inputs", version="v1")
 def no_inputs_proc(path: str) -> ProcessResult:
     return ProcessResult(value={"ok": True})
 
+
 p2 = pipeline(
-    id="no-inputs",
-    name="No Inputs",
-    folder="some_dir",
-    steps=[no_inputs_proc]
+    id="no-inputs", name="No Inputs", folder="some_dir", steps=[no_inputs_proc]
 )
 
 client = TestClient(app)
 
-from batchbrain import db
+
 
 @pytest.fixture(autouse=True)
 def isolated_db():
@@ -54,6 +52,7 @@ def isolated_db():
             db.engine.dispose()
         os.chdir(old_cwd)
 
+
 @patch("batchbrain.registry.load_processor_module")
 def test_list_processors(mock_load):
     res = client.get("/api/processors")
@@ -63,11 +62,15 @@ def test_list_processors(mock_load):
     assert "test-proc" in ids
     assert "no-inputs" in ids
 
+
 @patch("batchbrain.registry.load_processor_module")
 def test_run_processor_invalid_input(mock_load):
-    res = client.post("/api/processors/test-proc/run", json={"inputs": {"my_val": "not-an-int"}})
+    res = client.post(
+        "/api/processors/test-proc/run", json={"inputs": {"my_val": "not-an-int"}}
+    )
     assert res.status_code == 400
     assert "Invalid inputs" in res.json()["detail"]
+
 
 @patch("subprocess.Popen")
 @patch("batchbrain.registry.load_processor_module")
@@ -77,22 +80,25 @@ def test_run_processor_success(mock_load, mock_popen):
     data = res.json()
     assert "execution_id" in data
     assert data["status"] == "queued"
-    
+
     mock_popen.assert_called_once()
-    
+
     with get_session() as session:
         ex = session.query(ExecutionRequest).filter_by(id=data["execution_id"]).first()
         assert ex is not None
         assert ex.processor_id == "test-proc"
         assert ex.status == "queued"
         import json
+
         assert json.loads(ex.input_json) == {"my_val": 42}
+
 
 @patch("subprocess.Popen")
 @patch("batchbrain.registry.load_processor_module")
 def test_run_no_inputs(mock_load, mock_popen):
     res = client.post("/api/processors/no-inputs/run", json={})
     assert res.status_code == 200
+
 
 def test_get_executions():
     res = client.get("/api/executions")

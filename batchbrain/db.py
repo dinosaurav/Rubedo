@@ -8,6 +8,7 @@ DB_PATH = ".batchbrain/batchbrain.sqlite"
 engine = None
 SessionLocal = None
 
+
 def _ensure_gitignore(directory: str):
     if not directory:
         return
@@ -15,24 +16,35 @@ def _ensure_gitignore(directory: str):
     if not os.path.exists(gitignore_path):
         try:
             with open(gitignore_path, "w") as f:
-                f.write("# Ignore everything in this directory\n*\n# Except this file\n!.gitignore\n")
+                f.write(
+                    "# Ignore everything in this directory\n*\n# Except this file\n!.gitignore\n"
+                )
         except Exception:
             pass
+
 
 def init_db(db_path: str = None):
     global engine, SessionLocal
     if engine is not None:
         try:
             engine.dispose()
-        except:
+        except Exception:
             pass
-            
+
     if db_path is None:
         db_path = os.environ.get("BATCHBRAIN_DB_PATH", DB_PATH)
         # Strip sqlite:/// prefix if present to get the dir
-        dir_path = db_path.replace("sqlite:///", "") if db_path.startswith("sqlite:///") else db_path
+        dir_path = (
+            db_path.replace("sqlite:///", "")
+            if db_path.startswith("sqlite:///")
+            else db_path
+        )
     else:
-        dir_path = db_path.replace("sqlite:///", "") if db_path.startswith("sqlite:///") else db_path
+        dir_path = (
+            db_path.replace("sqlite:///", "")
+            if db_path.startswith("sqlite:///")
+            else db_path
+        )
 
     db_dir = os.path.dirname(dir_path)
     if db_dir:
@@ -45,6 +57,7 @@ def init_db(db_path: str = None):
     engine = create_engine(engine_url)
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 def get_session() -> Session:
     if SessionLocal is None:
