@@ -333,51 +333,6 @@ async def invalidate_selection(request: Request):
     }
 
 
-@app.get("/api/runs/{left_run_id}/diff/{right_run_id}")
-def run_diff(left_run_id: str, right_run_id: str):
-    with get_session() as session:
-        left_coords = {
-            c.coordinate: c
-            for c in session.query(RunCoordinateStatus)
-            .filter_by(run_id=left_run_id)
-            .all()
-        }
-        right_coords = {
-            c.coordinate: c
-            for c in session.query(RunCoordinateStatus)
-            .filter_by(run_id=right_run_id)
-            .all()
-        }
-
-        all_keys = set(left_coords.keys()) | set(right_coords.keys())
-        diff = []
-        for k in all_keys:
-            lc = left_coords.get(k)
-            rc = right_coords.get(k)
-
-            status = "changed"
-            if not lc or lc.status == "removed":
-                if rc and rc.status != "removed":
-                    status = "added"
-                else:
-                    status = "unchanged"  # removed to removed
-            elif not rc or rc.status == "removed":
-                status = "removed"
-            elif lc.output_address == rc.output_address and lc.status == rc.status:
-                status = "unchanged"
-
-            diff.append(
-                {
-                    "coordinate": k,
-                    "status": status,
-                    "left_output_address": lc.output_address if lc else None,
-                    "right_output_address": rc.output_address if rc else None,
-                    "left_status": lc.status if lc else None,
-                    "right_status": rc.status if rc else None,
-                }
-            )
-        return diff
-
 
 
 

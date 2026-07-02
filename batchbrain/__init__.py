@@ -8,12 +8,11 @@ from .registry import (
 from .models import ProcessResult, RunSummary
 from .selection import Selection
 from .sources import Source, SourceItem, FolderSource, CsvSource
-from .invalidation import invalidate, recompute
+from .invalidation import invalidate
 from .runner import run
 
 __all__ = [
     "invalidate",
-    "recompute",
     "ProcessResult",
     "RunSummary",
     "Selection",

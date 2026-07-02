@@ -5,8 +5,8 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## Quick removals / cleanups
 
-- [ ] Remove RunDiff (page, route, `/api/runs/{l}/diff/{r}` endpoint, `diffRuns` in api.ts)
-- [ ] Remove `recompute()` from invalidation.py — trivial wrapper; users compose `invalidate()` + `run()`
+- [x] Remove RunDiff (page, route, `/api/runs/{l}/diff/{r}` endpoint, `diffRuns` in api.ts)
+- [x] Remove `recompute()` from invalidation.py — trivial wrapper; users compose `invalidate()` + `run()`
 - [ ] Keep hunting removal targets (candidates: `PipelineOut.step_name/code_version/workers` only describe the *first* step — misleading; fix or drop when the DAG view lands)
 - [ ] Dashboard/API error state in the UI — a failing API currently looks identical to an empty database
 
@@ -58,10 +58,12 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 - [ ] TableSource — rows of a SQL table (coordinate = primary key); the "crucially
       rows in a table" case. `updated_at`-based incremental scan as a later optimization.
-- [ ] Multithreaded/multiprocess execution — **needs clarification**: steps already run
-      in a per-step thread pool (fine for I/O-bound LLM/HTTP work). If this means
-      CPU-bound steps → ProcessPoolExecutor option per step; if it means cross-step
-      pipelining → that's a scheduler change **[needs split]**
+- [ ] CPU-bound parallelism — per-step ProcessPoolExecutor option
+      (`@step(executor="process")`). Threads (current) only parallelize I/O-bound
+      work because of the GIL; multiprocessing gives true parallelism for
+      compute-heavy steps. Constraint to design around: process pools pickle the
+      step function and its arguments, so process-executor steps must be
+      module-level functions (no closures) with picklable payloads/params.
 
 ## UI / API
 
@@ -73,10 +75,13 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## Product / positioning
 
-- [ ] Pick a real name (BatchIt/BatchBrain both placeholder-y; check PyPI availability)
+- [ ] Pick a real name — brainstorm + PyPI availability check (parked; not the
+      current priority)
 - [ ] Interesting examples: LLM enrichment over a CSV, polite scraper with
       retries + staleness, sheet-combining (once fan-in exists)
-- [ ] Seed/nucleus prompt to help LLMs generate example pipelines against the API
+- [ ] LLM seed prompt for generating examples — a concise API-teaching doc
+      (llms.txt-style: concepts, step contract, cache identity rules, a worked
+      example) so a model can generate correct pipelines on request
 - [ ] README: sharpen the pitch — "dbt-style state for Python tasks; built for
       non-idempotent steps (LLMs, scraping)"; the generations/lifecycle model is
       the differentiator

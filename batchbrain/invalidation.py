@@ -1,15 +1,12 @@
 import uuid
-from typing import Optional
 from .models import (
     Run,
     Materialization,
     MaterializationLifecycle,
     RunEvent,
-    RunSummary,
 )
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
-from .runner import run
 from .util import utcnow_iso
 
 
@@ -82,23 +79,3 @@ def invalidate(selection: Selection, reason: str) -> dict:
             session.commit()
             raise e
 
-
-def recompute(
-    selection: Selection,
-    pipeline,  # PipelineSpec or registered pipeline id
-    source=None,  # Source | str; defaults to the pipeline's source
-    workers: Optional[int] = None,
-    params: Optional[dict] = None,
-) -> RunSummary:
-    """
-    Recompute invalidates the selection and then re-runs the pipeline on its source.
-    """
-    invalidate(selection, reason="Recompute triggered")
-
-    return run(
-        pipeline,
-        source=source,
-        workers=workers,
-        # force is unnecessary: invalidation already cleared the way
-        params=params,
-    )

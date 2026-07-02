@@ -8,7 +8,6 @@ import Materializations from './pages/Materializations';
 import CurrentOutputs from './pages/CurrentOutputs';
 import SelectionBuilder from './pages/SelectionBuilder';
 import OutputDetail from './pages/OutputDetail';
-import RunDiff from './pages/RunDiff';
 import Pipelines from './pages/Pipelines';
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -35,9 +34,6 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavLink to="/select" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Database size={20} /> Selection UI
           </NavLink>
-          <NavLink to="/diff" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <Activity size={20} /> Compare Runs
-          </NavLink>
           <NavLink to="/pipelines" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Activity size={20} /> Pipelines
           </NavLink>
@@ -61,7 +57,6 @@ function App() {
           <Route path="/materializations" element={<Materializations />} />
           <Route path="/coordinates" element={<CurrentOutputs />} />
           <Route path="/select" element={<SelectionBuilder />} />
-          <Route path="/diff" element={<RunDiff />} />
           <Route path="/pipelines" element={<Pipelines />} />
           <Route path="/objects/:address" element={<OutputDetail />} />
         </Routes>

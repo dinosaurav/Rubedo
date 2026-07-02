@@ -51,11 +51,6 @@ export async function invalidateSelection(selection: any, reason: string) {
   return res.json();
 }
 
-export async function diffRuns(leftId: string, rightId: string) {
-  const res = await fetch(`${API_URL}/runs/${leftId}/diff/${rightId}`);
-  return res.json();
-}
-
 export async function fetchObject(outputAddress: string) {
   const res = await fetch(`${API_URL}/objects/${outputAddress}`);
   return res.json();
