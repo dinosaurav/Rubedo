@@ -7,24 +7,24 @@ from batchbrain.sources import Source, coerce_source
 
 def run_processor(
     processor_id: str,
-    inputs: Optional[Dict[str, Any]] = None,
+    params: Optional[Dict[str, Any]] = None,
     *,
     force: bool = False,
     source: Optional[Union[Source, str]] = None,
     workers: Optional[int] = None,
 ) -> RunSummary:
     """
-    Shared runner that turns a PipelineSpec + inputs into a run_pipeline(...) call.
+    Shared runner that turns a PipelineSpec + params into a run_pipeline(...) call.
     """
     spec = get_processor(processor_id)
-    input_dict = inputs or {}
+    param_dict = params or {}
 
     first_step = spec.steps[0] if spec.steps else None
 
-    # 1. Validate inputs via schema of the first step
-    if first_step and first_step.input_model:
-        validated_inputs = first_step.input_model.model_validate(input_dict)
-        validated_json = validated_inputs.model_dump(mode="json")
+    # 1. Validate params via schema of the first step
+    if first_step and first_step.params_model:
+        validated_params = first_step.params_model.model_validate(param_dict)
+        validated_json = validated_params.model_dump(mode="json")
     else:
         validated_json = {}
 
@@ -34,7 +34,7 @@ def run_processor(
     effective_source = coerce_source(source) if source is not None else spec.source
 
     # 3. Build effective config
-    effective_config = {"processor_id": spec.id, "processor_inputs": validated_json}
+    effective_config = {"processor_id": spec.id, "params": validated_json}
 
     # 4. Call run_pipeline
     return run_pipeline(
@@ -43,5 +43,5 @@ def run_processor(
         config=effective_config,
         workers=workers,
         force=force,
-        inputs=validated_json,
+        params=validated_json,
     )

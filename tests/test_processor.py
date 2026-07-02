@@ -12,13 +12,13 @@ from batchbrain.server import app
 from pydantic import BaseModel
 
 
-class MyInputs(BaseModel):
+class MyParams(BaseModel):
     my_val: int
 
 
-@step(name="my-step", version="v1", input_model=MyInputs)
-def my_proc(path: str, inputs: MyInputs) -> ProcessResult:
-    return ProcessResult(value={"val": inputs.my_val})
+@step(name="my-step", version="v1", params_model=MyParams)
+def my_proc(path: str, params: MyParams) -> ProcessResult:
+    return ProcessResult(value={"val": params.my_val})
 
 
 p1 = pipeline(id="test-proc", name="Test Proc", folder="some_dir", steps=[my_proc])
@@ -60,4 +60,4 @@ def test_list_processors(mock_load):
     assert "test-proc" in ids
     assert "no-inputs" in ids
     spec = next(p for p in data if p["id"] == "test-proc")
-    assert spec["input_schema"]["properties"]["my_val"]["type"] == "integer"
+    assert spec["params_schema"]["properties"]["my_val"]["type"] == "integer"

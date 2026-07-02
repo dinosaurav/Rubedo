@@ -390,14 +390,14 @@ def get_processors_api():
         schema = None
         defaults = None
         first_step = p.steps[0] if p.steps else None
-        input_model = first_step.input_model if first_step else None
+        params_model = first_step.params_model if first_step else None
 
-        if input_model:
-            schema = input_model.model_json_schema()
+        if params_model:
+            schema = params_model.model_json_schema()
             # Extract defaults if any
             defaults = {
                 k: v.default
-                for k, v in input_model.model_fields.items()
+                for k, v in params_model.model_fields.items()
                 if not v.is_required()
             }
 
@@ -410,8 +410,8 @@ def get_processors_api():
                 code_version=first_step.version if first_step else "",
                 workers=first_step.workers if first_step else 4,
                 allow_source_override=p.allow_source_override,
-                input_schema=schema,
-                default_inputs=defaults or {},
+                params_schema=schema,
+                default_params=defaults or {},
             )
         )
     return out

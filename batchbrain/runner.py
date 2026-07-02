@@ -210,16 +210,16 @@ def _commit_materialization(
     return mat, "created"
 
 
-def _step_accepts_inputs(step: StepSpec) -> bool:
+def _step_accepts_params(step: StepSpec) -> bool:
     import inspect
 
-    return "inputs" in inspect.signature(step.fn).parameters
+    return "params" in inspect.signature(step.fn).parameters
 
 
-def _build_step_inputs(step: StepSpec, inputs: Optional[dict]):
-    if step.input_model:
-        return step.input_model(**(inputs or {}))
-    return inputs or {}
+def _build_step_params(step: StepSpec, params: Optional[dict]):
+    if step.params_model:
+        return step.params_model(**(params or {}))
+    return params or {}
 
 
 def run_pipeline(
@@ -228,7 +228,7 @@ def run_pipeline(
     config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
     force: bool = False,
-    inputs: Optional[dict] = None,
+    params: Optional[dict] = None,
 ) -> RunSummary:
     source = pipeline.source if source is None else coerce_source(source)
     source_id = source.id
@@ -393,9 +393,11 @@ def run_pipeline(
             # Dictionary mapping (coordinate, step_name) -> materialized Object or 'failed' or 'blocked'
             coord_step_mats = {}
 
+            params_hash = hash_json(params or {})
+
             for step in topo_steps:
                 tasks = []
-                accepts_inputs = _step_accepts_inputs(step)
+                accepts_params = _step_accepts_params(step)
                 for it in scanned_items:
                     coord = it.coordinate
 
@@ -447,7 +449,14 @@ def run_pipeline(
                         step, coord, it.content_hash, parent_mats
                     )
                     output_address = compute_output_address(
-                        step.name, step.version, input_hash, step.config_hash
+                        step.name,
+                        step.version,
+                        input_hash,
+                        step.config_hash,
+                        # Params are part of a step's cache identity only if
+                        # the step consumes them; downstream steps pick up
+                        # param changes through the content-hash chain
+                        params_hash=params_hash if accepts_params else None,
                     )
 
                     existing_mat = (
@@ -516,7 +525,7 @@ def run_pipeline(
                         try:
                             # Root steps get the source payload positionally;
                             # dependent steps get parent outputs by parameter
-                            # name. Either kind may declare an `inputs` param.
+                            # name. Either kind may declare `params`.
                             if not step.depends_on:
                                 args = [source.load(task_spec["item"])]
                                 kwargs = {}
@@ -528,8 +537,8 @@ def run_pipeline(
                                     )
                                     for dep in step.depends_on
                                 }
-                            if accepts_inputs:
-                                kwargs["inputs"] = _build_step_inputs(step, inputs)
+                            if accepts_params:
+                                kwargs["params"] = _build_step_params(step, params)
                             result = step.fn(*args, **kwargs)
                             return True, task_spec, result, None
                         except Exception:

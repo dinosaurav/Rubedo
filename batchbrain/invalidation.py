@@ -89,7 +89,7 @@ def recompute(
     source=None,  # Source | str; defaults to the pipeline's source
     config: Optional[dict[str, Any]] = None,
     workers: Optional[int] = None,
-    inputs: Optional[dict] = None,
+    params: Optional[dict] = None,
 ) -> RunSummary:
     """
     Recompute invalidates the selection and then re-runs the pipeline on its source.
@@ -102,5 +102,5 @@ def recompute(
         config=config,
         workers=workers,
         force=False,  # Since we invalidated, they will be recreated
-        inputs=inputs,
+        params=params,
     )

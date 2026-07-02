@@ -197,6 +197,54 @@ def test_force_deterministic_reuses_live_row():
     assert mats[0].is_live is True
 
 
+def test_params_are_part_of_cache_identity():
+    from pydantic import BaseModel
+
+    class Thresh(BaseModel):
+        threshold: int = 0
+
+    @step(name="score", version="1", params_model=Thresh)
+    def score(path, params: Thresh):
+        return {"ok": len(open(path).read()) >= params.threshold}
+
+    @step(name="label", version="1", depends_on=["score"])
+    def label(score):
+        return "pass" if score["ok"] else "fail"
+
+    pipeline(id="par", name="par", folder=TEST_FOLDER, steps=[score, label])
+    create_file("f1.txt", "hello")
+
+    s1 = run_processor("par", params={"threshold": 1}, workers=1)
+    assert (s1.created_count, s1.reused_count) == (2, 0)
+
+    # Same params: full cache hit
+    s2 = run_processor("par", params={"threshold": 1}, workers=1)
+    assert (s2.created_count, s2.reused_count) == (0, 2)
+
+    # Different params, different answer: score recomputes (params are in
+    # its address) and label follows through the content-hash chain
+    s3 = run_processor("par", params={"threshold": 100}, workers=1)
+    assert (s3.created_count, s3.reused_count) == (2, 0)
+
+    # Different params, same answer: score recomputes but produces identical
+    # bytes, so label is reused off the unchanged content hash
+    s4 = run_processor("par", params={"threshold": 2}, workers=1)
+    assert (s4.created_count, s4.reused_count) == (1, 1)
+
+
+def test_params_do_not_churn_param_free_pipelines():
+    @step(name="upper", version="1")
+    def upper(path):
+        return open(path).read().upper()
+
+    pipeline(id="nopar", name="nopar", folder=TEST_FOLDER, steps=[upper])
+    create_file("f1.txt", "hello")
+
+    run_processor("nopar", workers=1)
+    s2 = run_processor("nopar", params={"anything": 42}, workers=1)
+    assert (s2.created_count, s2.reused_count) == (0, 1)
+
+
 def test_string_payload_round_trips_as_string():
     @step(name="emit", version="1")
     def emit(path):

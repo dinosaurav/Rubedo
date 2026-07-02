@@ -15,7 +15,7 @@ class StepSpec:
     version: str
     depends_on: List[str]
     config_hash: str
-    input_model: Optional[Type[BaseModel]] = None
+    params_model: Optional[Type[BaseModel]] = None
     config: Optional[Dict[str, Any]] = None
     workers: int = 4
 
@@ -40,7 +40,7 @@ def step(
     name: str,
     version: str,
     depends_on: Optional[List[str]] = None,
-    input_model: Optional[Type[BaseModel]] = None,
+    params_model: Optional[Type[BaseModel]] = None,
     config: Optional[Dict[str, Any]] = None,
     workers: int = 4,
 ):
@@ -54,7 +54,7 @@ def step(
             version=version,
             depends_on=depends_on or [],
             config_hash=config_hash,
-            input_model=input_model,
+            params_model=params_model,
             config=config,
             workers=workers,
         )

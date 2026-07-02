@@ -106,5 +106,5 @@ class ProcessorSpecOut(BaseModel):
     code_version: str
     workers: int
     allow_source_override: bool
-    input_schema: Optional[Dict[str, Any]] = None
-    default_inputs: Optional[Dict[str, Any]] = None
+    params_schema: Optional[Dict[str, Any]] = None
+    default_params: Optional[Dict[str, Any]] = None
