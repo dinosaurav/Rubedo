@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 
@@ -109,32 +109,3 @@ class ProcessorSpecOut(BaseModel):
     allow_folder_override: bool
     input_schema: Optional[Dict[str, Any]] = None
     default_inputs: Optional[Dict[str, Any]] = None
-
-
-class RunProcessorRequest(BaseModel):
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    force: bool = False
-    folder: Optional[str] = None
-    workers: Optional[int] = None
-
-
-class RunProcessorResponse(BaseModel):
-    execution_id: str
-    status: str
-
-
-class ExecutionRequestOut(BaseModel):
-    id: str
-    processor_id: str
-    status: str
-    requested_at: str
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    run_id: Optional[str] = None
-    force: bool
-    input_json: str
-    folder_override: Optional[str] = None
-    workers_override: Optional[int] = None
-    error_message: Optional[str] = None
-    stdout_path: Optional[str] = None
-    stderr_path: Optional[str] = None
