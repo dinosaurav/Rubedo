@@ -12,14 +12,15 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## Engine core (ordered — each unlocks the ones below)
 
-- [ ] **Plan/execute split of `run_pipeline`** — pure planning phase (scan → manifest →
-      per (coordinate, step) decision with addresses) separated from execution.
-      Prerequisite for step policies, filters, joins, explain, and multi-process safety.
+- [x] **Plan/execute split of `run_pipeline`** — `_plan_step` (read-only StepDecision
+      per coordinate) / `_record_planned` / `_execute_step` / `_commit_execution_result`,
+      orchestrated by a slim `run_pipeline`.
 - [ ] **Code-change detection** — hash step function source alongside the manual
       `version` string (or at least warn when source changed but version didn't).
       The silent-stale-cache trap bites hardest for the iterate-on-LLM-steps persona.
-- [ ] Explain / dry-run — "what would this run do and why" (falls out of the plan phase;
-      surface in UI and/or as `run(..., dry_run=True)`)
+- [x] Explain / dry-run — `batchbrain.plan(pipeline, params=...)` returns a RunPlan
+      (reuse / execute / pending / removed per coordinate-step, with addresses);
+      still to do: surface it in the UI
 - [ ] Cross-process concurrency safety — two simultaneous runs can race the
       liveness check-then-insert; commit should be one guarded transaction **[needs split]**
 - [ ] Enforce the pairing rule mechanically (every `is_live` flip must ship a

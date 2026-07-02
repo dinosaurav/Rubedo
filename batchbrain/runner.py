@@ -791,6 +791,106 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
     )
 
 
+@dataclass
+class PlannedCoordinate:
+    coordinate: str
+    step_name: str
+    action: str  # reuse | execute | pending | removed
+    output_address: Optional[str] = None
+
+
+@dataclass
+class RunPlan:
+    pipeline_id: str
+    source_id: str
+    items: List[PlannedCoordinate]
+    counts: Dict[str, int]
+
+    def __str__(self) -> str:
+        lines = [
+            f"Plan for '{self.pipeline_id}' over {self.source_id}: "
+            + ", ".join(f"{v} {k}" for k, v in sorted(self.counts.items()))
+        ]
+        for it in self.items:
+            addr = f" @ {it.output_address[:12]}" if it.output_address else ""
+            lines.append(f"  {it.action:<8} {it.step_name:<20} {it.coordinate}{addr}")
+        return "\n".join(lines)
+
+
+def plan(
+    pipeline: PipelineSpec | str,
+    source: Optional[Source | str] = None,
+    *,
+    params: Optional[dict] = None,
+    force: bool = False,
+) -> RunPlan:
+    """Dry-run: what would run() do, and why — without writing anything.
+
+    "execute" means the step function would run for that coordinate;
+    "pending" means the answer depends on an upstream execution whose output
+    (and therefore this coordinate's address) is unknowable without running;
+    "removed" means the coordinate vanished from the source since last run.
+    """
+    pipeline, source, params = _resolve_invocation(pipeline, source, params)
+    topo_steps = topological_sort(pipeline)
+    scanned_items = source.scan()
+    params_hash = hash_json(params or {})
+
+    items: List[PlannedCoordinate] = []
+    coord_step_mats: Dict[tuple, Any] = {}
+
+    with get_session() as session:
+        prev_manifest = (
+            session.query(Manifest)
+            .filter(Manifest.source_id == source.id)
+            .order_by(Manifest.created_at.desc())
+            .first()
+        )
+        if prev_manifest:
+            scanned_coordinates = {it.coordinate for it in scanned_items}
+            prev_entries = (
+                session.query(ManifestEntry)
+                .filter_by(manifest_id=prev_manifest.id)
+                .all()
+            )
+            for pe in prev_entries:
+                if pe.coordinate not in scanned_coordinates:
+                    for step in topo_steps:
+                        items.append(
+                            PlannedCoordinate(pe.coordinate, step.name, "removed")
+                        )
+
+        for step in topo_steps:
+            accepts_params = _step_accepts_params(step)
+            decisions = _plan_step(
+                session,
+                step,
+                scanned_items,
+                coord_step_mats,
+                params_hash,
+                force,
+                accepts_params,
+            )
+            for d in decisions:
+                items.append(
+                    PlannedCoordinate(
+                        d.coordinate, step.name, d.action, d.output_address
+                    )
+                )
+                if d.action == "reuse":
+                    coord_step_mats[(d.coordinate, step.name)] = d.existing
+                else:  # execute or pending: output unknowable until run
+                    coord_step_mats[(d.coordinate, step.name)] = "pending"
+
+    counts: Dict[str, int] = {}
+    for it in items:
+        counts[it.action] = counts.get(it.action, 0) + 1
+
+    return RunPlan(
+        pipeline_id=pipeline.id, source_id=source.id, items=items, counts=counts
+    )
+
+
 def run(
     pipeline: PipelineSpec | str,
     source: Optional[Source | str] = None,
