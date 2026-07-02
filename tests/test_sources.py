@@ -13,6 +13,7 @@ from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_sources_data"
+ENV_FOLDER = ".test_sources_env"
 
 
 # ---------- FolderSource ----------
@@ -99,14 +100,16 @@ def test_csv_source_content_hash_mode(tmp_path):
 @pytest.fixture(autouse=True)
 def isolated_env():
     abs_test_folder = os.path.abspath(TEST_FOLDER)
-    if os.path.exists(abs_test_folder):
-        shutil.rmtree(abs_test_folder)
-    os.makedirs(abs_test_folder, exist_ok=True)
+    abs_env_folder = os.path.abspath(ENV_FOLDER)
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
 
     import batchbrain.store
 
-    batchbrain.store.OBJECTS_DIR = f"{abs_test_folder}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{abs_test_folder}/store/staging"
+    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
     os.environ["BATCHBRAIN_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
@@ -137,8 +140,9 @@ def isolated_env():
     yield
 
     clear_registry()
-    if os.path.exists(abs_test_folder):
-        shutil.rmtree(abs_test_folder)
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
 
 
 def make_row_pipeline(csv_path):

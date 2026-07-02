@@ -26,10 +26,11 @@ from .util import utcnow_iso
 
 
 class MatRef:
-    def __init__(self, id, output_address, output_content_hash):
+    def __init__(self, id, output_address, output_content_hash, content_type=None):
         self.id = id
         self.output_address = output_address
         self.output_content_hash = output_content_hash
+        self.content_type = content_type
 
 
 def _emit_event(
@@ -112,6 +113,76 @@ def _compute_step_input_hash(
     return hash_json(parent_hashes)
 
 
+def _commit_materialization(
+    session: Session,
+    *,
+    processor_name: str,
+    step: StepSpec,
+    input_hash: str,
+    output_address: str,
+    output_content_hash: str,
+    content_type: str,
+    output_path: str,
+    metadata_json: Optional[str],
+    run_id: str,
+) -> Materialization:
+    """Record an executed result at its address, honoring generations.
+
+    An address may accumulate generations over time; at most one is live.
+    Identical bytes are the same fact (reuse the live row, or resurrect a
+    tombstoned one); different bytes supersede the live generation so that
+    downstream input hashes change and dependents recompute.
+    """
+    live = (
+        session.query(Materialization)
+        .filter_by(output_address=output_address, invalidated_at=None)
+        .first()
+    )
+    if live:
+        if live.output_content_hash == output_content_hash:
+            return live
+        live.invalidated_at = utcnow_iso()
+        live.invalidated_by_run_id = run_id
+        live.invalidation_reason = "superseded: recompute produced different output"
+        session.flush()
+    else:
+        prior = (
+            session.query(Materialization)
+            .filter_by(
+                output_address=output_address,
+                output_content_hash=output_content_hash,
+            )
+            .filter(Materialization.invalidated_at.isnot(None))
+            .order_by(Materialization.id.desc())
+            .first()
+        )
+        if prior:
+            prior.invalidated_at = None
+            prior.invalidated_by_run_id = None
+            prior.invalidation_reason = None
+            if prior.content_type is None:
+                prior.content_type = content_type
+            return prior
+
+    mat = Materialization(
+        processor_name=processor_name,
+        step_name=step.name,
+        code_version=step.version,
+        config_hash=step.config_hash,
+        input_hash=input_hash,
+        output_address=output_address,
+        output_content_hash=output_content_hash,
+        content_type=content_type,
+        output_path=output_path,
+        metadata_json=metadata_json,
+        created_at=utcnow_iso(),
+        created_by_run_id=run_id,
+    )
+    session.add(mat)
+    session.flush()
+    return mat
+
+
 def _step_accepts_inputs(step: StepSpec) -> bool:
     import inspect
 
@@ -140,7 +211,6 @@ def run_pipeline(
     processor_name = pipeline.id
 
     topo_steps = topological_sort(pipeline)
-    code_version = topo_steps[0].version if topo_steps else "unknown"  # legacy
 
     with get_session() as session:
         run = Run(
@@ -149,7 +219,6 @@ def run_pipeline(
             status="running",
             processor_name=processor_name,
             source_id=source_id,
-            code_version=code_version,
             config_hash=config_hash,
             started_at=utcnow_iso(),
         )
@@ -230,6 +299,8 @@ def run_pipeline(
                             last_rc = (
                                 session.query(RunCoordinateStatus)
                                 .filter(
+                                    RunCoordinateStatus.processor_name
+                                    == processor_name,
                                     RunCoordinateStatus.source_id == source_id,
                                     RunCoordinateStatus.coordinate == pe.coordinate,
                                     RunCoordinateStatus.step_name == step.name,
@@ -300,19 +371,19 @@ def run_pipeline(
                     coord = it.coordinate
 
                     parent_mats = {}
-                    is_blocked = False
-                    is_failed = False
+                    failed_parents = []
+                    blocked_parents = []
 
                     for dep in step.depends_on:
                         parent_mat = coord_step_mats.get((coord, dep))
                         if parent_mat == "blocked":
-                            is_blocked = True
+                            blocked_parents.append(dep)
                         elif parent_mat == "failed":
-                            is_failed = True
+                            failed_parents.append(dep)
                         else:
                             parent_mats[dep] = parent_mat
 
-                    if is_failed or is_blocked:
+                    if failed_parents or blocked_parents:
                         coord_step_mats[(coord, step.name)] = "blocked"
                         rc = RunCoordinateStatus(
                             run_id=run_id,
@@ -321,7 +392,12 @@ def run_pipeline(
                             source_id=source_id,
                             coordinate=coord,
                             status="blocked",
-                            metadata_json=json.dumps({"blocked_by": step.depends_on}),
+                            metadata_json=json.dumps(
+                                {
+                                    "failed_parents": failed_parents,
+                                    "blocked_parents": blocked_parents,
+                                }
+                            ),
                             created_at=utcnow_iso(),
                         )
                         session.add(rc)
@@ -356,6 +432,7 @@ def run_pipeline(
                             existing_mat.id,
                             existing_mat.output_address,
                             existing_mat.output_content_hash,
+                            existing_mat.content_type,
                         )
                         rc = RunCoordinateStatus(
                             run_id=run_id,
@@ -442,10 +519,8 @@ def run_pipeline(
                             with get_session() as task_session:
                                 if success:
                                     try:
-                                        final_path, output_content_hash = (
-                                            stage_and_commit(
-                                                run_id, coord, output_address, result
-                                            )
+                                        final_path, output_content_hash, content_type = (
+                                            stage_and_commit(run_id, coord, result)
                                         )
                                         metadata_json = None
                                         if (
@@ -454,45 +529,24 @@ def run_pipeline(
                                         ):
                                             metadata_json = json.dumps(result.metadata)
 
-                                        mat = Materialization(
+                                        mat = _commit_materialization(
+                                            task_session,
                                             processor_name=processor_name,
-                                            step_name=step.name,
-                                            code_version=step.version,
-                                            config_hash=step.config_hash,
+                                            step=step,
                                             input_hash=input_hash,
                                             output_address=output_address,
                                             output_content_hash=output_content_hash,
+                                            content_type=content_type,
                                             output_path=final_path,
                                             metadata_json=metadata_json,
-                                            created_at=utcnow_iso(),
-                                            created_by_run_id=run_id,
+                                            run_id=run_id,
                                         )
-                                        task_session.add(mat)
-
-                                        try:
-                                            task_session.flush()
-                                        except Exception as db_e:
-                                            task_session.rollback()
-                                            mat = (
-                                                task_session.query(Materialization)
-                                                .filter_by(
-                                                    output_address=output_address
-                                                )
-                                                .first()
-                                            )
-                                            if not mat:
-                                                raise db_e
-                                            if mat.invalidated_at is not None:
-                                                mat.invalidated_at = None
-                                                mat.invalidated_by_run_id = None
-                                                mat.invalidation_reason = None
 
                                         for dep_name, p_mat in task_spec[
                                             "parent_mats"
                                         ].items():
-                                            # A resurrected materialization already
-                                            # has its lineage edges from when it was
-                                            # first created
+                                            # A reused or resurrected generation
+                                            # already has its lineage edges
                                             edge_exists = (
                                                 task_session.query(MaterializationEdge)
                                                 .filter_by(
@@ -538,6 +592,7 @@ def run_pipeline(
                                             mat.id,
                                             mat.output_address,
                                             mat.output_content_hash,
+                                            mat.content_type,
                                         )
 
                                     except Exception as e:

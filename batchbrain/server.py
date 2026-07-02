@@ -171,19 +171,33 @@ def get_current_outputs():
         return results
 
 
-@app.get("/api/objects/{output_address}")
-def get_object_metadata(output_address: str):
-    obj_path = os.path.abspath(
-        os.path.join(
-            ".batchbrain/objects",
-            output_address[:2],
-            output_address[2:4],
-            output_address,
-        )
+def _resolve_materialization(session, output_address: str):
+    """Latest generation at an address, preferring the live one."""
+    live = (
+        session.query(Materialization)
+        .filter_by(output_address=output_address, invalidated_at=None)
+        .first()
+    )
+    if live:
+        return live
+    return (
+        session.query(Materialization)
+        .filter_by(output_address=output_address)
+        .order_by(Materialization.id.desc())
+        .first()
     )
 
+
+@app.get("/api/objects/{output_address}")
+def get_object_metadata(output_address: str):
+    with get_session() as session:
+        mat = _resolve_materialization(session, output_address)
+        if not mat:
+            raise HTTPException(404, "Object not found")
+        obj_path = os.path.abspath(mat.output_path)
+
     if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object not found")
+        raise HTTPException(404, "Object bytes not found in store")
 
     size = os.path.getsize(obj_path)
 
@@ -207,23 +221,18 @@ def get_object_metadata(output_address: str):
             pass  # It's binary
 
     # Fetch the materialization data
-    mat_data = {}
     with get_session() as session:
-        mat = (
-            session.query(Materialization)
-            .filter_by(output_address=output_address)
-            .first()
-        )
-        if mat:
-            mat_data = {
-                "processor_name": mat.processor_name,
-                "step_name": mat.step_name,
-                "code_version": mat.code_version,
-                "created_by_run_id": mat.created_by_run_id,
-                "created_at": mat.created_at,
-                "invalidated_at": mat.invalidated_at,
-                "output_content_hash": mat.output_content_hash,
-            }
+        mat = _resolve_materialization(session, output_address)
+        mat_data = {
+            "processor_name": mat.processor_name,
+            "step_name": mat.step_name,
+            "code_version": mat.code_version,
+            "created_by_run_id": mat.created_by_run_id,
+            "created_at": mat.created_at,
+            "invalidated_at": mat.invalidated_at,
+            "output_content_hash": mat.output_content_hash,
+            "content_type": mat.content_type,
+        }
 
     return {
         "output_address": output_address,
@@ -238,17 +247,14 @@ def get_object_metadata(output_address: str):
 
 @app.get("/api/objects/{output_address}/download")
 def download_object(output_address: str):
-    obj_path = os.path.abspath(
-        os.path.join(
-            ".batchbrain/objects",
-            output_address[:2],
-            output_address[2:4],
-            output_address,
-        )
-    )
+    with get_session() as session:
+        mat = _resolve_materialization(session, output_address)
+        if not mat:
+            raise HTTPException(404, "Object not found")
+        obj_path = os.path.abspath(mat.output_path)
 
     if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object not found")
+        raise HTTPException(404, "Object bytes not found in store")
 
     return FileResponse(obj_path, filename=output_address)
 

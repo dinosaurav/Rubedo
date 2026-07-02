@@ -8,8 +8,6 @@ class RunListItem(BaseModel):
     status: str
     source_id: Optional[str] = None
     processor_name: Optional[str] = None
-    step_name: Optional[str] = None
-    code_version: Optional[str] = None
     started_at: str
     finished_at: Optional[str] = None
     created_count: int = 0
@@ -56,6 +54,7 @@ class MaterializationOut(BaseModel):
     input_hash: str
     output_address: str
     output_content_hash: str
+    content_type: Optional[str] = None
     metadata_json: Optional[str] = None
     created_at: str
     invalidated_at: Optional[str] = None

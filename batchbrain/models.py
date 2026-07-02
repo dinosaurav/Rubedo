@@ -1,6 +1,14 @@
 from typing import Any, Optional, Dict
 from pydantic import BaseModel
-from sqlalchemy import Column, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -12,7 +20,6 @@ class Run(Base):
     kind = Column(String, nullable=False)
     status = Column(String, nullable=False)
     source_id = Column(String)
-    code_version = Column(String)
     config_hash = Column(String)
     selection_json = Column(String)
     started_at = Column(String, nullable=False)
@@ -27,7 +34,7 @@ class Run(Base):
 class RunEvent(Base):
     __tablename__ = "run_events"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, index=True)
+    run_id = Column(String, ForeignKey("runs.id"), index=True)
     timestamp = Column(String, nullable=False)
     level = Column(String, nullable=False)
     event_type = Column(String, nullable=False, index=True)
@@ -41,8 +48,8 @@ class RunEvent(Base):
 class Manifest(Base):
     __tablename__ = "manifests"
     id = Column(String, primary_key=True)
-    run_id = Column(String, nullable=False)
-    source_id = Column(String, nullable=False)
+    run_id = Column(String, ForeignKey("runs.id"), nullable=False)
+    source_id = Column(String, nullable=False, index=True)
     manifest_hash = Column(String, nullable=False)
     created_at = Column(String, nullable=False)
 
@@ -50,7 +57,7 @@ class Manifest(Base):
 class ManifestEntry(Base):
     __tablename__ = "manifest_entries"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    manifest_id = Column(String, nullable=False)
+    manifest_id = Column(String, ForeignKey("manifests.id"), nullable=False, index=True)
     coordinate = Column(String, nullable=False)
     content_hash = Column(String, nullable=False)
     size_bytes = Column(Integer)
@@ -63,8 +70,10 @@ class ManifestEntry(Base):
 class MaterializationEdge(Base):
     __tablename__ = "materialization_edges"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    parent_id = Column(Integer, nullable=False)
-    child_id = Column(Integer, nullable=False)
+    parent_id = Column(Integer, ForeignKey("materializations.id"), nullable=False)
+    child_id = Column(
+        Integer, ForeignKey("materializations.id"), nullable=False, index=True
+    )
     __table_args__ = (UniqueConstraint("parent_id", "child_id", name="_mat_edge_uc"),)
 
 
@@ -76,30 +85,41 @@ class Materialization(Base):
     code_version = Column(String, nullable=False)
     config_hash = Column(String, nullable=False)
     input_hash = Column(String, nullable=False)
-    output_address = Column(String, nullable=False, unique=True)
+    # An address can accumulate generations over time (recomputes of
+    # non-deterministic steps); at most one may be live at once.
+    output_address = Column(String, nullable=False, index=True)
     output_content_hash = Column(String, nullable=False)
+    content_type = Column(String)  # bytes | text | json
     output_path = Column(String, nullable=False)
     metadata_json = Column(String)
     created_at = Column(String, nullable=False)
-    created_by_run_id = Column(String, nullable=False)
+    created_by_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
     invalidated_at = Column(String)
-    invalidated_by_run_id = Column(String)
+    invalidated_by_run_id = Column(String, ForeignKey("runs.id"))
     invalidation_reason = Column(String)
+    __table_args__ = (
+        Index(
+            "uq_live_output_address",
+            "output_address",
+            unique=True,
+            sqlite_where=text("invalidated_at IS NULL"),
+        ),
+    )
 
 
 class RunCoordinateStatus(Base):
     __tablename__ = "run_coordinate_statuses"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    run_id = Column(String, nullable=False, index=True)
+    run_id = Column(String, ForeignKey("runs.id"), nullable=False, index=True)
     processor_name = Column(String, index=True)
     step_name = Column(String, nullable=False, index=True)
     source_id = Column(String, nullable=False)
     coordinate = Column(String, nullable=False, index=True)
     input_hash = Column(String)
     output_address = Column(String)
-    materialization_id = Column(Integer)
+    materialization_id = Column(Integer, ForeignKey("materializations.id"))
     previous_output_address = Column(String)
-    previous_materialization_id = Column(Integer)
+    previous_materialization_id = Column(Integer, ForeignKey("materializations.id"))
     status = Column(String, nullable=False, index=True)
     error_message = Column(String)
     error_type = Column(String, index=True)
