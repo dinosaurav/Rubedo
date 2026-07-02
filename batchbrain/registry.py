@@ -131,7 +131,9 @@ def get_processor(processor_id: str) -> PipelineSpec:
     return _REGISTRY[processor_id]
 
 
-def load_processor_module(path: str = "batchbrain_processors.py"):
+def load_processor_module(path: Optional[str] = None):
+    if path is None:
+        path = os.environ.get("BATCHBRAIN_PROCESSORS", "batchbrain_processors.py")
     if os.path.exists(path):
         module_name = "batchbrain_processors"
         if module_name not in sys.modules:

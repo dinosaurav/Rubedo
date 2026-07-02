@@ -1,5 +1,6 @@
 import os
 import json
+from contextlib import asynccontextmanager
 from typing import List
 from fastapi import FastAPI, HTTPException, Request, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -25,13 +26,19 @@ from .schemas import (
     ExecutionRequestOut,
 )
 
-from datetime import datetime, timezone
+from .util import utcnow_iso
 import uuid
 import subprocess
 from .registry import list_processors, get_processor
 from .models import ExecutionRequest
 
-app = FastAPI(title="BatchBrain")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="BatchBrain", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,11 +54,6 @@ def _to_dict(obj):
     d = dict(obj.__dict__)
     d.pop("_sa_instance_state", None)
     return d
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
 
 
 @app.get("/api/runs", response_model=List[RunListItem])
@@ -415,7 +417,7 @@ def run_processor_api(processor_id: str, req: RunProcessorRequest):
             id=exec_id,
             processor_id=processor_id,
             status="queued",
-            requested_at=datetime.now(timezone.utc).isoformat(),
+            requested_at=utcnow_iso(),
             force=int(req.force),
             input_json=json.dumps(req.inputs),
             folder_override=req.folder,

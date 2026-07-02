@@ -1,10 +1,10 @@
 import uuid
-import datetime
 from typing import Any, Optional
 from .models import Run, Materialization, RunEvent, RunSummary
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .runner import run_pipeline
+from .util import utcnow_iso
 
 
 def invalidate(selection: Selection, reason: str) -> dict:
@@ -17,14 +17,14 @@ def invalidate(selection: Selection, reason: str) -> dict:
             kind="invalidate",
             status="running",
             selection_json=selection.model_dump_json(),
-            started_at=datetime.datetime.utcnow().isoformat() + "Z",
+            started_at=utcnow_iso(),
         )
         session.add(run)
 
         # Log event
         event = RunEvent(
             run_id=run_id,
-            timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+            timestamp=utcnow_iso(),
             level="info",
             event_type="run_started",
             message=f"Starting invalidation {run_id}",
@@ -37,20 +37,20 @@ def invalidate(selection: Selection, reason: str) -> dict:
 
             invalidated_count = 0
             for mat_id in mat_ids:
-                mat = session.query(Materialization).get(mat_id)
+                mat = session.get(Materialization, mat_id)
                 if mat and mat.invalidated_at is None:
-                    mat.invalidated_at = datetime.datetime.utcnow().isoformat() + "Z"
+                    mat.invalidated_at = utcnow_iso()
                     mat.invalidated_by_run_id = run_id
                     mat.invalidation_reason = reason
 
                     invalidated_count += 1
 
             run.status = "completed"
-            run.finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+            run.finished_at = utcnow_iso()
 
             event = RunEvent(
                 run_id=run_id,
-                timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+                timestamp=utcnow_iso(),
                 level="info",
                 event_type="run_completed",
                 message=f"Invalidation {run_id} finished, invalidated {invalidated_count} materializations",
@@ -66,7 +66,7 @@ def invalidate(selection: Selection, reason: str) -> dict:
         except Exception as e:
             run.status = "failed"
             run.error_message = str(e)
-            run.finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+            run.finished_at = utcnow_iso()
             session.commit()
             raise e
 

@@ -1,7 +1,7 @@
 import sys
 import json
 import traceback
-from datetime import datetime, timezone
+from batchbrain.util import utcnow_iso
 from batchbrain.db import get_session
 from batchbrain.models import ExecutionRequest
 
@@ -14,7 +14,7 @@ def run_worker(execution_id: str):
             sys.exit(1)
 
         req.status = "running"
-        req.started_at = datetime.now(timezone.utc).isoformat()
+        req.started_at = utcnow_iso()
         session.commit()
 
         processor_id = req.processor_id
@@ -40,7 +40,7 @@ def run_worker(execution_id: str):
             req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
             req.status = "succeeded"
             req.run_id = summary.run_id
-            req.finished_at = datetime.now(timezone.utc).isoformat()
+            req.finished_at = utcnow_iso()
             session.commit()
 
     except Exception as e:
@@ -49,7 +49,7 @@ def run_worker(execution_id: str):
             req = session.query(ExecutionRequest).filter_by(id=execution_id).first()
             req.status = "failed"
             req.error_message = str(e) + "\n" + err_msg
-            req.finished_at = datetime.now(timezone.utc).isoformat()
+            req.finished_at = utcnow_iso()
             session.commit()
         sys.exit(1)
 

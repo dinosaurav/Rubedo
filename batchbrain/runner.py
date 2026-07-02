@@ -1,5 +1,4 @@
 import uuid
-import datetime
 import json
 import traceback
 import concurrent.futures
@@ -23,6 +22,7 @@ from .db import get_session
 from .scanner import scan_folder
 from .hashing import hash_json, compute_output_address
 from .store import stage_and_commit, read_materialization_output
+from .util import utcnow_iso
 
 
 class MatRef:
@@ -45,7 +45,7 @@ def _emit_event(
 ):
     event = RunEvent(
         run_id=run_id,
-        timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+        timestamp=utcnow_iso(),
         level=level,
         event_type=event_type,
         processor_name=processor_name,
@@ -120,7 +120,6 @@ def run_pipeline(
     force: bool = False,
     inputs: Optional[dict] = None,
 ) -> RunSummary:
-    workers = workers or 4
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     config = config or {}
     config_hash = hash_json(config)
@@ -138,7 +137,7 @@ def run_pipeline(
             source_folder=folder,
             code_version=code_version,
             config_hash=config_hash,
-            started_at=datetime.datetime.utcnow().isoformat() + "Z",
+            started_at=utcnow_iso(),
         )
         session.add(run)
         _emit_event(
@@ -154,7 +153,7 @@ def run_pipeline(
         try:
             scanned_files = scan_folder(folder)
 
-            now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+            now_iso = utcnow_iso()
             manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
 
             sorted_files = sorted(scanned_files, key=lambda x: x.coordinate)
@@ -242,7 +241,7 @@ def run_pipeline(
                                 if last_rc
                                 else None,
                                 status="removed",
-                                created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                                created_at=utcnow_iso(),
                             )
                             session.add(rc)
 
@@ -308,7 +307,7 @@ def run_pipeline(
                             coordinate=coord,
                             status="blocked",
                             metadata_json=json.dumps({"blocked_by": step.depends_on}),
-                            created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                            created_at=utcnow_iso(),
                         )
                         session.add(rc)
                         _emit_event(
@@ -353,7 +352,7 @@ def run_pipeline(
                             output_address=output_address,
                             materialization_id=existing_mat.id,
                             status="reused",
-                            created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                            created_at=utcnow_iso(),
                         )
                         session.add(rc)
                         _emit_event(
@@ -425,7 +424,7 @@ def run_pipeline(
                             return False, task_spec, None, traceback.format_exc()
 
                     with concurrent.futures.ThreadPoolExecutor(
-                        max_workers=workers
+                        max_workers=workers or step.workers
                     ) as executor:
                         futures = [executor.submit(process_task, t) for t in tasks]
                         for future in concurrent.futures.as_completed(futures):
@@ -459,8 +458,7 @@ def run_pipeline(
                                             output_content_hash=output_content_hash,
                                             output_path=final_path,
                                             metadata_json=metadata_json,
-                                            created_at=datetime.datetime.utcnow().isoformat()
-                                            + "Z",
+                                            created_at=utcnow_iso(),
                                             created_by_run_id=run_id,
                                         )
                                         task_session.add(mat)
@@ -501,8 +499,7 @@ def run_pipeline(
                                             output_address=output_address,
                                             materialization_id=mat.id,
                                             status="created",
-                                            created_at=datetime.datetime.utcnow().isoformat()
-                                            + "Z",
+                                            created_at=utcnow_iso(),
                                         )
                                         task_session.add(rc)
 
@@ -537,8 +534,7 @@ def run_pipeline(
                                             status="failed",
                                             error_message=error_msg,
                                             error_type="StagingError",
-                                            created_at=datetime.datetime.utcnow().isoformat()
-                                            + "Z",
+                                            created_at=utcnow_iso(),
                                         )
                                         task_session.add(rc)
                                         _emit_event(
@@ -566,8 +562,7 @@ def run_pipeline(
                                         status="failed",
                                         error_message=error_trace,
                                         error_type="ExecutionError",
-                                        created_at=datetime.datetime.utcnow().isoformat()
-                                        + "Z",
+                                        created_at=utcnow_iso(),
                                     )
                                     task_session.add(rc)
                                     _emit_event(
@@ -607,7 +602,7 @@ def run_pipeline(
                     final_run.status = "completed_with_failures"
 
                 final_status = final_run.status
-                final_run.finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+                final_run.finished_at = utcnow_iso()
                 final_run.summary_json = json.dumps(full_summary)
                 _emit_event(
                     final_session,
@@ -634,7 +629,7 @@ def run_pipeline(
                 if err_run:
                     err_run.status = "failed"
                     err_run.error_message = traceback.format_exc()
-                    err_run.finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+                    err_run.finished_at = utcnow_iso()
                     _emit_event(
                         err_session,
                         run_id,
