@@ -569,6 +569,9 @@ def _commit_execution_result(
                 event_message=str(e),
                 metadata_json=attempts_meta,
             )
+        finally:
+            from .store import cleanup_staged
+            cleanup_staged(ctx.run_id)
 
         session.commit()
 

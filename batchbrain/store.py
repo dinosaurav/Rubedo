@@ -114,3 +114,12 @@ def read_materialization_output(materialization) -> Any:
             return raw_data.decode("utf-8")
         except UnicodeDecodeError:
             return raw_data
+
+def cleanup_staged(run_id: str):
+    import shutil
+    run_staging = os.path.join(STAGING_DIR, run_id)
+    if os.path.exists(run_staging):
+        try:
+            shutil.rmtree(run_staging)
+        except Exception:
+            pass
