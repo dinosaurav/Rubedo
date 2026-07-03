@@ -15,7 +15,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   schema change (new/removed *column* — new tables are fine, create_all
   handles them): `rm -rf .batchbrain/batchbrain.sqlite .batchbrain/objects
   .batchbrain/staging`, then repopulate by running
-  `uv run python examples/count_lines.py` twice (expect Created: 15 then
+  `uv run python examples/count_lines/count_lines.py` twice (expect Created: 15 then
   Reused: 15). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check batchbrain/ tests/ examples/`,
@@ -81,8 +81,9 @@ string ids. `.test_*/` is gitignored.
   `@pytest.mark.filterwarnings`.
 - `_commit_materialization`'s supersede path flushes the demotion *before*
   inserting the replacement (one-live-per-address partial unique index).
-- Bare `pytest` is scoped to `tests/` via pyproject; `examples/` contains a
-  non-test file named `test_invalidation.py`.
+- Each `examples/<name>/` is a self-contained folder (script + its data);
+  the flagship is `examples/count_lines/count_lines.py`. LLM examples read
+  `OPENROUTER_API_KEY` from a gitignored `.env` at the repo root.
 - The repo lives under `~/Documents` (macOS TCC-protected): if every file
   op suddenly returns EPERM, the app lost its Documents grant — tell the
   owner; nothing in-repo fixes it.

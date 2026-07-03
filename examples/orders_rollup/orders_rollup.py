@@ -14,7 +14,7 @@ streaming on or off without invalidating anything.
 
 Run it:
 
-    uv run python examples/orders_rollup.py
+    uv run python examples/orders_rollup/orders_rollup.py
 """
 
 import os

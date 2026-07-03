@@ -19,7 +19,7 @@ def read_lines(path: str):
 def count_lines(read_lines: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(read_lines["lines"])})
 
-p = pipeline(id="count-lines", name="Count Lines", folder="examples/input",
+p = pipeline(id="count-lines", name="Count Lines", folder="input",
              steps=[read_lines, count_lines])
 
 print(describe(p))            # the DAG, before ever running (also: format="mermaid")

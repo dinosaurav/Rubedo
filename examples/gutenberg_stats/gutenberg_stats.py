@@ -16,7 +16,7 @@ showing together:
 
 Run it:
 
-    uv run python examples/gutenberg_stats.py
+    uv run python examples/gutenberg_stats/gutenberg_stats.py
 
 Downloads are cached as materializations, so a re-run re-analyzes nothing.
 """

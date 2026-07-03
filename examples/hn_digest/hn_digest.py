@@ -13,7 +13,7 @@ Auth: put your key in a .env file at the repo root (already gitignored):
 
 Then run it (zero extra dependencies — plain stdlib HTTP):
 
-    uv run python examples/hn_digest.py
+    uv run python examples/hn_digest/hn_digest.py
 
 The point of doing this in Batchit: classifying a story with an LLM is
 expensive and non-idempotent. Each classification is cached by the story's

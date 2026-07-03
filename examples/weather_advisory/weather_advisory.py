@@ -9,7 +9,7 @@ Real APIs, both public and keyless:
 
 Run it out of the box:
 
-    uv run python examples/weather_advisory.py
+    uv run python examples/weather_advisory/weather_advisory.py
 
 `forecast` carries stale_after="3h": a cached forecast older than three hours
 re-fetches on the next run. If the numbers changed, downstream advice recomputes;

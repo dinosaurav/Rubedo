@@ -10,7 +10,7 @@ REST, to show the same engine over a very different shape of work.
 
 Run it:
 
-    uv run python examples/github_health.py
+    uv run python examples/github_health/github_health.py
 
 Each repo is a CSV row (a coordinate). fetch_repo and activity are two chained
 network calls per repo; both carry retries and a rate limit because the GitHub

@@ -1,3 +1,5 @@
+import os
+
 from pydantic import BaseModel, Field
 from batchbrain import ProcessResult, describe, run, step, pipeline
 
@@ -52,7 +54,7 @@ def total_lines(count_lines: dict):
 count_lines_pipeline = pipeline(
     id="count-lines",
     name="Count Lines DAG",
-    folder="examples/input",
+    folder=os.path.join(os.path.dirname(__file__), "input"),
     steps=[read_lines, count_lines, total_lines],
 )
 
