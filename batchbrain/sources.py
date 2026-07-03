@@ -19,6 +19,38 @@ class SourceItem:
     ref: Any = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+def _disambiguate(
+    rows: List[tuple[str, str, Any, Dict[str, Any]]]
+) -> List[SourceItem]:
+    """Resolve duplicate keys into single coordinates or content-suffixed coordinates."""
+    from collections import defaultdict
+    
+    # base lane key -> {content_hash: (ref, metadata)}; identical (key, content)
+    # rows are indistinguishable units of work and collapse to one lane
+    groups: Dict[str, Dict[str, tuple]] = defaultdict(dict)
+    
+    for base, content_hash, ref, meta in rows:
+        groups[base].setdefault(content_hash, (ref, meta))
+        
+    items: List[SourceItem] = []
+    for base, variants in groups.items():
+        collided = len(variants) > 1
+        for content_hash, (ref, meta) in variants.items():
+            coordinate = f"{base}#{content_hash[:6]}" if collided else base
+            metadata = dict(meta)
+            if collided:
+                metadata["key_collision"] = True
+            items.append(
+                SourceItem(
+                    coordinate=coordinate,
+                    content_hash=content_hash,
+                    ref=ref,
+                    metadata=metadata,
+                )
+            )
+            
+    return items
+
 
 class Source(ABC):
     """Anything that can enumerate coordinates and load their payloads.
@@ -111,17 +143,12 @@ class CsvSource(Source):
 
     def scan(self) -> List[SourceItem]:
         import csv
-        from collections import defaultdict
-
         from .hashing import hash_json
 
         if not os.path.exists(self.path):
             return []
 
-        # base lane key -> {content_hash: (row, line)}; identical (key, content)
-        # rows are indistinguishable units of work and collapse to one lane
-        groups: Dict[str, Dict[str, tuple]] = defaultdict(dict)
-
+        rows = []
         with open(self.path, newline="", encoding="utf-8") as f:
             for row_num, row in enumerate(csv.DictReader(f), start=2):
                 content_hash = hash_json(row)
@@ -136,26 +163,9 @@ class CsvSource(Source):
                 else:
                     base = f"row-{content_hash[:12]}"
 
-                groups[base].setdefault(content_hash, (row, row_num))
+                rows.append((base, content_hash, row, {"line": row_num}))
 
-        items: List[SourceItem] = []
-        for base, variants in groups.items():
-            collided = len(variants) > 1
-            for content_hash, (row, line) in variants.items():
-                coordinate = f"{base}#{content_hash[:6]}" if collided else base
-                metadata = {"line": line}
-                if collided:
-                    metadata["key_collision"] = True
-                items.append(
-                    SourceItem(
-                        coordinate=coordinate,
-                        content_hash=content_hash,
-                        ref=row,
-                        metadata=metadata,
-                    )
-                )
-
-        return items
+        return _disambiguate(rows)
 
     def load(self, item: SourceItem) -> Dict[str, str]:
         return item.ref
@@ -168,3 +178,81 @@ def coerce_source(source) -> Source:
     if isinstance(source, str):
         return FolderSource(source)
     raise TypeError(f"Expected a Source or folder path string, got {type(source)!r}")
+
+def _jsonable(row: Dict[str, Any]) -> Dict[str, Any]:
+    import datetime
+    from decimal import Decimal
+    
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            out[k] = str(v)
+        elif isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+            out[k] = v.isoformat()
+        elif isinstance(v, bytes):
+            out[k] = v.hex()
+        elif hasattr(v, '__dict__'):
+            # Just stringify complex objects that slipped through
+            out[k] = str(v)
+        else:
+            out[k] = v
+    return out
+
+class TableSource(Source):
+    """Rows of a SQL table. Coordinate = key column value(s), payload = row dict."""
+    
+    def __init__(self, engine_url: str, *, table: str, key, columns: Optional[List[str]] = None):
+        self.engine_url = engine_url
+        self.table = table
+        if isinstance(key, str):
+            key = [key]
+        self.key: List[str] = key
+        self.columns = columns
+        
+    @property
+    def id(self) -> str:
+        from urllib.parse import urlparse
+        
+        # Parse the URL and remove credentials for the id
+        parsed = urlparse(self.engine_url)
+        safe_netloc = parsed.hostname or ""
+        if parsed.port:
+            safe_netloc += f":{parsed.port}"
+        
+        # Build dialect+host+database+table#key=id
+        safe_url = f"{parsed.scheme}://{safe_netloc}{parsed.path}"
+        key_part = ",".join(self.key)
+        return f"table:{safe_url}/{self.table}#key={key_part}"
+        
+    def scan(self) -> List[SourceItem]:
+        from sqlalchemy import create_engine, text
+        from .hashing import hash_json
+        
+        engine = create_engine(self.engine_url)
+        try:
+            with engine.connect() as conn:
+                # Basic select from table
+                cols = "*" if not self.columns else ", ".join(self.columns)
+                # Unsafe interpolation here is accepted since it's an internal schema declaration
+                query = text(f"SELECT {cols} FROM {self.table}")
+                result = conn.execute(query)
+                
+                rows_data = []
+                for row in result.mappings():
+                    row_dict = _jsonable(dict(row))
+                    content_hash = hash_json(row_dict)
+                    
+                    missing = [k for k in self.key if k not in row_dict]
+                    if missing:
+                        raise ValueError(
+                            f"{self.table}: key column(s) {missing} not found in row"
+                        )
+                    base = "|".join(str(row_dict[k]) for k in self.key)
+                    rows_data.append((base, content_hash, row_dict, {}))
+                    
+            return _disambiguate(rows_data)
+        finally:
+            engine.dispose()
+            
+    def load(self, item: SourceItem) -> Dict[str, Any]:
+        return item.ref
