@@ -15,8 +15,8 @@ accurate and load-bearing; keep them updated when behavior changes.
   schema change (new/removed *column* — new tables are fine, create_all
   handles them): `rm -rf .batchbrain/batchbrain.sqlite .batchbrain/objects
   .batchbrain/staging`, then repopulate by running
-  `uv run python examples/count_lines.py` twice (expect Created: 14 then
-  Reused: 14). Say so in the commit message.
+  `uv run python examples/count_lines.py` twice (expect Created: 15 then
+  Reused: 15). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check batchbrain/ tests/ examples/`,
   `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the

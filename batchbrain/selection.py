@@ -23,8 +23,7 @@ class Selection(BaseModel):
 
         Reserved prefixes map to engine facts —
           source:<id>  coord:<glob>  step:<name>  version:<v>
-          address:<output_address>  content:<hash>  live:true|false
-          meta.<key>:<value> (equality; meta.<key>:* for existence)
+          address:<output_address>  live:true|false
         Any other field:value term matches an indexed output field
         (@step(index=[...])) — indexed data is the language's open
         vocabulary. Quote values containing spaces: company:"acme corp".
@@ -102,7 +101,8 @@ def get_selection_materialization_ids(
 
     mats = query.all()
 
-    # Python-side filtering for coordinate glob and metadata since SQLite json querying is complex/not always compiled in
+    # Coordinate-glob and version-range filtering happen in Python (glob
+    # matching and PEP 440 specifiers don't map cleanly to SQL).
     result_ids = []
     for m in mats:
         # Coordinate glob check
