@@ -14,8 +14,19 @@ export default function SelectionBuilder() {
   const [metaKey, setMetaKey] = useState('');
   const [metaOp, setMetaOp] = useState('equals');
   const [metaValue, setMetaValue] = useState('');
+  const [query, setQuery] = useState('');
 
   const [preview, setPreview] = useState<any[]>([]);
+
+  // The query string wins over the form when present
+  const buildPayload = (): any => {
+    if (query.trim()) return { query: query.trim() };
+    const cleanSel: any = {};
+    if (selection.source_id) cleanSel.source_id = selection.source_id;
+    if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
+    if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
+    return cleanSel;
+  };
 
   const addMetaFilter = () => {
     if (!metaKey) return;
@@ -43,22 +54,13 @@ export default function SelectionBuilder() {
   };
 
   const handlePreview = async () => {
-    const cleanSel: any = {};
-    if (selection.source_id) cleanSel.source_id = selection.source_id;
-    if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
-    if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
-    const res = await previewSelection(cleanSel);
+    const res = await previewSelection(buildPayload());
     setPreview(res.items || []);
   };
 
   const handleInvalidate = async () => {
     if (!confirm("Are you sure you want to invalidate these materializations?")) return;
-    const cleanSel: any = {};
-    if (selection.source_id) cleanSel.source_id = selection.source_id;
-    if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
-    if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
-    
-    const res = await invalidateSelection(cleanSel, "Invalidated from UI");
+    const res = await invalidateSelection(buildPayload(), "Invalidated from UI");
     alert(`Invalidated ${res.invalidated_count} materializations. Run process again to recompute.`);
     setPreview([]);
   };
@@ -101,7 +103,22 @@ export default function SelectionBuilder() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
         <div className="card">
           <h2 style={{ marginBottom: '1rem', fontSize: '1.25rem' }}>Filters</h2>
-          
+
+          <div className="form-group">
+            <label className="form-label">Query</label>
+            <input
+              className="form-control"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder='e.g. step:extract company:acme live:true coord:*.txt'
+              style={{ fontFamily: 'monospace' }}
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              source: coord: step: version: live: meta.&lt;key&gt;: — any other
+              field:value matches indexed output fields. Overrides the form below.
+            </div>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Source</label>
             <input 

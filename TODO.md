@@ -73,8 +73,8 @@ The coordinate conflated three jobs; they now have one home each:
 
 - [x] Lane-key contract + CsvSource duplicate handling
 - [x] `index=` extraction + selection by indexed fields
-- [ ] Surface indexed fields in the UI (object detail, selection builder)
-      and in the selection language
+- [x] Surface indexed fields in the UI (object detail chips, selection
+      builder query box) and in the selection language
 
 ## Data shape: filters, joins, fan-in **[needs split]**
 
@@ -108,8 +108,10 @@ The coordinate conflated three jobs; they now have one home each:
       each run snapshots its definition into the ledger (Run.definition_json)
       and /api/pipelines serves it; DagView renders the graph (SVG, no deps)
       on the Pipelines page and on RunDetail with per-step outcome counts
-- [ ] Selection language — string DSL (`step:count_lines coord:*.txt live:false`)
-      parsing to Selection; usable in UI search box and Python
+- [x] Selection language — `Selection.parse("step:extract company:acme live:true")`;
+      reserved prefixes (source: coord: step: version: address: content: live:
+      meta.<key>:) plus open vocabulary mapping to indexed fields; accepted by
+      the API as {"query": "..."} and wired into the SelectionBuilder page
 
 ## Product / positioning
 

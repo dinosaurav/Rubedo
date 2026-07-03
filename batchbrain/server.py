@@ -12,6 +12,7 @@ from .models import (
     Run,
     RunEvent,
     Materialization,
+    MaterializationIndexEntry,
     MaterializationLifecycle,
     RunCoordinateStatus,
 )
@@ -263,6 +264,13 @@ def get_object_metadata(output_address: str):
             "invalidation_reason": invalidation_reason,
             "output_content_hash": mat.output_content_hash,
             "content_type": mat.content_type,
+            "index": [
+                {"field": e.field, "value": e.value}
+                for e in session.query(MaterializationIndexEntry)
+                .filter_by(materialization_id=mat.id)
+                .order_by(MaterializationIndexEntry.id)
+                .all()
+            ],
         }
 
     return {
@@ -290,10 +298,21 @@ def download_object(output_address: str):
     return FileResponse(obj_path, filename=output_address)
 
 
+def _selection_from_payload(data: dict) -> Selection:
+    """Accept either structured Selection fields or a selection-language
+    string: {"query": "step:extract company:acme live:true"}."""
+    if "query" in data:
+        try:
+            return Selection.parse(data["query"])
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    return Selection(**data)
+
+
 @app.post("/api/selection/preview", response_model=SelectionPreviewResponse)
 async def preview_selection(request: Request):
     data = await request.json()
-    sel = Selection(**data)
+    sel = _selection_from_payload(data)
     from .selection import get_selection_materialization_ids
 
     with get_session() as session:
@@ -330,7 +349,7 @@ async def invalidate_selection(request: Request):
     data = await request.json()
     reason = request.query_params.get("reason", "UI Invalidation")
 
-    sel = Selection(**data)
+    sel = _selection_from_payload(data)
     result = invalidate(sel, reason)
 
     return {

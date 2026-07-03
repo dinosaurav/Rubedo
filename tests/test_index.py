@@ -188,3 +188,15 @@ def test_skip_cache_rejects_index():
         @step(name="u", version="1", skip_cache=True, index=["x"])
         def u(path):
             pass
+
+
+def test_selection_language_end_to_end():
+    create_file("a.txt", "acme,east")
+    create_file("b.txt", "globex,west")
+    pipe = make_pipeline()
+    run(pipe, workers=1)
+
+    res = invalidate(
+        Selection.parse("step:extract company:acme live:true"), reason="via query"
+    )
+    assert res["invalidated_count"] == 1

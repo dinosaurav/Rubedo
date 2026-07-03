@@ -43,6 +43,16 @@ export default function OutputDetail() {
           <div>
             <strong>Status:</strong> {obj.invalidated_at ? <span className="badge badge-error">Invalidated</span> : <span className="badge badge-success">Valid</span>}
           </div>
+          {obj.index?.length > 0 && (
+            <div>
+              <strong>Indexed Fields:</strong>{' '}
+              {obj.index.map((e: any, i: number) => (
+                <code key={i} style={{ marginRight: '0.5rem', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: '4px' }}>
+                  {e.field}:{e.value}
+                </code>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ marginTop: '1rem' }}>
           <button className="btn btn-danger" onClick={handleInvalidate} disabled={!!obj.invalidated_at}>Invalidate</button>
