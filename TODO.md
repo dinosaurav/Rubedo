@@ -59,6 +59,23 @@ Living roadmap. Ordering within sections is rough priority; items marked
       anything touching identity/plan/ledger earns a deliberate built-in.
       Revisit only if a concrete third-party need appears.
 
+## Coordinates, identity, search (settled design, 2026-07)
+
+The coordinate conflated three jobs; they now have one home each:
+- **Identity** of work = content-addressed output addresses (unchanged).
+- **Coordinate = lane key**: engine-facing dataflow/incrementality key;
+  unique within a scan (sources disambiguate collisions mechanically,
+  e.g. CsvSource content-suffixes duplicate keys), stable across scans.
+- **Search**: lane keys for source-shaped questions; indexed value fields
+  (`@step(index=[...])` → extracted at commit, `Selection(index={...})`)
+  for content-shaped questions — a label is just data someone chose to
+  index, never identity; metadata filters for diagnostics.
+
+- [x] Lane-key contract + CsvSource duplicate handling
+- [x] `index=` extraction + selection by indexed fields
+- [ ] Surface indexed fields in the UI (object detail, selection builder)
+      and in the selection language
+
 ## Data shape: filters, joins, fan-in **[needs split]**
 
 - [x] Filters — a step declines a coordinate by returning `Filtered(reason)`;

@@ -23,6 +23,7 @@ from .models import (
     ManifestEntry,
     Materialization,
     MaterializationEdge,
+    MaterializationIndexEntry,
     MaterializationLifecycle,
     ProcessResult,
     Run,
@@ -320,6 +321,37 @@ def _commit_materialization(
     return mat, "created"
 
 
+def _extract_index_entries(session: Session, mat_id: int, step: StepSpec, result):
+    """Project declared value fields into the search index.
+
+    Labels are data someone chose to index: fields come straight from the
+    output value (dotted paths for nesting), list fields yield one entry
+    per element, missing fields are simply not indexed.
+    """
+    if not step.index:
+        return
+    value = result.value if isinstance(result, ProcessResult) else result
+    if not isinstance(value, dict):
+        return
+
+    for path in step.index:
+        node = value
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+            if node is None:
+                break
+        if node is None:
+            continue
+        elements = node if isinstance(node, list) else [node]
+        for el in elements:
+            if isinstance(el, (str, int, float, bool)):
+                session.add(
+                    MaterializationIndexEntry(
+                        materialization_id=mat_id, field=path, value=str(el)
+                    )
+                )
+
+
 def _record_failure(
     session: Session,
     ctx: _RunContext,
@@ -424,6 +456,11 @@ def _commit_execution_result(
                 refresh=decision.stale,
                 filtered=is_filtered,
             )
+
+            # Fresh generations get their declared value fields indexed;
+            # reused/restored/refreshed rows already carry their entries
+            if mat_action in ("created", "superseded") and not is_filtered:
+                _extract_index_entries(session, mat.id, step, result)
 
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation

@@ -1,10 +1,10 @@
 import json
-from typing import Any, Optional, List
+from typing import Any, Dict, Optional, List
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import fnmatch
 
-from .models import Materialization, RunCoordinateStatus
+from .models import Materialization, MaterializationIndexEntry, RunCoordinateStatus
 
 
 class MetadataFilter(BaseModel):
@@ -23,6 +23,8 @@ class Selection(BaseModel):
     metadata: Optional[List[MetadataFilter]] = None
     invalidated: Optional[bool] = None
     coordinates: Optional[List[str]] = None
+    # Indexed value fields (@step(index=[...])): all pairs must match
+    index: Optional[Dict[str, str]] = None
 
 
 def get_selection_materialization_ids(
@@ -42,6 +44,14 @@ def get_selection_materialization_ids(
         )
     if selection.invalidated is not None:
         query = query.filter(Materialization.is_live.is_(not selection.invalidated))
+
+    if selection.index:
+        for field, value in selection.index.items():
+            matching = (
+                session.query(MaterializationIndexEntry.materialization_id)
+                .filter_by(field=field, value=str(value))
+            )
+            query = query.filter(Materialization.id.in_(matching))
 
     if selection.source_id or selection.coordinate_glob or selection.coordinates:
         # Join with RunCoordinateStatus to filter by coordinate or source_id

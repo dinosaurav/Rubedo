@@ -58,6 +58,7 @@ class StepSpec:
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
+    index: Tuple[str, ...] = ()  # value fields extracted into the search index
 
 
 @dataclass
@@ -94,6 +95,7 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
+    index: Optional[List[str]] = None,
 ):
     """Declare a step.
 
@@ -131,6 +133,13 @@ def step(
     exist to keep other steps readable. Values pass in memory without a
     serialization round-trip, and execution policies (retries, rate_limit)
     are not applied — if a step needs those, it deserves materialization.
+
+    index names fields of the output value (dotted paths for nesting) to
+    extract into the search index at commit time, making outputs findable
+    by their content: Selection(index={"company": "acme"}). List-valued
+    fields index one entry per element. Purely operational — changing
+    index= never affects cache identity, and only newly created
+    materializations are indexed under the new declaration.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
@@ -145,6 +154,11 @@ def step(
         raise ValueError(
             f"Step '{name}': stale_after is meaningless with skip_cache — "
             "nothing is stored to expire"
+        )
+    if skip_cache and index:
+        raise ValueError(
+            f"Step '{name}': index is meaningless with skip_cache — "
+            "nothing is stored to search"
         )
     if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
         retry_on = (retry_on,)
@@ -180,6 +194,7 @@ def step(
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
             skip_cache=skip_cache,
+            index=tuple(index or ()),
         )
 
     return decorator
