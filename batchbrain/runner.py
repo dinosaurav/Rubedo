@@ -158,6 +158,52 @@ def _resolve_invocation(pipeline, source, params):
 
 
 @dataclass
+class EphemeralRef:
+    """A skip_cache step's stand-in for a materialization.
+
+    Carries the step's identity (not its output — it hasn't run) so that
+    consumers' cache keys can be computed statically, plus everything needed
+    to lazily compute the actual value if a consumer executes.
+    """
+
+    step: StepSpec
+    item: SourceItem
+    parent_refs: Dict[str, Any]
+    identity_hash: str
+
+    @property
+    def output_content_hash(self) -> str:
+        # Chains into consumers' input hashes exactly like a real
+        # materialization's content hash would
+        return self.identity_hash
+
+
+class _RunMemo:
+    """Per-run memo so an ephemeral step runs at most once per coordinate.
+
+    Reentrant lock: chained skip_cache steps resolve recursively on the
+    same worker thread. Exceptions are memoized too, so every consumer of
+    a failed util sees the same failure.
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._values: Dict[Any, Any] = {}
+
+    def compute(self, key, producer):
+        with self._lock:
+            if key not in self._values:
+                try:
+                    self._values[key] = ("ok", producer())
+                except Exception as e:
+                    self._values[key] = ("err", e)
+        kind, value = self._values[key]
+        if kind == "err":
+            raise value
+        return value
+
+
+@dataclass
 class StepDecision:
     coordinate: str
     action: str  # reuse | execute | blocked | pending
@@ -205,6 +251,38 @@ def _plan_step(
                 pending = True
             else:
                 parent_mats[dep] = parent_mat
+
+        if step.skip_cache:
+            # Inline util: no decision, no ledger row. Its identity becomes
+            # part of every consumer's cache key; its value is computed
+            # lazily (memoized) only if a consumer executes.
+            if failed_parents or blocked_parents:
+                coord_step_mats[(coord, step.name)] = "blocked"
+            elif pending:
+                coord_step_mats[(coord, step.name)] = "pending"
+            else:
+                identity = {
+                    "step": step.name,
+                    "version": step.version,
+                    "config": step.config_hash,
+                    "parents": {
+                        dep: ref.output_content_hash
+                        for dep, ref in parent_mats.items()
+                    }
+                    if step.depends_on
+                    else {"source": it.content_hash},
+                }
+                if accepts_params:
+                    identity["params"] = params_hash
+                if step.code_mode == "auto":
+                    identity["code"] = step.code_hash
+                coord_step_mats[(coord, step.name)] = EphemeralRef(
+                    step=step,
+                    item=it,
+                    parent_refs=parent_mats,
+                    identity_hash=hash_json(identity),
+                )
+            continue
 
         if failed_parents or blocked_parents:
             decisions.append(
@@ -430,6 +508,51 @@ class ExecutionOutcome:
     attempt_errors: List[str] = field(default_factory=list)
 
 
+def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _RunMemo):
+    if isinstance(ref, EphemeralRef):
+        return _compute_ephemeral(ref, source, params, memo)
+    return read_materialization_output(ref)
+
+
+def _compute_ephemeral(
+    ref: EphemeralRef, source: Source, params: Optional[dict], memo: _RunMemo
+):
+    """Lazily compute a skip_cache step's value, at most once per run."""
+
+    def produce():
+        step = ref.step
+        if not step.depends_on:
+            args = [source.load(ref.item)]
+            kwargs = {}
+        else:
+            args = []
+            kwargs = {
+                dep: _resolve_parent_value(ref.parent_refs[dep], source, params, memo)
+                for dep in step.depends_on
+            }
+        if _step_accepts_params(step):
+            kwargs["params"] = _build_step_params(step, params)
+        result = step.fn(*args, **kwargs)
+        # Consumers of materialized steps receive the unwrapped value;
+        # keep the contract identical (minus the serialization round-trip)
+        if isinstance(result, ProcessResult):
+            result = result.value
+        return result
+
+    return memo.compute((ref.step.name, ref.item.coordinate), produce)
+
+
+def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
+    """Nearest materialized ancestors, skipping through ephemeral hops."""
+    out: Dict[int, MatRef] = {}
+    for ref in parent_refs.values():
+        if isinstance(ref, EphemeralRef):
+            out.update(_materialized_ancestors(ref.parent_refs))
+        else:
+            out[ref.id] = ref
+    return out
+
+
 def _execute_step(
     step: StepSpec,
     decisions: List[StepDecision],
@@ -437,6 +560,7 @@ def _execute_step(
     params: Optional[dict],
     accepts_params: bool,
     workers: Optional[int],
+    memo: _RunMemo,
 ) -> Iterator[ExecutionOutcome]:
     """Run the step function for each execute decision; yield as completed.
 
@@ -455,7 +579,9 @@ def _execute_step(
         else:
             args = []
             kwargs = {
-                dep: read_materialization_output(decision.parent_mats[dep])
+                dep: _resolve_parent_value(
+                    decision.parent_mats[dep], source, params, memo
+                )
                 for dep in step.depends_on
             }
         if accepts_params:
@@ -712,9 +838,10 @@ def _commit_execution_result(ctx: _RunContext, step: StepSpec, outcome: Executio
                 refresh=decision.stale,
             )
 
-            for dep_name, p_mat in decision.parent_mats.items():
-                # A reused or resurrected generation already has its
-                # lineage edges
+            # Lineage skips through ephemeral hops to the nearest
+            # materialized ancestors; a reused or resurrected generation
+            # already has its edges
+            for p_mat in _materialized_ancestors(decision.parent_mats).values():
                 edge_exists = (
                     session.query(MaterializationEdge)
                     .filter_by(parent_id=p_mat.id, child_id=mat.id)
@@ -844,6 +971,8 @@ def _snapshot_source(
         for pe in prev_entries:
             if pe.coordinate not in scanned_coordinates:
                 for step in topo_steps:
+                    if step.skip_cache:
+                        continue
                     last_rc = (
                         session.query(RunCoordinateStatus)
                         .filter(
@@ -1084,6 +1213,7 @@ def run_pipeline(
         by_step={
             s.name: {"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0}
             for s in topo_steps
+            if not s.skip_cache
         },
     )
 
@@ -1118,6 +1248,7 @@ def run_pipeline(
                 counts["removed"] = removed_count
 
             params_hash = hash_json(params or {})
+            memo = _RunMemo()
 
             for step in topo_steps:
                 accepts_params = _step_accepts_params(step)
@@ -1136,7 +1267,7 @@ def run_pipeline(
 
                 to_execute = [d for d in decisions if d.action == "execute"]
                 for outcome in _execute_step(
-                    step, to_execute, source, params, accepts_params, workers
+                    step, to_execute, source, params, accepts_params, workers, memo
                 ):
                     _commit_execution_result(ctx, step, outcome)
 

@@ -48,11 +48,14 @@ Living roadmap. Ordering within sections is rough priority; items marked
 - [x] Staleness / TTL — `stale_after="24h"`: planning treats expired outputs as
       cache misses; recompute with different bytes supersedes, identical bytes
       append a `refreshed` lifecycle row and reset the `refreshed_at` projection.
-- [ ] `skip_cache` / ephemeral steps — cheap steps recomputed inline instead of
-      materialized. Design questions: lineage edges across the skipped hop; what
-      blocked-propagation means for a step with no materialization.
-- [ ] Arbitrary step rules — once 2–3 concrete policies exist, extract the plugin
-      surface from them (don't design the abstraction first)
+- [x] `skip_cache` — inline utils fused into consumers' cache identity; lazy
+      execution memoized per run, lineage skips through to nearest materialized
+      ancestors, blocked/failed propagate with the util's failure surfacing on
+      its consumer. Intended for quick idempotent helpers only (docs say so).
+- [x] ~~Arbitrary step rules~~ — resolved: no plugin surface. Rule of thumb:
+      execution-only concerns are user-wrappable (a step is just a function);
+      anything touching identity/plan/ledger earns a deliberate built-in.
+      Revisit only if a concrete third-party need appears.
 
 ## Data shape: filters, joins, fan-in **[needs split]**
 

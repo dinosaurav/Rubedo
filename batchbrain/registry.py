@@ -60,6 +60,7 @@ class StepSpec:
     retry_backoff: float = 1.0
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
+    skip_cache: bool = False  # inline util: never materialized, fused into consumers
 
 
 @dataclass
@@ -102,6 +103,7 @@ def step(
     retry_backoff: float = 1.0,
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
+    skip_cache: bool = False,
 ):
     """Declare a step.
 
@@ -131,6 +133,14 @@ def step(
     older than this re-executes on the next run. A recompute that produces
     different bytes supersedes the old generation; identical bytes refresh
     its clock. Natural for scraped or otherwise time-sensitive data.
+
+    skip_cache marks an inline util: the step is never materialized or
+    recorded — its identity (version/code/config) fuses into its consumers'
+    cache keys, and it executes lazily (memoized per run) only when a
+    consumer actually runs. Intended for quick, idempotent helpers that
+    exist to keep other steps readable. Values pass in memory without a
+    serialization round-trip, and execution policies (retries, rate_limit)
+    are not applied — if a step needs those, it deserves materialization.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
@@ -141,6 +151,11 @@ def step(
         )
     if retries < 0:
         raise ValueError(f"Step '{name}': retries must be >= 0")
+    if skip_cache and stale_after is not None:
+        raise ValueError(
+            f"Step '{name}': stale_after is meaningless with skip_cache — "
+            "nothing is stored to expire"
+        )
     if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
         retry_on = (retry_on,)
     parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
@@ -174,6 +189,7 @@ def step(
             retry_backoff=retry_backoff,
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
+            skip_cache=skip_cache,
         )
 
     return decorator
@@ -192,6 +208,14 @@ def pipeline(
         from .sources import FolderSource
 
         source = FolderSource(folder)
+
+    consumed = {dep for s in (steps or []) for dep in s.depends_on}
+    for s in steps or []:
+        if s.skip_cache and s.name not in consumed:
+            raise ValueError(
+                f"Step '{s.name}' has skip_cache but no consumer: its output "
+                "would never be computed or stored"
+            )
 
     pipe_id = id or name
     spec = PipelineSpec(
