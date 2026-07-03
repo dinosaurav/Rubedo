@@ -18,19 +18,13 @@ def test_reserved_prefixes():
 
 
 def test_open_vocabulary_is_the_index():
-    sel = Selection.parse("company:acme meta.line_count:2 domain:acme.com")
+    sel = Selection.parse("company:acme domain:acme.com")
     assert sel.index == {"company": "acme", "domain": "acme.com"}
-    (mf,) = sel.metadata
-    assert (mf.key, mf.op, mf.value) == ("line_count", "equals", 2)
 
 
-def test_quoted_values_and_meta_literals():
-    sel = Selection.parse('company:"acme corp" meta.ok:true meta.score:1.5 meta.tag:*')
+def test_quoted_values():
+    sel = Selection.parse('company:"acme corp"')
     assert sel.index == {"company": "acme corp"}
-    ops = {(m.key, m.op): m.value for m in sel.metadata}
-    assert ops[("ok", "equals")] is True
-    assert ops[("score", "equals")] == 1.5
-    assert ("tag", "exists") in ops
 
 
 def test_live_false_means_invalidated():

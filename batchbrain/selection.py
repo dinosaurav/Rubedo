@@ -1,4 +1,3 @@
-import json
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -7,34 +6,12 @@ import fnmatch
 from .models import Materialization, MaterializationIndexEntry, RunCoordinateStatus
 
 
-class MetadataFilter(BaseModel):
-    key: str
-    op: str  # "equals", "not equals", "greater than", "less than", "exists", "does not exist"
-    value: Any = None
-
-
-def _coerce_literal(value: str) -> Any:
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        return value
-
-
 class Selection(BaseModel):
     source_id: Optional[str] = None
     coordinate_glob: Optional[str] = None
     step: Optional[str] = None
     code_version: Optional[str] = None
     output_address: Optional[str] = None
-    metadata: Optional[List[MetadataFilter]] = None
     invalidated: Optional[bool] = None
     # Indexed value fields (@step(index=[...])): all pairs must match
     index: Optional[Dict[str, str]] = None
@@ -54,7 +31,6 @@ class Selection(BaseModel):
         import shlex
 
         fields: Dict[str, Any] = {}
-        meta_filters: List[MetadataFilter] = []
         index: Dict[str, str] = {}
 
         for term in shlex.split(query):
@@ -79,23 +55,9 @@ class Selection(BaseModel):
                 if value not in ("true", "false"):
                     raise ValueError(f"live: expects true or false, got {value!r}")
                 fields["invalidated"] = value == "false"
-            elif key.startswith("meta."):
-                meta_key = key[len("meta."):]
-                if value == "*":
-                    meta_filters.append(MetadataFilter(key=meta_key, op="exists"))
-                else:
-                    # Metadata is typed JSON; coerce literals so
-                    # meta.line_count:2 matches the stored int
-                    meta_filters.append(
-                        MetadataFilter(
-                            key=meta_key, op="equals", value=_coerce_literal(value)
-                        )
-                    )
             else:
                 index[key] = value
 
-        if meta_filters:
-            fields["metadata"] = meta_filters
         if index:
             fields["index"] = index
         return cls(**fields)
@@ -150,56 +112,6 @@ def get_selection_materialization_ids(
                 .first()
             )
             if not co or not fnmatch.fnmatch(co.coordinate, selection.coordinate_glob):
-                continue
-
-        # Metadata check
-        if selection.metadata:
-            if not m.metadata_json:
-                continue
-            try:
-                meta_dict = json.loads(m.metadata_json)
-            except Exception:
-                continue
-
-            passed = True
-            for f in selection.metadata:
-                if f.op == "exists":
-                    if f.key not in meta_dict:
-                        passed = False
-                        break
-                elif f.op == "does not exist":
-                    if f.key in meta_dict:
-                        passed = False
-                        break
-                else:
-                    if f.key not in meta_dict:
-                        passed = False
-                        break
-                    val = meta_dict[f.key]
-                    if f.op == "equals" and val != f.value:
-                        passed = False
-                        break
-                    if f.op == "not equals" and val == f.value:
-                        passed = False
-                        break
-                    if f.op == "greater than":
-                        try:
-                            if not (val > f.value):
-                                passed = False
-                                break
-                        except TypeError:
-                            passed = False
-                            break
-                    if f.op == "less than":
-                        try:
-                            if not (val < f.value):
-                                passed = False
-                                break
-                        except TypeError:
-                            passed = False
-                            break
-
-            if not passed:
                 continue
 
         result_ids.append(m.id)

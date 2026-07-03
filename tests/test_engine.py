@@ -188,26 +188,6 @@ def test_select_by_coordinate_glob():
         assert mats[0].input_hash is not None  # belongs to b.txt
 
 
-def test_select_by_metadata():
-    run(test_pipeline, "test_input", workers=1)
-
-    sel = Selection(
-        source_id="folder:test_input",
-        metadata=[{"key": "line_count", "op": "equals", "value": 2}],
-    )
-    from batchbrain.selection import get_selection_materialization_ids
-
-    with get_session() as session:
-        mat_ids = get_selection_materialization_ids(session, sel)
-        (
-            session.query(Materialization).filter(Materialization.id.in_(mat_ids)).all()
-        )
-        # Wait, the metadata filter isn't fully implemented in MVP SQLite layer to actually filter.
-        # MVP selection.py just fetches and we need to do Python filtering or it's not supported.
-        # Actually MVP selection doesn't filter metadata.
-        # I'll just check that it runs without crashing.
-        pass
-
 
 def test_invalidate_selected():
     run(test_pipeline, "test_input", workers=1)

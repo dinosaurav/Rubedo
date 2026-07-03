@@ -7,13 +7,9 @@ import { Link } from 'react-router-dom';
 export default function SelectionBuilder() {
   const [selection, setSelection] = useState({
     source_id: '',
-    coordinate_glob: '',
-    metadata: [] as any[]
+    coordinate_glob: ''
   });
   
-  const [metaKey, setMetaKey] = useState('');
-  const [metaOp, setMetaOp] = useState('equals');
-  const [metaValue, setMetaValue] = useState('');
   const [query, setQuery] = useState('');
 
   const [preview, setPreview] = useState<any[]>([]);
@@ -24,34 +20,10 @@ export default function SelectionBuilder() {
     const cleanSel: any = {};
     if (selection.source_id) cleanSel.source_id = selection.source_id;
     if (selection.coordinate_glob) cleanSel.coordinate_glob = selection.coordinate_glob;
-    if (selection.metadata.length > 0) cleanSel.metadata = selection.metadata;
     return cleanSel;
   };
 
-  const addMetaFilter = () => {
-    if (!metaKey) return;
-    let val: any = metaValue;
-    if (val === 'true') {
-      val = true;
-    } else if (val === 'false') {
-      val = false;
-    } else if (!isNaN(Number(val)) && val.trim() !== '') {
-      val = Number(val);
-    }
-    
-    setSelection({
-      ...selection,
-      metadata: [...selection.metadata, { key: metaKey, op: metaOp, value: val }]
-    });
-    setMetaKey('');
-    setMetaValue('');
-  };
 
-  const removeMetaFilter = (idx: number) => {
-    const newMeta = [...selection.metadata];
-    newMeta.splice(idx, 1);
-    setSelection({ ...selection, metadata: newMeta });
-  };
 
   const handlePreview = async () => {
     const res = await previewSelection(buildPayload());
@@ -114,7 +86,7 @@ export default function SelectionBuilder() {
               style={{ fontFamily: 'monospace' }}
             />
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-              source: coord: step: version: live: meta.&lt;key&gt;: — any other
+              source: coord: step: version: live: — any other
               field:value matches indexed output fields. Overrides the form below.
             </div>
           </div>
@@ -139,26 +111,7 @@ export default function SelectionBuilder() {
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Metadata Filters</label>
-            {selection.metadata.map((m, i) => (
-              <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
-                <span className="badge badge-info">{m.key} {m.op} {String(m.value)}</span>
-                <button onClick={() => removeMetaFilter(i)} className="btn btn-outline" style={{ padding: '0.2rem 0.5rem' }}>x</button>
-              </div>
-            ))}
-            
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-              <input className="form-control" placeholder="Key" value={metaKey} onChange={e => setMetaKey(e.target.value)} />
-              <select className="form-control" value={metaOp} onChange={e => setMetaOp(e.target.value)}>
-                <option value="equals">equals</option>
-                <option value="not equals">not equals</option>
-                <option value="exists">exists</option>
-              </select>
-              <input className="form-control" placeholder="Value" value={metaValue} onChange={e => setMetaValue(e.target.value)} />
-              <button className="btn btn-primary" onClick={addMetaFilter}>Add</button>
-            </div>
-          </div>
+
 
           <div style={{ display: 'flex', gap: '1rem', marginTop: '2rem' }}>
             <button className="btn btn-primary" onClick={handlePreview}>Preview Selection</button>
