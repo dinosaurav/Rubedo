@@ -1,37 +1,90 @@
 """Hacker News digest — a real fan-out/fan-in pipeline over two live APIs.
 
     top stories ─▶ screen ─▶ classify ─▶ digest (reduce)
-                   (filter)   (Claude)     (Claude)
+                   (filter)   (LLM)        (LLM)
 
 Real APIs, no mocks:
   - Hacker News Firebase API (public, no key)
-  - Anthropic Claude for the classification and the editor's note
-    (set ANTHROPIC_API_KEY in your environment)
+  - An LLM via OpenRouter for the classification and the editor's note
 
-Run it (pulls in the anthropic SDK just for this process):
+Auth: put your key in a .env file at the repo root (already gitignored):
 
-    uv run --with anthropic python examples/hn_digest.py
+    OPENROUTER_API_KEY=sk-or-...
+
+Then run it (zero extra dependencies — plain stdlib HTTP):
+
+    uv run python examples/hn_digest.py
 
 The point of doing this in Batchit: classifying a story with an LLM is
 expensive and non-idempotent. Each classification is cached by the story's
-content, so a second run reclassifies nothing and makes *zero* Claude calls —
+content, so a second run reclassifies nothing and makes *zero* LLM calls —
 and a story that gets filtered out is decided once, not once per run.
 """
 
 import json
+import os
 import urllib.request
 
-import anthropic
 from pydantic import BaseModel
 
 from batchbrain import Filtered, Source, SourceItem, describe, pipeline, run, step
 
 HN = "https://hacker-news.firebaseio.com/v0"
+OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
+# Cheap + capable; override with OPENROUTER_MODEL to try another.
+MODEL = os.environ.get("OPENROUTER_MODEL", "minimax/minimax-m2.5")
+
+
+def _load_env():
+    """Load KEY=VALUE lines from the nearest .env, without overriding real env vars."""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(4):
+        path = os.path.join(d, ".env")
+        if os.path.isfile(path):
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
+            return
+        d = os.path.dirname(d)
+
+
+_load_env()
 
 
 def _get(url: str):
     with urllib.request.urlopen(url, timeout=15) as r:
         return json.load(r)
+
+
+def _chat(prompt: str, max_tokens: int = 400, json_mode: bool = False) -> str:
+    """One-shot chat completion via OpenRouter's OpenAI-compatible endpoint."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set — put it in a .env file at the repo root."
+        )
+    payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        OPENROUTER,
+        data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)["choices"][0]["message"]["content"]
+
+
+def _first_json(text: str) -> dict:
+    """Pull the first {...} object out of a model reply (cheap models add prose)."""
+    try:
+        return json.loads(text[text.index("{") : text.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return {}
 
 
 class HackerNewsTop(Source):
@@ -61,11 +114,6 @@ class Screen(BaseModel):
     min_score: int = 100
 
 
-class Topic(BaseModel):
-    topic: str  # one or two words, e.g. "AI", "Databases", "Career"
-    blurb: str  # one plain-English sentence
-
-
 @step(name="screen", version="1", params_model=Screen)
 def screen(story: dict, params: Screen) -> dict:
     """Drop low-signal stories before we spend any tokens on them."""
@@ -86,44 +134,34 @@ def screen(story: dict, params: Screen) -> dict:
     index=["topic"],  # search your outputs by topic: Selection.parse("topic:AI")
 )
 def classify(screen: dict) -> dict:
-    """Ask Claude for a topic + one-line blurb. Expensive + non-idempotent → cached."""
-    client = anthropic.Anthropic()
-    resp = client.messages.parse(
-        model="claude-opus-4-8",  # swap to claude-haiku-4-5 for cheaper runs
-        max_tokens=512,
-        messages=[
-            {"role": "user", "content": f"Classify this Hacker News headline.\n\n{screen['title']}"}
-        ],
-        output_format=Topic,
+    """Ask the LLM for a topic + one-line blurb. Expensive + non-idempotent → cached."""
+    raw = _chat(
+        "Classify this Hacker News headline. Respond with ONLY a JSON object like "
+        '{"topic": "AI", "blurb": "one plain-English sentence"} — topic is one or two '
+        "words.\n\n" + screen["title"],
+        max_tokens=200,
+        json_mode=True,
     )
-    t = resp.parsed_output
+    obj = _first_json(raw)
     return {
         "title": screen["title"],
-        "topic": t.topic,
-        "blurb": t.blurb,
+        "topic": obj.get("topic", "unknown"),
+        "blurb": obj.get("blurb", ""),
         "score": screen["score"],
     }
 
 
 @step(name="digest", version="1", depends_on=["classify"], shape="reduce")
 def digest(classify: dict) -> str:
-    """Fan in every classified story and let Claude write the editor's note."""
+    """Fan in every classified story and let the LLM write the editor's note."""
     stories = sorted(classify.values(), key=lambda s: s["score"], reverse=True)
     headlines = [f"- [{s['topic']}] {s['title']} ({s['score']} pts)" for s in stories]
-    client = anthropic.Anthropic()
-    resp = client.messages.create(
-        model="claude-opus-4-8",
-        max_tokens=512,
-        messages=[
-            {
-                "role": "user",
-                "content": "In two punchy sentences, tell me what's on Hacker News "
-                "today from these headlines:\n\n" + "\n".join(headlines),
-            }
-        ],
+    note = _chat(
+        "In two punchy sentences, tell me what's on Hacker News today from these "
+        "headlines:\n\n" + "\n".join(headlines),
+        max_tokens=300,
     )
-    note = next(b.text for b in resp.content if b.type == "text")
-    return note + "\n\n" + "\n".join(headlines)
+    return note.strip() + "\n\n" + "\n".join(headlines)
 
 
 def make_pipeline():
@@ -144,7 +182,10 @@ def main():
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
     )
-    print("\nRun it again — every classification is cached, so it makes no Claude calls.")
+    print(
+        "\nRun it again — classifications are cached, so nothing is re-classified. "
+        "(The digest may re-run if HN's front page shifted; its inputs changed.)"
+    )
 
 
 if __name__ == "__main__":

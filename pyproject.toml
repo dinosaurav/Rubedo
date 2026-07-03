@@ -14,11 +14,9 @@ dependencies = [
     "packaging>=26.2",
 ]
 
-# The engine core has no LLM/HTTP deps. The examples in examples/ that call
-# real services pull them in on demand — install with `uv sync --extra examples`
-# or run one off with `uv run --with anthropic python examples/hn_digest.py`.
-[project.optional-dependencies]
-examples = ["anthropic>=0.40"]
+# The examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via
+# OpenRouter) using only the standard library — no extra dependencies to install.
+# LLM examples read OPENROUTER_API_KEY from a .env file at the repo root.
 
 [tool.setuptools]
 packages = ["batchbrain"]
