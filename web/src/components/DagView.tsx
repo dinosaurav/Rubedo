@@ -16,6 +16,7 @@ interface StepDef {
   stale_after_seconds?: number;
   params_schema?: any;
   code?: string;
+  shape?: string;
 }
 
 type StepCounts = Record<string, Record<string, number>>;
@@ -44,6 +45,7 @@ function countsLine(counts?: Record<string, number>): { label: string; color: st
 
 function policyBadges(s: StepDef): string[] {
   const badges: string[] = [];
+  if (s.shape === 'reduce') badges.push('reduce');
   if (s.skip_cache) badges.push('util');
   if (s.retries) badges.push(`retries ${s.retries}`);
   if (s.rate_limit) badges.push(s.rate_limit);
@@ -126,8 +128,8 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
             <g key={s.name}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
-                    stroke={s.skip_cache ? 'var(--text-muted)' : 'var(--accent-primary)'}
-                    strokeWidth={1.5}
+                    stroke={s.skip_cache ? 'var(--text-muted)' : (s.shape === 'reduce' ? 'var(--status-warning)' : 'var(--accent-primary)')}
+                    strokeWidth={s.shape === 'reduce' ? 2 : 1.5}
                     strokeDasharray={s.skip_cache ? '5 4' : undefined} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
                     fontSize={13} fontWeight={600} fontFamily="ui-monospace, monospace">

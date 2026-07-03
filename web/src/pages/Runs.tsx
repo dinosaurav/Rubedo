@@ -6,10 +6,18 @@ import type { ColumnDef } from '@tanstack/react-table';
 
 export default function Runs() {
   const [runs, setRuns] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchRuns().then(setRuns);
+    fetchRuns()
+      .then(setRuns)
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false));
   }, []);
+
+  if (loading) return <div>Loading runs...</div>;
+  if (error) return <div className="page-container">API unreachable: {error}</div>;
 
   const columns: ColumnDef<any, any>[] = [
     {

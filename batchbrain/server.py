@@ -153,7 +153,7 @@ def get_current_outputs():
         rows = (
             session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.id.in_(session.query(latest_ids_subq.c.max_id)))
-            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
+            .filter(RunCoordinateStatus.status.in_(["created", "reused", "filtered"]))
             .all()
         )
 

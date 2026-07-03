@@ -5,16 +5,36 @@ import type { ColumnDef } from '@tanstack/react-table';
 
 export default function CurrentOutputs() {
   const [outputs, setOutputs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchCurrentOutputs().then(setOutputs);
+    fetchCurrentOutputs()
+      .then(setOutputs)
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false));
   }, []);
+
+  if (loading) return <div>Loading current outputs...</div>;
+  if (error) return <div className="page-container">API unreachable: {error}</div>;
 
   const columns: ColumnDef<any, any>[] = [
     {
       accessorKey: 'source_id',
       header: 'Source',
       meta: { filterVariant: 'select' },
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      meta: { filterVariant: 'select' },
+      cell: (info) => {
+        const val = info.getValue();
+        if (val === 'filtered') {
+          return <span className="badge" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>filtered</span>;
+        }
+        return <span className="badge badge-success">active</span>;
+      }
     },
     {
       accessorKey: 'coordinate',

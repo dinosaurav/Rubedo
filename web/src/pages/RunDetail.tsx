@@ -11,16 +11,25 @@ export default function RunDetail() {
   const [coords, setCoords] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [tab, setTab] = useState<'coords' | 'events'>('coords');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (runId) {
-      fetchRun(runId).then(setRun);
-      fetchRunCoordinates(runId).then(setCoords);
-      fetchRunEvents(runId).then(setEvents);
+      setLoading(true);
+      Promise.all([
+        fetchRun(runId).then(setRun),
+        fetchRunCoordinates(runId).then(setCoords),
+        fetchRunEvents(runId).then(setEvents)
+      ])
+        .catch(e => setError(String(e)))
+        .finally(() => setLoading(false));
     }
   }, [runId]);
 
-  if (!run) return <div>Loading...</div>;
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div className="page-container">API unreachable: {error}</div>;
+  if (!run) return <div>Not found</div>;
 
   const coordColumns: ColumnDef<any, any>[] = [
     {
