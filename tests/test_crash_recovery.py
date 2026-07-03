@@ -97,7 +97,7 @@ def test_crash_during_staging(setup_teardown):
     def crashing_stage(*args, **kwargs):
         raise Exception("Disk full or worker killed during write")
 
-    with patch("batchbrain.runner.stage_and_commit", side_effect=crashing_stage):
+    with patch("batchbrain.ledger.stage_and_commit", side_effect=crashing_stage):
         summary = run(p_dummy, str(temp_workspace), workers=1)
         assert summary.status == "failed"
         assert summary.created_count == 0
@@ -123,7 +123,7 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
         raise Exception("Worker killed right after disk write but before DB commit")
 
     with patch(
-        "batchbrain.runner.stage_and_commit",
+        "batchbrain.ledger.stage_and_commit",
         side_effect=crashing_stage_but_write_succeeds,
     ):
         summary = run(p_dummy, str(temp_workspace), workers=1)
