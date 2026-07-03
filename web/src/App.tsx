@@ -7,6 +7,7 @@ import RunDetail from './pages/RunDetail';
 import Materializations from './pages/Materializations';
 import CurrentOutputs from './pages/CurrentOutputs';
 import SelectionBuilder from './pages/SelectionBuilder';
+import OutputDetail from './pages/OutputDetail';
 import Pipelines from './pages/Pipelines';
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -57,6 +58,7 @@ function App() {
           <Route path="/coordinates" element={<CurrentOutputs />} />
           <Route path="/select" element={<SelectionBuilder />} />
           <Route path="/pipelines" element={<Pipelines />} />
+          <Route path="/objects/:address" element={<OutputDetail />} />
         </Routes>
       </Layout>
     </BrowserRouter>

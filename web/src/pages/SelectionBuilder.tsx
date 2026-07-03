@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { previewSelection, invalidateSelection } from '../api';
 import { DataTable } from '../components/DataTable';
 import type { ColumnDef } from '@tanstack/react-table';
+import { Link } from 'react-router-dom';
 
 export default function SelectionBuilder() {
   const [selection, setSelection] = useState({
@@ -46,7 +47,7 @@ export default function SelectionBuilder() {
       header: 'Output Address',
       cell: (info) => {
         const val = info.getValue();
-        return val ? <span style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</span> : '-';
+        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
       },
     },
     {

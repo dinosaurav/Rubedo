@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { fetchMaterializations } from '../api';
 import { DataTable } from '../components/DataTable';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -40,7 +41,7 @@ export default function Materializations() {
       header: 'Output Address',
       cell: (info) => {
         const val = info.getValue();
-        return val ? <span style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</span> : '-';
+        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
       },
     },
     {
