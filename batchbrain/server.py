@@ -73,6 +73,7 @@ def get_runs():
             d["failed_count"] = summary.get("failed", 0)
             d["removed_count"] = summary.get("removed", 0)
             d["blocked_count"] = summary.get("blocked", 0)
+            d["filtered_count"] = summary.get("filtered", 0)
             results.append(d)
         return results
 
@@ -96,6 +97,7 @@ def get_run(run_id: str):
         d["failed_count"] = summary.get("failed", 0)
         d["removed_count"] = summary.get("removed", 0)
         d["blocked_count"] = summary.get("blocked", 0)
+        d["filtered_count"] = summary.get("filtered", 0)
         return d
 
 

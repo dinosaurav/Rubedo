@@ -59,9 +59,11 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## Data shape: filters, joins, fan-in **[needs split]**
 
-- [ ] Filters — a step can decline a coordinate (return sentinel / `filter=` predicate);
-      downstream steps skip it; new ledger status (`filtered`). The 1→0/1 warm-up
-      for coordinate transformation.
+- [x] Filters — a step declines a coordinate by returning `Filtered(reason)`;
+      the verdict is a cached materialization (filtered flag), downstream gets
+      status `filtered`, and content changes re-decide. Note: filtered
+      coordinates drop out of /api/current-outputs (status filter) — revisit
+      whether the UI should show them explicitly.
 - [ ] Fan-in / reduce — one output from all coordinates of an upstream step
       ("combine the sheets"); input_hash = manifest-level hash of upstream outputs
 - [ ] **Joins** — the big one. Materialize rows from two sources, join into pair

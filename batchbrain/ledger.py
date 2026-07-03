@@ -18,6 +18,7 @@ from .db import get_session
 from .execution import ExecutionOutcome, _materialized_ancestors
 from .hashing import hash_json
 from .models import (
+    Filtered,
     Manifest,
     ManifestEntry,
     Materialization,
@@ -145,12 +146,15 @@ def _record_planned(
 
         elif d.action == "reuse":
             ctx.coord_step_mats[(d.coordinate, step.name)] = d.existing
+            # A cached filter verdict reads as "filtered" in the ledger:
+            # "reused" is reserved for coordinates with a usable output
+            status = "filtered" if d.existing.filtered else "reused"
             session.add(
                 _new_status(
                     ctx,
                     step.name,
                     d.coordinate,
-                    "reused",
+                    status,
                     input_hash=d.input_hash,
                     output_address=d.output_address,
                     materialization_id=d.existing.id,
@@ -164,7 +168,30 @@ def _record_planned(
                 step_name=step.name,
                 coordinate=d.coordinate,
             )
-            ctx.count(step.name, "reused")
+            ctx.count(step.name, status)
+
+        elif d.action == "filtered":
+            ctx.coord_step_mats[(d.coordinate, step.name)] = "filtered"
+            session.add(
+                _new_status(
+                    ctx,
+                    step.name,
+                    d.coordinate,
+                    "filtered",
+                    metadata_json=json.dumps(
+                        {"filtered_parents": d.filtered_parents}
+                    ),
+                )
+            )
+            _emit(
+                session,
+                ctx,
+                "info",
+                "step_filtered",
+                step_name=step.name,
+                coordinate=d.coordinate,
+            )
+            ctx.count(step.name, "filtered")
 
         elif d.action == "execute":
             _emit(
@@ -191,6 +218,7 @@ def _commit_materialization(
     metadata_json: Optional[str],
     run_id: str,
     refresh: bool = False,
+    filtered: bool = False,
 ) -> tuple[Materialization, str]:
     """Record an executed result at its address, honoring generations.
 
@@ -271,6 +299,7 @@ def _commit_materialization(
         metadata_json=metadata_json,
         created_at=utcnow_iso(),
         created_by_run_id=run_id,
+        filtered=filtered,
         is_live=True,
     )
     session.add(mat)
@@ -365,12 +394,21 @@ def _commit_execution_result(
             return
 
         try:
+            # A step declining the coordinate is a cacheable decision: it is
+            # committed like any output (a marker object with filtered=True)
+            # so re-runs reuse the verdict instead of re-executing the step.
+            is_filtered = isinstance(result, Filtered)
+            if is_filtered:
+                metadata_json = json.dumps({"reason": result.reason})
+                result = {"__filtered__": True, "reason": result.reason}
+            else:
+                metadata_json = None
+                if isinstance(result, ProcessResult) and result.metadata:
+                    metadata_json = json.dumps(result.metadata)
+
             final_path, output_content_hash, content_type = stage_and_commit(
                 ctx.run_id, decision.coordinate, result
             )
-            metadata_json = None
-            if isinstance(result, ProcessResult) and result.metadata:
-                metadata_json = json.dumps(result.metadata)
 
             mat, mat_action = _commit_materialization(
                 session,
@@ -384,6 +422,7 @@ def _commit_execution_result(
                 metadata_json=metadata_json,
                 run_id=ctx.run_id,
                 refresh=decision.stale,
+                filtered=is_filtered,
             )
 
             # Lineage skips through ephemeral hops to the nearest
@@ -400,33 +439,35 @@ def _commit_execution_result(
                         MaterializationEdge(parent_id=p_mat.id, child_id=mat.id)
                     )
 
+            status = "filtered" if is_filtered else "created"
             session.add(
                 _new_status(
                     ctx,
                     step.name,
                     decision.coordinate,
-                    "created",
+                    status,
                     input_hash=decision.input_hash,
                     output_address=decision.output_address,
                     materialization_id=mat.id,
-                    metadata_json=attempts_meta,
+                    metadata_json=metadata_json if is_filtered else attempts_meta,
                 )
             )
             _emit(
                 session,
                 ctx,
                 "info",
-                f"materialization_{mat_action}",
+                "step_filtered" if is_filtered else f"materialization_{mat_action}",
                 step_name=step.name,
                 coordinate=decision.coordinate,
                 data={"materialization_id": mat.id},
             )
-            ctx.count(step.name, "created")
+            ctx.count(step.name, status)
             ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
                 mat.id,
                 mat.output_address,
                 mat.output_content_hash,
                 mat.content_type,
+                filtered=is_filtered,
             )
         except Exception as e:
             session.rollback()
@@ -518,7 +559,9 @@ def _snapshot_source(
                             RunCoordinateStatus.source_id == ctx.source_id,
                             RunCoordinateStatus.coordinate == pe.coordinate,
                             RunCoordinateStatus.step_name == step.name,
-                            RunCoordinateStatus.status.in_(["created", "reused"]),
+                            RunCoordinateStatus.status.in_(
+                                ["created", "reused", "filtered"]
+                            ),
                         )
                         .order_by(RunCoordinateStatus.id.desc())
                         .first()
@@ -561,6 +604,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         "failed": ctx.totals["failed"],
         "removed": ctx.totals["removed"],
         "blocked": ctx.totals["blocked"],
+        "filtered": ctx.totals["filtered"],
         "total": ctx.totals,
         "by_step": ctx.by_step,
     }
@@ -593,4 +637,6 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         reused_count=ctx.totals["reused"],
         failed_count=ctx.totals["failed"],
         removed_count=ctx.totals["removed"],
+        blocked_count=ctx.totals["blocked"],
+        filtered_count=ctx.totals["filtered"],
     )

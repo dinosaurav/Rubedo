@@ -17,11 +17,19 @@ from .util import iso_age_seconds
 
 
 class MatRef:
-    def __init__(self, id, output_address, output_content_hash, content_type=None):
+    def __init__(
+        self,
+        id,
+        output_address,
+        output_content_hash,
+        content_type=None,
+        filtered=False,
+    ):
         self.id = id
         self.output_address = output_address
         self.output_content_hash = output_content_hash
         self.content_type = content_type
+        self.filtered = filtered
 
 
 @dataclass
@@ -48,7 +56,7 @@ class EphemeralRef:
 @dataclass
 class StepDecision:
     coordinate: str
-    action: str  # reuse | execute | blocked | pending
+    action: str  # reuse | execute | blocked | pending | filtered
     item: Optional[SourceItem] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
@@ -56,6 +64,7 @@ class StepDecision:
     parent_mats: Dict[str, MatRef] = field(default_factory=dict)
     failed_parents: List[str] = field(default_factory=list)
     blocked_parents: List[str] = field(default_factory=list)
+    filtered_parents: List[str] = field(default_factory=list)
     # Reusing an output whose code has changed since it was computed
     # (same version string): legal, but worth a warning
     code_drift: bool = False
@@ -156,6 +165,7 @@ def _plan_step(
         parent_mats: Dict[str, MatRef] = {}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
+        filtered_parents: List[str] = []
         pending = False
 
         for dep in step.depends_on:
@@ -166,6 +176,8 @@ def _plan_step(
                 failed_parents.append(dep)
             elif parent_mat == "pending":
                 pending = True
+            elif parent_mat == "filtered" or getattr(parent_mat, "filtered", False):
+                filtered_parents.append(dep)
             else:
                 parent_mats[dep] = parent_mat
 
@@ -175,6 +187,8 @@ def _plan_step(
             # lazily (memoized) only if a consumer executes.
             if failed_parents or blocked_parents:
                 coord_step_mats[(coord, step.name)] = "blocked"
+            elif filtered_parents:
+                coord_step_mats[(coord, step.name)] = "filtered"
             elif pending:
                 coord_step_mats[(coord, step.name)] = "pending"
             else:
@@ -209,6 +223,17 @@ def _plan_step(
                     item=it,
                     failed_parents=failed_parents,
                     blocked_parents=blocked_parents,
+                )
+            )
+            continue
+
+        if filtered_parents:
+            decisions.append(
+                StepDecision(
+                    coordinate=coord,
+                    action="filtered",
+                    item=it,
+                    filtered_parents=filtered_parents,
                 )
             )
             continue
@@ -256,6 +281,7 @@ def _plan_step(
                         existing_mat.output_address,
                         existing_mat.output_content_hash,
                         existing_mat.content_type,
+                        filtered=existing_mat.filtered,
                     ),
                     code_drift=(
                         step.code_mode == "warn"

@@ -107,6 +107,11 @@ class Materialization(Base):
     metadata_json = Column(String)
     created_at = Column(String, nullable=False)
     created_by_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
+    # The step declined this coordinate: the stored object is a marker, and
+    # downstream steps are filtered rather than executed. Immutable, like
+    # the rest of the content columns — a changed decision is a new
+    # generation.
+    filtered = Column(Boolean, nullable=False, default=False)
     is_live = Column(Boolean, nullable=False, default=True)
     # Projection of the latest "refreshed" lifecycle row: when a stale
     # output was last re-verified byte-identical. Freshness clock is
@@ -233,6 +238,21 @@ class ProcessResult(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class Filtered:
+    """Return this from a step to decline a coordinate.
+
+    The decision is cached like any other output (recorded as a filtered
+    materialization), and downstream steps skip the coordinate with status
+    "filtered" instead of executing.
+    """
+
+    def __init__(self, reason: Optional[str] = None):
+        self.reason = reason
+
+    def __repr__(self):
+        return f"Filtered(reason={self.reason!r})"
+
+
 class RunSummary(BaseModel):
     run_id: str
     status: str
@@ -241,3 +261,4 @@ class RunSummary(BaseModel):
     failed_count: int = 0
     removed_count: int = 0
     blocked_count: int = 0
+    filtered_count: int = 0

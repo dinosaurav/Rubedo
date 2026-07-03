@@ -11,7 +11,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
 
-from .models import ProcessResult
+from .models import Filtered, ProcessResult
 from .planning import (
     EphemeralRef,
     MatRef,
@@ -101,6 +101,11 @@ def _compute_ephemeral(
         if _step_accepts_params(step):
             kwargs["params"] = _build_step_params(step, params)
         result = step.fn(*args, **kwargs)
+        if isinstance(result, Filtered):
+            raise RuntimeError(
+                f"skip_cache step '{step.name}' returned Filtered: filtering "
+                "is a cacheable decision, so filter steps must be materialized"
+            )
         # Consumers of materialized steps receive the unwrapped value;
         # keep the contract identical (minus the serialization round-trip)
         if isinstance(result, ProcessResult):

@@ -5,7 +5,7 @@ from .registry import (
     step,
     pipeline,
 )
-from .models import ProcessResult, RunSummary
+from .models import Filtered, ProcessResult, RunSummary
 from .selection import Selection
 from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate
@@ -13,6 +13,7 @@ from .runner import plan, run, RunPlan
 
 __all__ = [
     "invalidate",
+    "Filtered",
     "ProcessResult",
     "RunSummary",
     "Selection",

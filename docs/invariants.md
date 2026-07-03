@@ -27,7 +27,9 @@ Human-facing selection key, e.g. a file path or a row key. Produced by a Source;
 Anything that can enumerate coordinates with content hashes and load their payloads (folder of files, CSV rows, table rows). Identified by a stable `source_id`.
 
 **Run-coordinate status:**
-Relationship between a run and a coordinate: created, reused, failed, skipped, out_of_scope, etc.
+Relationship between a run and a coordinate: created, reused, failed, blocked,
+removed, filtered. "Filtered" means a step declined the coordinate — a cached,
+first-class verdict, not an error.
 
 **Invalidation:**
 Removal from current/canonical eligibility, not necessarily physical deletion.

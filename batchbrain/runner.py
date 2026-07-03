@@ -153,6 +153,8 @@ def plan(
                 )
                 if d.action == "reuse":
                     coord_step_mats[(d.coordinate, step.name)] = d.existing
+                elif d.action == "filtered":
+                    coord_step_mats[(d.coordinate, step.name)] = "filtered"
                 else:  # execute or pending: output unknowable until run
                     coord_step_mats[(d.coordinate, step.name)] = "pending"
 
@@ -203,9 +205,9 @@ def run_pipeline(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         pipeline_id=pipeline.id,
         source_id=source.id,
-        totals={"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0},
+        totals={"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0},
         by_step={
-            s.name: {"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0}
+            s.name: {"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0}
             for s in topo_steps
             if not s.skip_cache
         },
