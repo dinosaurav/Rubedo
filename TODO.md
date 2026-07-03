@@ -8,6 +8,85 @@ vocabulary. One item = one (or a few) commits.
 
 ──────────────────────────────────────────────────────────────────────
 
+## 0. Trim pass  **[owner-approved removals — do this first]**
+
+All verified dead (zero consumers) or explicitly approved. Suggested as
+three commits: (a) engine/schema trims, (b) metadata-filtering removal,
+(c) dashboard + stale examples. Address format and schema columns change
+→ reset `.batchbrain/` per CLAUDE.md and note it in the commit.
+
+**(a) Dead engine/schema code:**
+- Remove `@step(config=...)` entirely: the `config` param and
+  `StepSpec.config`/`config_hash` fields (spec.py), the `config_hash`
+  component of `compute_output_address` (hashing.py) and its call site
+  (planning.py — also drop `"config"` from the skip_cache EphemeralRef
+  identity dict), `config` in `definition()` (spec.py), and the
+  `code_version`-adjacent `config_hash` column on Materialization
+  (models.py) plus its writes in `ledger._commit_materialization`.
+  Rationale: v1 residue; runtime knobs are `params`, behavior-change
+  identity is `version`/`code="auto"`. Update the README "a step consumes
+  up to three things" paragraph (now two: data, params) and the
+  invariants.md output-address definition, and the CLAUDE.md address
+  formula line.
+- Remove `Selection.coordinates` (field + query branch, selection.py).
+- Remove `Selection.output_content_hash` (field + query branch) and the
+  `content:` term in `Selection.parse` (+ docstring). `address:` covers
+  exact-output selection.
+- Remove `Manifest.manifest_hash` (models.py) and its computation in
+  `ledger._snapshot_source` (the `sorted_items`/`manifest_data` block
+  exists only for it — delete all of it).
+- Remove `ManifestEntry.size_bytes`/`mtime_ns` columns and their writes
+  in `_snapshot_source`. Keep `SourceItem.metadata` (csv line /
+  key_collision still use it).
+- Remove `previous_output_address`/`previous_materialization_id` from
+  RunCoordinateStatus (models.py), the `last_rc` N+1 query + fields in
+  `_snapshot_source` (ledger.py), and the two fields in
+  `RunCoordinateStatusOut` (schemas.py). Update the assertion in
+  tests/test_run_status.py (~line 179) that reads them — the removed-row
+  behavior itself is unchanged.
+- Remove `SelectionPreviewItem.coordinate` (always None — schemas.py +
+  the server dict) AND `coordinate_count` from SelectionPreviewResponse
+  (always equals materialization_count). Update tests/test_api.py's
+  `coordinate_count` assertion and check web/src for usages of either.
+
+**(b) Metadata *filtering* removal (aggressive — approved).** Metadata
+storage and display are untouched (`ProcessResult.metadata`,
+`metadata_json`, preview/UI display, `index=` remains the search
+channel). Remove only the query path:
+- `MetadataFilter` class, `Selection.metadata` field, and the entire
+  Python-side metadata filtering loop in
+  `get_selection_materialization_ids` (selection.py). NOTE: the
+  coordinate-glob Python-side filtering in that same loop STAYS — only
+  the metadata branch goes.
+- `meta.*` terms and `_coerce_literal` in `Selection.parse` (+ docstring
+  and the language hint text in SelectionBuilder.tsx).
+- SelectionBuilder.tsx: the metadata key/op/value form section and its
+  state (`metaKey`/`metaOp`/`metaValue`, `addMetaFilter`,
+  `removeMetaFilter`, `selection.metadata`).
+- Tests: remove/replace the metadata-selection test in test_engine.py
+  (~line 190, `Selection(source_id=..., metadata=[...])`) and the meta
+  cases in test_selection_language.py. test_api.py's preview *display*
+  assertion (`items[0]["metadata"]["line_count"]`) stays — display is
+  kept.
+- Docs: invariants.md "Searching" entry becomes two channels (lane keys,
+  indexed fields); README search paragraph likewise.
+
+**(c) UI + examples:**
+- Delete the Dashboard page: web/src/pages/Dashboard.tsx, its import/
+  nav-link/route in App.tsx; route "/" now renders Runs. Keep the api.ts
+  fetchers (shared).
+- Delete examples/simple_process.py, examples/dag_pipeline.py,
+  examples/test_invalidation.py (redundant with count_lines.py and the
+  planned llm_enrich.py). Update the examples list in
+  PROJECT_CAPABILITIES_AND_STRUCTURE.md.
+
+**Acceptance:** full suite green, ruff clean, `tsc -b` clean, DB reset +
+count_lines runs twice (14 created then 14 reused), a `Selection.parse`
+round-trip via the API still works, and README/invariants/CLAUDE.md no
+longer mention config=, metadata filters, or the removed fields.
+
+──────────────────────────────────────────────────────────────────────
+
 ## 1. Fan-in / reduce steps  **[design settled — build it]**
 
 **Goal:** `@step(name="combine", version="1", depends_on=["grade"],
