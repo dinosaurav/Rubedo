@@ -1,135 +1,282 @@
 # TODO
 
-Living roadmap. Ordering within sections is rough priority; items marked
-**[needs split]** depend on the plan/execute refactor of `run_pipeline`.
+Each open item below is written as a self-contained spec: the design
+decisions are already made (do not re-litigate; flag genuine
+contradictions), with file pointers, gotchas, and acceptance criteria.
+Read `CLAUDE.md` first for conventions, and `docs/invariants.md` for
+vocabulary. One item = one (or a few) commits.
 
-## Quick removals / cleanups
+──────────────────────────────────────────────────────────────────────
 
-- [x] Remove RunDiff (page, route, `/api/runs/{l}/diff/{r}` endpoint, `diffRuns` in api.ts)
-- [x] Remove `recompute()` from invalidation.py — trivial wrapper; users compose `invalidate()` + `run()`
-- [x] ~~Registry / magic module loading~~ — removed: pipeline() is a pure
-      constructor, run()/plan() take spec objects only, the server derives
-      /api/pipelines from the run ledger (never imports user code)
-- [ ] Dashboard/API error state in the UI — a failing API currently looks identical to an empty database
+## 1. Fan-in / reduce steps  **[design settled — build it]**
 
-## Engine core (ordered — each unlocks the ones below)
+**Goal:** `@step(name="combine", version="1", depends_on=["grade"],
+shape="reduce")` — one output computed from *all* lanes of its parents
+("combine the sheets"). v1 is full fan-in (N→1) only; grouped reduce
+(N→k, `by=`) is explicitly deferred.
 
-- [x] **Plan/execute split of `run_pipeline`** — `_plan_step` (read-only StepDecision
-      per coordinate) / `_record_planned` / `_execute_step` / `_commit_execution_result`,
-      orchestrated by a slim `run_pipeline`.
-- [x] **Code-change detection** — orthogonal axes: `version` (semantic label) and
-      `code="auto"|"warn"` (source hash joins identity vs. drift warnings via
-      UserWarning + `code_drift_detected` event + `RunPlan.warnings`). Caveat:
-      hashes the step function's own source only — helper edits are what the
-      version bump is for. Possible middle ground later: hash the step's whole
-      defining module (coarse but catches same-file helpers); full closure
-      hashing deliberately rejected (dynamic dispatch + dependency upgrades
-      make it unsound at real complexity cost).
-- [ ] Semantic version ordering — parse `version` with `packaging` (PEP 440)
-      wherever ordering matters: version-range selection ("invalidate everything
-      computed by < 2.0") and UI sorting. Policy: no validation at registration;
-      parseable versions order properly, unparseable ones ("read-v1") stay opaque
-      labels — equality only, range operations skip them. Frontend gets a small
-      semver-aware comparator for table sorting. Build alongside the selection
-      language, which is its main consumer.
-- [x] Explain / dry-run — `batchbrain.plan(pipeline, params=...)` returns a RunPlan
-      (reuse / execute / pending / removed per coordinate-step, with addresses);
-      still to do: surface it in the UI
-- [ ] Cross-process concurrency safety — two simultaneous runs can race the
-      liveness check-then-insert; commit should be one guarded transaction **[needs split]**
-- [ ] Enforce the pairing rule mechanically (every `is_live` flip must ship a
-      lifecycle row in the same flush) — session-level guard upgrade
+**Decisions:**
+- New `StepSpec.shape: str = "map"` (`map` | `reduce`), param `shape=` on
+  `@step` (spec.py). Reject `shape="reduce"` combined with `skip_cache`.
+- The reduce step's single lane key is the literal string `"@all"`.
+- Step function contract: each dep parameter receives a dict
+  `{lane_key: value}` over that parent's surviving lanes, e.g.
+  `def combine(grade): ...` where `grade == {"a.txt": {...}, "b.txt": {...}}`.
+  `params` works as for map steps.
+- **input_hash** = `hash_json({dep: {lane: parent_content_hash, ...}, ...})`
+  with lanes sorted — the lane *set* is part of identity, so adding or
+  removing a lane recomputes the reduce.
+- **Upstream state semantics:** filtered parent lanes are *excluded* from
+  the input dict and the hash (filtered = "not part of the dataset").
+  Any parent lane failed or blocked → the reduce is `blocked`
+  (`blocked_parents` metadata should name the lanes, not just the step).
+  In `plan()`: any parent lane pending → the reduce is `pending`.
+  Zero surviving lanes → still runs with empty dicts (an empty dataset is
+  a valid dataset).
+- Downstream of a reduce: ordinary map steps over the single `@all` lane —
+  no special handling needed (verify with a test).
+- Lineage: one `MaterializationEdge` from every surviving parent
+  materialization to the reduce's materialization (dedupe by parent id —
+  `_materialized_ancestors` already returns a dict keyed by id).
 
-## Step policies (`@step(...)`) **[needs split]**
+**Implementation notes:**
+- `planning._plan_step` currently loops `scanned_items`; a reduce step
+  instead produces exactly ONE decision. Branch early:
+  `if step.shape == "reduce":` collect
+  `{coord: ref for (coord, dep_step), ref in coord_step_mats.items() if dep_step == dep}`
+  per dep; apply the state semantics above; emit a single `StepDecision`
+  with `coordinate="@all"` and `parent_mats[dep] = {lane: ref}` (note the
+  type widens for reduce decisions — map decisions keep `dep -> ref`).
+- `execution._execute_step`'s `call()`: for reduce decisions build
+  `kwargs[dep] = {lane: _resolve_parent_value(ref, ...) for lane, ref in ...}`
+  (ephemeral parents of a reduce thereby resolve lazily — memo makes this
+  cheap; this is legal, no need to reject utils upstream of a reduce).
+- `ledger` needs no protocol changes — the reduce materialization commits
+  like any other; only the edge loop must handle the nested parent_mats
+  shape (flatten before `_materialized_ancestors`).
+- `_snapshot_source` removal detection skips reduce steps (like skip_cache):
+  `@all` is not a source lane. Add `if step.shape == "reduce": continue`.
+- `describe()`/`definition()` in spec.py: include `"shape": "reduce"` in
+  the step entry when non-map; DagView can render it with a distinct badge
+  (small follow-up, don't block on it).
 
-- [x] Retries — `retries=`, `retry_on=`, `retry_delay=`/`retry_backoff=`; attempts
-      recorded as `step_attempt_failed` events, attempt count on the coordinate
-      status metadata
-- [x] Rate limits — `rate_limit="10/min"`: even pacing shared across a step's
-      workers, retries included
-- [x] Staleness / TTL — `stale_after="24h"`: planning treats expired outputs as
-      cache misses; recompute with different bytes supersedes, identical bytes
-      append a `refreshed` lifecycle row and reset the `refreshed_at` projection.
-- [x] `skip_cache` — inline utils fused into consumers' cache identity; lazy
-      execution memoized per run, lineage skips through to nearest materialized
-      ancestors, blocked/failed propagate with the util's failure surfacing on
-      its consumer. Intended for quick idempotent helpers only (docs say so).
-- [x] ~~Arbitrary step rules~~ — resolved: no plugin surface. Rule of thumb:
-      execution-only concerns are user-wrappable (a step is just a function);
-      anything touching identity/plan/ledger earns a deliberate built-in.
-      Revisit only if a concrete third-party need appears.
+**Tests (new file `tests/test_reduce.py`, fixture from test_index.py):**
+1. 3 files → map step → reduce → assert single `@all` materialization whose
+   value saw all 3 lanes; N lineage edges.
+2. Cache: rerun → reduce reused. Change ONE file → reduce recomputes
+   (lane hash changed). Add a file → recomputes (lane set changed).
+3. Filtered lane: filter step upstream; filtered lane absent from reduce
+   input; un-filtering (content change) recomputes the reduce.
+4. Failed lane → reduce blocked, `blocked_parents` metadata present.
+5. Downstream map step off the reduce works and caches.
+6. `plan()`: fresh state shows reduce as pending; cached state as reuse.
+7. Registration: `shape="reduce"` + `skip_cache=True` raises;
+   `shape="banana"` raises.
 
-## Coordinates, identity, search (settled design, 2026-07)
+──────────────────────────────────────────────────────────────────────
 
-The coordinate conflated three jobs; they now have one home each:
-- **Identity** of work = content-addressed output addresses (unchanged).
-- **Coordinate = lane key**: engine-facing dataflow/incrementality key;
-  unique within a scan (sources disambiguate collisions mechanically,
-  e.g. CsvSource content-suffixes duplicate keys), stable across scans.
-- **Search**: lane keys for source-shaped questions; indexed value fields
-  (`@step(index=[...])` → extracted at commit, `Selection(index={...})`)
-  for content-shaped questions — a label is just data someone chose to
-  index, never identity; metadata filters for diagnostics.
+## 2. TableSource (SQL rows)
 
-- [x] Lane-key contract + CsvSource duplicate handling
-- [x] `index=` extraction + selection by indexed fields
-- [x] Surface indexed fields in the UI (object detail chips, selection
-      builder query box) and in the selection language
+**Goal:** `TableSource(engine_url, table="leads", key="id")` — rows of a
+SQL table as lanes; the "crucially rows in a table" case.
 
-## Data shape: filters, joins, fan-in **[needs split]**
+**Decisions:**
+- Constructor: `TableSource(url, *, table, key, columns=None)`. `key` is a
+  required kwarg exactly like CsvSource (str or list). Payload = row dict.
+- `content_hash = hash_json(row_dict)` (stringify non-JSON scalars:
+  Decimal→str, datetime→isoformat, bytes→hex; write one `_jsonable(row)`
+  helper).
+- **source_id must not leak credentials**: build it from
+  `dialect+host+database+table+key` (e.g. `table:postgresql/mydb/leads#key=id`),
+  never the raw URL.
+- Duplicate keys: same policy as CsvSource — identical (key, content)
+  collapses; different content gets `#hash[:6]` suffix. **Refactor**: pull
+  CsvSource's grouping logic into a module-level
+  `_disambiguate(rows: list[tuple[base_key, content_hash, ref, meta]])`
+  helper and use it from both sources.
+- Scan reads all rows via a fresh SQLAlchemy engine per scan (dispose
+  after). Incremental scans via updated_at column: deferred, note only.
 
-- [x] Filters — a step declines a coordinate by returning `Filtered(reason)`;
-      the verdict is a cached materialization (filtered flag), downstream gets
-      status `filtered`, and content changes re-decide. Note: filtered
-      coordinates drop out of /api/current-outputs (status filter) — revisit
-      whether the UI should show them explicitly.
-- [ ] Fan-in / reduce — one output from all coordinates of an upstream step
-      ("combine the sheets"); input_hash = manifest-level hash of upstream outputs
-- [ ] **Joins** — the big one. Materialize rows from two sources, join into pair
-      coordinates, fan out again for per-pair steps. Implies: multi-source pipelines
-      (today a pipeline has exactly one source), coordinate-*creating* steps, pair
-      coordinate naming (`left|right` — composite-key convention already exists in
-      CsvSource). Do filters and fan-in first; a join is a product + fan-out composed.
+**Tests:** use a temp SQLite file as the "remote" DB (fixture creates a
+table with rows). Cover: scan/coordinates/load; row edit → only that lane
+recomputes end-to-end; duplicate-key disambiguation; credential-free
+source_id (assert password not in id when url contains one).
 
-## Sources
+──────────────────────────────────────────────────────────────────────
 
-- [ ] TableSource — rows of a SQL table (coordinate = primary key); the "crucially
-      rows in a table" case. `updated_at`-based incremental scan as a later optimization.
-- [ ] CPU-bound parallelism — per-step ProcessPoolExecutor option
-      (`@step(executor="process")`). Threads (current) only parallelize I/O-bound
-      work because of the GIL; multiprocessing gives true parallelism for
-      compute-heavy steps. Constraint to design around: process pools pickle the
-      step function and its arguments, so process-executor steps must be
-      module-level functions (no closures) with picklable payloads/params.
+## 3. CPU-bound parallelism — `@step(executor="process")`
 
-## UI / API
+**Decisions:**
+- `StepSpec.executor: str = "thread"` (`thread` | `process`).
+- Registration-time validation for `process`: the fn must be picklable —
+  reject when `"<locals>" in fn.__qualname__` (closures/test-local defs)
+  with a clear message ("process-executor steps must be module-level").
+- **Parent-side orchestration, child runs the bare fn**: in
+  `execution._execute_step`, when `executor == "process"`, build
+  args/kwargs in the parent (so `_resolve_parent_value` / ephemeral
+  resolution and `_build_step_params` stay parent-side; the resulting
+  values must pickle — document this), then submit `step.fn` itself to a
+  `ProcessPoolExecutor`. Retries and the rate limiter stay in the parent:
+  acquire the limiter before each submit; on failure, resubmit per the
+  retry policy. The existing `process()` closure logic can be reshaped so
+  the attempt loop wraps "submit + future.result()" for the process case
+  and the direct call for the thread case.
+- One pool per step execution (same lifecycle as the current
+  ThreadPoolExecutor), `max_workers=workers or step.workers`.
+- `Filtered`/`ProcessResult` returns work unchanged (they pickle).
 
-- [x] Pipeline DAG visibility — describe(spec) renders text/Mermaid pre-run;
-      each run snapshots its definition into the ledger (Run.definition_json)
-      and /api/pipelines serves it; DagView renders the graph (SVG, no deps)
-      on the Pipelines page and on RunDetail with per-step outcome counts
-- [x] Selection language — `Selection.parse("step:extract company:acme live:true")`;
-      reserved prefixes (source: coord: step: version: address: content: live:
-      meta.<key>:) plus open vocabulary mapping to indexed fields; accepted by
-      the API as {"query": "..."} and wired into the SelectionBuilder page
+**Tests:** module-level fn steps in the test file (they must be, that's the
+point). Cover: results correct across the pool; registration rejection of
+a local fn; retries still counted (module-level fn that fails via a
+tempfile-based counter — closures can't cross processes); pickling error
+surfaces as a normal step failure, not a crash.
 
-## Product / positioning
+──────────────────────────────────────────────────────────────────────
 
-- [ ] Pick a real name — brainstorm + PyPI availability check (parked; not the
-      current priority)
-- [ ] Interesting examples: LLM enrichment over a CSV, polite scraper with
-      retries + staleness, sheet-combining (once fan-in exists)
-- [ ] LLM seed prompt for generating examples — a concise API-teaching doc
-      (llms.txt-style: concepts, step contract, cache identity rules, a worked
-      example) so a model can generate correct pipelines on request
-- [ ] README: sharpen the pitch — "dbt-style state for Python tasks; built for
-      non-idempotent steps (LLMs, scraping)"; the generations/lifecycle model is
-      the differentiator
+## 4. Cross-process concurrency safety
 
-## Done recently (context for the above)
+**Problem:** two simultaneous runs (separate processes) can both pass the
+live-materialization existence check and collide on the
+one-live-per-address partial unique index at commit.
 
-- Source protocol (FolderSource, CsvSource), coordinates from anywhere
-- Content-addressed store + generations; append-only lifecycle ledger with
-  enforced immutability
-- Params in cache identity; single `batchbrain.run()` entry point; processor
-  vocabulary retired
+**Decisions:**
+- SQLite hardening in `db.init_db`: enable WAL and busy_timeout via an
+  `sqlalchemy.event.listens_for(engine, "connect")` hook —
+  `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`.
+- `ledger._commit_materialization`: wrap the new-row INSERT/flush in
+  try/except IntegrityError → rollback → re-query the live row at the
+  address → apply the existing bytes-equality rule (identical → return
+  (live, "reused"); different → demote it and retry the insert ONCE; a
+  second failure propagates). Keep it a small loop, not recursion.
+- The run-level `Run` insert and status writes are already per-run-id and
+  cannot collide.
+
+**Tests:** true multi-process tests are flaky; simulate instead — insert a
+conflicting live materialization at the same address from a second session
+between plan and commit (monkeypatch `stage_and_commit` to do the insert
+before returning), then assert the commit resolves per the bytes-equality
+rule in both branches. Assert PRAGMAs are set on a fresh connection.
+
+──────────────────────────────────────────────────────────────────────
+
+## 5. Pairing-rule guard (lifecycle rows enforced mechanically)
+
+**Invariant 8**: every `is_live`/`refreshed_at` flip must ship a
+`materialization_lifecycle` row in the same transaction.
+
+**Decision — enforce at commit, not flush** (the supersede path
+legitimately flushes the demotion before its lifecycle row exists):
+- In models.py, add a `before_flush` session listener that *accumulates*
+  into `session.info`: ids of Materializations whose `is_live` or
+  `refreshed_at` changed, and materialization_ids of new
+  MaterializationLifecycle rows.
+- A `before_commit` listener asserts changed-ids ⊆ lifecycle-ids and
+  raises `ImmutabilityError` naming the offenders; clear `session.info`
+  on commit AND rollback (`after_transaction_end` is simplest).
+- Exemption for tests that legitimately flip `is_live` directly
+  (test_immutability's projection-column test): those tests should now
+  add a lifecycle row or use raw SQL — update them; the guard is the
+  point.
+
+**Tests:** flipping `is_live` without a lifecycle row raises at commit;
+the invalidate/supersede/restore/refresh paths all still pass (they
+already pair correctly); rollback clears the tracking state.
+
+──────────────────────────────────────────────────────────────────────
+
+## 6. Semantic version ordering + range selection
+
+**Decisions (already settled):**
+- Add `packaging` to pyproject dependencies. No validation at
+  registration: parseable versions order, unparseable ones ("read-v1")
+  are opaque labels — equality only, range operations never match them.
+- Selection language: `version:` values beginning with `< <= > >= !=`
+  become a range term (e.g. `version:<2.0`); plain values stay exact
+  match. New `Selection.version_range: Optional[str]` field holding the
+  raw specifier; `Selection.parse` routes accordingly. Use
+  `packaging.specifiers.SpecifierSet` for matching.
+- SQL can't compare versions: apply `code_version` range filtering in the
+  existing Python-side filtering pass of
+  `selection.get_selection_materialization_ids` (where glob/metadata
+  filtering already happens), catching `InvalidVersion` → no match.
+- Frontend: add a version-aware sort comparator in `DataTable.tsx` for
+  columns whose accessorKey is `code_version` (split on dots, numeric
+  where possible, fall back to string).
+
+**Tests:** parse routing (exact vs range); range matching incl. unparseable
+stored versions skipped; end-to-end `invalidate(Selection.parse("version:<2.0"))`
+over mats with versions 1.0.0 / 2.1.0 / "legacy-v1".
+
+──────────────────────────────────────────────────────────────────────
+
+## 7. UI polish cluster (one commit each)
+
+- **API error state everywhere**: add a `fetchJson(url)` helper in
+  `web/src/api.ts` that throws on `!res.ok`/network failure; pages catch
+  and render an "API unreachable: ..." message (Pipelines.tsx already does
+  this — copy its pattern). Today a dead API renders as an empty database.
+- **Filtered lanes in Current Outputs**: `/api/current-outputs` includes
+  status `filtered` rows (the verdict materialization exists and is live —
+  keep the `mat.is_live` check). UI: the existing status column shows a
+  muted "filtered" badge. Rationale: "what is the current state of every
+  lane" should include "correctly excluded".
+- **Reduce badge in DagView** once item 1 lands (`shape: "reduce"` in the
+  definition snapshot → e.g. a doubled border or "reduce" badge).
+
+──────────────────────────────────────────────────────────────────────
+
+## 8. Examples + LLM seed prompt (positioning)
+
+- `examples/llm_enrich.py`: CsvSource over a small checked-in CSV,
+  `screen` (Filtered) → `enrich` (fake-LLM function — deterministic
+  stand-in with a comment showing where a real client call goes;
+  `retries=3, retry_on=..., rate_limit="30/min"`, `index=["company"]`) →
+  reduce summary once item 1 lands. Heavy comments; this is the flagship
+  example.
+- `examples/scraper.py`: FolderSource of URL-list files or CsvSource of
+  URLs; fetch step with `stale_after="24h"`, retries, rate_limit;
+  fake fetcher (no network in examples).
+- `docs/llms.txt`: a compact API-teaching doc for LLMs generating
+  pipelines: concepts in 10 lines, the step contract (payload positional,
+  parents by name, `params` by declaration), cache identity rules
+  (version/code/params/config slots), policies table, a complete worked
+  example, common mistakes (mutating inputs; forgetting version bumps;
+  skip_cache on expensive steps). Source it from README rather than
+  inventing new claims.
+- README pitch paragraph: lead with "dbt-style state for Python tasks,
+  built for non-idempotent steps (LLMs, scraping)"; the
+  generations/lifecycle model is the differentiator.
+
+──────────────────────────────────────────────────────────────────────
+
+## 9. Joins  **[DO NOT BUILD without a design session with the owner]**
+
+Direction (not yet settled enough to build): a join creates pair lanes
+from two parents (`left|right`), which requires coordinate-*creating*
+steps (shape="expand") and multi-root pipelines. The conceptual
+foundation (lane keys vs identity vs search) is settled and reduce (item
+1) builds half the machinery. Open questions needing the owner: pair
+explosion control (predicates before materialization?), expand-step
+manifest caching, multi-source pipeline API. Bring a proposal first.
+
+## 10. Naming  **[parked by owner]**
+
+Brainstorm + PyPI availability check when asked. Not the current priority.
+
+──────────────────────────────────────────────────────────────────────
+
+## Done (compressed changelog — context for the above)
+
+Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·
+content-addressed store + generations (supersede/restore/refresh) ·
+append-only lifecycle ledger with ORM immutability guards · params/code in
+cache identity (`code="auto"|"warn"` drift warnings) · single
+`run()`/`plan()` entry points, no registry, definition snapshots on runs ·
+plan/execute/ledger module split · step policies: retries, rate_limit,
+stale_after, skip_cache (fusion) · filters (`Filtered` verdicts, cached) ·
+`@step(index=[...])` + `Selection(index=...)` + selection language
+(`Selection.parse`, `{"query": ...}` API, UI query box) · DAG rendering
+(describe/Mermaid + DagView on Pipelines/RunDetail with per-step counts) ·
+resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
+rule); plan()-in-UI (server never imports user code — use plan() in
+Python).
