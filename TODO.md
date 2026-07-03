@@ -89,8 +89,8 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 - [x] Pipeline DAG visibility — describe(spec) renders text/Mermaid pre-run;
       each run snapshots its definition into the ledger (Run.definition_json)
-      and /api/pipelines serves it; still open: graphical DAG rendering in the UI
-- [ ] View a run as a DAG — per-step status counts on the graph
+      and /api/pipelines serves it; DagView renders the graph (SVG, no deps)
+      on the Pipelines page and on RunDetail with per-step outcome counts
 - [ ] Selection language — string DSL (`step:count_lines coord:*.txt live:false`)
       parsing to Selection; usable in UI search box and Python
 

@@ -20,6 +20,9 @@ class RunListItem(BaseModel):
 
 class RunDetailOut(RunListItem):
     error_message: Optional[str] = None
+    # DAG snapshot recorded at run start, and per-step outcome counts
+    definition: Optional[Dict[str, Any]] = None
+    by_step: Optional[Dict[str, Dict[str, int]]] = None
 
 
 class RunCoordinateStatusOut(BaseModel):

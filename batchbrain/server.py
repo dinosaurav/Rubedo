@@ -97,6 +97,12 @@ def get_run(run_id: str):
         d["removed_count"] = summary.get("removed", 0)
         d["blocked_count"] = summary.get("blocked", 0)
         d["filtered_count"] = summary.get("filtered", 0)
+        d["by_step"] = summary.get("by_step")
+        if run.definition_json:
+            try:
+                d["definition"] = json.loads(run.definition_json)
+            except Exception:
+                pass
         return d
 
 

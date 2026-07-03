@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchRun, fetchRunCoordinates, fetchRunEvents } from '../api';
 import { DataTable } from '../components/DataTable';
+import DagView from '../components/DagView';
 import type { ColumnDef } from '@tanstack/react-table';
 
 export default function RunDetail() {
@@ -123,6 +124,13 @@ export default function RunDetail() {
           <div className="stat-value" style={{ color: 'var(--status-warning)' }}>{run.removed_count}</div>
         </div>
       </div>
+
+      {run.definition?.steps?.length > 0 && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <div className="stat-label" style={{ marginBottom: '0.5rem' }}>Pipeline DAG (as run)</div>
+          <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} />
+        </div>
+      )}
 
       <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem' }}>
         <button className={`btn ${tab === 'coords' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('coords')}>Coordinates</button>
