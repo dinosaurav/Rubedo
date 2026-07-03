@@ -57,16 +57,23 @@ class StepSpec:
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     index: Tuple[str, ...] = ()  # value fields extracted into the search index
-    shape: str = "map"  # map | reduce
+    shape: str = "map"  # map | reduce | expand
     executor: str = "thread"
+    source: Optional[str] = None  # for multi-source pipelines, which source to consume
 
 
 @dataclass
 class PipelineSpec:
     id: str
     name: str
-    source: Source
+    sources: Dict[str, Source]
     steps: List[StepSpec]
+
+    @property
+    def source(self) -> Source:
+        if len(self.sources) == 1:
+            return next(iter(self.sources.values()))
+        raise ValueError("Pipeline has multiple sources; use sources property instead.")
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -97,6 +104,7 @@ def step(
     index: Optional[List[str]] = None,
     shape: str = "map",
     executor: str = "thread",
+    source: Optional[str] = None,
 ):
     """Declare a step.
 
@@ -144,8 +152,8 @@ def step(
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
-    if shape not in ("map", "reduce"):
-        raise ValueError(f"Step '{name}': shape must be 'map' or 'reduce', got {shape!r}")
+    if shape not in ("map", "reduce", "expand"):
+        raise ValueError(f"Step '{name}': shape must be 'map', 'reduce', or 'expand', got {shape!r}")
     if executor not in ("thread", "process"):
         raise ValueError(f"Step '{name}': executor must be 'thread' or 'process', got {executor!r}")
     if shape == "reduce" and skip_cache:
@@ -204,6 +212,7 @@ def step(
             index=tuple(index or ()),
             shape=shape,
             executor=executor,
+            source=source,
         )
 
     return decorator
@@ -215,13 +224,15 @@ def pipeline(
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
     source: Optional[Source] = None,
+    sources: Optional[Dict[str, Source]] = None,
 ):
-    if (source is None) == (folder is None):
-        raise ValueError("Pass exactly one of source= or folder= (FolderSource sugar)")
-    if source is None:
-        from .sources import FolderSource
-
-        source = FolderSource(folder)
+    if sources is None:
+        if (source is None) == (folder is None):
+            raise ValueError("Pass exactly one of source=, sources=, or folder= (FolderSource sugar)")
+        if source is None:
+            from .sources import FolderSource
+            source = FolderSource(folder)
+        sources = {"default": source}
 
     consumed = {dep for s in (steps or []) for dep in s.depends_on}
     for s in steps or []:
@@ -234,7 +245,7 @@ def pipeline(
     return PipelineSpec(
         id=id or name,
         name=name,
-        source=source,
+        sources=sources,
         steps=steps or [],
     )
 
@@ -272,10 +283,11 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["executor"] = s.executor
         steps.append(entry)
 
+    source_id_val = spec.source.id if len(spec.sources) == 1 else ",".join(f"{k}:{v.id}" for k, v in spec.sources.items())
     return {
         "id": spec.id,
         "name": spec.name,
-        "source_id": spec.source.id,
+        "source_id": source_id_val,
         "steps": steps,
     }
 
@@ -304,7 +316,8 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
     if format != "text":
         raise ValueError(f"Unknown format {format!r}: expected 'text' or 'mermaid'")
 
-    lines = [f"Pipeline '{spec.id}' over {spec.source.id}"]
+    source_desc = spec.source.id if len(spec.sources) == 1 else f"sources {list(spec.sources.keys())}"
+    lines = [f"Pipeline '{spec.id}' over {source_desc}"]
     for s in topo:
         deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
         policies = []

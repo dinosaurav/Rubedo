@@ -30,11 +30,14 @@ def compute_output_address(
     input_hash: str,
     params_hash: str = None,
     code_hash: str = None,
+    coordinate_for_hash: str = None,
 ) -> str:
     """Cache identity: version + data, plus run params for
     steps that consume them and the source hash for steps with code='auto'.
     Optional segments are labeled so their absence/presence can't collide."""
     combined = f"{step}:{code_version}:{input_hash}"
+    if coordinate_for_hash is not None:
+        combined += f":coord:{coordinate_for_hash}"
     if params_hash is not None:
         combined += f":params:{params_hash}"
     if code_hash is not None:

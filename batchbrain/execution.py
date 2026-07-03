@@ -76,26 +76,27 @@ class ExecutionOutcome:
     attempt_errors: List[str] = field(default_factory=list)
 
 
-def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _RunMemo):
+def _resolve_parent_value(ref, sources: Dict[str, Source], params: Optional[dict], memo: _RunMemo):
     if isinstance(ref, EphemeralRef):
-        return _compute_ephemeral(ref, source, params, memo)
+        return _compute_ephemeral(ref, sources, params, memo)
     return read_materialization_output(ref)
 
 
 def _compute_ephemeral(
-    ref: EphemeralRef, source: Source, params: Optional[dict], memo: _RunMemo
+    ref: EphemeralRef, sources: Dict[str, Source], params: Optional[dict], memo: _RunMemo
 ):
     """Lazily compute a skip_cache step's value, at most once per run."""
 
     def produce():
         step = ref.step
         if not step.depends_on:
-            args = [source.load(ref.item)]
+            step_source_key = step.source or "default"
+            args = [sources[step_source_key].load(ref.item)]
             kwargs = {}
         else:
             args = []
             kwargs = {
-                dep: _resolve_parent_value(ref.parent_refs[dep], source, params, memo)
+                dep: _resolve_parent_value(ref.parent_refs[dep], sources, params, memo)
                 for dep in step.depends_on
             }
         if _step_accepts_params(step):
@@ -129,7 +130,7 @@ def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
 def _execute_step(
     step: StepSpec,
     decisions: List[StepDecision],
-    source: Source,
+    sources: Dict[str, Source],
     params: Optional[dict],
     accepts_params: bool,
     workers: Optional[int],
@@ -147,14 +148,15 @@ def _execute_step(
         # get parent outputs by parameter name. Either kind may declare
         # `params`.
         if not step.depends_on:
-            args = [source.load(decision.item)]
+            step_source_key = step.source or "default"
+            args = [sources[step_source_key].load(decision.item)]
             kwargs = {}
-        elif step.shape == "reduce":
+        elif step.shape in ("reduce", "expand"):
             args = []
             kwargs = {
                 dep: {
                     lane: _resolve_parent_value(
-                        ref, source, params, memo
+                        ref, sources, params, memo
                     )
                     for lane, ref in decision.parent_mats[dep].items()
                 }
@@ -164,7 +166,7 @@ def _execute_step(
             args = []
             kwargs = {
                 dep: _resolve_parent_value(
-                    decision.parent_mats[dep], source, params, memo
+                    decision.parent_mats[dep], sources, params, memo
                 )
                 for dep in step.depends_on
             }
@@ -172,8 +174,13 @@ def _execute_step(
             kwargs["params"] = _build_step_params(step, params)
             
         if pool is not None:
-            return pool.submit(step.fn, *args, **kwargs).result()
-        return step.fn(*args, **kwargs)
+            result = pool.submit(step.fn, *args, **kwargs).result()
+        else:
+            result = step.fn(*args, **kwargs)
+        
+        if step.shape == "expand":
+            return list(result)
+        return result
 
     def process(decision: StepDecision, pool: Optional[concurrent.futures.ProcessPoolExecutor] = None) -> ExecutionOutcome:
         attempt_errors: List[str] = []

@@ -435,6 +435,8 @@ def _commit_execution_result(
         json.dumps({"attempts": outcome.attempts}) if outcome.attempts > 1 else None
     )
 
+    from .hashing import compute_output_address
+
     with get_session() as session:
         for i, attempt_trace in enumerate(outcome.attempt_errors, start=1):
             _emit(
@@ -467,13 +469,80 @@ def _commit_execution_result(
             # committed like any output (a marker object with filtered=True)
             # so re-runs reuse the verdict instead of re-executing the step.
             is_filtered = isinstance(result, Filtered)
-            if is_filtered:
-                metadata_json = json.dumps({"reason": result.reason})
-                result = {"__filtered__": True, "reason": result.reason}
+            
+            if step.shape == "expand":
+                # result is a list of (lane_key, payload)
+                produced_lanes = []
+                for lane_key, payload in result:
+                    produced_lanes.append(lane_key)
+                    lane_address = compute_output_address(
+                        step.name, step.version, decision.input_hash,
+                        params_hash=decision.output_address.split(":params:")[1].split(":")[0] if ":params:" in decision.output_address else None,
+                        code_hash=step.code_hash if step.code_mode == "auto" else None,
+                        coordinate_for_hash=lane_key
+                    )
+                    
+                    if isinstance(payload, ProcessResult) and payload.metadata:
+                        lane_meta = json.dumps(payload.metadata)
+                        val = payload.value
+                    else:
+                        lane_meta = None
+                        val = payload
+                        
+                    final_path, output_content_hash, content_type = stage_and_commit(
+                        ctx.run_id, lane_key, val
+                    )
+                    mat, mat_action = _commit_materialization(
+                        session, pipeline_id=ctx.pipeline_id, step=step,
+                        input_hash=decision.input_hash, output_address=lane_address,
+                        output_content_hash=output_content_hash, content_type=content_type,
+                        output_path=final_path, metadata_json=lane_meta,
+                        run_id=ctx.run_id, refresh=decision.stale, filtered=False
+                    )
+                    if mat_action in ("created", "superseded"):
+                        _extract_index_entries(session, mat.id, step, payload)
+                        
+                    flat_parents = {
+                        f"{dep}:{lane}": ref 
+                        for dep, lanes in decision.parent_mats.items() 
+                        for lane, ref in lanes.items()
+                    }
+                    for p_mat in _materialized_ancestors(flat_parents).values():
+                        edge_exists = (
+                            session.query(MaterializationEdge)
+                            .filter_by(parent_id=p_mat.id, child_id=mat.id)
+                            .first()
+                        )
+                        if not edge_exists:
+                            session.add(
+                                MaterializationEdge(parent_id=p_mat.id, child_id=mat.id)
+                            )
+                            
+                    status = "created" if mat_action == "created" else "reused"
+                    session.add(
+                        _new_status(
+                            ctx, step.name, lane_key, status, # approximation for UI
+                            input_hash=decision.input_hash, output_address=lane_address,
+                            materialization_id=mat.id, metadata_json=attempts_meta,
+                        )
+                    )
+                    ctx.count(step.name, status)
+                    ctx.coord_step_mats[(lane_key, step.name)] = MatRef(
+                        mat.id, mat.output_address, mat.output_content_hash,
+                        mat.content_type, filtered=False
+                    )
+                
+                # Now commit the manifest itself
+                metadata_json = json.dumps({"produced_lanes": produced_lanes})
+                result = {"__expand_manifest__": True}
             else:
-                metadata_json = None
-                if isinstance(result, ProcessResult) and result.metadata:
-                    metadata_json = json.dumps(result.metadata)
+                if is_filtered:
+                    metadata_json = json.dumps({"reason": result.reason})
+                    result = {"__filtered__": True, "reason": result.reason}
+                else:
+                    metadata_json = None
+                    if isinstance(result, ProcessResult) and result.metadata:
+                        metadata_json = json.dumps(result.metadata)
 
             final_path, output_content_hash, content_type = stage_and_commit(
                 ctx.run_id, decision.coordinate, result
@@ -502,7 +571,7 @@ def _commit_execution_result(
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
             # already has its edges
-            if step.shape == "reduce":
+            if step.shape in ("reduce", "expand"):
                 flat_parents = {
                     f"{dep}:{lane}": ref 
                     for dep, lanes in decision.parent_mats.items() 
@@ -550,13 +619,14 @@ def _commit_execution_result(
                 data={"materialization_id": mat.id},
             )
             ctx.count(step.name, status)
-            ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
-                mat.id,
-                mat.output_address,
-                mat.output_content_hash,
-                mat.content_type,
-                filtered=is_filtered,
-            )
+            if step.shape != "expand":
+                ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
+                    mat.id,
+                    mat.output_address,
+                    mat.output_content_hash,
+                    mat.content_type,
+                    filtered=is_filtered,
+                )
         except Exception as e:
             session.rollback()
             _record_failure(
@@ -581,14 +651,18 @@ def _snapshot_source(
     ctx: _RunContext,
     scanned_items: List[SourceItem],
     topo_steps: List[StepSpec],
+    source_id: str,
 ) -> int:
-    """Record the manifest and mark removed coordinates. Returns removed count."""
+    """Record what lanes exist before we start planning.
+    
+    Returns the number of coordinates that were removed since the last run.
+    """
     now_iso = utcnow_iso()
     manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
 
     prev_manifest = (
         session.query(Manifest)
-        .filter(Manifest.source_id == ctx.source_id)
+        .filter(Manifest.source_id == source_id)
         .order_by(Manifest.created_at.desc())
         .first()
     )
@@ -596,7 +670,7 @@ def _snapshot_source(
     manifest = Manifest(
         id=manifest_id,
         run_id=ctx.run_id,
-        source_id=ctx.source_id,
+        source_id=source_id,
         parent_manifest_id=prev_manifest.id if prev_manifest else None,
         created_at=now_iso,
     )
