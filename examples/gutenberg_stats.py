@@ -1,0 +1,113 @@
+"""Readability stats for public-domain books — real download + CPU parallelism.
+
+    books.csv ─▶ fetch ─▶ clean ─▶ analyze ─▶ report (reduce)
+                 (HTTP)   (skip_   (process    (rank)
+                          cache)    executor)
+
+Real API: Project Gutenberg (public, no key). Then two Batchit features worth
+showing together:
+
+  - `clean` is skip_cache=True: a quick, idempotent helper that strips the
+    Gutenberg boilerplate. It is never materialized — its identity fuses into
+    analyze's cache key and it runs in-memory only when analyze actually runs.
+  - `analyze` is executor="process": the token crunching is CPU-bound, so it
+    runs in a process pool for real parallelism (module-level function, as the
+    process executor requires).
+
+Run it:
+
+    uv run python examples/gutenberg_stats.py
+
+Downloads are cached as materializations, so a re-run re-analyzes nothing.
+"""
+
+import os
+import re
+import urllib.request
+
+from batchbrain import CsvSource, describe, pipeline, run, step
+
+GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
+
+
+@step(name="fetch", version="1", retries=3, retry_delay=2, rate_limit="10/min")
+def fetch(row: dict) -> dict:
+    """Download one book. row is {id, title} from books.csv."""
+    url = GUTENBERG.format(id=row["id"])
+    req = urllib.request.Request(url, headers={"User-Agent": "batchit-example"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        text = r.read().decode("utf-8", errors="replace")
+    return {"title": row["title"], "text": text}
+
+
+@step(name="clean", version="1", depends_on=["fetch"], skip_cache=True)
+def clean(fetch: dict) -> dict:
+    """Strip the *** START/END *** Gutenberg boilerplate. Quick, pure, inline."""
+    text = fetch["text"]
+    start = re.search(r"\*\*\* START OF.*?\*\*\*", text, re.S)
+    end = re.search(r"\*\*\* END OF.*?\*\*\*", text, re.S)
+    body = text[start.end() : end.start()] if start and end else text
+    return {"title": fetch["title"], "text": body}
+
+
+# A process-executor step is pickled by its module path, so it must be a plain
+# module-level function. Note we build the step with the call form step(...)(fn)
+# rather than the @step decorator: @step would rebind the name `analyze_book` to
+# a StepSpec, and the worker process could no longer unpickle the real function.
+def analyze_book(clean: dict) -> dict:
+    """CPU-bound token crunching, run in a worker process."""
+    words = re.findall(r"[a-zA-Z']+", clean["text"].lower())
+    total = len(words)
+    unique = len(set(words))
+    longest = max(words, key=len) if words else ""
+    avg_len = round(sum(len(w) for w in words) / total, 2) if total else 0
+    return {
+        "title": clean["title"],
+        "words": total,
+        "unique": unique,
+        "lexical_diversity": round(unique / total, 3) if total else 0,
+        "avg_word_len": avg_len,
+        "longest_word": longest,
+    }
+
+
+analyze = step(
+    name="analyze",
+    version="1",
+    depends_on=["clean"],
+    executor="process",
+    index=["longest_word"],
+)(analyze_book)
+
+
+@step(name="report", version="1", depends_on=["analyze"], shape="reduce")
+def report(analyze: dict) -> str:
+    """Rank books by lexical diversity."""
+    rows = sorted(analyze.values(), key=lambda s: s["lexical_diversity"], reverse=True)
+    lines = [
+        f"{s['lexical_diversity']:.3f}  {s['title']:<38} "
+        f"{s['words']:>7} words, {s['unique']:>6} unique"
+        for s in rows
+    ]
+    return "Books by lexical diversity (richest first):\n" + "\n".join(lines)
+
+
+def make_pipeline():
+    return pipeline(
+        id="gutenberg-stats",
+        name="Gutenberg Stats",
+        source=CsvSource(os.path.join(os.path.dirname(__file__), "books.csv"), key="id"),
+        steps=[fetch, clean, analyze, report],
+    )
+
+
+def main():
+    pipe = make_pipeline()
+    print(describe(pipe))
+    print()
+    summary = run(pipe)
+    print(f"created={summary.created_count} reused={summary.reused_count}")
+
+
+if __name__ == "__main__":
+    main()
