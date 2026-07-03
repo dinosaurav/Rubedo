@@ -142,7 +142,7 @@ def _execute_step(
     """
     limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
 
-    def call(decision: StepDecision):
+    def call(decision: StepDecision, pool: Optional[concurrent.futures.ProcessPoolExecutor] = None):
         # Root steps get the source payload positionally; dependent steps
         # get parent outputs by parameter name. Either kind may declare
         # `params`.
@@ -170,16 +170,19 @@ def _execute_step(
             }
         if accepts_params:
             kwargs["params"] = _build_step_params(step, params)
+            
+        if pool is not None:
+            return pool.submit(step.fn, *args, **kwargs).result()
         return step.fn(*args, **kwargs)
 
-    def process(decision: StepDecision) -> ExecutionOutcome:
+    def process(decision: StepDecision, pool: Optional[concurrent.futures.ProcessPoolExecutor] = None) -> ExecutionOutcome:
         attempt_errors: List[str] = []
         delay = step.retry_delay
         for attempt in range(1, step.retries + 2):
             if limiter:
                 limiter.acquire()
             try:
-                result = call(decision)
+                result = call(decision, pool)
                 return ExecutionOutcome(
                     decision,
                     True,
@@ -203,9 +206,18 @@ def _execute_step(
                     time.sleep(delay)
                 delay *= step.retry_backoff
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=workers or step.workers
-    ) as executor:
-        futures = [executor.submit(process, d) for d in decisions]
-        for future in concurrent.futures.as_completed(futures):
-            yield future.result()
+    workers_count = workers or step.workers
+    process_pool = None
+    if getattr(step, "executor", "thread") == "process":
+        process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=workers_count)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers_count
+        ) as executor:
+            futures = [executor.submit(process, d, process_pool) for d in decisions]
+            for future in concurrent.futures.as_completed(futures):
+                yield future.result()
+    finally:
+        if process_pool is not None:
+            process_pool.shutdown()

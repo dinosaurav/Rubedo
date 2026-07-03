@@ -58,6 +58,7 @@ class StepSpec:
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     index: Tuple[str, ...] = ()  # value fields extracted into the search index
     shape: str = "map"  # map | reduce
+    executor: str = "thread"
 
 
 @dataclass
@@ -95,6 +96,7 @@ def step(
     skip_cache: bool = False,
     index: Optional[List[str]] = None,
     shape: str = "map",
+    executor: str = "thread",
 ):
     """Declare a step.
 
@@ -144,6 +146,8 @@ def step(
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
     if shape not in ("map", "reduce"):
         raise ValueError(f"Step '{name}': shape must be 'map' or 'reduce', got {shape!r}")
+    if executor not in ("thread", "process"):
+        raise ValueError(f"Step '{name}': executor must be 'thread' or 'process', got {executor!r}")
     if shape == "reduce" and skip_cache:
         raise ValueError(f"Step '{name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
     if shape == "reduce" and not depends_on:
@@ -171,6 +175,8 @@ def step(
     parsed_stale = parse_duration(stale_after) if stale_after else None
 
     def decorator(fn: Callable):
+        if executor == "process" and "<locals>" in fn.__qualname__:
+            raise ValueError(f"Step '{name}': process-executor steps must be module-level functions")
 
         code_hash = _hash_source(fn)
         if code == "auto" and code_hash is None:
@@ -197,6 +203,7 @@ def step(
             skip_cache=skip_cache,
             index=tuple(index or ()),
             shape=shape,
+            executor=executor,
         )
 
     return decorator
@@ -261,6 +268,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["params_schema"] = s.params_model.model_json_schema()
         if s.shape != "map":
             entry["shape"] = s.shape
+        if s.executor != "thread":
+            entry["executor"] = s.executor
         steps.append(entry)
 
     return {
