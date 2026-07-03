@@ -158,20 +158,15 @@ def _plan_step(
     accepts_params: bool,
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only."""
-    if step.shape in ("reduce", "expand"):
+    if step.shape == "reduce":
         parent_mats: Dict[str, Dict[str, Any]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
         filtered_parents: List[str] = []
         pending = False
 
-        coords = set()
-        for dep in step.depends_on:
-            for (c, d) in coord_step_mats.keys():
-                if d == dep:
-                    coords.add(c)
-
-        for coord in coords:
+        for it in scanned_items:
+            coord = it.coordinate
             for dep in step.depends_on:
                 ref = coord_step_mats.get((coord, dep))
                 if ref == "blocked":
@@ -223,112 +218,39 @@ def _plan_step(
             freshness = existing_mat.refreshed_at or existing_mat.created_at
             expired = iso_age_seconds(freshness) > step.stale_after
 
-        if step.shape == "reduce":
-            if existing_mat and not force and not expired:
-                return [
-                    StepDecision(
-                        coordinate="@all",
-                        action="reuse",
-                        input_hash=input_hash,
-                        output_address=output_address,
-                        existing=MatRef(
-                            existing_mat.id,
-                            existing_mat.output_address,
-                            existing_mat.output_content_hash,
-                            existing_mat.content_type,
-                            filtered=existing_mat.filtered,
-                        ),
-                        code_drift=(
-                            step.code_mode == "warn"
-                            and step.code_hash is not None
-                            and existing_mat.code_hash is not None
-                            and step.code_hash != existing_mat.code_hash
-                        ),
-                    )
-                ]
-            else:
-                return [
-                    StepDecision(
-                        coordinate="@all",
-                        action="execute",
-                        input_hash=input_hash,
-                        output_address=output_address,
-                        parent_mats=parent_mats,
-                        stale=expired,
-                    )
-                ]
+        if existing_mat and not force and not expired:
+            return [
+                StepDecision(
+                    coordinate="@all",
+                    action="reuse",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    existing=MatRef(
+                        existing_mat.id,
+                        existing_mat.output_address,
+                        existing_mat.output_content_hash,
+                        existing_mat.content_type,
+                        filtered=existing_mat.filtered,
+                    ),
+                    code_drift=(
+                        step.code_mode == "warn"
+                        and step.code_hash is not None
+                        and existing_mat.code_hash is not None
+                        and step.code_hash != existing_mat.code_hash
+                    ),
+                )
+            ]
         else:
-            # expand
-            manifest_address = compute_output_address(
-                step.name, step.version, input_hash, 
-                params_hash=params_hash if accepts_params else None, 
-                code_hash=step.code_hash if step.code_mode == "auto" else None, 
-                coordinate_for_hash="@expand_manifest"
-            )
-            existing_manifest_mat = (
-                session.query(Materialization)
-                .filter_by(output_address=manifest_address, is_live=True)
-                .first()
-            )
-            expired = False
-            if existing_manifest_mat and step.stale_after is not None:
-                freshness = existing_manifest_mat.refreshed_at or existing_manifest_mat.created_at
-                expired = iso_age_seconds(freshness) > step.stale_after
-
-            if existing_manifest_mat and not force and not expired:
-                import json
-                try:
-                    produced_lanes = json.loads(existing_manifest_mat.metadata_json)["produced_lanes"]
-                except Exception:
-                    produced_lanes = []
-                
-                decisions = []
-                for lane in produced_lanes:
-                    lane_address = compute_output_address(
-                        step.name, step.version, input_hash, 
-                        params_hash=params_hash if accepts_params else None, 
-                        code_hash=step.code_hash if step.code_mode == "auto" else None, 
-                        coordinate_for_hash=lane
-                    )
-                    existing_lane_mat = (
-                        session.query(Materialization)
-                        .filter_by(output_address=lane_address, is_live=True)
-                        .first()
-                    )
-                    if existing_lane_mat:
-                        decisions.append(
-                            StepDecision(
-                                coordinate=lane,
-                                action="reuse",
-                                input_hash=input_hash,
-                                output_address=lane_address,
-                                existing=MatRef(
-                                    existing_lane_mat.id,
-                                    existing_lane_mat.output_address,
-                                    existing_lane_mat.output_content_hash,
-                                    existing_lane_mat.content_type,
-                                    filtered=existing_lane_mat.filtered,
-                                ),
-                                code_drift=(
-                                    step.code_mode == "warn"
-                                    and step.code_hash is not None
-                                    and existing_lane_mat.code_hash is not None
-                                    and step.code_hash != existing_lane_mat.code_hash
-                                ),
-                            )
-                        )
-                return decisions
-            else:
-                return [
-                    StepDecision(
-                        coordinate="@expand_manifest",
-                        action="execute",
-                        input_hash=input_hash,
-                        output_address=manifest_address,
-                        parent_mats=parent_mats,
-                        stale=expired,
-                    )
-                ]
+            return [
+                StepDecision(
+                    coordinate="@all",
+                    action="execute",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    parent_mats=parent_mats,
+                    stale=expired,
+                )
+            ]
 
     decisions = []
     

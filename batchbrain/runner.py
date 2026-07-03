@@ -36,22 +36,16 @@ from .sources import Source, coerce_source
 from .util import utcnow_iso
 
 
-def _resolve_invocation(pipeline: PipelineSpec, sources, params):
+def _resolve_invocation(pipeline: PipelineSpec, source, params):
     """Shared by run() and plan(): source coercion and param validation."""
-    if sources is None:
-        sources = pipeline.sources
-    else:
-        if not isinstance(sources, dict):
-            sources = {"default": coerce_source(sources)}
-        else:
-            sources = {k: coerce_source(v) for k, v in sources.items()}
+    source = pipeline.source if source is None else coerce_source(source)
 
     first = pipeline.steps[0] if pipeline.steps else None
     if first and first.params_model:
         params = first.params_model.model_validate(params or {}).model_dump(
             mode="json"
         )
-    return pipeline, sources, params
+    return pipeline, source, params
 
 
 @dataclass
@@ -85,7 +79,7 @@ class RunPlan:
 
 def plan(
     pipeline: PipelineSpec,
-    sources: Optional[Dict[str, Source] | Source | str] = None,
+    source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
     force: bool = False,
@@ -99,54 +93,44 @@ def plan(
     """
     from .planning import _code_drift_message
 
-    pipeline, sources, params = _resolve_invocation(pipeline, sources, params)
+    pipeline, source, params = _resolve_invocation(pipeline, source, params)
     topo_steps = topological_sort(pipeline)
-    
-    scanned_items = {}
-    for src_name, src in sources.items():
-        scanned_items[src_name] = src.scan()
-        
+    scanned_items = source.scan()
     params_hash = hash_json(params or {})
 
     items: List[PlannedCoordinate] = []
     plan_warnings: List[str] = []
     coord_step_mats: Dict[tuple, Any] = {}
 
-    source_id_val = ",".join(f"{k}:{v.id}" for k, v in sources.items()) if len(sources) > 1 else next(iter(sources.values())).id
-
     with get_session() as session:
-        for src_name, src in sources.items():
-            prev_manifest = (
-                session.query(Manifest)
-                .filter(Manifest.source_id == src.id)
-                .order_by(Manifest.created_at.desc())
-                .first()
+        prev_manifest = (
+            session.query(Manifest)
+            .filter(Manifest.source_id == source.id)
+            .order_by(Manifest.created_at.desc())
+            .first()
+        )
+        if prev_manifest:
+            scanned_coordinates = {it.coordinate for it in scanned_items}
+            prev_entries = (
+                session.query(ManifestEntry)
+                .filter_by(manifest_id=prev_manifest.id)
+                .all()
             )
-            if prev_manifest:
-                scanned_coordinates = {it.coordinate for it in scanned_items[src_name]}
-                prev_entries = (
-                    session.query(ManifestEntry)
-                    .filter_by(manifest_id=prev_manifest.id)
-                    .all()
-                )
-                for pe in prev_entries:
-                    if pe.coordinate not in scanned_coordinates:
-                        for step in topo_steps:
-                            if step.skip_cache:
-                                continue
-                            if (step.source and step.source != src_name) or (not step.source and src_name != "default" and len(sources) > 1):
-                                continue # This step is not bound to this source
-                            items.append(
-                                PlannedCoordinate(pe.coordinate, step.name, "removed")
-                            )
+            for pe in prev_entries:
+                if pe.coordinate not in scanned_coordinates:
+                    for step in topo_steps:
+                        if step.skip_cache:
+                            continue
+                        items.append(
+                            PlannedCoordinate(pe.coordinate, step.name, "removed")
+                        )
 
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
-            step_source_key = step.source or "default"
             decisions = _plan_step(
                 session,
                 step,
-                scanned_items.get(step_source_key, []),
+                scanned_items,
                 coord_step_mats,
                 params_hash,
                 force,
@@ -175,7 +159,7 @@ def plan(
 
     return RunPlan(
         pipeline_id=pipeline.id,
-        source_id=source_id_val,
+        source_id=source.id,
         items=items,
         counts=counts,
         warnings=plan_warnings,
@@ -184,7 +168,7 @@ def plan(
 
 def run(
     pipeline: PipelineSpec,
-    sources: Optional[Dict[str, Source] | Source | str] = None,
+    source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
     workers: Optional[int] = None,
@@ -195,28 +179,26 @@ def run(
     Params are validated against the first step's params_model whenever
     one is declared.
     """
-    pipeline, sources, params = _resolve_invocation(pipeline, sources, params)
+    pipeline, source, params = _resolve_invocation(pipeline, source, params)
     return run_pipeline(
-        pipeline=pipeline, sources=sources, params=params, workers=workers, force=force
+        pipeline=pipeline, source=source, params=params, workers=workers, force=force
     )
 
 
 def run_pipeline(
     pipeline: PipelineSpec,
-    sources: Optional[Dict[str, Source] | Source | str] = None,
+    source: Optional[Source | str] = None,
     workers: Optional[int] = None,
     force: bool = False,
     params: Optional[dict] = None,
 ) -> RunSummary:
-    pipeline, sources, params = _resolve_invocation(pipeline, sources, params)
+    source = pipeline.source if source is None else coerce_source(source)
 
     topo_steps = topological_sort(pipeline)
-    source_id_val = ",".join(f"{k}:{v.id}" for k, v in sources.items()) if len(sources) > 1 else next(iter(sources.values())).id
-
     ctx = _RunContext(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         pipeline_id=pipeline.id,
-        source_id=source_id_val,
+        source_id=source.id,
         totals={"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0},
         by_step={
             s.name: {"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0}
@@ -249,14 +231,9 @@ def run_pipeline(
         session.commit()
 
         try:
-            scanned_items = {}
-            for src_name, src in sources.items():
-                scanned_items[src_name] = src.scan()
+            scanned_items = source.scan()
 
-            removed_count = 0
-            for src_name, items in scanned_items.items():
-                removed_count += _snapshot_source(session, ctx, items, topo_steps, sources[src_name].id)
-            
+            removed_count = _snapshot_source(session, ctx, scanned_items, topo_steps)
             ctx.totals["removed"] = removed_count
             for counts in ctx.by_step.values():
                 counts["removed"] = removed_count
@@ -267,11 +244,10 @@ def run_pipeline(
             for step in topo_steps:
                 accepts_params = _step_accepts_params(step)
 
-                step_source_key = step.source or "default"
                 decisions = _plan_step(
                     session,
                     step,
-                    scanned_items.get(step_source_key, []),
+                    scanned_items,
                     ctx.coord_step_mats,
                     params_hash,
                     force,
@@ -282,7 +258,7 @@ def run_pipeline(
 
                 to_execute = [d for d in decisions if d.action == "execute"]
                 for outcome in _execute_step(
-                    step, to_execute, sources, params, accepts_params, workers, memo
+                    step, to_execute, source, params, accepts_params, workers, memo
                 ):
                     _commit_execution_result(ctx, step, outcome)
 
