@@ -55,6 +55,16 @@ def init_db(db_path: str = None):
     else:
         engine_url = f"sqlite:///{db_path}"
     engine = create_engine(engine_url)
+    
+    if engine_url.startswith("sqlite"):
+        from sqlalchemy import event
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+            
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

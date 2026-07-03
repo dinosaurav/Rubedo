@@ -301,8 +301,47 @@ def _commit_materialization(
         filtered=filtered,
         is_live=True,
     )
-    session.add(mat)
-    session.flush()
+
+    from sqlalchemy.exc import IntegrityError
+    try:
+        with session.begin_nested():
+            session.add(mat)
+            session.flush()
+    except IntegrityError:
+        live = (
+            session.query(Materialization)
+            .filter_by(output_address=output_address, is_live=True)
+            .first()
+        )
+        if live:
+            if live.output_content_hash == output_content_hash:
+                return live, "reused"
+            
+            live.is_live = False
+            session.flush()
+            superseded = live
+            
+            mat2 = Materialization(
+                pipeline_id=pipeline_id,
+                step_name=step.name,
+                code_version=step.version,
+                code_hash=step.code_hash,
+                input_hash=input_hash,
+                output_address=output_address,
+                output_content_hash=output_content_hash,
+                content_type=content_type,
+                output_path=output_path,
+                metadata_json=metadata_json,
+                created_at=utcnow_iso(),
+                created_by_run_id=run_id,
+                filtered=filtered,
+                is_live=True,
+            )
+            session.add(mat2)
+            session.flush()
+            mat = mat2
+        else:
+            raise
 
     if superseded is not None:
         session.add(
@@ -483,7 +522,12 @@ def _commit_execution_result(
                         MaterializationEdge(parent_id=p_mat.id, child_id=mat.id)
                     )
 
-            status = "filtered" if is_filtered else "created"
+            if is_filtered:
+                status = "filtered"
+            elif mat_action == "reused":
+                status = "reused"
+            else:
+                status = "created"
             session.add(
                 _new_status(
                     ctx,
