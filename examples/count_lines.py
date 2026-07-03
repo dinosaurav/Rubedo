@@ -45,11 +45,15 @@ def count_lines(read_lines: dict) -> ProcessResult:
     )
 
 
+@step(name="total_lines", version="total-v1", depends_on=["count_lines"], shape="reduce")
+def total_lines(count_lines: dict):
+    return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
+
 count_lines_pipeline = pipeline(
     id="count-lines",
     name="Count Lines DAG",
     folder="examples/input",
-    steps=[read_lines, count_lines],
+    steps=[read_lines, count_lines, total_lines],
 )
 
 if __name__ == "__main__":

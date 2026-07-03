@@ -149,6 +149,17 @@ def _execute_step(
         if not step.depends_on:
             args = [source.load(decision.item)]
             kwargs = {}
+        elif step.shape == "reduce":
+            args = []
+            kwargs = {
+                dep: {
+                    lane: _resolve_parent_value(
+                        ref, source, params, memo
+                    )
+                    for lane, ref in decision.parent_mats[dep].items()
+                }
+                for dep in step.depends_on
+            }
         else:
             args = []
             kwargs = {

@@ -463,7 +463,16 @@ def _commit_execution_result(
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
             # already has its edges
-            for p_mat in _materialized_ancestors(decision.parent_mats).values():
+            if step.shape == "reduce":
+                flat_parents = {
+                    f"{dep}:{lane}": ref 
+                    for dep, lanes in decision.parent_mats.items() 
+                    for lane, ref in lanes.items()
+                }
+            else:
+                flat_parents = decision.parent_mats
+                
+            for p_mat in _materialized_ancestors(flat_parents).values():
                 edge_exists = (
                     session.query(MaterializationEdge)
                     .filter_by(parent_id=p_mat.id, child_id=mat.id)
@@ -577,7 +586,7 @@ def _snapshot_source(
         for pe in prev_entries:
             if pe.coordinate not in scanned_coordinates:
                 for step in topo_steps:
-                    if step.skip_cache:
+                    if step.skip_cache or step.shape == "reduce":
                         continue
                     session.add(
                         _new_status(

@@ -61,7 +61,7 @@ class StepDecision:
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
     existing: Optional[MatRef] = None
-    parent_mats: Dict[str, MatRef] = field(default_factory=dict)
+    parent_mats: Dict[str, Any] = field(default_factory=dict)
     failed_parents: List[str] = field(default_factory=list)
     blocked_parents: List[str] = field(default_factory=list)
     filtered_parents: List[str] = field(default_factory=list)
@@ -158,10 +158,121 @@ def _plan_step(
     accepts_params: bool,
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only."""
-    decisions = []
-    for it in scanned_items:
-        coord = it.coordinate
+    if step.shape == "reduce":
+        parent_mats: Dict[str, Dict[str, Any]] = {dep: {} for dep in step.depends_on}
+        failed_parents: List[str] = []
+        blocked_parents: List[str] = []
+        filtered_parents: List[str] = []
+        pending = False
 
+        for it in scanned_items:
+            coord = it.coordinate
+            for dep in step.depends_on:
+                ref = coord_step_mats.get((coord, dep))
+                if ref == "blocked":
+                    blocked_parents.append(f"{dep}:{coord}")
+                elif ref == "failed":
+                    failed_parents.append(f"{dep}:{coord}")
+                elif ref == "pending":
+                    pending = True
+                elif ref == "filtered" or getattr(ref, "filtered", False):
+                    pass
+                elif ref is not None:
+                    parent_mats[dep][coord] = ref
+
+        if failed_parents or blocked_parents:
+            return [
+                StepDecision(
+                    coordinate="@all",
+                    action="blocked",
+                    failed_parents=failed_parents,
+                    blocked_parents=blocked_parents,
+                )
+            ]
+        if pending:
+            return [StepDecision(coordinate="@all", action="pending")]
+            
+        hash_data = {}
+        for dep, coords_dict in sorted(parent_mats.items()):
+            hash_data[dep] = {
+                c: coords_dict[c].output_content_hash for c in sorted(coords_dict.keys())
+            }
+        input_hash = hash_json(hash_data)
+        
+        output_address = compute_output_address(
+            step.name,
+            step.version,
+            input_hash,
+            params_hash=params_hash if accepts_params else None,
+            code_hash=step.code_hash if step.code_mode == "auto" else None,
+        )
+
+        existing_mat = (
+            session.query(Materialization)
+            .filter_by(output_address=output_address, is_live=True)
+            .first()
+        )
+
+        expired = False
+        if existing_mat and step.stale_after is not None:
+            freshness = existing_mat.refreshed_at or existing_mat.created_at
+            expired = iso_age_seconds(freshness) > step.stale_after
+
+        if existing_mat and not force and not expired:
+            return [
+                StepDecision(
+                    coordinate="@all",
+                    action="reuse",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    existing=MatRef(
+                        existing_mat.id,
+                        existing_mat.output_address,
+                        existing_mat.output_content_hash,
+                        existing_mat.content_type,
+                        filtered=existing_mat.filtered,
+                    ),
+                    code_drift=(
+                        step.code_mode == "warn"
+                        and step.code_hash is not None
+                        and existing_mat.code_hash is not None
+                        and step.code_hash != existing_mat.code_hash
+                    ),
+                )
+            ]
+        else:
+            return [
+                StepDecision(
+                    coordinate="@all",
+                    action="execute",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    parent_mats=parent_mats,
+                    stale=expired,
+                )
+            ]
+
+    decisions = []
+    
+    if not step.depends_on:
+        targets = [(it.coordinate, it, it.content_hash) for it in scanned_items]
+    else:
+        coords = set()
+        for dep in step.depends_on:
+            for (c, d) in coord_step_mats.keys():
+                if d == dep:
+                    coords.add(c)
+        
+        coord_to_item = {it.coordinate: it for it in scanned_items}
+        targets = []
+        for c in sorted(coords):
+            it = coord_to_item.get(c)
+            if not it:
+                from .sources import SourceItem
+                it = SourceItem(coordinate=c, content_hash="", metadata={})
+            targets.append((c, it, it.content_hash))
+
+    for coord, it, sf_content_hash in targets:
         parent_mats: Dict[str, MatRef] = {}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
@@ -200,7 +311,7 @@ def _plan_step(
                         for dep, ref in parent_mats.items()
                     }
                     if step.depends_on
-                    else {"source": it.content_hash},
+                    else {"source": sf_content_hash},
                 }
                 if accepts_params:
                     identity["params"] = params_hash
@@ -241,7 +352,7 @@ def _plan_step(
             decisions.append(StepDecision(coordinate=coord, action="pending", item=it))
             continue
 
-        input_hash = _compute_step_input_hash(step, coord, it.content_hash, parent_mats)
+        input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)
         output_address = compute_output_address(
             step.name,
             step.version,

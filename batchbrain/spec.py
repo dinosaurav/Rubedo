@@ -57,6 +57,7 @@ class StepSpec:
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     index: Tuple[str, ...] = ()  # value fields extracted into the search index
+    shape: str = "map"  # map | reduce
 
 
 @dataclass
@@ -93,6 +94,7 @@ def step(
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
     index: Optional[List[str]] = None,
+    shape: str = "map",
 ):
     """Declare a step.
 
@@ -140,6 +142,12 @@ def step(
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
+    if shape not in ("map", "reduce"):
+        raise ValueError(f"Step '{name}': shape must be 'map' or 'reduce', got {shape!r}")
+    if shape == "reduce" and skip_cache:
+        raise ValueError(f"Step '{name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
+    if shape == "reduce" and not depends_on:
+        raise ValueError(f"Step '{name}': shape='reduce' requires at least one parent in depends_on")
     if version == "auto":
         raise ValueError(
             f"Step '{name}': version is a semantic label; use code='auto' "
@@ -188,6 +196,7 @@ def step(
             stale_after=parsed_stale,
             skip_cache=skip_cache,
             index=tuple(index or ()),
+            shape=shape,
         )
 
     return decorator
@@ -250,6 +259,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["stale_after_seconds"] = s.stale_after
         if s.params_model is not None:
             entry["params_schema"] = s.params_model.model_json_schema()
+        if s.shape != "map":
+            entry["shape"] = s.shape
         steps.append(entry)
 
     return {
