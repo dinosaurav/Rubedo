@@ -199,60 +199,132 @@ def _jsonable(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 class TableSource(Source):
-    """Rows of a SQL table. Coordinate = key column value(s), payload = row dict."""
-    
-    def __init__(self, engine_url: str, *, table: str, key, columns: Optional[List[str]] = None):
+    """Rows of a SQL table. Coordinate = key column value(s), payload = row dict.
+
+    By default the whole table is read once during `scan()` and each row's
+    payload rides along in the SourceItem (like CsvSource) — one query, and
+    `load()` is a passthrough.
+
+    Pass `batch_size=N` when the table is too large to hold in memory. Then
+    `scan()` streams the rows in server-side chunks of `N`, keeping only the
+    `(key, content_hash)` of each and discarding the payload; `load()`
+    re-fetches a single row by key when its lane actually runs. This bounds
+    memory to ~N payloads at a time, at the cost of one query per lane and
+    the row having to still exist at load time (a row deleted between scan
+    and load raises — the same exposure FolderSource has with files).
+
+    `batch_size` is an operational knob: it changes *how* rows are read, not
+    which coordinates or content exist, so it is deliberately absent from
+    `id` and toggling it never invalidates the cache.
+    """
+
+    def __init__(
+        self,
+        engine_url: str,
+        *,
+        table: str,
+        key,
+        columns: Optional[List[str]] = None,
+        batch_size: Optional[int] = None,
+    ):
         self.engine_url = engine_url
         self.table = table
         if isinstance(key, str):
             key = [key]
         self.key: List[str] = key
         self.columns = columns
-        
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f"batch_size must be a positive int, got {batch_size!r}")
+        self.batch_size = batch_size
+        self._engine = None
+
     @property
     def id(self) -> str:
         from urllib.parse import urlparse
-        
+
         # Parse the URL and remove credentials for the id
         parsed = urlparse(self.engine_url)
         safe_netloc = parsed.hostname or ""
         if parsed.port:
             safe_netloc += f":{parsed.port}"
-        
+
         # Build dialect+host+database+table#key=id
         safe_url = f"{parsed.scheme}://{safe_netloc}{parsed.path}"
         key_part = ",".join(self.key)
         return f"table:{safe_url}/{self.table}#key={key_part}"
-        
+
+    def _get_engine(self):
+        # Cached and reused: streaming mode re-enters the DB on every load(),
+        # so a fresh engine per call would mean a new connection pool per lane.
+        if self._engine is None:
+            from sqlalchemy import create_engine
+
+            self._engine = create_engine(self.engine_url)
+        return self._engine
+
+    def _cols(self) -> str:
+        # Unsafe interpolation is accepted here: table/column names are an
+        # internal schema declaration from pipeline code, never user input.
+        return "*" if not self.columns else ", ".join(self.columns)
+
     def scan(self) -> List[SourceItem]:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import text
         from .hashing import hash_json
-        
-        engine = create_engine(self.engine_url)
+
+        conn = self._get_engine().connect()
+        if self.batch_size is not None:
+            conn = conn.execution_options(yield_per=self.batch_size)
         try:
-            with engine.connect() as conn:
-                # Basic select from table
-                cols = "*" if not self.columns else ", ".join(self.columns)
-                # Unsafe interpolation here is accepted since it's an internal schema declaration
-                query = text(f"SELECT {cols} FROM {self.table}")
-                result = conn.execute(query)
-                
-                rows_data = []
-                for row in result.mappings():
-                    row_dict = _jsonable(dict(row))
-                    content_hash = hash_json(row_dict)
-                    
-                    missing = [k for k in self.key if k not in row_dict]
-                    if missing:
-                        raise ValueError(
-                            f"{self.table}: key column(s) {missing} not found in row"
-                        )
-                    base = "|".join(str(row_dict[k]) for k in self.key)
-                    rows_data.append((base, content_hash, row_dict, {}))
-                    
+            query = text(f"SELECT {self._cols()} FROM {self.table}")
+            rows_data = []
+            for row in conn.execute(query).mappings():
+                row_dict = _jsonable(dict(row))
+                content_hash = hash_json(row_dict)
+
+                missing = [k for k in self.key if k not in row_dict]
+                if missing:
+                    raise ValueError(
+                        f"{self.table}: key column(s) {missing} not found in row"
+                    )
+                base = "|".join(str(row_dict[k]) for k in self.key)
+
+                if self.batch_size is None:
+                    # Eager: carry the payload so load() is a passthrough.
+                    ref: Any = row_dict
+                else:
+                    # Streaming: keep only what re-fetches the row later. Raw
+                    # DB values (not the jsonable copy) so binds match types.
+                    ref = {k: row[k] for k in self.key}
+                rows_data.append((base, content_hash, ref, {}))
+
             return _disambiguate(rows_data)
         finally:
-            engine.dispose()
-            
+            conn.close()
+
     def load(self, item: SourceItem) -> Dict[str, Any]:
-        return item.ref
+        if self.batch_size is None:
+            return item.ref
+
+        from sqlalchemy import text
+        from .hashing import hash_json
+
+        where = " AND ".join(f"{k} = :k{i}" for i, k in enumerate(self.key))
+        binds = {f"k{i}": item.ref[k] for i, k in enumerate(self.key)}
+        query = text(f"SELECT {self._cols()} FROM {self.table} WHERE {where}")
+        with self._get_engine().connect() as conn:
+            candidates = [_jsonable(dict(r)) for r in conn.execute(query, binds).mappings()]
+
+        if not candidates:
+            raise ValueError(
+                f"{self.table}: row for key {item.ref} is gone since the scan"
+            )
+        if len(candidates) == 1:
+            return candidates[0]
+        # Duplicate key: content-suffixed lanes share a key, so pick the row
+        # whose bytes match the coordinate we planned.
+        for row_dict in candidates:
+            if hash_json(row_dict) == item.content_hash:
+                return row_dict
+        raise ValueError(
+            f"{self.table}: no row for key {item.ref} matches planned content"
+        )

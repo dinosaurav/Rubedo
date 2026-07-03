@@ -137,6 +137,79 @@ def test_credential_stripping():
     assert "secretpass" not in source.id
     assert source.id == "table:postgresql://localhost:5432/mydb/leads#key=id"
     
+def test_batch_size_must_be_positive():
+    with pytest.raises(ValueError, match="batch_size must be a positive int"):
+        TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=0)
+
+
+def test_streaming_is_cache_equivalent_to_eager():
+    # batch_size is operational, not identity: an eager run then a streaming
+    # run of the same pipeline is a full cache hit.
+    @step(name="p", version="1")
+    def p(row):
+        return {"name": row["name"], "score": row["score"]}
+
+    eager = TableSource(REMOTE_DB_PATH, table="leads", key="id")
+    s1 = run(pipeline(id="ts", name="ts", steps=[p], source=eager), workers=1)
+    assert s1.created_count == 2
+
+    streaming = TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=1)
+    s2 = run(pipeline(id="ts", name="ts", steps=[p], source=streaming), workers=1)
+    assert s2.created_count == 0
+    assert s2.reused_count == 2
+
+
+def test_streaming_executes_via_lazy_load():
+    captured = []
+
+    @step(name="p", version="1")
+    def p(row):
+        captured.append(row["name"])
+        return dict(row)
+
+    streaming = TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=1)
+    s = run(pipeline(id="tstream", name="tstream", steps=[p], source=streaming), workers=1)
+    assert s.created_count == 2
+    # load() re-fetched the right rows for each lane
+    assert sorted(captured) == ["Alice", "Bob"]
+
+
+def test_streaming_partial_update():
+    @step(name="p", version="1")
+    def p(row):
+        return row
+
+    src = TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=1)
+    run(pipeline(id="tsu", name="tsu", steps=[p], source=src), workers=1)
+
+    execute_remote("UPDATE leads SET score = 10.0 WHERE id = 1")
+    s2 = run(pipeline(id="tsu", name="tsu", steps=[p], source=src), workers=1)
+    assert s2.created_count == 1  # Alice recomputed
+    assert s2.reused_count == 1   # Bob reused
+
+
+def test_streaming_duplicate_key_load_picks_by_content():
+    execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
+    src = TableSource(
+        REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"], batch_size=1
+    )
+    items = src.scan()
+    bobs = [it for it in items if it.coordinate.startswith("Bob#")]
+    assert len(bobs) == 2
+
+    loaded = [src.load(it) for it in bobs]
+    assert sorted(r["score"] for r in loaded) == [7.5, 8.0]
+
+
+def test_streaming_load_after_delete_raises():
+    src = TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=1)
+    items = src.scan()
+    execute_remote("DELETE FROM leads WHERE id = 1")
+    alice = next(it for it in items if it.coordinate == "1")
+    with pytest.raises(ValueError, match="gone since the scan"):
+        src.load(alice)
+
+
 def test_jsonable_types():
     from batchbrain.sources import _jsonable
     
