@@ -1,7 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Activity, Database, FileText, LayoutList } from 'lucide-react';
-import Dashboard from './pages/Dashboard';
+import { Activity, Database, FileText, LayoutList } from 'lucide-react';
 import Runs from './pages/Runs';
 import RunDetail from './pages/RunDetail';
 import Materializations from './pages/Materializations';
@@ -20,9 +19,6 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <LayoutDashboard size={20} /> Dashboard
-          </NavLink>
-          <NavLink to="/runs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Activity size={20} /> Runs
           </NavLink>
           <NavLink to="/materializations" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
@@ -51,7 +47,7 @@ function App() {
     <BrowserRouter>
       <Layout>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Runs />} />
           <Route path="/runs" element={<Runs />} />
           <Route path="/runs/:runId" element={<RunDetail />} />
           <Route path="/materializations" element={<Materializations />} />
