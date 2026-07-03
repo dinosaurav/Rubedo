@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { fetchRun, fetchRunCoordinates, fetchRunEvents } from '../api';
 import { DataTable } from '../components/DataTable';
 import DagView from '../components/DagView';
@@ -45,7 +45,7 @@ export default function RunDetail() {
       header: 'Output Address',
       cell: (info) => {
         const val = info.getValue();
-        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
+        return val ? <span style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</span> : '-';
       },
     },
     {
