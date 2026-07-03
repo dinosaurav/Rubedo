@@ -1,0 +1,64 @@
+# Writing Batchit Pipelines (LLM Guide)
+
+Batchit is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
+
+## Concepts in 10 lines
+1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder).
+2. **Sources:** `CsvSource` or `FolderSource` define the input lanes.
+3. **Steps:** Pure functions decorated with `@step(version="...")`.
+4. **Pipelines:** A DAG of steps over a source.
+5. **Execution:** The engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
+6. **Immutability:** Results are content-addressed and saved in `.batchbrain/objects`. Never mutate inputs; always return new data.
+7. **Identity:** A step's cache identity is defined by its inputs + `version` + `params`.
+8. **Generations:** A rerun supersedes old outputs with new ones.
+9. **Filtering:** Return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
+10. **Reduce:** `@step(shape="reduce")` computes one output from all surviving lanes of its parents.
+
+## Step Contract
+- The first argument is the payload (dict) from the Source or the upstream step.
+- Additional positional arguments represent outputs from other upstream steps (by exact name).
+- Keyword-only arguments (e.g., `*, prompt: str`) are `params`. They are automatically injected by `run()` and participate in the cache key.
+- A step returns a JSON-serializable `dict` (or `Filtered`).
+
+## Cache Identity Rules
+A step's output is cached based on:
+1. The **input hash** (the content of the incoming payload).
+2. The **code version** (`version` string in `@step`). If you change the logic, you MUST bump the version. (Alternatively, `code="auto"` tries to hash the AST, but explicit version is safer).
+3. The **parameters** (`params` kwargs).
+
+## Step Policies
+- `retries=3, retry_on=Exception`: Automatically retry failures.
+- `rate_limit="30/min"`: Limit execution speed across all lanes.
+- `stale_after="24h"`: Force recomputation if the cached result is older than 24 hours.
+- `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step.
+- `shape="reduce"`: A reduce step receives a dict of `{lane_key: payload}` for all lanes and returns one output.
+
+## Complete Worked Example
+```python
+from batchbrain import step, pipeline, run, Filtered
+from batchbrain.sources import CsvSource
+
+@step(name="screen", version="1")
+def screen(row: dict) -> dict:
+    if not row.get("url"):
+        return Filtered("No URL")
+    return row
+
+@step(name="enrich", version="1", depends_on=["screen"], retries=3, rate_limit="10/min", index=["company"])
+def enrich(screen: dict, *, prompt_mode: str) -> dict:
+    # Fake LLM logic
+    return {"company": screen["company"], "summary": "..."}
+
+@step(name="summarize", version="1", depends_on=["enrich"], shape="reduce")
+def summarize(enrich: dict) -> dict:
+    return {"total": len(enrich), "data": list(enrich.values())}
+
+source = CsvSource("input.csv", key="company")
+p = pipeline(id="enrichment", name="Enrich", folder=source, steps=[screen, enrich, summarize])
+run(p, params={"enrich": {"prompt_mode": "detailed"}})
+```
+
+## Common Mistakes
+1. **Mutating inputs:** `row["new_field"] = "x"; return row`. BAD. This breaks content-addressing and JSON serialization guarantees. Always create a new dict: `return {**row, "new_field": "x"}`.
+2. **Missing version bumps:** Changing step logic without bumping `version` will cause the engine to reuse the old cache.
+3. **`skip_cache` on expensive steps:** Only use `skip_cache` for cheap data transformations. Never use it on LLM calls or network requests.

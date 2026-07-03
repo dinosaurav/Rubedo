@@ -1,6 +1,6 @@
 # Batchit
 
-A local-first batch processing engine that runs DAG pipelines over collections of coordinates — files in a folder, rows in a CSV — with content-addressed caching, durable run history, and surgical invalidation.
+A local-first batch processing engine that provides dbt-style state for Python tasks, built for non-idempotent steps (LLMs, scraping). It runs DAG pipelines over collections of coordinates — files in a folder, rows in a CSV — with content-addressed caching, durable run history, and surgical invalidation.
 
 Every step output is stored immutably at a deterministic address — `hash(step, code_version, input_hash)` — so re-running a pipeline only recomputes what actually changed. A run ledger records what happened to every coordinate in every run (`created`, `reused`, `failed`, `blocked`, `removed`), and lineage edges connect each output to the outputs it was derived from.
 
