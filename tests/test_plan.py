@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from batchbrain import Selection, invalidate, plan, run, step, pipeline
 from batchbrain.db import init_db, get_session
 from batchbrain.models import Run, RunEvent
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_plan_data"
@@ -56,11 +55,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)
@@ -88,10 +85,10 @@ def actions(run_plan):
 
 
 def test_fresh_state_executes_roots_and_pends_downstream():
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
 
-    p = plan("pl")
+    p = plan(pipe)
     assert actions(p) == {
         ("f1.txt", "read"): "execute",
         ("f1.txt", "upper"): "pending",
@@ -100,51 +97,51 @@ def test_fresh_state_executes_roots_and_pends_downstream():
 
 
 def test_fully_cached_state_reuses_everything():
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
-    run("pl", workers=1)
+    run(pipe, workers=1)
 
-    p = plan("pl")
+    p = plan(pipe)
     assert set(actions(p).values()) == {"reuse"}
     assert p.counts == {"reuse": 2}
 
 
 def test_invalidation_shows_execute_and_pending_chain():
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
-    run("pl", workers=1)
+    run(pipe, workers=1)
 
     invalidate(Selection(step="read"), reason="redo")
-    p = plan("pl")
+    p = plan(pipe)
     assert actions(p)[("f1.txt", "read")] == "execute"
     # Downstream depends on what the re-execution produces
     assert actions(p)[("f1.txt", "upper")] == "pending"
 
 
 def test_removed_coordinate_reported():
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
-    run("pl", workers=1)
+    run(pipe, workers=1)
 
     os.remove(os.path.join(TEST_FOLDER, "f2.txt"))
-    p = plan("pl")
+    p = plan(pipe)
     assert actions(p)[("f2.txt", "read")] == "removed"
     assert actions(p)[("f2.txt", "upper")] == "removed"
     assert actions(p)[("f1.txt", "read")] == "reuse"
 
 
 def test_plan_writes_nothing():
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
-    run("pl", workers=1)
+    run(pipe, workers=1)
 
     with get_session() as session:
         runs_before = session.query(Run).count()
         events_before = session.query(RunEvent).count()
 
-    plan("pl")
-    plan("pl", force=True)
+    plan(pipe)
+    plan(pipe, force=True)
 
     with get_session() as session:
         assert session.query(Run).count() == runs_before
@@ -153,18 +150,18 @@ def test_plan_writes_nothing():
 
 def test_plan_matches_run():
     """The plan's execute/reuse split is exactly what run() then does."""
-    make_two_step_pipeline()
+    pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
-    run("pl", workers=1)
+    run(pipe, workers=1)
     create_file("f3.txt", "new")
 
-    p = plan("pl")
+    p = plan(pipe)
     planned_executes = sum(1 for a in actions(p).values() if a == "execute")
     planned_pending = sum(1 for a in actions(p).values() if a == "pending")
     planned_reuses = sum(1 for a in actions(p).values() if a == "reuse")
 
-    summary = run("pl", workers=1)
+    summary = run(pipe, workers=1)
     # Deterministic steps: pendings resolve to creates
     assert summary.created_count == planned_executes + planned_pending == 2
     assert summary.reused_count == planned_reuses == 4

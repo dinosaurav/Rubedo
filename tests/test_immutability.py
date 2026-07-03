@@ -18,7 +18,6 @@ from batchbrain.models import (
     RunCoordinateStatus,
     RunEvent,
 )
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_immutability_data"
@@ -63,11 +62,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)
@@ -78,14 +75,14 @@ def run_simple_pipeline(pipe_id="imm"):
     def read(path):
         return open(path).read().strip()
 
-    pipeline(id=pipe_id, name=pipe_id, folder=TEST_FOLDER, steps=[read])
+    pipe = pipeline(id=pipe_id, name=pipe_id, folder=TEST_FOLDER, steps=[read])
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
-    return run(pipe_id, workers=1)
+    return pipe, run(pipe, workers=1)
 
 
 def test_append_only_rows_reject_updates():
-    run_simple_pipeline()
+    pipe, _ = run_simple_pipeline()
     with get_session() as session:
         rc = session.query(RunCoordinateStatus).first()
         rc.status = "tampered"
@@ -95,7 +92,7 @@ def test_append_only_rows_reject_updates():
 
 
 def test_append_only_rows_reject_deletes():
-    run_simple_pipeline()
+    pipe, _ = run_simple_pipeline()
     with get_session() as session:
         event = session.query(RunEvent).first()
         session.delete(event)
@@ -105,7 +102,7 @@ def test_append_only_rows_reject_deletes():
 
 
 def test_materialization_content_is_immutable():
-    run_simple_pipeline()
+    pipe, _ = run_simple_pipeline()
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.output_content_hash = "tampered"
@@ -115,7 +112,7 @@ def test_materialization_content_is_immutable():
 
 
 def test_materialization_liveness_is_the_only_legal_update():
-    run_simple_pipeline()
+    pipe, _ = run_simple_pipeline()
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.is_live = False
@@ -123,7 +120,7 @@ def test_materialization_liveness_is_the_only_legal_update():
 
 
 def test_run_identity_is_immutable_but_lifecycle_is_not():
-    summary = run_simple_pipeline()
+    pipe, summary = run_simple_pipeline()
     with get_session() as session:
         run_row = session.get(Run, summary.run_id)
         run_row.status = "completed"  # lifecycle projection: allowed
@@ -138,11 +135,11 @@ def test_run_identity_is_immutable_but_lifecycle_is_not():
 
 
 def test_restore_preserves_invalidation_history():
-    run_simple_pipeline()
+    pipe, _ = run_simple_pipeline()
 
     invalidate(Selection(step="read"), reason="looked wrong")
     # Deterministic step: rerun produces identical bytes -> restored, not new row
-    summary = run("imm", workers=1)
+    summary = run(pipe, workers=1)
     assert summary.created_count == 1
 
     with get_session() as session:

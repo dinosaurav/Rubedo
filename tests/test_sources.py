@@ -9,7 +9,6 @@ from sqlalchemy.pool import StaticPool
 from batchbrain import CsvSource, FolderSource, step, pipeline, run
 from batchbrain.db import init_db, get_session
 from batchbrain.models import RunCoordinateStatus
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_sources_data"
@@ -135,11 +134,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)

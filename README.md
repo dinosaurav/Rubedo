@@ -6,10 +6,10 @@ Every step output is stored immutably at a deterministic address — `hash(step,
 
 ## Quickstart
 
-Define a pipeline in `batchbrain_pipelines.py` at the repo root (override the path with the `BATCHBRAIN_PIPELINES` env var):
+Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from batchbrain import ProcessResult, step, pipeline
+from batchbrain import ProcessResult, step, pipeline, run, plan, describe
 
 @step(name="read_lines", version="read-v1")
 def read_lines(path: str):
@@ -19,18 +19,16 @@ def read_lines(path: str):
 def count_lines(read_lines: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(read_lines["lines"])})
 
-pipeline(id="count-lines", name="Count Lines", folder="examples/input",
-         steps=[read_lines, count_lines])
-```
+p = pipeline(id="count-lines", name="Count Lines", folder="examples/input",
+             steps=[read_lines, count_lines])
 
-Run it programmatically:
-
-```python
-import batchbrain
-
-summary = batchbrain.run("count-lines", params={"min_lines": 1})
+print(describe(p))            # the DAG, before ever running (also: format="mermaid")
+print(plan(p))                # dry-run: what would run() do to my data, and why
+summary = run(p)              # execute
 print(summary.created_count, summary.reused_count)
 ```
+
+There is no registry and no magic module: the engine never imports your code — you import the engine. Each run snapshots the pipeline's definition (steps, edges, policies) into the ledger, so the UI can show the DAG of anything that has run.
 
 Then inspect it in the web UI — a read-only browser over runs, materializations, lineage, and current outputs, plus surgical invalidation ("this output is bad, redo it"):
 
@@ -52,9 +50,9 @@ from batchbrain import CsvSource, ProcessResult, step, pipeline
 def enrich(row: dict):
     return {"email": row["email"], "summary": call_llm(row["notes"])}
 
-pipeline(id="enrich-leads", name="Enrich Leads",
-         source=CsvSource("data/leads.csv", key="email"),
-         steps=[enrich])
+leads = pipeline(id="enrich-leads", name="Enrich Leads",
+                 source=CsvSource("data/leads.csv", key="email"),
+                 steps=[enrich])
 ```
 
 `key` names the column(s) that identify a row and is deliberately required: it keeps coordinates stable when rows are edited or inserted, so only changed rows recompute. Pass `key=None` to opt into content-addressed coordinates, where an edited row shows up as removed + created instead.

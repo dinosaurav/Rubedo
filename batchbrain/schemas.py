@@ -101,10 +101,8 @@ class SelectionInvalidateResponse(BaseModel):
 
 class PipelineOut(BaseModel):
     id: str
-    name: str
-    source_id: str
-    step_name: str
-    code_version: str
-    workers: int
-    params_schema: Optional[Dict[str, Any]] = None
-    default_params: Optional[Dict[str, Any]] = None
+    source_id: Optional[str] = None
+    run_count: int
+    last_run_at: Optional[str] = None
+    # DAG snapshot recorded by the most recent run (steps, edges, policies)
+    definition: Optional[Dict[str, Any]] = None

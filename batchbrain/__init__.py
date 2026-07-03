@@ -1,9 +1,9 @@
-from .registry import (
-    list_pipelines,
-    get_pipeline,
-    load_pipelines_module,
+from .spec import (
     step,
     pipeline,
+    describe,
+    PipelineSpec,
+    StepSpec,
 )
 from .models import Filtered, ProcessResult, RunSummary
 from .selection import Selection
@@ -23,10 +23,10 @@ __all__ = [
     "CsvSource",
     "step",
     "pipeline",
+    "describe",
+    "PipelineSpec",
+    "StepSpec",
     "run",
     "plan",
     "RunPlan",
-    "list_pipelines",
-    "get_pipeline",
-    "load_pipelines_module",
 ]

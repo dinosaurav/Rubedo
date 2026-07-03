@@ -7,7 +7,9 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 - [x] Remove RunDiff (page, route, `/api/runs/{l}/diff/{r}` endpoint, `diffRuns` in api.ts)
 - [x] Remove `recompute()` from invalidation.py — trivial wrapper; users compose `invalidate()` + `run()`
-- [ ] Keep hunting removal targets (candidates: `PipelineOut.step_name/code_version/workers` only describe the *first* step — misleading; fix or drop when the DAG view lands)
+- [x] ~~Registry / magic module loading~~ — removed: pipeline() is a pure
+      constructor, run()/plan() take spec objects only, the server derives
+      /api/pipelines from the run ledger (never imports user code)
 - [ ] Dashboard/API error state in the UI — a failing API currently looks identical to an empty database
 
 ## Engine core (ordered — each unlocks the ones below)
@@ -85,8 +87,9 @@ Living roadmap. Ordering within sections is rough priority; items marked
 
 ## UI / API
 
-- [ ] Pipeline detail view — full DAG (steps, edges, versions, params schema),
-      not just the first step; API must expose all steps
+- [x] Pipeline DAG visibility — describe(spec) renders text/Mermaid pre-run;
+      each run snapshots its definition into the ledger (Run.definition_json)
+      and /api/pipelines serves it; still open: graphical DAG rendering in the UI
 - [ ] View a run as a DAG — per-step status counts on the graph
 - [ ] Selection language — string DSL (`step:count_lines coord:*.txt live:false`)
       parsing to Selection; usable in UI search box and Python

@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from batchbrain import plan, run, step, pipeline
 from batchbrain.db import init_db, get_session
 from batchbrain.models import Materialization, RunEvent
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_code_data"
@@ -56,11 +55,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)
@@ -83,48 +80,47 @@ def body_v2(path):
 
 
 def register(fn, version, code="warn"):
-    clear_registry()
     spec = step(name="work", version=version, code=code)(fn)
-    pipeline(id="cd", name="cd", folder=TEST_FOLDER, steps=[spec])
-    return spec
+    pipe = pipeline(id="cd", name="cd", folder=TEST_FOLDER, steps=[spec])
+    return pipe, spec
 
 
 def test_code_auto_recomputes_on_code_change():
     create_file("f1.txt", "hello")
 
-    register(body_v1, "1.0.0", code="auto")
-    s1 = run("cd", workers=1)
+    pipe, _ = register(body_v1, "1.0.0", code="auto")
+    s1 = run(pipe, workers=1)
     assert s1.created_count == 1
 
     # Same code: cache hit
-    register(body_v1, "1.0.0", code="auto")
-    s2 = run("cd", workers=1)
+    pipe, _ = register(body_v1, "1.0.0", code="auto")
+    s2 = run(pipe, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
     # Edited code: identity changed, recompute without any version bump
-    register(body_v2, "1.0.0", code="auto")
-    s3 = run("cd", workers=1)
+    pipe, _ = register(body_v2, "1.0.0", code="auto")
+    s3 = run(pipe, workers=1)
     assert (s3.created_count, s3.reused_count) == (1, 0)
 
     # code='auto' never drift-warns: identity already tracks the source
     import warnings
 
-    register(body_v2, "1.0.0", code="auto")
+    pipe, _ = register(body_v2, "1.0.0", code="auto")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        s4 = run("cd", workers=1)
+        s4 = run(pipe, workers=1)
     assert s4.reused_count == 1
 
 
 def test_version_and_code_are_independent_axes():
     create_file("f1.txt", "hello")
 
-    register(body_v1, "1.0.0", code="auto")
-    run("cd", workers=1)
+    pipe, _ = register(body_v1, "1.0.0", code="auto")
+    run(pipe, workers=1)
 
     # Same code, bumped version: version alone changes identity
-    register(body_v1, "2.0.0", code="auto")
-    s = run("cd", workers=1)
+    pipe, _ = register(body_v1, "2.0.0", code="auto")
+    s = run(pipe, workers=1)
     assert (s.created_count, s.reused_count) == (1, 0)
 
 
@@ -136,13 +132,13 @@ def test_version_auto_is_rejected():
 def test_manual_version_warns_on_drift_but_reuses():
     create_file("f1.txt", "hello")
 
-    register(body_v1, "v1")
-    run("cd", workers=1)
+    pipe, _ = register(body_v1, "v1")
+    run(pipe, workers=1)
 
     # Code edited, version not bumped: reuse stands, but loudly
-    register(body_v2, "v1")
+    pipe, _ = register(body_v2, "v1")
     with pytest.warns(UserWarning, match="source code changed"):
-        summary = run("cd", workers=1)
+        summary = run(pipe, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
     with get_session() as session:
@@ -158,23 +154,23 @@ def test_no_warning_when_code_unchanged():
     import warnings
 
     create_file("f1.txt", "hello")
-    register(body_v1, "v1")
-    run("cd", workers=1)
+    pipe, _ = register(body_v1, "v1")
+    run(pipe, workers=1)
 
-    register(body_v1, "v1")
+    pipe, _ = register(body_v1, "v1")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        summary = run("cd", workers=1)
+        summary = run(pipe, workers=1)
     assert summary.reused_count == 1
 
 
 def test_plan_surfaces_drift_warning():
     create_file("f1.txt", "hello")
-    register(body_v1, "v1")
-    run("cd", workers=1)
+    pipe, _ = register(body_v1, "v1")
+    run(pipe, workers=1)
 
-    register(body_v2, "v1")
-    p = plan("cd")
+    pipe, _ = register(body_v2, "v1")
+    p = plan(pipe)
     assert len(p.warnings) == 1
     assert "source code changed" in p.warnings[0]
     assert p.counts == {"reuse": 1}
@@ -182,8 +178,8 @@ def test_plan_surfaces_drift_warning():
 
 def test_code_hash_recorded_on_materialization():
     create_file("f1.txt", "hello")
-    spec = register(body_v1, "v1")
-    run("cd", workers=1)
+    pipe, spec = register(body_v1, "v1")
+    run(pipe, workers=1)
 
     with get_session() as session:
         mat = session.query(Materialization).one()

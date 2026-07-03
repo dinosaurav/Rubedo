@@ -31,18 +31,13 @@ from .planning import (
     _step_accepts_params,
     topological_sort,
 )
-from .registry import PipelineSpec
+from .spec import PipelineSpec, definition
 from .sources import Source, coerce_source
 from .util import utcnow_iso
 
 
-def _resolve_invocation(pipeline, source, params):
-    """Shared by run() and plan(): id -> spec, source coercion, param validation."""
-    if isinstance(pipeline, str):
-        from .registry import get_pipeline
-
-        pipeline = get_pipeline(pipeline)
-
+def _resolve_invocation(pipeline: PipelineSpec, source, params):
+    """Shared by run() and plan(): source coercion and param validation."""
     source = pipeline.source if source is None else coerce_source(source)
 
     first = pipeline.steps[0] if pipeline.steps else None
@@ -83,7 +78,7 @@ class RunPlan:
 
 
 def plan(
-    pipeline: PipelineSpec | str,
+    pipeline: PipelineSpec,
     source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
@@ -172,7 +167,7 @@ def plan(
 
 
 def run(
-    pipeline: PipelineSpec | str,
+    pipeline: PipelineSpec,
     source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
@@ -181,9 +176,8 @@ def run(
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
-    Accepts a PipelineSpec or a registered pipeline id. Params are
-    validated against the first step's params_model whenever one is
-    declared, regardless of how the pipeline was obtained.
+    Params are validated against the first step's params_model whenever
+    one is declared.
     """
     pipeline, source, params = _resolve_invocation(pipeline, source, params)
     return run_pipeline(
@@ -222,6 +216,7 @@ def run_pipeline(
                 pipeline_id=ctx.pipeline_id,
                 source_id=ctx.source_id,
                 params_json=json.dumps(params or {}, sort_keys=True),
+                definition_json=json.dumps(definition(pipeline)),
                 started_at=utcnow_iso(),
             )
         )

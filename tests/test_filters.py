@@ -12,7 +12,6 @@ from sqlalchemy.pool import StaticPool
 from batchbrain import Filtered, plan, run, step, pipeline
 from batchbrain.db import init_db, get_session
 from batchbrain.models import Materialization, RunCoordinateStatus
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_filters_data"
@@ -57,11 +56,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)
@@ -88,8 +85,8 @@ def build_pipeline(calls=None):
     def summarize(screen):
         return screen.upper()
 
-    pipeline(id="flt", name="flt", folder=TEST_FOLDER, steps=[screen, summarize])
-    return calls
+    pipe = pipeline(id="flt", name="flt", folder=TEST_FOLDER, steps=[screen, summarize])
+    return pipe, calls
 
 
 def statuses(step_name):
@@ -106,9 +103,9 @@ def statuses(step_name):
 def test_filtered_coordinate_skips_downstream():
     create_file("long.txt", "long enough content here")
     create_file("short.txt", "tiny")
-    build_pipeline()
+    pipe, _ = build_pipeline()
 
-    summary = run("flt", workers=1)
+    summary = run(pipe, workers=1)
     assert summary.created_count == 2  # screen(long) + summarize(long)
     assert summary.filtered_count == 2  # screen(short) + summarize(short)
     assert summary.failed_count == 0
@@ -132,12 +129,12 @@ def test_filtered_coordinate_skips_downstream():
 
 def test_filter_decision_is_cached():
     create_file("short.txt", "tiny")
-    calls = build_pipeline([])
+    pipe, calls = build_pipeline([])
 
-    run("flt", workers=1)
+    run(pipe, workers=1)
     assert calls == ["short.txt"]
 
-    summary = run("flt", workers=1)
+    summary = run(pipe, workers=1)
     assert calls == ["short.txt"], "cached verdict: filter step must not re-execute"
     assert summary.filtered_count == 2
     assert summary.created_count == 0
@@ -151,13 +148,13 @@ def test_filter_decision_is_cached():
 
 def test_content_change_reverses_the_verdict():
     create_file("f.txt", "tiny")
-    build_pipeline()
-    summary1 = run("flt", workers=1)
+    pipe, _ = build_pipeline()
+    summary1 = run(pipe, workers=1)
     assert summary1.filtered_count == 2
 
     # File grows past the threshold: new input hash, fresh decision
     create_file("f.txt", "now long enough to pass the filter")
-    summary2 = run("flt", workers=1)
+    summary2 = run(pipe, workers=1)
     assert summary2.filtered_count == 0
     assert summary2.created_count == 2
 
@@ -167,10 +164,10 @@ def test_content_change_reverses_the_verdict():
 
 def test_plan_shows_filtered_chain():
     create_file("short.txt", "tiny")
-    build_pipeline()
-    run("flt", workers=1)
+    pipe, _ = build_pipeline()
+    run(pipe, workers=1)
 
-    p = plan("flt")
+    p = plan(pipe)
     actions = {(i.coordinate, i.step_name): i.action for i in p.items}
     assert actions[("short.txt", "screen")] == "reuse"  # the verdict is cached
     assert actions[("short.txt", "summarize")] == "filtered"
@@ -187,8 +184,8 @@ def test_skip_cache_step_cannot_filter():
     def use(util):
         return util
 
-    pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[util, use])
-    summary = run("bad", workers=1)
+    pipe = pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[util, use])
+    summary = run(pipe, workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:

@@ -19,7 +19,7 @@ from .planning import (
     _build_step_params,
     _step_accepts_params,
 )
-from .registry import StepSpec
+from .spec import StepSpec
 from .sources import Source
 from .store import read_materialization_output
 

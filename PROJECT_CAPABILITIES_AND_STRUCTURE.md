@@ -23,11 +23,11 @@ Below is the breakdown of the top-level directories and critical files, and how 
 ### `/batchbrain/`
 This is the core Python backend package containing the execution engine, database logic, API, and CLI.
 
-- **Execution & Pipeline Logic (`runner.py`, `registry.py`)**: Handles registering `@step`s and `pipeline()`s, topological sorting, managing concurrent executors, and flowing artifacts across graphs.
+- **Definitions (`spec.py`)**: `@step` and `pipeline()` build plain `StepSpec`/`PipelineSpec` objects (no registry, no magic module loading); `describe()` renders a DAG as text or Mermaid before it ever runs.
+- **Run Phases (`planning.py`, `execution.py`, `ledger.py`, `runner.py`)**: read-only planning (decisions, addresses, staleness/drift), DB-free execution (thread pool, retries, rate limits, ephemeral utils), all ledger writes (manifests, statuses, events, generations), and the `run()`/`plan()` orchestrators. Each run snapshots its pipeline definition into the ledger.
 - **Sources & Invalidation (`sources.py`, `hashing.py`, `invalidation.py`)**: The `Source` protocol with `FolderSource`/`CsvSource`, content hashing, and logic for determining if a coordinate's cached result is still valid.
 - **Data Models & Storage (`db.py`, `models.py`, `schemas.py`, `store.py`, `selection.py`)**: SQLAlchemy database setup, ORM models (including tracking `MaterializationEdge`s), Pydantic schemas, and local object store logic.
-- **Run Entrypoint (`runner.run`)**: `batchbrain.run(pipeline_or_id, params=...)` — resolves registered pipeline ids, validates params against the first step's schema, and executes. This is how library clients trigger runs.
-- **Server (`server.py`)**: Read-only FastAPI application for the frontend, plus the invalidation endpoint.
+- **Server (`server.py`)**: Read-only FastAPI application for the frontend, plus the invalidation endpoint. Never imports user pipeline code; the pipelines it lists are derived from the run ledger.
 
 ### `/web/`
 This directory contains the Frontend User Interface. It is a modern single-page application built with React, TypeScript, and Vite.
@@ -41,7 +41,7 @@ This directory contains the Frontend User Interface. It is a modern single-page 
 Contains sample scripts and inputs to demonstrate how to use the framework.
 
 - **`input/`**: Sample text files or data used by example pipelines.
-- **`simple_process.py`, `test_invalidation.py`**: Scripts demonstrating pipeline definition, execution, and how the caching/invalidation system behaves.
+- **`count_lines.py`, `simple_process.py`, `test_invalidation.py`**: Scripts demonstrating pipeline definition, execution, and how the caching/invalidation system behaves.
 
 ### `/docs/`
 Contains architectural documentation.
@@ -54,6 +54,5 @@ The test suite for the Python backend.
 
 ### Top-Level Files
 
-- **`batchbrain_pipelines.py`**: The default pipeline module at the root of the project. It demonstrates how to define a concrete pipeline (e.g., `count-lines`) with param validation (`CountLinesParams`) and run it using the framework.
 - **`pyproject.toml` & `uv.lock`**: Python packaging and dependency management configuration (listing dependencies like `sqlalchemy`, `pydantic`, `fastapi`, `uvicorn`).
 - **`.gitignore`**: Git ignore rules.

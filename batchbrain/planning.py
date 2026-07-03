@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
 from .models import Materialization
-from .registry import PipelineSpec, StepSpec
+from .spec import PipelineSpec, StepSpec
 from .sources import SourceItem
 from .util import iso_age_seconds
 

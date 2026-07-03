@@ -15,7 +15,6 @@ from batchbrain.models import (
     MaterializationEdge,
     RunCoordinateStatus,
 )
-from batchbrain.registry import clear_registry
 from batchbrain.store import init_store
 
 TEST_FOLDER = ".test_skipcache_data"
@@ -60,11 +59,9 @@ def isolated_env():
     )
 
     init_store()
-    clear_registry()
 
     yield
 
-    clear_registry()
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
             shutil.rmtree(d)
@@ -99,9 +96,9 @@ def build_pipeline(calls, util_version="1"):
 def test_util_never_materialized_or_recorded():
     calls = []
     create_file("f1.txt", "  HELLO  ")
-    build_pipeline(calls)
+    pipe = build_pipeline(calls)
 
-    summary = run("sc", workers=1)
+    summary = run(pipe, workers=1)
     assert summary.created_count == 2  # read + report; parse invisible
     assert calls == ["parse"]
 
@@ -126,12 +123,12 @@ def test_util_never_materialized_or_recorded():
 def test_fully_cached_run_skips_util_entirely():
     calls = []
     create_file("f1.txt", "hello")
-    build_pipeline(calls)
+    pipe = build_pipeline(calls)
 
-    run("sc", workers=1)
+    run(pipe, workers=1)
     assert calls == ["parse"]
 
-    summary = run("sc", workers=1)
+    summary = run(pipe, workers=1)
     assert summary.reused_count == 2
     assert calls == ["parse"], "cached run must not execute the util at all"
 
@@ -139,13 +136,12 @@ def test_fully_cached_run_skips_util_entirely():
 def test_util_identity_change_recomputes_consumer():
     calls = []
     create_file("f1.txt", "hello")
-    build_pipeline(calls)
-    run("sc", workers=1)
+    pipe = build_pipeline(calls)
+    run(pipe, workers=1)
 
-    clear_registry()
     calls2 = []
-    build_pipeline(calls2, util_version="2")
-    summary = run("sc", workers=1)
+    pipe = build_pipeline(calls2, util_version="2")
+    summary = run(pipe, workers=1)
     # read reused; report recomputed because the util's identity is in its key
     assert (summary.created_count, summary.reused_count) == (1, 1)
     assert calls2 == ["parse"]
@@ -172,8 +168,9 @@ def test_util_shared_by_two_consumers_runs_once():
     def length(norm):
         return {"len": len(norm)}
 
-    pipeline(id="fan", name="fan", folder=TEST_FOLDER, steps=[read, norm, upper, length])
-    summary = run("fan", workers=2)
+    pipe = pipeline(
+id="fan", name="fan", folder=TEST_FOLDER, steps=[read, norm, upper, length])
+    summary = run(pipe, workers=2)
     assert summary.failed_count == 0
     assert calls == ["norm"], "memoized per run despite two consumers"
 
@@ -193,8 +190,9 @@ def test_util_failure_fails_the_consumer():
     def use(boom):
         return boom
 
-    pipeline(id="fail", name="fail", folder=TEST_FOLDER, steps=[read, boom, use])
-    summary = run("fail", workers=1)
+    pipe = pipeline(
+id="fail", name="fail", folder=TEST_FOLDER, steps=[read, boom, use])
+    summary = run(pipe, workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:
@@ -218,8 +216,9 @@ def test_blocked_propagates_through_util():
     def use(mid):
         return mid
 
-    pipeline(id="blk", name="blk", folder=TEST_FOLDER, steps=[read, mid, use])
-    summary = run("blk", workers=1)
+    pipe = pipeline(
+id="blk", name="blk", folder=TEST_FOLDER, steps=[read, mid, use])
+    summary = run(pipe, workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:
@@ -246,8 +245,9 @@ def test_chained_utils():
     def out(lower):
         return lower
 
-    pipeline(id="chain", name="chain", folder=TEST_FOLDER, steps=[read, strip, lower, out])
-    summary = run("chain", workers=1)
+    pipe = pipeline(
+id="chain", name="chain", folder=TEST_FOLDER, steps=[read, strip, lower, out])
+    summary = run(pipe, workers=1)
     assert summary.failed_count == 0
 
     from batchbrain.store import read_materialization_output
@@ -260,9 +260,9 @@ def test_chained_utils():
 def test_plan_omits_utils():
     calls = []
     create_file("f1.txt", "hello")
-    build_pipeline(calls)
+    pipe = build_pipeline(calls)
 
-    p = plan("sc")
+    p = plan(pipe)
     step_names = {i.step_name for i in p.items}
     assert step_names == {"read", "report"}
     assert calls == [], "planning must not execute the util"
@@ -280,4 +280,5 @@ def test_registration_validations():
         pass
 
     with pytest.raises(ValueError, match="no consumer"):
-        pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[orphan])
+        pipe = pipeline(
+id="bad", name="bad", folder=TEST_FOLDER, steps=[orphan])

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from batchbrain import ProcessResult, run, step, pipeline
+from batchbrain import ProcessResult, describe, run, step, pipeline
 
 
 class CountLinesParams(BaseModel):
@@ -45,7 +45,7 @@ def count_lines(read_lines: dict) -> ProcessResult:
     )
 
 
-pipeline(
+count_lines_pipeline = pipeline(
     id="count-lines",
     name="Count Lines DAG",
     folder="examples/input",
@@ -53,14 +53,12 @@ pipeline(
 )
 
 if __name__ == "__main__":
-    
+    print(describe(count_lines_pipeline))
+    print()
+
     summary = run(
-        "count-lines",
+        count_lines_pipeline,
         params={"min_lines": 0, "include_text_preview": False},
     )
-    print("\nScript Wrapper Completed.")
-    print(f"Run ID: {summary.run_id}")
-    print(
-        f"Total processed: {summary.created_count + summary.reused_count + summary.failed_count}"
-    )
+    print(f"\nRun ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")

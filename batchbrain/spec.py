@@ -2,9 +2,6 @@ import re
 from typing import Callable, Optional, Dict, Any, Tuple, Type, List
 from pydantic import BaseModel
 from dataclasses import dataclass
-import importlib.util
-import sys
-import os
 
 from .sources import Source
 
@@ -69,13 +66,6 @@ class PipelineSpec:
     name: str
     source: Source
     steps: List[StepSpec]
-
-
-_REGISTRY: Dict[str, PipelineSpec] = {}
-
-
-def clear_registry():
-    _REGISTRY.clear()
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -217,39 +207,94 @@ def pipeline(
                 "would never be computed or stored"
             )
 
-    pipe_id = id or name
-    spec = PipelineSpec(
-        id=pipe_id,
+    return PipelineSpec(
+        id=id or name,
         name=name,
         source=source,
         steps=steps or [],
     )
-    _REGISTRY[pipe_id] = spec
-    return spec
 
 
-def list_pipelines() -> List[PipelineSpec]:
-    load_pipelines_module()
-    return list(_REGISTRY.values())
+def definition(spec: PipelineSpec) -> Dict[str, Any]:
+    """JSON-safe snapshot of a pipeline's structure and policies.
+
+    Recorded on every Run row so the ledger knows what DAG produced each
+    run's outputs, and rendered by describe().
+    """
+    steps = []
+    for s in spec.steps:
+        entry: Dict[str, Any] = {
+            "name": s.name,
+            "version": s.version,
+            "depends_on": list(s.depends_on),
+            "workers": s.workers,
+            "code": s.code_mode,
+        }
+        if s.skip_cache:
+            entry["skip_cache"] = True
+        if s.retries:
+            entry["retries"] = s.retries
+            entry["retry_on"] = [e.__name__ for e in s.retry_on]
+        if s.rate_limit:
+            count, period = s.rate_limit
+            entry["rate_limit"] = f"{count}/{int(period)}s"
+        if s.stale_after is not None:
+            entry["stale_after_seconds"] = s.stale_after
+        if s.params_model is not None:
+            entry["params_schema"] = s.params_model.model_json_schema()
+        if s.config:
+            entry["config"] = s.config
+        steps.append(entry)
+
+    return {
+        "id": spec.id,
+        "name": spec.name,
+        "source_id": spec.source.id,
+        "steps": steps,
+    }
 
 
-def get_pipeline(pipeline_id: str) -> PipelineSpec:
-    load_pipelines_module()
-    if pipeline_id not in _REGISTRY:
-        raise ValueError(f"Pipeline '{pipeline_id}' not found.")
-    return _REGISTRY[pipeline_id]
+def describe(spec: PipelineSpec, format: str = "text") -> str:
+    """Render a pipeline's DAG before ever running it.
 
+    format="text" prints steps in dependency order with their policies;
+    format="mermaid" emits a Mermaid graph for markdown viewers.
+    """
+    from .planning import topological_sort
 
-def load_pipelines_module(path: Optional[str] = None):
-    if path is None:
-        path = os.environ.get("BATCHBRAIN_PIPELINES", "batchbrain_pipelines.py")
-    if os.path.exists(path):
-        module_name = "batchbrain_pipelines"
-        if module_name not in sys.modules:
-            spec = importlib.util.spec_from_file_location(
-                module_name, os.path.abspath(path)
-            )
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
+    topo = topological_sort(spec)
+
+    if format == "mermaid":
+        lines = ["graph TD"]
+        for s in topo:
+            label = f"{s.name}<br/>{s.version}" if s.version else s.name
+            shape = f'{s.name}(["{label}"])' if s.skip_cache else f'{s.name}["{label}"]'
+            lines.append(f"    {shape}")
+        for s in topo:
+            for dep in s.depends_on:
+                lines.append(f"    {dep} --> {s.name}")
+        return "\n".join(lines)
+
+    if format != "text":
+        raise ValueError(f"Unknown format {format!r}: expected 'text' or 'mermaid'")
+
+    lines = [f"Pipeline '{spec.id}' over {spec.source.id}"]
+    for s in topo:
+        deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
+        policies = []
+        if s.skip_cache:
+            policies.append("skip_cache")
+        if s.retries:
+            policies.append(f"retries={s.retries}")
+        if s.rate_limit:
+            count, period = s.rate_limit
+            policies.append(f"rate_limit={count}/{int(period)}s")
+        if s.stale_after is not None:
+            policies.append(f"stale_after={int(s.stale_after)}s")
+        if s.code_mode == "auto":
+            policies.append("code=auto")
+        if s.params_model is not None:
+            policies.append(f"params={s.params_model.__name__}")
+        policy_str = f"  [{', '.join(policies)}]" if policies else ""
+        lines.append(f"  {s.name} ({s.version}){deps}{policy_str}")
+    return "\n".join(lines)

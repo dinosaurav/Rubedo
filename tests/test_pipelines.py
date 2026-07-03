@@ -1,63 +1,127 @@
+"""/api/pipelines is ledger-derived: a pipeline exists once it has run."""
+
 import os
-import tempfile
+import shutil
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
-from sqlalchemy.orm import close_all_sessions
-
-from batchbrain.registry import _REGISTRY, step, pipeline
-from batchbrain.models import ProcessResult
-from batchbrain import db
-from batchbrain.server import app
 from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
+from batchbrain import run, step, pipeline
+from batchbrain.db import init_db
+from batchbrain.server import app
+from batchbrain.store import init_store
 
-class MyParams(BaseModel):
-    my_val: int
-
-
-@step(name="my-step", version="v1", params_model=MyParams)
-def my_proc(path: str, params: MyParams) -> ProcessResult:
-    return ProcessResult(value={"val": params.my_val})
-
-
-p1 = pipeline(id="test-proc", name="Test Proc", folder="some_dir", steps=[my_proc])
-
-
-@step(name="no-inputs", version="v1")
-def no_inputs_proc(path: str) -> ProcessResult:
-    return ProcessResult(value={"ok": True})
-
-
-p2 = pipeline(
-    id="no-inputs", name="No Inputs", folder="some_dir", steps=[no_inputs_proc]
-)
+TEST_FOLDER = ".test_pipelines_data"
+ENV_FOLDER = ".test_pipelines_env"
 
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def isolated_db():
-    with tempfile.TemporaryDirectory() as tmp:
-        old_cwd = os.getcwd()
-        os.chdir(tmp)
-        db.init_db()
-        _REGISTRY[p1.id] = p1
-        _REGISTRY[p2.id] = p2
-        yield
-        close_all_sessions()
-        if db.engine:
-            db.engine.dispose()
-        os.chdir(old_cwd)
+def isolated_env():
+    abs_test_folder = os.path.abspath(TEST_FOLDER)
+    abs_env_folder = os.path.abspath(ENV_FOLDER)
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+    import batchbrain.store
+
+    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+
+    os.environ["BATCHBRAIN_DB_PATH"] = (
+        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
+    )
+    init_db()
+
+    import batchbrain.db
+
+    if batchbrain.db.engine is not None:
+        batchbrain.db.engine.dispose()
+
+    from batchbrain.models import Base
+    from sqlalchemy.orm import sessionmaker
+
+    batchbrain.db.engine = create_engine(
+        os.environ["BATCHBRAIN_DB_PATH"],
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=batchbrain.db.engine)
+    batchbrain.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=batchbrain.db.engine
+    )
+
+    init_store()
+
+    yield
+
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
 
 
-@patch("batchbrain.registry.load_pipelines_module")
-def test_list_pipelines(mock_load):
+class MyParams(BaseModel):
+    my_val: int = 7
+
+
+def make_pipeline():
+    @step(name="my-step", version="v1", params_model=MyParams, retries=2)
+    def my_proc(path: str, params: MyParams):
+        return {"val": params.my_val}
+
+    return pipeline(
+        id="test-proc", name="Test Proc", folder=TEST_FOLDER, steps=[my_proc]
+    )
+
+
+def test_unrun_pipelines_are_invisible():
+    make_pipeline()  # defined but never run
     res = client.get("/api/pipelines")
     assert res.status_code == 200
-    data = res.json()
-    ids = [p["id"] for p in data]
-    assert "test-proc" in ids
-    assert "no-inputs" in ids
-    spec = next(p for p in data if p["id"] == "test-proc")
-    assert spec["params_schema"]["properties"]["my_val"]["type"] == "integer"
+    assert res.json() == []
+
+
+def test_run_pipeline_appears_with_definition_snapshot():
+    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+        f.write("hello")
+
+    pipe = make_pipeline()
+    run(pipe, workers=1)
+    run(pipe, workers=1)
+
+    res = client.get("/api/pipelines")
+    assert res.status_code == 200
+    (item,) = res.json()
+    assert item["id"] == "test-proc"
+    assert item["run_count"] == 2
+    assert item["source_id"] == f"folder:{TEST_FOLDER}"
+    assert item["last_run_at"] is not None
+
+    definition = item["definition"]
+    assert definition["name"] == "Test Proc"
+    (step_def,) = definition["steps"]
+    assert step_def["name"] == "my-step"
+    assert step_def["version"] == "v1"
+    assert step_def["retries"] == 2
+    assert step_def["params_schema"]["properties"]["my_val"]["default"] == 7
+
+
+def test_describe_renders_dag_without_running():
+    pipe = make_pipeline()
+    from batchbrain import describe
+
+    text = describe(pipe)
+    assert "test-proc" in text
+    assert "my-step (v1) (root)" in text
+    assert "retries=2" in text
+
+    mermaid = describe(pipe, format="mermaid")
+    assert mermaid.startswith("graph TD")
+    assert 'my-step["my-step<br/>v1"]' in mermaid

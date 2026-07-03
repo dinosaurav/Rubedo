@@ -29,7 +29,6 @@ from .schemas import (
     PipelineOut,
 )
 
-from .registry import list_pipelines
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -341,33 +340,41 @@ async def invalidate_selection(request: Request):
 
 @app.get("/api/pipelines", response_model=List[PipelineOut])
 def get_pipelines_api():
-    out = []
-    for p in list_pipelines():
-        schema = None
-        defaults = None
-        first_step = p.steps[0] if p.steps else None
-        params_model = first_step.params_model if first_step else None
+    """Ledger-derived: a pipeline exists here once it has run.
 
-        if params_model:
-            schema = params_model.model_json_schema()
-            # Extract defaults if any
-            defaults = {
-                k: v.default
-                for k, v in params_model.model_fields.items()
-                if not v.is_required()
-            }
-
-        out.append(
-            PipelineOut(
-                id=p.id,
-                name=p.name,
-                source_id=p.source.id,
-                step_name=first_step.name if first_step else "",
-                code_version=first_step.version if first_step else "",
-                workers=first_step.workers if first_step else 4,
-                params_schema=schema,
-                default_params=defaults or {},
+    The server never imports user pipeline code; definitions live in the
+    caller's codebase and are snapshotted into the ledger by run().
+    """
+    with get_session() as session:
+        rows = (
+            session.query(
+                Run.pipeline_id,
+                func.count(Run.id),
+                func.max(Run.started_at),
             )
+            .filter(Run.pipeline_id.isnot(None), Run.kind == "process")
+            .group_by(Run.pipeline_id)
+            .all()
         )
-    return out
+
+        out = []
+        for pipeline_id, run_count, last_run_at in rows:
+            latest = (
+                session.query(Run)
+                .filter_by(pipeline_id=pipeline_id, kind="process")
+                .order_by(Run.started_at.desc())
+                .first()
+            )
+            out.append(
+                PipelineOut(
+                    id=pipeline_id,
+                    source_id=latest.source_id,
+                    run_count=run_count,
+                    last_run_at=last_run_at,
+                    definition=json.loads(latest.definition_json)
+                    if latest.definition_json
+                    else None,
+                )
+            )
+        return out
 

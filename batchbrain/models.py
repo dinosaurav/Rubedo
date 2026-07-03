@@ -29,6 +29,9 @@ class Run(Base):
     source_id = Column(String)
     params_json = Column(String)
     selection_json = Column(String)
+    # Snapshot of the pipeline definition (steps, edges, policies) at run
+    # time — the ledger's record of what DAG produced this run's outputs
+    definition_json = Column(String)
     started_at = Column(String, nullable=False)
     finished_at = Column(String)
     error_message = Column(String)

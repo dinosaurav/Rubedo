@@ -31,7 +31,7 @@ from .models import (
     RunSummary,
 )
 from .planning import MatRef, StepDecision, _code_drift_message
-from .registry import StepSpec
+from .spec import StepSpec
 from .sources import SourceItem
 from .store import stage_and_commit
 from .util import utcnow_iso
