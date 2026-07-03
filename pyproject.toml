@@ -14,6 +14,12 @@ dependencies = [
     "packaging>=26.2",
 ]
 
+# The engine core has no LLM/HTTP deps. The examples in examples/ that call
+# real services pull them in on demand — install with `uv sync --extra examples`
+# or run one off with `uv run --with anthropic python examples/hn_digest.py`.
+[project.optional-dependencies]
+examples = ["anthropic>=0.40"]
+
 [tool.setuptools]
 packages = ["batchbrain"]
 

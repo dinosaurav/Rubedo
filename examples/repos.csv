@@ -1,0 +1,6 @@
+repo
+pallets/flask
+psf/requests
+tiangolo/fastapi
+encode/httpx
+sqlalchemy/sqlalchemy
