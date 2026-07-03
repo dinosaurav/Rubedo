@@ -206,15 +206,23 @@ def _execute_step(
                     time.sleep(delay)
                 delay *= step.retry_backoff
 
-    workers_count = workers or step.workers
-    process_pool = None
-    if getattr(step, "executor", "thread") == "process":
-        process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=workers_count)
+    # Never spin up more workers (or subprocesses) than there is work.
+    pool_size = min(workers or step.workers, len(decisions))
+    if pool_size < 1:
+        return
 
+    # Two layers, on purpose. The thread pool is the orchestrator: it drives
+    # the retry loop and the parent-shared rate limiter for every lane. A
+    # process pool, when requested, is only where the CPU-bound step body
+    # runs — retries and rate limiting must stay in the parent, so process
+    # steps still need the thread layer to feed them.
+    process_pool = (
+        concurrent.futures.ProcessPoolExecutor(max_workers=pool_size)
+        if step.executor == "process"
+        else None
+    )
     try:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=workers_count
-        ) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
             futures = [executor.submit(process, d, process_pool) for d in decisions]
             for future in concurrent.futures.as_completed(futures):
                 yield future.result()
