@@ -32,8 +32,6 @@ class RunCoordinateStatusOut(BaseModel):
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
     materialization_id: Optional[int] = None
-    previous_output_address: Optional[str] = None
-    previous_materialization_id: Optional[int] = None
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     metadata_json: Optional[str] = None
@@ -80,7 +78,6 @@ class CurrentOutputOut(BaseModel):
 
 class SelectionPreviewItem(BaseModel):
     materialization_id: int
-    coordinate: Optional[str] = None
     pipeline_id: str
     step_name: str
     code_version: str
@@ -92,7 +89,6 @@ class SelectionPreviewItem(BaseModel):
 
 class SelectionPreviewResponse(BaseModel):
     materialization_count: int
-    coordinate_count: int
     items: List[SelectionPreviewItem]
 
 

@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 
 from .db import get_session
 from .execution import ExecutionOutcome, _materialized_ancestors
-from .hashing import hash_json
 from .models import (
     Filtered,
     Manifest,
@@ -291,7 +290,6 @@ def _commit_materialization(
         step_name=step.name,
         code_version=step.version,
         code_hash=step.code_hash,
-        config_hash=step.config_hash,
         input_hash=input_hash,
         output_address=output_address,
         output_content_hash=output_content_hash,
@@ -532,11 +530,6 @@ def _snapshot_source(
     now_iso = utcnow_iso()
     manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
 
-    sorted_items = sorted(scanned_items, key=lambda x: x.coordinate)
-    manifest_data = [
-        {"coordinate": it.coordinate, "hash": it.content_hash} for it in sorted_items
-    ]
-
     prev_manifest = (
         session.query(Manifest)
         .filter(Manifest.source_id == ctx.source_id)
@@ -548,7 +541,6 @@ def _snapshot_source(
         id=manifest_id,
         run_id=ctx.run_id,
         source_id=ctx.source_id,
-        manifest_hash=hash_json(manifest_data),
         parent_manifest_id=prev_manifest.id if prev_manifest else None,
         created_at=now_iso,
     )
@@ -560,8 +552,6 @@ def _snapshot_source(
                 manifest_id=manifest_id,
                 coordinate=it.coordinate,
                 content_hash=it.content_hash,
-                size_bytes=it.metadata.get("size_bytes"),
-                mtime_ns=it.metadata.get("mtime_ns"),
             )
         )
 
@@ -589,21 +579,6 @@ def _snapshot_source(
                 for step in topo_steps:
                     if step.skip_cache:
                         continue
-                    last_rc = (
-                        session.query(RunCoordinateStatus)
-                        .filter(
-                            RunCoordinateStatus.pipeline_id == ctx.pipeline_id,
-                            RunCoordinateStatus.source_id == ctx.source_id,
-                            RunCoordinateStatus.coordinate == pe.coordinate,
-                            RunCoordinateStatus.step_name == step.name,
-                            RunCoordinateStatus.status.in_(
-                                ["created", "reused", "filtered"]
-                            ),
-                        )
-                        .order_by(RunCoordinateStatus.id.desc())
-                        .first()
-                    )
-
                     session.add(
                         _new_status(
                             ctx,
@@ -611,12 +586,6 @@ def _snapshot_source(
                             pe.coordinate,
                             "removed",
                             input_hash=pe.content_hash,  # Best approximation for removed
-                            previous_output_address=last_rc.output_address
-                            if last_rc
-                            else None,
-                            previous_materialization_id=last_rc.materialization_id
-                            if last_rc
-                            else None,
                         )
                     )
 

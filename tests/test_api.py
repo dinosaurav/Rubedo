@@ -121,7 +121,6 @@ def test_selection_preview():
     assert response.status_code == 200
     data = response.json()
     assert data["materialization_count"] == 1
-    assert data["coordinate_count"] == 1
     assert data["items"][0]["metadata"]["line_count"] == 2
 
 

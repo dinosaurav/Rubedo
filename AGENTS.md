@@ -42,7 +42,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   not the search handle.
 - `batchbrain/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
-  addresses = `hash(step, version, input_hash, config_hash[, params][, code])`;
+  addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
 - `batchbrain/execution.py` — DB-free execute phase: thread pool, retry
   loop, rate limiter, per-run memo for skip_cache utils.

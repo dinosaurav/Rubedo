@@ -326,7 +326,6 @@ async def preview_selection(request: Request):
             items.append(
                 {
                     "materialization_id": m.id,
-                    "coordinate": None,
                     "pipeline_id": m.pipeline_id,
                     "step_name": m.step_name,
                     "code_version": m.code_version,
@@ -339,7 +338,6 @@ async def preview_selection(request: Request):
 
         return {
             "materialization_count": len(mats),
-            "coordinate_count": len(mats),
             "items": items,
         }
 

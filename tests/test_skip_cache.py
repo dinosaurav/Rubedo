@@ -280,5 +280,4 @@ def test_registration_validations():
         pass
 
     with pytest.raises(ValueError, match="no consumer"):
-        pipe = pipeline(
-id="bad", name="bad", folder=TEST_FOLDER, steps=[orphan])
+        pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[orphan])

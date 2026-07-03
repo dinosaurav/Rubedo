@@ -6,7 +6,7 @@
 Immutable stored result.
 
 **Output address:**
-Deterministic address computed from identity inputs: `hash(step, code_version, input_hash, config_hash)`
+Deterministically computed from identity inputs: `hash(step, code_version, input_hash)`
 
 **Output content hash:**
 Hash of the actual produced bytes/logical result.
@@ -30,11 +30,10 @@ not the primary search handle — it merely coincides with a natural human name
 for file-like sources, where it is a path.
 
 **Searching:**
-Three channels, one home each: lane keys for source-shaped questions
+Two channels, one home each: lane keys for source-shaped questions
 (`coordinate_glob`); indexed fields of the output *value* for content-shaped
 questions (declared with `@step(index=[...])`, extracted at commit — a label
-is just data someone chose to index); metadata filters for diagnostics that
-deliberately sit outside cache identity.
+is just data someone chose to index).
 
 **Source:**
 Anything that can enumerate coordinates with content hashes and load their payloads (folder of files, CSV rows, table rows). Identified by a stable `source_id`.

@@ -34,10 +34,8 @@ class Selection(BaseModel):
     step: Optional[str] = None
     code_version: Optional[str] = None
     output_address: Optional[str] = None
-    output_content_hash: Optional[str] = None
     metadata: Optional[List[MetadataFilter]] = None
     invalidated: Optional[bool] = None
-    coordinates: Optional[List[str]] = None
     # Indexed value fields (@step(index=[...])): all pairs must match
     index: Optional[Dict[str, str]] = None
 
@@ -77,8 +75,6 @@ class Selection(BaseModel):
                 fields["code_version"] = value
             elif key == "address":
                 fields["output_address"] = value
-            elif key == "content":
-                fields["output_content_hash"] = value
             elif key == "live":
                 if value not in ("true", "false"):
                     raise ValueError(f"live: expects true or false, got {value!r}")
@@ -116,10 +112,6 @@ def get_selection_materialization_ids(
         query = query.filter(Materialization.code_version == selection.code_version)
     if selection.output_address:
         query = query.filter(Materialization.output_address == selection.output_address)
-    if selection.output_content_hash:
-        query = query.filter(
-            Materialization.output_content_hash == selection.output_content_hash
-        )
     if selection.invalidated is not None:
         query = query.filter(Materialization.is_live.is_(not selection.invalidated))
 
@@ -131,7 +123,7 @@ def get_selection_materialization_ids(
             )
             query = query.filter(Materialization.id.in_(matching))
 
-    if selection.source_id or selection.coordinate_glob or selection.coordinates:
+    if selection.source_id or selection.coordinate_glob:
         # Join with RunCoordinateStatus to filter by coordinate or source_id
         query = query.join(
             RunCoordinateStatus,
@@ -140,10 +132,6 @@ def get_selection_materialization_ids(
         if selection.source_id:
             query = query.filter(
                 RunCoordinateStatus.source_id == selection.source_id
-            )
-        if selection.coordinates:
-            query = query.filter(
-                RunCoordinateStatus.coordinate.in_(selection.coordinates)
             )
 
     mats = query.all()

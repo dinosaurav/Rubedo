@@ -58,7 +58,6 @@ class Manifest(Base):
     id = Column(String, primary_key=True)
     run_id = Column(String, ForeignKey("runs.id"), nullable=False)
     source_id = Column(String, nullable=False, index=True)
-    manifest_hash = Column(String, nullable=False)
     parent_manifest_id = Column(String, ForeignKey("manifests.id"))
     created_at = Column(String, nullable=False)
 
@@ -69,8 +68,6 @@ class ManifestEntry(Base):
     manifest_id = Column(String, ForeignKey("manifests.id"), nullable=False, index=True)
     coordinate = Column(String, nullable=False)
     content_hash = Column(String, nullable=False)
-    size_bytes = Column(Integer)
-    mtime_ns = Column(Integer)
     __table_args__ = (
         UniqueConstraint("manifest_id", "coordinate", name="_manifest_coord_uc"),
     )
@@ -101,7 +98,6 @@ class Materialization(Base):
     step_name = Column(String, nullable=False, index=True)
     code_version = Column(String, nullable=False)
     code_hash = Column(String)  # source hash at creation time, for drift detection
-    config_hash = Column(String, nullable=False)
     input_hash = Column(String, nullable=False)
     output_address = Column(String, nullable=False, index=True)
     output_content_hash = Column(String, nullable=False)
@@ -175,8 +171,6 @@ class RunCoordinateStatus(Base):
     input_hash = Column(String)
     output_address = Column(String)
     materialization_id = Column(Integer, ForeignKey("materializations.id"))
-    previous_output_address = Column(String)
-    previous_materialization_id = Column(Integer, ForeignKey("materializations.id"))
     status = Column(String, nullable=False, index=True)
     error_message = Column(String)
     error_type = Column(String, index=True)

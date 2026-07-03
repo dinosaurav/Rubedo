@@ -176,7 +176,6 @@ def test_deleted_file_records_removed(setup_teardown):
             .all()
         }
         assert coords["a.txt"].status == "removed"
-        assert coords["a.txt"].previous_output_address == old_address
         assert coords["b.txt"].status == "reused"
         assert coords["c.txt"].status == "reused"
 

@@ -45,9 +45,7 @@ class StepSpec:
     fn: Callable
     version: str
     depends_on: List[str]
-    config_hash: str
     params_model: Optional[Type[BaseModel]] = None
-    config: Optional[Dict[str, Any]] = None
     workers: int = 4
     code_hash: Optional[str] = None
     code_mode: str = "warn"  # warn | auto
@@ -85,7 +83,6 @@ def step(
     version: str,
     depends_on: Optional[List[str]] = None,
     params_model: Optional[Type[BaseModel]] = None,
-    config: Optional[Dict[str, Any]] = None,
     workers: int = 4,
     code: str = "warn",
     retries: int = 0,
@@ -166,7 +163,6 @@ def step(
     parsed_stale = parse_duration(stale_after) if stale_after else None
 
     def decorator(fn: Callable):
-        from .hashing import hash_json
 
         code_hash = _hash_source(fn)
         if code == "auto" and code_hash is None:
@@ -175,15 +171,12 @@ def step(
                 "function source"
             )
 
-        config_hash = hash_json(config or {})
         return StepSpec(
             name=name,
             fn=fn,
             version=version,
             depends_on=depends_on or [],
-            config_hash=config_hash,
             params_model=params_model,
-            config=config,
             workers=workers,
             code_hash=code_hash,
             code_mode=code,
@@ -257,8 +250,6 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["stale_after_seconds"] = s.stale_after
         if s.params_model is not None:
             entry["params_schema"] = s.params_model.model_json_schema()
-        if s.config:
-            entry["config"] = s.config
         steps.append(entry)
 
     return {

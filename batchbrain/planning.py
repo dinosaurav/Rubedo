@@ -195,7 +195,6 @@ def _plan_step(
                 identity = {
                     "step": step.name,
                     "version": step.version,
-                    "config": step.config_hash,
                     "parents": {
                         dep: ref.output_content_hash
                         for dep, ref in parent_mats.items()
@@ -247,7 +246,6 @@ def _plan_step(
             step.name,
             step.version,
             input_hash,
-            step.config_hash,
             # Params are part of a step's cache identity only if the step
             # consumes them; downstream steps pick up param changes through
             # the content-hash chain
