@@ -89,6 +89,13 @@ class CsvSource(Source):
     inserted or edited, and only the caller knows which column(s) identify a
     row. Pass key=None to opt into content-addressed coordinates, where an
     edited row shows up as removed + created rather than changed.
+
+    The coordinate is a lane key, not a uniqueness constraint on your data:
+    duplicate keys are handled mechanically. Rows sharing a key *and* content
+    are indistinguishable units of work and collapse into one lane; rows
+    sharing a key with different content get content-suffixed lanes
+    ("bob#3f2a9c"), where an edit reads as removed + created. Searching by
+    the human-facing key value is the job of indexed fields, not the lane.
     """
 
     def __init__(self, path: str, *, key):
@@ -104,14 +111,16 @@ class CsvSource(Source):
 
     def scan(self) -> List[SourceItem]:
         import csv
+        from collections import defaultdict
 
         from .hashing import hash_json
 
-        items: List[SourceItem] = []
-        seen = set()
-
         if not os.path.exists(self.path):
-            return items
+            return []
+
+        # base lane key -> {content_hash: (row, line)}; identical (key, content)
+        # rows are indistinguishable units of work and collapse to one lane
+        groups: Dict[str, Dict[str, tuple]] = defaultdict(dict)
 
         with open(self.path, newline="", encoding="utf-8") as f:
             for row_num, row in enumerate(csv.DictReader(f), start=2):
@@ -123,23 +132,26 @@ class CsvSource(Source):
                         raise ValueError(
                             f"{self.path}: key column(s) {missing} not found in CSV header"
                         )
-                    coordinate = "|".join(str(row[k]) for k in self.key)
+                    base = "|".join(str(row[k]) for k in self.key)
                 else:
-                    coordinate = f"row-{content_hash[:12]}"
+                    base = f"row-{content_hash[:12]}"
 
-                if coordinate in seen:
-                    raise ValueError(
-                        f"{self.path}: duplicate coordinate '{coordinate}' at line {row_num}; "
-                        "key column(s) must uniquely identify rows"
-                    )
-                seen.add(coordinate)
+                groups[base].setdefault(content_hash, (row, row_num))
 
+        items: List[SourceItem] = []
+        for base, variants in groups.items():
+            collided = len(variants) > 1
+            for content_hash, (row, line) in variants.items():
+                coordinate = f"{base}#{content_hash[:6]}" if collided else base
+                metadata = {"line": line}
+                if collided:
+                    metadata["key_collision"] = True
                 items.append(
                     SourceItem(
                         coordinate=coordinate,
                         content_hash=content_hash,
                         ref=row,
-                        metadata={"line": row_num},
+                        metadata=metadata,
                     )
                 )
 

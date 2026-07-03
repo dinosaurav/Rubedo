@@ -67,12 +67,28 @@ def test_csv_source_composite_key(tmp_path):
     assert coords == {"east|alice", "west|alice"}
 
 
-def test_csv_source_duplicate_key_raises(tmp_path):
+def test_csv_source_duplicate_keys_disambiguate_lanes(tmp_path):
     csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "id,name\n1,alice\n1,bob\n")
+    write_csv(csv_path, "id,name\n1,alice\n1,bob\n2,carol\n")
 
-    with pytest.raises(ValueError, match="duplicate coordinate '1'"):
-        CsvSource(csv_path, key="id").scan()
+    items = CsvSource(csv_path, key="id").scan()
+    coords = sorted(it.coordinate for it in items)
+
+    # Colliding key -> content-suffixed lanes; unique key stays clean
+    assert coords[2] == "2"
+    assert all(c.startswith("1#") for c in coords[:2])
+    assert len(set(coords)) == 3
+    collided = [it for it in items if it.coordinate != "2"]
+    assert all(it.metadata.get("key_collision") for it in collided)
+
+
+def test_csv_source_identical_duplicate_rows_collapse(tmp_path):
+    csv_path = str(tmp_path / "rows.csv")
+    write_csv(csv_path, "id,name\n1,alice\n1,alice\n")
+
+    items = CsvSource(csv_path, key="id").scan()
+    # Same key, same content: indistinguishable work, one lane, no suffix
+    assert [it.coordinate for it in items] == ["1"]
 
 
 def test_csv_source_missing_key_column_raises(tmp_path):

@@ -20,8 +20,21 @@ A user-triggered execution attempt over some scope.
 **Attempt/event:**
 Something that happened during execution, successful or not.
 
-**Coordinate:**
-Human-facing selection key, e.g. a file path or a row key. Produced by a Source; must stay stable across scans so "changed" (same coordinate, new hash) is distinguishable from "removed + added".
+**Coordinate (lane key):**
+The engine's dataflow key: it matches a step's output to its consumers within
+a run, and matches "the same item" across runs so "changed" (same coordinate,
+new hash) is distinguishable from "removed + added". Unique within a scan
+(sources disambiguate collisions mechanically), stable across scans. It is
+*not* the identity of work (that is the content-addressed output address) and
+not the primary search handle — it merely coincides with a natural human name
+for file-like sources, where it is a path.
+
+**Searching:**
+Three channels, one home each: lane keys for source-shaped questions
+(`coordinate_glob`); indexed fields of the output *value* for content-shaped
+questions (declared with `@step(index=[...])`, extracted at commit — a label
+is just data someone chose to index); metadata filters for diagnostics that
+deliberately sit outside cache identity.
 
 **Source:**
 Anything that can enumerate coordinates with content hashes and load their payloads (folder of files, CSV rows, table rows). Identified by a stable `source_id`.
