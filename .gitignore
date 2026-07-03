@@ -33,6 +33,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Root-level scratch/debug files (real tests live in tests/)
+/test_*.py
+/test_*.txt
+/print_errors.py
+
 # Testing and Coverage
 .test_*/
 .pytest_cache/
