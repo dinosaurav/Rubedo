@@ -11,6 +11,7 @@ class Selection(BaseModel):
     coordinate_glob: Optional[str] = None
     step: Optional[str] = None
     code_version: Optional[str] = None
+    version_range: Optional[str] = None
     output_address: Optional[str] = None
     invalidated: Optional[bool] = None
     # Indexed value fields (@step(index=[...])): all pairs must match
@@ -48,7 +49,10 @@ class Selection(BaseModel):
             elif key == "step":
                 fields["step"] = value
             elif key == "version":
-                fields["code_version"] = value
+                if value.startswith(("<", ">", "=", "!")):
+                    fields["version_range"] = value
+                else:
+                    fields["code_version"] = value
             elif key == "address":
                 fields["output_address"] = value
             elif key == "live":
@@ -112,6 +116,21 @@ def get_selection_materialization_ids(
                 .first()
             )
             if not co or not fnmatch.fnmatch(co.coordinate, selection.coordinate_glob):
+                continue
+                
+        # Version range check
+        if selection.version_range:
+            from packaging.version import Version, InvalidVersion
+            from packaging.specifiers import SpecifierSet
+            try:
+                specifier_set = SpecifierSet(selection.version_range)
+                parsed_version = Version(m.code_version)
+                if parsed_version not in specifier_set:
+                    continue
+            except InvalidVersion:
+                continue
+            except ValueError:
+                # If the specifier itself is invalid, we might want to fail earlier, but for now we skip.
                 continue
 
         result_ids.append(m.id)

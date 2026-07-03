@@ -154,14 +154,47 @@ function ColumnHeader({ header, table, openMenuId, setOpenMenuId }: { header: He
   );
 }
 
+const versionSort = (rowA: any, rowB: any, columnId: string) => {
+  const a = rowA.getValue(columnId) as string;
+  const b = rowB.getValue(columnId) as string;
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+
+  const aParts = a.split('.');
+  const bParts = b.split('.');
+
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const aPart = aParts[i] || '0';
+    const bPart = bParts[i] || '0';
+
+    const aNum = parseInt(aPart, 10);
+    const bNum = parseInt(bPart, 10);
+
+    if (!isNaN(aNum) && !isNaN(bNum)) {
+      if (aNum !== bNum) return aNum - bNum;
+    } else {
+      if (aPart !== bPart) return aPart.localeCompare(bPart);
+    }
+  }
+  return 0;
+};
+
 export function DataTable({ data, columns }: { data: any[]; columns: ColumnDef<any, any>[] }) {
   const [sorting, setSorting] = useState<any[]>([]);
   const [columnFilters, setColumnFilters] = useState<any[]>([]);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
+  const processedColumns = columns.map(col => {
+    if ((col as any).accessorKey === 'code_version') {
+      return { ...col, sortingFn: versionSort };
+    }
+    return col;
+  });
+
   const table = useReactTable({
     data,
-    columns,
+    columns: processedColumns,
     state: {
       sorting,
       columnFilters,

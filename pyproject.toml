@@ -10,7 +10,8 @@ dependencies = [
     "sqlalchemy",
     "pydantic",
     "fastapi",
-    "uvicorn"
+    "uvicorn",
+    "packaging>=26.2",
 ]
 
 [tool.setuptools]

@@ -17,6 +17,15 @@ def test_reserved_prefixes():
     assert sel.invalidated is False
 
 
+def test_version_range_parsing():
+    sel = Selection.parse("version:<2.0")
+    assert sel.version_range == "<2.0"
+    assert sel.code_version is None
+    
+    sel2 = Selection.parse("version:!=1.0")
+    assert sel2.version_range == "!=1.0"
+    assert sel2.code_version is None
+
 def test_open_vocabulary_is_the_index():
     sel = Selection.parse("company:acme domain:acme.com")
     assert sel.index == {"company": "acme", "domain": "acme.com"}
