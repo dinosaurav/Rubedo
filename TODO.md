@@ -185,7 +185,7 @@ source_id (assert password not in id when url contains one).
 
 ## 3. CPU-bound parallelism — `@step(executor="process")`
 
-**Decisions:**
+**Decisions (Currently Implemented):**
 - `StepSpec.executor: str = "thread"` (`thread` | `process`).
 - Registration-time validation for `process`: the fn must be picklable —
   reject when `"<locals>" in fn.__qualname__` (closures/test-local defs)
@@ -204,11 +204,22 @@ source_id (assert password not in id when url contains one).
   ThreadPoolExecutor), `max_workers=workers or step.workers`.
 - `Filtered`/`ProcessResult` returns work unchanged (they pickle).
 
-**Tests:** module-level fn steps in the test file (they must be, that's the
-point). Cover: results correct across the pool; registration rejection of
-a local fn; retries still counted (module-level fn that fails via a
-tempfile-based counter — closures can't cross processes); pickling error
-surfaces as a normal step failure, not a crash.
+**The Overcomplication:**
+The `executor="process"` option adds a layer of complexity because it forces the orchestrator (`execution._execute_step`) to manage two different concurrency primitives (`ThreadPoolExecutor` and `ProcessPoolExecutor`). This means we have to maintain a delicate balance where retries and rate limits run in the parent thread while the actual execution happens in the child process. It also imposes strict pickling constraints on step arguments and functions (no closures), which can confuse users when their data or inner functions fail to serialize.
+
+**Possible Fix:**
+Remove the `executor="process"` option from the engine entirely and default strictly to thread-based concurrency. If users have heavy CPU-bound tasks, they can implement multiprocessing *inside* their own step functions, thereby delegating the CPU-bound complexity to the user's code rather than baking it into the engine's orchestration layer.
+
+──────────────────────────────────────────────────────────────────────
+
+## 3.1 Codebase Housekeeping & Typing Improvements
+
+**Goal:** Improve developer experience and code maintainability by expanding explicit type hints across the codebase.
+
+**Decisions:**
+- **Type Hints**: Expand type hinting for `RunMemo._values`, `Producer` Callables, and parameters in `execution.py`.
+- **API Typing**: In `server.py`, some endpoints like `get_object_metadata` and `download_object` return untyped dictionaries or direct `FileResponse` objects. Add explicit Pydantic schemas (e.g. `ObjectMetadataOut`) to these to improve the API documentation.
+- **`typing.Any` reduction**: Where possible, replace `Any` with specific generics or unions, particularly around serialized output data in `store.py`.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -333,6 +344,18 @@ manifest caching, multi-source pipeline API. Bring a proposal first.
 ## 10. Naming  **[parked by owner]**
 
 Brainstorm + PyPI availability check when asked. Not the current priority.
+
+──────────────────────────────────────────────────────────────────────
+
+## 11. Future Product Directions (Recommended Next Steps)
+
+These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
+
+- **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
+- **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
+- **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
+- **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `batchit` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
+- **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 
 ──────────────────────────────────────────────────────────────────────
 
