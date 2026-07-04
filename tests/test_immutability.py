@@ -19,6 +19,7 @@ from batchbrain.models import (
     RunEvent,
 )
 from batchbrain.store import init_store
+from batchbrain.util import utcnow_iso
 
 TEST_FOLDER = ".test_immutability_data"
 ENV_FOLDER = ".test_immutability_env"
@@ -116,7 +117,17 @@ def test_materialization_liveness_is_the_only_legal_update():
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.is_live = False
-        session.commit()  # projection column: allowed
+        # Projection column is allowed, but invariant 8 requires the flip to
+        # ship a lifecycle row in the same transaction (pairing guard).
+        session.add(
+            MaterializationLifecycle(
+                materialization_id=mat.id,
+                action="invalidated",
+                reason="test",
+                created_at=utcnow_iso(),
+            )
+        )
+        session.commit()
 
 
 def test_run_identity_is_immutable_but_lifecycle_is_not():

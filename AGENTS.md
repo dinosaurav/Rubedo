@@ -56,7 +56,12 @@ accurate and load-bearing; keep them updated when behavior changes.
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,
   `Materialization.is_live`/`refreshed_at`). Tests that must backdate rows
-  use raw SQL deliberately.
+  use raw SQL deliberately. A `before_commit` session guard (the pairing
+  guard) additionally enforces invariant 8: every `is_live`/`refreshed_at`
+  flip must ship a `materialization_lifecycle` row for that materialization in
+  the same transaction. It accumulates across flushes (the supersede path
+  flushes a demotion before its lifecycle row exists) and skips savepoint
+  releases (`in_nested_transaction()`).
 - `batchbrain/selection.py` — `Selection` + `Selection.parse()` (the query
   language) + the materialization query.
 - `batchbrain/server.py` — read-only FastAPI + invalidation endpoint.

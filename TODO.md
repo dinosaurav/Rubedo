@@ -238,28 +238,20 @@ rule in both branches. Assert PRAGMAs are set on a fresh connection.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 5. Pairing-rule guard (lifecycle rows enforced mechanically)
+## 5. Pairing-rule guard (lifecycle rows enforced mechanically)  **[DONE]**
 
-**Invariant 8**: every `is_live`/`refreshed_at` flip must ship a
-`materialization_lifecycle` row in the same transaction.
-
-**Decision — enforce at commit, not flush** (the supersede path
-legitimately flushes the demotion before its lifecycle row exists):
-- In models.py, add a `before_flush` session listener that *accumulates*
-  into `session.info`: ids of Materializations whose `is_live` or
-  `refreshed_at` changed, and materialization_ids of new
-  MaterializationLifecycle rows.
-- A `before_commit` listener asserts changed-ids ⊆ lifecycle-ids and
-  raises `ImmutabilityError` naming the offenders; clear `session.info`
-  on commit AND rollback (`after_transaction_end` is simplest).
-- Exemption for tests that legitimately flip `is_live` directly
-  (test_immutability's projection-column test): those tests should now
-  add a lifecycle row or use raw SQL — update them; the guard is the
-  point.
-
-**Tests:** flipping `is_live` without a lifecycle row raises at commit;
-the invalidate/supersede/restore/refresh paths all still pass (they
-already pair correctly); rollback clears the tracking state.
+**Invariant 8** is now enforced mechanically. A `before_flush` session
+listener accumulates into `session.info` (ids of Materializations whose
+`is_live`/`refreshed_at` changed, plus materialization_ids of new lifecycle
+rows); a `before_commit` listener flushes, asserts changed-ids ⊆
+lifecycle-ids, and raises `ImmutabilityError` naming offenders. Two wrinkles
+found during build (both handled): `before_commit` fires *before* commit's
+own pre-flush (so the guard flushes first), and it *also* fires on savepoint
+release (`begin_nested`) — skipped via `in_nested_transaction()`, since
+`_commit_materialization` demotes inside a savepoint but adds the superseded
+lifecycle row after it. Accumulators consumed on clean commit, cleared on
+`after_rollback`. `tests/test_pairing_guard.py` + updated
+`test_immutability` projection test.
 
 ──────────────────────────────────────────────────────────────────────
 

@@ -50,9 +50,10 @@ Removal from current/canonical eligibility, not necessarily physical deletion.
 `Materialization.is_live` and `refreshed_at` are mutable projections; the
 append-only `materialization_lifecycle` table (invalidated / restored /
 superseded / refreshed rows) is the truth about every liveness and freshness
-transition. Every projection change must be accompanied by a lifecycle row in
-the same transaction. Similarly, Run's status columns are a projection of the
-`run_events` log.
+transition. Every `is_live`/`refreshed_at` change must be accompanied by a
+lifecycle row for the same materialization in the same transaction — a session
+guard enforces this at commit (see invariant 8). Similarly, Run's status
+columns are a projection of the `run_events` log.
 
 ## Core Invariants
 
@@ -65,4 +66,6 @@ the same transaction. Similarly, Run's status columns are a projection of the
 7. Invalidation never silently deletes historical facts.
 8. Ledger tables are append-only, enforced by ORM guards; the only legal
    updates anywhere are the projection columns (Run lifecycle,
-   Materialization.is_live).
+   Materialization.is_live). Every `is_live`/`refreshed_at` flip must ship a
+   `materialization_lifecycle` row for that materialization in the same
+   transaction — a `before_commit` session guard rejects an unpaired flip.
