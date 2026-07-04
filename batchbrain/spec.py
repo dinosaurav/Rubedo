@@ -1,3 +1,6 @@
+"""
+Pipeline and step specification definitions.
+"""
 import re
 from typing import Callable, Optional, Dict, Any, Tuple, Type, List
 from pydantic import BaseModel
@@ -41,6 +44,7 @@ def parse_duration(spec: str) -> float:
 
 @dataclass
 class StepSpec:
+    """The static definition of a pipeline step and its policies."""
     name: str
     fn: Callable
     version: str
@@ -63,6 +67,7 @@ class StepSpec:
 
 @dataclass
 class PipelineSpec:
+    """The static definition of a complete DAG pipeline."""
     id: str
     name: str
     source: Source
@@ -70,6 +75,7 @@ class PipelineSpec:
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
+    """Extract and hash the source code of a function for code drift detection."""
     import inspect
 
     from .hashing import hash_text
@@ -216,6 +222,7 @@ def pipeline(
     id: Optional[str] = None,
     source: Optional[Source] = None,
 ):
+    """Construct a pipeline specification from a source and a list of steps."""
     if (source is None) == (folder is None):
         raise ValueError("Pass exactly one of source= or folder= (FolderSource sugar)")
     if source is None:

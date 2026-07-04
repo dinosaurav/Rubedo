@@ -1,3 +1,6 @@
+"""
+Content-addressed object store operations.
+"""
 import os
 import json
 from typing import Any, Tuple
@@ -9,6 +12,7 @@ STAGING_DIR = ".batchbrain/staging"
 
 
 def _ensure_gitignore(directory: str):
+    """Ensure a directory is gitignored."""
     if not directory:
         return
     gitignore_path = os.path.join(directory, ".gitignore")
@@ -23,21 +27,25 @@ def _ensure_gitignore(directory: str):
 
 
 def init_store():
+    """Ensure the objects and staging directories exist."""
     os.makedirs(OBJECTS_DIR, exist_ok=True)
     os.makedirs(STAGING_DIR, exist_ok=True)
     _ensure_gitignore(os.path.dirname(OBJECTS_DIR))
 
 
 def _get_object_path(content_hash: str) -> str:
+    """Compute the path for a content-hashed object."""
     return os.path.join(OBJECTS_DIR, content_hash[:2], content_hash[2:4], content_hash)
 
 
 def _get_staging_path(run_id: str, coordinate: str, content_hash: str) -> str:
+    """Compute the temporary path for staging an object before commit."""
     safe_coord = coordinate.replace("/", "_").replace("\\", "_")
     return os.path.join(STAGING_DIR, run_id, safe_coord, f"{content_hash}.tmp")
 
 
 def _serialize(result: Any) -> Tuple[bytes, str]:
+    """Serialize an output value to bytes and return its content type."""
     value = result.value if isinstance(result, ProcessResult) else result
 
     if isinstance(value, bytes):
@@ -116,6 +124,7 @@ def read_materialization_output(materialization) -> Any:
             return raw_data
 
 def cleanup_staged(run_id: str):
+    """Remove any temporary staged files for the given run."""
     import shutil
     run_staging = os.path.join(STAGING_DIR, run_id)
     if os.path.exists(run_staging):

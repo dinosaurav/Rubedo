@@ -1,3 +1,6 @@
+"""
+FastAPI server for the read-only web UI and invalidation API.
+"""
 import os
 import json
 from contextlib import asynccontextmanager
@@ -50,6 +53,7 @@ app.add_middleware(
 
 
 def _to_dict(obj):
+    """Convert an SQLAlchemy model instance to a dictionary."""
     d = dict(obj.__dict__)
     d.pop("_sa_instance_state", None)
     return d
@@ -57,6 +61,7 @@ def _to_dict(obj):
 
 @app.get("/api/runs", response_model=List[RunListItem])
 def get_runs():
+    """List all pipeline runs, ordered by most recent."""
     with get_session() as session:
         runs = session.query(Run).order_by(Run.started_at.desc()).all()
         results = []
@@ -80,6 +85,7 @@ def get_runs():
 
 @app.get("/api/runs/{run_id}", response_model=RunDetailOut)
 def get_run(run_id: str):
+    """Get detailed information for a specific run."""
     with get_session() as session:
         run = session.query(Run).filter_by(id=run_id).first()
         if not run:
@@ -109,6 +115,7 @@ def get_run(run_id: str):
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])
 def get_run_coordinates(run_id: str):
+    """Get the status of every coordinate in a specific run."""
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=run_id).all()
         return [_to_dict(c) for c in coords]
@@ -116,6 +123,7 @@ def get_run_coordinates(run_id: str):
 
 @app.get("/api/runs/{run_id}/events", response_model=List[RunEventOut])
 def get_run_events(run_id: str):
+    """Get the event log for a specific run."""
     with get_session() as session:
         events = (
             session.query(RunEvent).filter_by(run_id=run_id).order_by(RunEvent.id).all()
@@ -129,6 +137,7 @@ def get_materializations(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
+    """List materializations with pagination."""
     with get_session() as session:
         total = session.query(Materialization).count()
         mats = (
@@ -144,6 +153,7 @@ def get_materializations(
 
 @app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
 def get_current_outputs():
+    """Get the latest live output for every coordinate across all sources."""
     with get_session() as session:
         latest_ids_subq = (
             session.query(func.max(RunCoordinateStatus.id).label("max_id"))
@@ -207,6 +217,7 @@ def _resolve_materialization(session, output_address: str):
 
 @app.get("/api/objects/{output_address}")
 def get_object_metadata(output_address: str):
+    """Get metadata and a preview for a materialized object."""
     with get_session() as session:
         mat = _resolve_materialization(session, output_address)
         if not mat:
@@ -286,6 +297,7 @@ def get_object_metadata(output_address: str):
 
 @app.get("/api/objects/{output_address}/download")
 def download_object(output_address: str):
+    """Download the raw bytes of a materialized object."""
     with get_session() as session:
         mat = _resolve_materialization(session, output_address)
         if not mat:
@@ -311,6 +323,7 @@ def _selection_from_payload(data: dict) -> Selection:
 
 @app.post("/api/selection/preview", response_model=SelectionPreviewResponse)
 async def preview_selection(request: Request):
+    """Preview which materializations match a selection query."""
     data = await request.json()
     sel = _selection_from_payload(data)
     from .selection import get_selection_materialization_ids
@@ -344,6 +357,7 @@ async def preview_selection(request: Request):
 
 @app.post("/api/selection/invalidate", response_model=SelectionInvalidateResponse)
 async def invalidate_selection(request: Request):
+    """Invalidate materializations matching a selection query."""
     data = await request.json()
     reason = request.query_params.get("reason", "UI Invalidation")
 

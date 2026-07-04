@@ -1,3 +1,6 @@
+"""
+Data sources for Batchit pipelines. Provides mechanisms for iterating over files, CSVs, and database tables.
+"""
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -180,6 +183,7 @@ def coerce_source(source) -> Source:
     raise TypeError(f"Expected a Source or folder path string, got {type(source)!r}")
 
 def _jsonable(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a dictionary containing complex types into JSON-serializable primitives."""
     import datetime
     from decimal import Decimal
     

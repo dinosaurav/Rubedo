@@ -1,3 +1,6 @@
+"""
+Selection language and querying logic for invalidation and UI previews.
+"""
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -7,6 +10,7 @@ from .models import Materialization, MaterializationIndexEntry, RunCoordinateSta
 
 
 class Selection(BaseModel):
+    """Criteria for selecting materializations, either programmatically or via a query string."""
     source_id: Optional[str] = None
     coordinate_glob: Optional[str] = None
     step: Optional[str] = None
@@ -69,6 +73,7 @@ class Selection(BaseModel):
 def get_selection_materialization_ids(
     session: Session, selection: Selection
 ) -> List[int]:
+    """Retrieve materialization IDs that match the given selection criteria."""
     query = session.query(Materialization)
 
     if selection.step:

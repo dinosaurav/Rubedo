@@ -1,3 +1,9 @@
+"""
+Database initialization and session management.
+
+Provides utilities for setting up the SQLite database, ensuring the directory
+is gitignored, configuring WAL mode for concurrency, and providing sessions.
+"""
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -10,6 +16,12 @@ SessionLocal = None
 
 
 def _ensure_gitignore(directory: str):
+    """
+    Ensure the given directory has a .gitignore file that ignores all contents except itself.
+    
+    Args:
+        directory (str): The path to the directory to protect.
+    """
     if not directory:
         return
     gitignore_path = os.path.join(directory, ".gitignore")
@@ -24,6 +36,13 @@ def _ensure_gitignore(directory: str):
 
 
 def init_db(db_path: str = None):
+    """
+    Initialize the database engine and create tables.
+
+    Args:
+        db_path (str, optional): The database URL or file path. If None, uses BATCHBRAIN_DB_PATH
+            or the default '.batchbrain/batchbrain.sqlite'.
+    """
     global engine, SessionLocal
     if engine is not None:
         try:
@@ -70,6 +89,12 @@ def init_db(db_path: str = None):
 
 
 def get_session() -> Session:
+    """
+    Get a new SQLAlchemy session, initializing the DB if necessary.
+
+    Returns:
+        Session: A new database session.
+    """
     if SessionLocal is None:
         init_db()
     return SessionLocal()

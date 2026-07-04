@@ -50,6 +50,7 @@ def _resolve_invocation(pipeline: PipelineSpec, source, params):
 
 @dataclass
 class PlannedCoordinate:
+    """A projected action for a single coordinate in a specific step."""
     coordinate: str
     step_name: str
     action: str  # reuse | execute | pending | removed
@@ -58,6 +59,7 @@ class PlannedCoordinate:
 
 @dataclass
 class RunPlan:
+    """The complete dry-run plan for a pipeline execution."""
     pipeline_id: str
     source_id: str
     items: List[PlannedCoordinate]
@@ -192,6 +194,19 @@ def run_pipeline(
     force: bool = False,
     params: Optional[dict] = None,
 ) -> RunSummary:
+    """
+    Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
+
+    Args:
+        pipeline (PipelineSpec): The pipeline to run.
+        source (Optional[Source | str]): The source data.
+        workers (Optional[int]): Number of parallel workers to use.
+        force (bool): If True, forces re-execution of cached outputs.
+        params (Optional[dict]): Run-level parameters.
+
+    Returns:
+        RunSummary: A summary of the executed run.
+    """
     source = pipeline.source if source is None else coerce_source(source)
 
     topo_steps = topological_sort(pipeline)

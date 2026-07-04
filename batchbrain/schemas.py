@@ -1,8 +1,12 @@
+"""
+Pydantic schemas for the FastAPI server.
+"""
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 
 class RunListItem(BaseModel):
+    """Summary of a run, typically for list views."""
     id: str
     kind: str
     status: str
@@ -19,6 +23,7 @@ class RunListItem(BaseModel):
 
 
 class RunDetailOut(RunListItem):
+    """Detailed view of a run including DAG snapshot and step counts."""
     error_message: Optional[str] = None
     # DAG snapshot recorded at run start, and per-step outcome counts
     definition: Optional[Dict[str, Any]] = None
@@ -26,6 +31,7 @@ class RunDetailOut(RunListItem):
 
 
 class RunCoordinateStatusOut(BaseModel):
+    """Status of a single coordinate for a step during a run."""
     coordinate: str
     status: str
     pipeline_id: Optional[str] = None
@@ -39,6 +45,7 @@ class RunCoordinateStatusOut(BaseModel):
 
 
 class RunEventOut(BaseModel):
+    """A single log event from a run."""
     timestamp: str
     level: str
     event_type: str
@@ -49,6 +56,7 @@ class RunEventOut(BaseModel):
 
 
 class MaterializationOut(BaseModel):
+    """A materialized output from a step."""
     id: int
     pipeline_id: str
     step_name: str
@@ -63,6 +71,7 @@ class MaterializationOut(BaseModel):
 
 
 class CurrentOutputOut(BaseModel):
+    """The latest live output for a given coordinate."""
     source_id: str
     coordinate: str
     status: str
@@ -77,6 +86,7 @@ class CurrentOutputOut(BaseModel):
 
 
 class SelectionPreviewItem(BaseModel):
+    """A materialization matched by a selection query."""
     materialization_id: int
     pipeline_id: str
     step_name: str
@@ -88,17 +98,20 @@ class SelectionPreviewItem(BaseModel):
 
 
 class SelectionPreviewResponse(BaseModel):
+    """The full set of materializations matched by a selection query."""
     materialization_count: int
     items: List[SelectionPreviewItem]
 
 
 class SelectionInvalidateResponse(BaseModel):
+    """Result of an invalidation request."""
     run_id: str
     invalidated_count: int
     materialization_ids: List[int]
 
 
 class PipelineOut(BaseModel):
+    """A pipeline definition as seen by the engine."""
     id: str
     source_id: Optional[str] = None
     run_count: int

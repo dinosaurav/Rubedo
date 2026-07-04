@@ -17,6 +17,7 @@ from .util import iso_age_seconds
 
 
 class MatRef:
+    """A lightweight reference to a committed materialization."""
     def __init__(
         self,
         id,
@@ -55,6 +56,7 @@ class EphemeralRef:
 
 @dataclass
 class StepDecision:
+    """The planned action for a coordinate in a step (execute, reuse, filter, block, or pending)."""
     coordinate: str
     action: str  # reuse | execute | blocked | pending | filtered
     item: Optional[SourceItem] = None
@@ -74,6 +76,7 @@ class StepDecision:
 
 
 def topological_sort(pipeline: PipelineSpec) -> List[StepSpec]:
+    """Sort the pipeline steps in topological order based on dependencies."""
     # Validate and sort
     name_to_step = {s.name: s for s in pipeline.steps}
 
@@ -115,6 +118,7 @@ def _compute_step_input_hash(
     sf_content_hash: str,
     parent_mats: Dict[str, MatRef],
 ) -> str:
+    """Compute the combined input hash for a step given its parent materializations."""
     if not step.depends_on:
         return sf_content_hash
     if len(step.depends_on) == 1:
@@ -129,18 +133,21 @@ def _compute_step_input_hash(
 
 
 def _step_accepts_params(step: StepSpec) -> bool:
+    """Check if the step function signature accepts a 'params' keyword argument."""
     import inspect
 
     return "params" in inspect.signature(step.fn).parameters
 
 
 def _build_step_params(step: StepSpec, params: Optional[dict]):
+    """Construct and validate parameters for a step using its optional Pydantic model."""
     if step.params_model:
         return step.params_model(**(params or {}))
     return params or {}
 
 
 def _code_drift_message(step: StepSpec, drifted: int) -> str:
+    """Format a warning message about reusing outputs whose source code has drifted."""
     return (
         f"Step '{step.name}' source code changed but version is still "
         f"'{step.version}': reusing {drifted} cached output(s) computed by the "

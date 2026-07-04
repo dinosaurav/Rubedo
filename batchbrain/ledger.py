@@ -39,6 +39,7 @@ from .util import utcnow_iso
 
 @dataclass
 class _RunContext:
+    """Context holding state and counts for the current pipeline run."""
     run_id: str
     pipeline_id: str
     source_id: str
@@ -47,6 +48,7 @@ class _RunContext:
     coord_step_mats: Dict[tuple, Any] = field(default_factory=dict)
 
     def count(self, step_name: str, outcome: str):
+        """Record an outcome count for the run and a specific step."""
         self.totals[outcome] += 1
         self.by_step[step_name][outcome] += 1
 
@@ -62,6 +64,7 @@ def _emit_event(
     message: Optional[str] = None,
     data: Optional[dict] = None,
 ):
+    """Write a raw run event to the database."""
     session.add(
         RunEvent(
             run_id=run_id,
@@ -78,6 +81,7 @@ def _emit_event(
 
 
 def _emit(session: Session, ctx: _RunContext, level: str, event_type: str, **kwargs):
+    """Write a run event associated with the current context."""
     _emit_event(
         session, ctx.run_id, level, event_type, pipeline_id=ctx.pipeline_id, **kwargs
     )
@@ -86,6 +90,7 @@ def _emit(session: Session, ctx: _RunContext, level: str, event_type: str, **kwa
 def _new_status(
     ctx: _RunContext, step_name: str, coordinate: str, status: str, **kwargs
 ) -> RunCoordinateStatus:
+    """Create a new RunCoordinateStatus object for the given coordinate."""
     return RunCoordinateStatus(
         run_id=ctx.run_id,
         pipeline_id=ctx.pipeline_id,
@@ -399,6 +404,7 @@ def _record_failure(
     event_message: str,
     metadata_json: Optional[str] = None,
 ):
+    """Record a step execution failure and emit an error event."""
     session.add(
         _new_status(
             ctx,
@@ -660,6 +666,7 @@ def _snapshot_source(
 
 
 def _finish_run(ctx: _RunContext) -> RunSummary:
+    """Finalize the run status and return a summary of all outcomes."""
     full_summary = {
         "created": ctx.totals["created"],
         "reused": ctx.totals["reused"],

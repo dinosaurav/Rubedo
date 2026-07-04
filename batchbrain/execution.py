@@ -28,11 +28,19 @@ class _RateLimiter:
     """Paces calls evenly across a step's worker threads."""
 
     def __init__(self, count: int, period_seconds: float):
+        """
+        Initialize the rate limiter.
+
+        Args:
+            count (int): Number of allowed calls per period.
+            period_seconds (float): Time period in seconds.
+        """
         self.min_interval = period_seconds / count
         self._lock = threading.Lock()
         self._next_free = 0.0
 
     def acquire(self):
+        """Wait until it is safe to proceed according to the rate limit."""
         with self._lock:
             now = time.monotonic()
             wait = self._next_free - now
@@ -50,10 +58,21 @@ class _RunMemo:
     """
 
     def __init__(self):
+        """Initialize the run memoizer with a reentrant lock."""
         self._lock = threading.RLock()
         self._values: Dict[Any, Any] = {}
 
     def compute(self, key, producer):
+        """
+        Compute or retrieve a memoized value for the given key.
+
+        Args:
+            key (Any): The cache key.
+            producer (Callable): A zero-argument function that produces the value.
+
+        Returns:
+            Any: The produced or cached value.
+        """
         with self._lock:
             if key not in self._values:
                 try:
@@ -68,6 +87,7 @@ class _RunMemo:
 
 @dataclass
 class ExecutionOutcome:
+    """Represents the final result of attempting to execute a step for a coordinate."""
     decision: StepDecision
     success: bool
     result: Any = None
@@ -77,6 +97,18 @@ class ExecutionOutcome:
 
 
 def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _RunMemo):
+    """
+    Resolve the output value of a parent step, computing it lazily if ephemeral.
+
+    Args:
+        ref: The reference to the parent output (MatRef or EphemeralRef).
+        source (Source): The data source.
+        params (Optional[dict]): Run parameters.
+        memo (_RunMemo): The run memoizer for ephemeral steps.
+
+    Returns:
+        Any: The resolved output value.
+    """
     if isinstance(ref, EphemeralRef):
         return _compute_ephemeral(ref, source, params, memo)
     return read_materialization_output(ref)

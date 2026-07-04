@@ -1,3 +1,9 @@
+"""
+Batchit: A local-first batch processing engine.
+
+This package provides a framework for defining DAG pipelines over collections of 
+coordinates with content-addressed caching, durable run history, and surgical invalidation.
+"""
 from .spec import (
     step,
     pipeline,

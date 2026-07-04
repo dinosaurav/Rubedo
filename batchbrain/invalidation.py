@@ -1,3 +1,6 @@
+"""
+Invalidation logic for marking outputs as no longer live.
+"""
 import uuid
 from .models import (
     Run,
@@ -11,6 +14,16 @@ from .util import utcnow_iso
 
 
 def invalidate(selection: Selection, reason: str) -> dict:
+    """
+    Invalidate materializations matching the given selection.
+
+    Args:
+        selection (Selection): The criteria for what to invalidate.
+        reason (str): The reason for invalidation.
+
+    Returns:
+        dict: A summary of the invalidation run.
+    """
     run_id = f"run_{uuid.uuid4().hex[:12]}"
 
     with get_session() as session:

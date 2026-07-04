@@ -1,3 +1,6 @@
+"""
+SQLAlchemy models and immutability guards for the Batchit ledger.
+"""
 from typing import Any, Optional, Dict
 from pydantic import BaseModel
 from sqlalchemy import (
@@ -40,6 +43,7 @@ class Run(Base):
 
 
 class RunEvent(Base):
+    """A single log event associated with a run."""
     __tablename__ = "run_events"
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String, ForeignKey("runs.id"), index=True)
@@ -54,6 +58,7 @@ class RunEvent(Base):
 
 
 class Manifest(Base):
+    """A snapshot of the coordinates present in a source during a run."""
     __tablename__ = "manifests"
     id = Column(String, primary_key=True)
     run_id = Column(String, ForeignKey("runs.id"), nullable=False)
@@ -63,6 +68,7 @@ class Manifest(Base):
 
 
 class ManifestEntry(Base):
+    """A single coordinate and its content hash in a manifest."""
     __tablename__ = "manifest_entries"
     id = Column(Integer, primary_key=True, autoincrement=True)
     manifest_id = Column(String, ForeignKey("manifests.id"), nullable=False, index=True)
@@ -74,6 +80,7 @@ class ManifestEntry(Base):
 
 
 class MaterializationEdge(Base):
+    """A directed lineage edge between parent and child materializations."""
     __tablename__ = "materialization_edges"
     id = Column(Integer, primary_key=True, autoincrement=True)
     parent_id = Column(Integer, ForeignKey("materializations.id"), nullable=False)
@@ -161,6 +168,7 @@ class MaterializationLifecycle(Base):
 
 
 class RunCoordinateStatus(Base):
+    """The outcome of a specific step for a specific coordinate during a run."""
     __tablename__ = "run_coordinate_statuses"
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String, ForeignKey("runs.id"), nullable=False, index=True)
@@ -193,6 +201,7 @@ class RunCoordinateStatus(Base):
 
 
 class ImmutabilityError(RuntimeError):
+    """Raised when an attempt is made to update or delete immutable ledger rows."""
     pass
 
 
@@ -213,18 +222,21 @@ _PROJECTION_COLUMNS = {
 
 
 def _reject_update(mapper, connection, target):
+    """Guard to prevent updates on append-only models."""
     raise ImmutabilityError(
         f"{type(target).__name__} rows are append-only and cannot be updated"
     )
 
 
 def _reject_delete(mapper, connection, target):
+    """Guard to prevent deletions on all ledger models."""
     raise ImmutabilityError(
         f"{type(target).__name__} rows are ledger history and cannot be deleted"
     )
 
 
 def _projection_guard(allowed):
+    """Guard to allow updates only on specific projection columns."""
     def guard(mapper, connection, target):
         changed = {
             attr.key
@@ -281,6 +293,7 @@ def _track_liveness_pairing(session, flush_context, instances):
 
 
 def _clear_liveness_tracking(session):
+    """Clear the liveness pairing tracking accumulators."""
     session.info.pop("_liveness_changed", None)
     session.info.pop("_liveness_paired", None)
 
@@ -319,6 +332,7 @@ event.listen(Session, "after_rollback", _clear_liveness_tracking)
 
 
 class ProcessResult(BaseModel):
+    """The successful output of a step, carrying the value and optional metadata."""
     value: Any
     metadata: Optional[Dict[str, Any]] = None
 
@@ -339,6 +353,7 @@ class Filtered:
 
 
 class RunSummary(BaseModel):
+    """A summary of the outcomes of a completed run."""
     run_id: str
     status: str
     created_count: int = 0
