@@ -10,16 +10,13 @@ vocabulary. One item = one (or a few) commits.
 
 
 
-## 1. Joins  **[now designed in `docs/producer-model.md` — build per that doc's sequencing]**
+## 1. Joins  **[✅ DONE — shipped as the producer model, see Done + `docs/producer-model.md`]**
 
-The owner design session happened: joins are no longer a standalone item but
-the last step of the **producer model** (`docs/producer-model.md`), where a
-join is the binary, collective member of the `expand` family — it matches two
-independent roots on a declared equijoin key (hashed) and mints `left|right`
-pair coordinates. Pair-explosion control is resolved (equijoin key, not
-arbitrary predicate; predicate is a post-join `filter`). Do not build in
-isolation — it lands after content-addressed lanes → producer refactor →
-`expand` → `group_key`, per the doc's sequencing.
+The whole producer-model line shipped: content-addressed lanes → `expand`
+(cached) → `group_key` reduce → multi-source → **N-way `join`**
+(`shape="join"`, equijoin on indexed fields, `left|right` pair coordinates).
+Kept here only as a pointer; details in the Done changelog and
+`docs/producer-model.md`.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -31,7 +28,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); the configurable `RUBEDO_HOME` root (now shipped — see Done below) is a natural stepping stone since it already isolates where these paths get resolved.
 - **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`docs/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
-- **Dynamic Lane Expansion (`flat_map` shape)** — *now designed in `docs/producer-model.md` as the `expand` producer (1:N coordinate-minting); build per that doc, not this bullet.* Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` shape (1:N) lets a step `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
+- **Dynamic Lane Expansion (`flat_map` shape)** — ✅ *shipped as `shape="expand"` (1:N coordinate-minting, cached via a parent-addressed list anchor). See Done + `docs/producer-model.md`.*
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 - **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
@@ -58,18 +55,19 @@ These are strategic feature recommendations to expand the engine's capabilities 
 
 ──────────────────────────────────────────────────────────────────────
 
-## 3. Runner rework for the producer model  **[part of `docs/producer-model.md`]**
+## 3. Runner rework for the producer model  **[✅ largely resolved — went vertical, not via a big-bang refactor]**
 
-The orchestration layer (`runner.py`: `run()` / `plan()` / `run_pipeline()`)
-hardcodes the source-privileged flow today: scan source → `_snapshot_source`
-manifest → plan each step in topo order → execute → commit. Under the producer
-model it must drive every producer uniformly — the source is just the nullary
-root — threading the emitted-lane namespace from one producer to the next,
-minting coordinates for `expand`/`join`, honoring `group_key` on `reduce`, and
-running a **per-producer census** instead of one source snapshot. This is where
-the `spec` / `planning` / `ledger` changes converge, so sequence it after those
-per the doc. Non-negotiable: the map-a-folder common path stays a one-liner —
-the general core must not leak into the simple case.
+The producer model shipped by adding capabilities that reused the existing
+interleaved plan→execute runner, *not* by a behavior-preserving Source→Producer
+rewrite (that was dropped as premature — see `docs/producer-model.md`, "go
+vertical, skip the churn"). What actually landed: `expand`/`join` mint
+coordinates via the runner's existing "executed MatRefs feed forward"
+mechanism; `group_key` on `reduce`; and multi-source threading (`run()`/
+`plan()`/`run_pipeline()` now scan each source and thread a per-step
+`step_sources` map into execution). The **per-producer census** was
+deliberately *not* built — removal is only a low-value report and minted lanes
+orphan silently (`docs/producer-model.md` open Q1/Q2). Nothing left here unless
+that census is ever wanted.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -213,6 +211,18 @@ deliberately — step return values are genuinely heterogeneous, no
 narrower type is honest there) · CPU-bound parallelism migrated to `loky` +
 `cloudpickle` (`executor="process"`), allowing closures in process-executed
 steps (`tests/test_process_executor.py` updated to verify local functions) ·
-resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
-rule); plan()-in-UI (server never imports user code — use plan() in
-Python).
+**producer model** (`docs/producer-model.md` — the owner design session and
+build): content-addressed lanes (`key=` optional, `_disambiguate` gone,
+`tests/test_sources.py`) · `expand` (`shape="expand"`, 1:N coordinate-minting,
+cached via a parent-addressed list-anchor so a scrape runs once,
+`tests/test_expand.py`) · `group_key` reduce (partition by an indexed field;
+reduce now folds in minted lanes, `tests/test_group_key.py`) · multi-source
+pipelines (`sources={name: Source}`, root `@step(source=...)`, per-step
+`step_sources` threaded through execution, `tests/test_multisource.py`) ·
+N-way `join` (`shape="join"`, equijoin on indexed fields, `left|right` pair
+coordinates, 4-way star supported, `tests/test_join.py`) — every shape is now
+a producer · resolved-won't-do: arbitrary-rules plugin surface
+(wrapper-or-built-in rule); plan()-in-UI (server never imports user code — use
+plan() in Python); per-producer census (removal is a low-value report, minted
+lanes orphan silently); behavior-preserving Source→Producer refactor (went
+vertical instead).
