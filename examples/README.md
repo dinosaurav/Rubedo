@@ -19,6 +19,7 @@ that the second run recomputes only what actually changed.
 | [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
 | [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | `TableSource` in streaming (`batch_size`) mode |
+| [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
 
 ## Keys
 
