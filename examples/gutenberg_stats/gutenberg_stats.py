@@ -50,11 +50,14 @@ def clean(fetch: dict) -> dict:
     return {"title": fetch["title"], "text": body}
 
 
-# A process-executor step is pickled by its module path, so it must be a plain
-# module-level function. Note we build the step with the call form step(...)(fn)
-# rather than the @step decorator: @step would rebind the name `analyze_book` to
-# a StepSpec, and the worker process could no longer unpickle the real function.
-def analyze_book(clean: dict) -> dict:
+@step(
+    name="analyze",
+    version="1",
+    depends_on=["clean"],
+    executor="process",
+    index=["longest_word"],
+)
+def analyze(clean: dict) -> dict:
     """CPU-bound token crunching, run in a worker process."""
     words = re.findall(r"[a-zA-Z']+", clean["text"].lower())
     total = len(words)
@@ -69,15 +72,6 @@ def analyze_book(clean: dict) -> dict:
         "avg_word_len": avg_len,
         "longest_word": longest,
     }
-
-
-analyze = step(
-    name="analyze",
-    version="1",
-    depends_on=["clean"],
-    executor="process",
-    index=["longest_word"],
-)(analyze_book)
 
 
 @step(name="report", version="1", depends_on=["analyze"], shape="reduce")

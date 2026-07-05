@@ -11,6 +11,9 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
 
+import loky
+
+
 from .models import Filtered, ProcessResult
 from .planning import (
     EphemeralRef,
@@ -174,7 +177,7 @@ def _execute_step(
     """
     limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
 
-    def call(decision: StepDecision, pool: Optional[concurrent.futures.ProcessPoolExecutor] = None):
+    def call(decision: StepDecision, pool: Optional[Any] = None):
         # Root steps get the source payload positionally; dependent steps
         # get parent outputs by parameter name. Either kind may declare
         # `params`.
@@ -207,7 +210,7 @@ def _execute_step(
             return pool.submit(step.fn, *args, **kwargs).result()
         return step.fn(*args, **kwargs)
 
-    def process(decision: StepDecision, pool: Optional[concurrent.futures.ProcessPoolExecutor] = None) -> ExecutionOutcome:
+    def process(decision: StepDecision, pool: Optional[Any] = None) -> ExecutionOutcome:
         attempt_errors: List[str] = []
         delay = step.retry_delay
         for attempt in range(1, step.retries + 2):
@@ -249,7 +252,7 @@ def _execute_step(
     # runs — retries and rate limiting must stay in the parent, so process
     # steps still need the thread layer to feed them.
     process_pool = (
-        concurrent.futures.ProcessPoolExecutor(max_workers=pool_size)
+        loky.ProcessPoolExecutor(max_workers=pool_size)
         if step.executor == "process"
         else None
     )

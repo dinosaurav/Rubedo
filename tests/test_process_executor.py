@@ -76,13 +76,17 @@ def test_process_executor_basic():
     assert summary2.created_count == 0
     assert summary2.reused_count == 2
 
-def test_process_executor_registration_rejection():
-    # Local closure
+def test_process_executor_closure_ok():
+    # Local closure should work fine with loky + cloudpickle
+    prefix = "Closure: "
     def my_local_func(content):
-        return content
+        return prefix + content
         
-    with pytest.raises(ValueError, match="process-executor steps must be module-level"):
-        step(name="local", version="1", executor="process")(my_local_func)
+    step_local = step(name="local", version="1", executor="process")(my_local_func)
+    pipe = pipeline(id="p4", name="p4", folder=TEST_FOLDER, steps=[step_local])
+    summary = run(pipe, workers=2)
+    assert summary.created_count == 2
+    assert summary.failed_count == 0
         
 def test_process_executor_retries():
     # Retries happen in the parent thread pool and submit to process pool

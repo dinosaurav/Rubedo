@@ -181,9 +181,6 @@ def step(
     parsed_stale = parse_duration(stale_after) if stale_after else None
 
     def decorator(fn: Callable):
-        if executor == "process" and "<locals>" in fn.__qualname__:
-            raise ValueError(f"Step '{name}': process-executor steps must be module-level functions")
-
         code_hash = _hash_source(fn)
         if code == "auto" and code_hash is None:
             raise ValueError(
