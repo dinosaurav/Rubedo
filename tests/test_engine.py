@@ -1,10 +1,10 @@
 import os
 import tempfile
 import pytest
-from batchbrain import step, pipeline, run
-from batchbrain.db import get_session, init_db
-import batchbrain.db as db
-from batchbrain.models import (
+from rubedo import step, pipeline, run
+from rubedo.db import get_session, init_db
+import rubedo.db as db
+from rubedo.models import (
     Base,
     Run,
     RunCoordinateStatus,
@@ -12,8 +12,8 @@ from batchbrain.models import (
     Manifest,
     ManifestEntry,
 )
-from batchbrain.selection import Selection
-from batchbrain.invalidation import invalidate
+from rubedo.selection import Selection
+from rubedo.invalidation import invalidate
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -40,9 +40,9 @@ def setup_teardown():
     temp_dir = tempfile.mkdtemp()
     os.chdir(temp_dir)
 
-    os.makedirs(".batchbrain/objects", exist_ok=True)
+    os.makedirs(".rubedo/objects", exist_ok=True)
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
@@ -51,7 +51,7 @@ def setup_teardown():
         db.engine.dispose()
 
     db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
@@ -177,7 +177,7 @@ def test_select_by_coordinate_glob():
     run(test_pipeline, "test_input", workers=1)
 
     sel = Selection(source_id="folder:test_input", coordinate_glob="*b.txt")
-    from batchbrain.selection import get_selection_materialization_ids
+    from rubedo.selection import get_selection_materialization_ids
 
     with get_session() as session:
         mat_ids = get_selection_materialization_ids(session, sel)

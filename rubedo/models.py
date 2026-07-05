@@ -1,5 +1,5 @@
 """
-SQLAlchemy models and immutability guards for the Batchit ledger.
+SQLAlchemy models and immutability guards for the Rubedo ledger.
 """
 from typing import Any, Optional, Dict
 from pydantic import BaseModel

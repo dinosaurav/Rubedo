@@ -1,4 +1,4 @@
-# BatchBrain Invariants and Vocabulary
+# Rubedo Invariants and Vocabulary
 
 ## Vocabulary
 

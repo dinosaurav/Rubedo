@@ -1,11 +1,11 @@
 import pytest
 import os
 import shutil
-from batchbrain.db import init_db, get_session
-from batchbrain.store import init_store
-from batchbrain.spec import step, pipeline
-from batchbrain.runner import run, topological_sort
-from batchbrain.models import RunCoordinateStatus, Materialization, MaterializationEdge
+from rubedo.db import init_db, get_session
+from rubedo.store import init_store
+from rubedo.spec import step, pipeline
+from rubedo.runner import run, topological_sort
+from rubedo.models import RunCoordinateStatus, Materialization, MaterializationEdge
 import uuid
 from sqlalchemy import create_engine
 
@@ -25,36 +25,36 @@ def setup_teardown():
         shutil.rmtree(DB_FOLDER)
     os.makedirs(DB_FOLDER, exist_ok=True)
 
-    os.environ["BATCHBRAIN_STORE_DIR"] = f"{DB_FOLDER}/store"
+    os.environ["RUBEDO_STORE_DIR"] = f"{DB_FOLDER}/store"
     # patch store dirs
-    import batchbrain.store
+    import rubedo.store
 
-    batchbrain.store.OBJECTS_DIR = f"{DB_FOLDER}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{DB_FOLDER}/store/staging"
+    rubedo.store.OBJECTS_DIR = f"{DB_FOLDER}/store/objects"
+    rubedo.store.STAGING_DIR = f"{DB_FOLDER}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
 
     # Need to make sure the engine is created with StaticPool for in-memory shared
     from sqlalchemy.pool import StaticPool
-    import batchbrain.db
+    import rubedo.db
 
-    if batchbrain.db.engine is not None:
-        batchbrain.db.engine.dispose()
+    if rubedo.db.engine is not None:
+        rubedo.db.engine.dispose()
 
-    batchbrain.db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+    rubedo.db.engine = create_engine(
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    from batchbrain.models import Base
+    from rubedo.models import Base
     from sqlalchemy.orm import sessionmaker
 
-    Base.metadata.create_all(bind=batchbrain.db.engine)
-    batchbrain.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=batchbrain.db.engine
+    Base.metadata.create_all(bind=rubedo.db.engine)
+    rubedo.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=rubedo.db.engine
     )
 
     init_store()
@@ -175,8 +175,8 @@ id="p2", name="p2", folder=TEST_FOLDER, steps=[read])
 
 
 def test_invalidate_downstream_then_rerun():
-    from batchbrain import Selection
-    from batchbrain.invalidation import invalidate
+    from rubedo import Selection
+    from rubedo.invalidation import invalidate
 
     @step(name="read", version="1")
     def read(path):

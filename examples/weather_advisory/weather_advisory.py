@@ -20,7 +20,7 @@ import json
 import urllib.parse
 import urllib.request
 
-from batchbrain import Filtered, describe, pipeline, run, step
+from rubedo import Filtered, describe, pipeline, run, step
 
 GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST = "https://api.open-meteo.com/v1/forecast"
@@ -94,7 +94,7 @@ def briefing(advice: dict) -> str:
 
 
 def make_pipeline():
-    from batchbrain import CsvSource
+    from rubedo import CsvSource
     import os
 
     return pipeline(

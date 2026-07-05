@@ -3,9 +3,9 @@ import shutil
 import pytest
 from unittest.mock import patch
 
-from batchbrain import run, step, pipeline
-from batchbrain.db import init_db
-import batchbrain.store as store
+from rubedo import run, step, pipeline
+from rubedo.db import init_db
+import rubedo.store as store
 
 TEST_FOLDER = ".test_staging_data"
 ENV_FOLDER = ".test_staging_env"
@@ -22,7 +22,7 @@ def isolated_env():
     store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
     store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = f"sqlite:///{abs_env_folder}/batchbrain.sqlite"
+    os.environ["RUBEDO_DB_PATH"] = f"sqlite:///{abs_env_folder}/rubedo.sqlite"
     init_db()
     
     with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
@@ -64,7 +64,7 @@ def test_staging_cleanup_on_error():
         # Then we raise an error!
         raise ValueError("Simulated failure during stage_and_commit")
 
-    with patch("batchbrain.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
         summary = run(pipe)
         
     assert summary.failed_count == 1
@@ -81,7 +81,7 @@ def test_staging_cleanup_on_commit_error():
         
     # Patch session.commit inside ledger's _commit_execution_result context
     # It's tricky to patch just one commit, so we patch _commit_materialization to fail.
-    with patch("batchbrain.ledger._commit_materialization", side_effect=RuntimeError("Simulated DB failure")):
+    with patch("rubedo.ledger._commit_materialization", side_effect=RuntimeError("Simulated DB failure")):
         summary = run(pipe)
         
     assert summary.failed_count == 1

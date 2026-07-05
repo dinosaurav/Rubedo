@@ -1,5 +1,5 @@
 """
-Utility functions for time and date handling in the Batchit engine.
+Utility functions for time and date handling in the Rubedo engine.
 """
 from datetime import datetime, timezone
 

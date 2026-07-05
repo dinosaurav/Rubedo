@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="BatchBrain", lifespan=lifespan)
+app = FastAPI(title="Rubedo", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

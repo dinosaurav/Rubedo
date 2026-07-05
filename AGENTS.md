@@ -1,4 +1,4 @@
-# Working on Batchit (agent instructions — canonical)
+# Working on Rubedo (agent instructions — canonical)
 
 Local-first batch engine: DAG pipelines over keyed collections (files, CSV
 rows) with content-addressed caching, an append-only run ledger, and
@@ -13,12 +13,12 @@ accurate and load-bearing; keep them updated when behavior changes.
   Granular commits over big ones. Run verification before committing.
 - **Dev stage — no migrations, no backwards compatibility.** On any DB
   schema change (new/removed *column* — new tables are fine, create_all
-  handles them): `rm -rf .batchbrain/batchbrain.sqlite .batchbrain/objects
-  .batchbrain/staging`, then repopulate by running
+  handles them): `rm -rf .rubedo/rubedo.sqlite .rubedo/objects
+  .rubedo/staging`, then repopulate by running
   `uv run python examples/count_lines/count_lines.py` twice (expect Created: 15 then
   Reused: 15). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
-  warnings), `uv run ruff check batchbrain/ tests/ examples/`,
+  warnings), `uv run ruff check rubedo/ tests/ examples/`,
   `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
@@ -31,28 +31,28 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 ## Architecture map
 
-- `batchbrain/spec.py` — `@step` / `pipeline()` build plain
+- `rubedo/spec.py` — `@step` / `pipeline()` build plain
   `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
   user code. `describe()` renders DAGs (text/Mermaid); `definition()` is the
   JSON snapshot each run records.
-- `batchbrain/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
+- `rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
   payload); `FolderSource`, `CsvSource`. A coordinate is a **lane key**:
   engine-facing dataflow/incrementality key, unique within a scan (sources
   disambiguate collisions mechanically), stable across scans. Not identity,
   not the search handle.
-- `batchbrain/planning.py` — read-only plan phase: `_plan_step` emits a
+- `rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
-- `batchbrain/execution.py` — DB-free execute phase: thread pool, retry
+- `rubedo/execution.py` — DB-free execute phase: thread pool, retry
   loop, rate limiter, per-run memo for skip_cache utils.
-- `batchbrain/ledger.py` — every DB write: manifests, per-lane statuses,
+- `rubedo/ledger.py` — every DB write: manifests, per-lane statuses,
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
   transition appends a `materialization_lifecycle` row).
-- `batchbrain/runner.py` — orchestration: `run()`, `plan()` (dry-run,
+- `rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run,
   writes nothing), `run_pipeline()`.
-- `batchbrain/models.py` — schema + **immutability guards**: ledger tables
+- `rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,
   `Materialization.is_live`/`refreshed_at`). Tests that must backdate rows
@@ -62,9 +62,9 @@ accurate and load-bearing; keep them updated when behavior changes.
   the same transaction. It accumulates across flushes (the supersede path
   flushes a demotion before its lifecycle row exists) and skips savepoint
   releases (`in_nested_transaction()`).
-- `batchbrain/selection.py` — `Selection` + `Selection.parse()` (the query
+- `rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
   language) + the materialization query.
-- `batchbrain/server.py` — read-only FastAPI + invalidation endpoint.
+- `rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines.
 - `web/` — React/Vite dashboard. `DagView.tsx` renders definition
   snapshots. Dark-theme CSS variables in `index.css`.

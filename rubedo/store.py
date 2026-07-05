@@ -7,8 +7,8 @@ from typing import Any, Tuple
 from .models import ProcessResult
 from .hashing import hash_bytes
 
-OBJECTS_DIR = ".batchbrain/objects"
-STAGING_DIR = ".batchbrain/staging"
+OBJECTS_DIR = ".rubedo/objects"
+STAGING_DIR = ".rubedo/staging"
 
 
 def _ensure_gitignore(directory: str):

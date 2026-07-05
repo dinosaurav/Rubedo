@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from .models import Base
 
-DB_PATH = ".batchbrain/batchbrain.sqlite"
+DB_PATH = ".rubedo/rubedo.sqlite"
 
 engine = None
 SessionLocal = None
@@ -40,8 +40,8 @@ def init_db(db_path: str = None):
     Initialize the database engine and create tables.
 
     Args:
-        db_path (str, optional): The database URL or file path. If None, uses BATCHBRAIN_DB_PATH
-            or the default '.batchbrain/batchbrain.sqlite'.
+        db_path (str, optional): The database URL or file path. If None, uses RUBEDO_DB_PATH
+            or the default '.rubedo/rubedo.sqlite'.
     """
     global engine, SessionLocal
     if engine is not None:
@@ -51,7 +51,7 @@ def init_db(db_path: str = None):
             pass
 
     if db_path is None:
-        db_path = os.environ.get("BATCHBRAIN_DB_PATH", DB_PATH)
+        db_path = os.environ.get("RUBEDO_DB_PATH", DB_PATH)
         # Strip sqlite:/// prefix if present to get the dir
         dir_path = (
             db_path.replace("sqlite:///", "")

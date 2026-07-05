@@ -2,11 +2,11 @@ import os
 import tempfile
 import pytest
 from unittest.mock import patch
-from batchbrain.db import init_db, get_session
-from batchbrain.models import Materialization
-from batchbrain.runner import run
-from batchbrain.store import stage_and_commit
-from batchbrain import step, pipeline
+from rubedo.db import init_db, get_session
+from rubedo.models import Materialization
+from rubedo.runner import run
+from rubedo.store import stage_and_commit
+from rubedo import step, pipeline
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -14,15 +14,15 @@ from sqlalchemy import create_engine
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
-    import batchbrain.db as db
+    import rubedo.db as db
 
     orig_dir = os.getcwd()
     temp_dir = tempfile.mkdtemp()
     os.chdir(temp_dir)
 
-    os.makedirs(".batchbrain/objects", exist_ok=True)
+    os.makedirs(".rubedo/objects", exist_ok=True)
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
@@ -31,7 +31,7 @@ def setup_teardown():
         db.engine.dispose()
 
     db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
@@ -97,7 +97,7 @@ def test_crash_during_staging(setup_teardown):
     def crashing_stage(*args, **kwargs):
         raise Exception("Disk full or worker killed during write")
 
-    with patch("batchbrain.ledger.stage_and_commit", side_effect=crashing_stage):
+    with patch("rubedo.ledger.stage_and_commit", side_effect=crashing_stage):
         summary = run(p_dummy, str(temp_workspace), workers=1)
         assert summary.status == "failed"
         assert summary.created_count == 0
@@ -123,7 +123,7 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
         raise Exception("Worker killed right after disk write but before DB commit")
 
     with patch(
-        "batchbrain.ledger.stage_and_commit",
+        "rubedo.ledger.stage_and_commit",
         side_effect=crashing_stage_but_write_succeeds,
     ):
         summary = run(p_dummy, str(temp_workspace), workers=1)

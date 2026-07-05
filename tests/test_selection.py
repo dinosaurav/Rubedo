@@ -3,11 +3,11 @@ import shutil
 import pytest
 import uuid
 
-from batchbrain import step, pipeline, run, Selection
-from batchbrain.db import get_session, init_db
-import batchbrain.db as db
-from batchbrain.models import Base, Materialization
-from batchbrain.invalidation import invalidate
+from rubedo import step, pipeline, run, Selection
+from rubedo.db import get_session, init_db
+import rubedo.db as db
+from rubedo.models import Base, Materialization
+from rubedo.invalidation import invalidate
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
 
@@ -22,9 +22,9 @@ def setup_teardown():
         shutil.rmtree(TEST_FOLDER)
     os.makedirs(TEST_FOLDER, exist_ok=True)
 
-    os.makedirs(".batchbrain/objects", exist_ok=True)
+    os.makedirs(".rubedo/objects", exist_ok=True)
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
@@ -33,7 +33,7 @@ def setup_teardown():
         db.engine.dispose()
 
     db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )

@@ -1,10 +1,10 @@
-# Batchit / BatchBrain Project Documentation
+# Rubedo / Rubedo Project Documentation
 
-This document provides a detailed overview of the Batchit (also internally referred to as `batchbrain`) project. It outlines the current capabilities of the system, its architecture, and how each folder contributes to its overall functionality.
+This document provides a detailed overview of the Rubedo (also internally referred to as `rubedo`) project. It outlines the current capabilities of the system, its architecture, and how each folder contributes to its overall functionality.
 
 ## Project Overview & Capabilities
 
-Batchit is a batch processing framework designed to efficiently run pipelines over collections of coordinates — files in a folder, rows in a CSV. It is composed of a Python-based backend processing engine and a React-based frontend web application.
+Rubedo is a batch processing framework designed to efficiently run pipelines over collections of coordinates — files in a folder, rows in a CSV. It is composed of a Python-based backend processing engine and a React-based frontend web application.
 
 ### Key Capabilities:
 1. **DAG Pipeline Framework:** Developers can define multi-step Directed Acyclic Graph (DAG) pipelines using `@step` and `pipeline()` decorators. Steps can declare explicit dependencies on upstream steps, allowing outputs to flow downstream seamlessly.
@@ -14,13 +14,13 @@ Batchit is a batch processing framework designed to efficiently run pipelines ov
 5. **Concurrency & Execution Engine:** Provides a multi-worker execution runner to topologically sort steps and process file tasks in parallel while correctly blocking on failed upstream dependencies.
 6. **Database Storage:** Results, metadata, runs, run ledgers, topological lineage, and caching statuses are tracked in a SQL database (via SQLAlchemy).
 7. **API Server:** A read-only FastAPI server exposing pipelines, runs, materializations, lineage, and current outputs to the frontend, plus selection-based invalidation as its single write action.
-8. **Web UI:** A React + Vite dashboard for browsing runs, outputs, and lineage, and surgically invalidating outputs. Runs themselves are triggered from library code (`batchbrain.run`), not the UI.
+8. **Web UI:** A React + Vite dashboard for browsing runs, outputs, and lineage, and surgically invalidating outputs. Runs themselves are triggered from library code (`rubedo.run`), not the UI.
 
 ## Folder Structure
 
 Below is the breakdown of the top-level directories and critical files, and how they contribute to the project.
 
-### `/batchbrain/`
+### `/rubedo/`
 This is the core Python backend package containing the execution engine, database logic, API, and CLI.
 
 - **Definitions (`spec.py`)**: `@step` and `pipeline()` build plain `StepSpec`/`PipelineSpec` objects (no registry, no magic module loading); `describe()` renders a DAG as text or Mermaid before it ever runs.
@@ -35,7 +35,7 @@ This directory contains the Frontend User Interface. It is a modern single-page 
 - **`src/` & `public/`**: Contains the React component code, assets, and frontend logic.
 - **`package.json`, `vite.config.ts`, `tsconfig.*`**: Node.js dependencies, Vite build configuration, and TypeScript configuration.
 - **`playwright.config.ts`**: E2E testing setup using Playwright.
-- The web app likely communicates with the `batchbrain` FastAPI backend to provide users with a visual dashboard of their batch processes.
+- The web app likely communicates with the `rubedo` FastAPI backend to provide users with a visual dashboard of their batch processes.
 
 ### `/examples/`
 Contains sample scripts and inputs to demonstrate how to use the framework.

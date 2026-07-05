@@ -15,7 +15,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <nav className="sidebar">
         <div className="sidebar-logo">
           <Database color="var(--accent-primary)" />
-          BatchBrain
+          Rubedo
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>

@@ -3,9 +3,9 @@ import shutil
 import pytest
 from unittest.mock import patch
 
-from batchbrain import run, step, pipeline
-from batchbrain.db import init_db, get_session
-import batchbrain.store as store
+from rubedo import run, step, pipeline
+from rubedo.db import init_db, get_session
+import rubedo.store as store
 
 TEST_FOLDER = ".test_concurrency_data"
 ENV_FOLDER = ".test_concurrency_env"
@@ -23,7 +23,7 @@ def isolated_env():
     store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
     # Must use a physical file so other sessions can see it.
-    os.environ["BATCHBRAIN_DB_PATH"] = f"sqlite:///{abs_env_folder}/batchbrain.sqlite"
+    os.environ["RUBEDO_DB_PATH"] = f"sqlite:///{abs_env_folder}/rubedo.sqlite"
     init_db()
     
     with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
@@ -57,9 +57,9 @@ def test_concurrency_identical_bytes_collision():
             has_injected = True
             # Simulate a competing run inserting a live materialization
             with get_session() as session:
-                from batchbrain.planning import _plan_step
-                from batchbrain.ledger import _commit_materialization
-                from batchbrain.sources import FolderSource
+                from rubedo.planning import _plan_step
+                from rubedo.ledger import _commit_materialization
+                from rubedo.sources import FolderSource
                 
                 # We need the step's input hash to compute the output address
                 source = FolderSource(TEST_FOLDER)
@@ -85,12 +85,12 @@ def test_concurrency_identical_bytes_collision():
                 
         return final_path, output_content_hash, content_type
 
-    with patch("batchbrain.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
         summary = run(pipe)
         
     if summary.failed_count > 0:
         with get_session() as session:
-            from batchbrain.models import RunCoordinateStatus
+            from rubedo.models import RunCoordinateStatus
             for s in session.query(RunCoordinateStatus).filter_by(status='failed').all():
                 print(f"FAILED TRACE: {s.error_message}")
                 
@@ -114,9 +114,9 @@ def test_concurrency_different_bytes_collision():
         if not has_injected:
             has_injected = True
             with get_session() as session:
-                from batchbrain.planning import _plan_step
-                from batchbrain.ledger import _commit_materialization
-                from batchbrain.sources import FolderSource
+                from rubedo.planning import _plan_step
+                from rubedo.ledger import _commit_materialization
+                from rubedo.sources import FolderSource
                 
                 source = FolderSource(TEST_FOLDER)
                 item = list(source.scan())[0]
@@ -139,12 +139,12 @@ def test_concurrency_different_bytes_collision():
                 
         return final_path, output_content_hash, content_type
 
-    with patch("batchbrain.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
         summary = run(pipe)
         
     if summary.failed_count > 0:
         with get_session() as session:
-            from batchbrain.models import RunCoordinateStatus
+            from rubedo.models import RunCoordinateStatus
             for s in session.query(RunCoordinateStatus).filter_by(status='failed').all():
                 print(f"FAILED TRACE: {s.error_message}")
 

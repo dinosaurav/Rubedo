@@ -1,6 +1,6 @@
-# Writing Batchit Pipelines (LLM Guide)
+# Writing Rubedo Pipelines (LLM Guide)
 
-Batchit is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
+Rubedo is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
 
 ## Concepts in 10 lines
 1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder).
@@ -8,7 +8,7 @@ Batchit is a local-first batch engine: DAG pipelines over keyed collections (fil
 3. **Steps:** Pure functions decorated with `@step(version="...")`.
 4. **Pipelines:** A DAG of steps over a source.
 5. **Execution:** The engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
-6. **Immutability:** Results are content-addressed and saved in `.batchbrain/objects`. Never mutate inputs; always return new data.
+6. **Immutability:** Results are content-addressed and saved in `.rubedo/objects`. Never mutate inputs; always return new data.
 7. **Identity:** A step's cache identity is defined by its inputs + `version` + `params`.
 8. **Generations:** A rerun supersedes old outputs with new ones.
 9. **Filtering:** Return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
@@ -35,8 +35,8 @@ A step's output is cached based on:
 
 ## Complete Worked Example
 ```python
-from batchbrain import step, pipeline, run, Filtered
-from batchbrain.sources import CsvSource
+from rubedo import step, pipeline, run, Filtered
+from rubedo.sources import CsvSource
 
 @step(name="screen", version="1")
 def screen(row: dict) -> dict:

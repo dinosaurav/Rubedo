@@ -1,7 +1,7 @@
-# BatchBrain project gitignore
+# Rubedo project gitignore
 
-# Specific Folder for BatchBrain metadata/cache
-.batchbrain/
+# Specific Folder for Rubedo metadata/cache
+.rubedo/
 
 # Python Virtual Environments
 venv/

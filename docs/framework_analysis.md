@@ -1,4 +1,4 @@
-# Framework Analysis: Batchit
+# Framework Analysis: Rubedo
 
 **Date**: 2026-07-04
 **Author**: Gemini 3.1 Pro
@@ -12,29 +12,29 @@ It brings a "dbt-style state" to Python, meaning it treats data pipelines as DAG
 1. **Granular, Content-Addressed Caching**: Caches at the coordinate level (e.g., a specific row in a CSV or a specific file). If you edit one row, only the downstream tasks for *that specific row* are recomputed.
 2. **Immutable Ledger & Surgical Invalidation**: Outputs are immutable bytes in an object store. A SQLite ledger tracks the lifecycle (created, reused, superseded, invalidated). You can invalidate outputs based on the *content* they generated (e.g., `invalidate(company:acme)`), not just by timestamp.
 3. **Resilience for the Real World**: Built-in policies for `retry_on`, `rate_limit`, and `stale_after` (TTL). This makes it perfect for wrangling rate-limited or flaky LLM APIs.
-4. **Zero-Magic, Zero-Daemon Architecture**: There is no central server to deploy or daemon to run. The pipeline is just a Python object, executed locally, with state stored in a local `.batchbrain` directory.
+4. **Zero-Magic, Zero-Daemon Architecture**: There is no central server to deploy or daemon to run. The pipeline is just a Python object, executed locally, with state stored in a local `.rubedo` directory.
 
 ## Competitor Landscape
 
 ### vs. Dagster
 - **Dagster's Edge**: Enterprise-grade observability, software-defined assets, and rich integrations.
-- **Batchit's Edge**: Lightweight and local-first. Dagster requires spinning up a web server/daemon even for local development. Batchit is purely library-driven with an optional UI. Batchit also provides much finer granular row-level caching out of the box compared to Dagster's partition-level assets.
+- **Rubedo's Edge**: Lightweight and local-first. Dagster requires spinning up a web server/daemon even for local development. Rubedo is purely library-driven with an optional UI. Rubedo also provides much finer granular row-level caching out of the box compared to Dagster's partition-level assets.
 
 ### vs. Prefect
 - **Prefect's Edge**: Hybrid execution (local workers + cloud orchestration) and fantastic error handling observability.
-- **Batchit's Edge**: True content-addressed caching. Prefect's caching is typically time-based or explicitly key-based, whereas Batchit automatically hashes inputs, parameters, and even code (with `code="auto"`) to guarantee exact state reproducibility.
+- **Rubedo's Edge**: True content-addressed caching. Prefect's caching is typically time-based or explicitly key-based, whereas Rubedo automatically hashes inputs, parameters, and even code (with `code="auto"`) to guarantee exact state reproducibility.
 
 ### vs. Metaflow (Netflix)
 - **Metaflow's Edge**: Seamless scaling to the cloud (AWS Batch/Kubernetes) and snapshotting the entire Python environment/state to S3.
-- **Batchit's Edge**: Row-level surgical execution. Metaflow typically runs or resumes an entire step for a batch. Batchit processes item by item, seamlessly reusing successful API calls from a previous interrupted run.
+- **Rubedo's Edge**: Row-level surgical execution. Metaflow typically runs or resumes an entire step for a batch. Rubedo processes item by item, seamlessly reusing successful API calls from a previous interrupted run.
 
 ### vs. dbt
 - **dbt's Edge**: The industry standard for SQL transformations in the data warehouse.
-- **Batchit's Edge**: Batchit is essentially **"dbt for arbitrary Python"**. Where dbt manages incremental state for SQL tables, Batchit manages incremental state for arbitrary Python objects and unstructured data (files/APIs).
+- **Rubedo's Edge**: Rubedo is essentially **"dbt for arbitrary Python"**. Where dbt manages incremental state for SQL tables, Rubedo manages incremental state for arbitrary Python objects and unstructured data (files/APIs).
 
 ### vs. Hamilton
 - **Hamilton's Edge**: Pure functional DAGs for data engineering, heavily focused on pandas/dataframe transformations.
-- **Batchit's Edge**: Focused on side-effects and flaky tasks (retries, rate limiting, TTLs) rather than pure dataframe math, backed by a persistent ledger.
+- **Rubedo's Edge**: Focused on side-effects and flaky tasks (retries, rate limiting, TTLs) rather than pure dataframe math, backed by a persistent ledger.
 
 ## Strengths & Weaknesses
 
@@ -46,6 +46,6 @@ It brings a "dbt-style state" to Python, meaning it treats data pipelines as DAG
 
 **Weaknesses:**
 - **Local-Bound Execution**: Not designed (yet) for distributed compute across thousands of nodes.
-- **Storage Heavy**: Content-addressed object stores keep everything. Without garbage collection, large outputs will balloon the `.batchbrain` directory.
+- **Storage Heavy**: Content-addressed object stores keep everything. Without garbage collection, large outputs will balloon the `.rubedo` directory.
 - **Not for Real-Time Streaming**: Strictly a batch engine.
 - **Tight Python Coupling**: Not polyglot like some orchestration tools.

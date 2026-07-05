@@ -8,7 +8,7 @@ library — nothing extra to install. Run any of them from the repo root:
 uv run python examples/<name>/<name>.py
 ```
 
-Re-run any example and watch it reuse everything — the whole point of Batchit is
+Re-run any example and watch it reuse everything — the whole point of Rubedo is
 that the second run recomputes only what actually changed.
 
 | Example | Service(s) | Shape | Shows off |

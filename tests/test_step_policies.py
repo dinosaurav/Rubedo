@@ -10,11 +10,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from batchbrain import run, step, pipeline
-from batchbrain.db import init_db, get_session
-from batchbrain.models import RunCoordinateStatus, RunEvent
-from batchbrain.spec import parse_rate_limit
-from batchbrain.store import init_store
+from rubedo import run, step, pipeline
+from rubedo.db import init_db, get_session
+from rubedo.models import RunCoordinateStatus, RunEvent
+from rubedo.spec import parse_rate_limit
+from rubedo.store import init_store
 
 TEST_FOLDER = ".test_policies_data"
 ENV_FOLDER = ".test_policies_env"
@@ -29,32 +29,32 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import batchbrain.store
+    import rubedo.store
 
-    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
 
-    import batchbrain.db
+    import rubedo.db
 
-    if batchbrain.db.engine is not None:
-        batchbrain.db.engine.dispose()
+    if rubedo.db.engine is not None:
+        rubedo.db.engine.dispose()
 
-    from batchbrain.models import Base
+    from rubedo.models import Base
     from sqlalchemy.orm import sessionmaker
 
-    batchbrain.db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+    rubedo.db.engine = create_engine(
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(bind=batchbrain.db.engine)
-    batchbrain.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=batchbrain.db.engine
+    Base.metadata.create_all(bind=rubedo.db.engine)
+    rubedo.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=rubedo.db.engine
     )
 
     init_store()
@@ -186,7 +186,7 @@ def test_bad_rate_limit_rejected_at_registration():
 
 
 def test_duration_parsing():
-    from batchbrain.spec import parse_duration
+    from rubedo.spec import parse_duration
 
     assert parse_duration("30s") == 30.0
     assert parse_duration("15min") == 900.0
@@ -224,7 +224,7 @@ id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
 
 
 def test_expired_deterministic_output_is_refreshed():
-    from batchbrain.models import Materialization, MaterializationLifecycle
+    from rubedo.models import Materialization, MaterializationLifecycle
 
     create_file("f1.txt", "hello")
 
@@ -259,7 +259,7 @@ id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
 def test_expired_nondeterministic_output_is_superseded():
     import itertools
 
-    from batchbrain.models import Materialization
+    from rubedo.models import Materialization
 
     create_file("f1.txt", "hello")
     counter = itertools.count()
@@ -284,7 +284,7 @@ id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
 
 
 def test_staleness_visible_in_plan():
-    from batchbrain import plan
+    from rubedo import plan
 
     create_file("f1.txt", "hello")
 

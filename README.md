@@ -1,4 +1,4 @@
-# Batchit
+# Rubedo
 
 A local-first batch processing engine that provides dbt-style state for Python tasks, built for non-idempotent steps (LLMs, scraping). It runs DAG pipelines over collections of coordinates — files in a folder, rows in a CSV — with content-addressed caching, durable run history, and surgical invalidation.
 
@@ -9,7 +9,7 @@ Every step output is stored immutably at a deterministic address — `hash(step,
 Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from batchbrain import ProcessResult, step, pipeline, run, plan, describe
+from rubedo import ProcessResult, step, pipeline, run, plan, describe
 
 @step(name="read_lines", version="read-v1")
 def read_lines(path: str):
@@ -33,7 +33,7 @@ There is no registry and no magic module: the engine never imports your code —
 Then inspect it in the web UI — a read-only browser over runs, materializations, lineage, and current outputs, plus surgical invalidation ("this output is bad, redo it"):
 
 ```bash
-uv run uvicorn batchbrain.server:app --reload   # API on :8000
+uv run uvicorn rubedo.server:app --reload   # API on :8000
 cd web && npm run dev                            # UI on :5173
 ```
 
@@ -44,7 +44,7 @@ Running and recomputing always happen from library code; the UI's only write act
 Coordinates come from a `Source` — anything that can enumerate `(coordinate, content_hash)` pairs and load payloads. `folder="..."` above is sugar for `FolderSource`, where each file is a coordinate and root steps receive its path. `CsvSource` makes each row a coordinate and hands root steps the row dict:
 
 ```python
-from batchbrain import CsvSource, ProcessResult, step, pipeline
+from rubedo import CsvSource, ProcessResult, step, pipeline
 
 @step(name="enrich", version="v1")
 def enrich(row: dict):
@@ -76,7 +76,7 @@ Outputs are **searchable by their content**: `@step(index=["company", "meta.regi
 
 A step consumes up to two things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed) and **params** (run-level knobs, validated against `params_model` and hashed for exactly the steps that declare a `params` parameter). Root steps receive the payload positionally; dependent steps receive parent outputs by parameter name, matching `depends_on`.
 
-State lives in `.batchbrain/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
+State lives in `.rubedo/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
 
 ## Concepts
 
@@ -86,7 +86,7 @@ See [docs/invariants.md](docs/invariants.md) for the core vocabulary (coordinate
 
 ## Layout
 
-- `batchbrain/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
+- `rubedo/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
 - `web/` — React + Vite dashboard (runs, materializations, lineage, selection-based invalidation)
 - `examples/` — runnable demo pipelines
 - `tests/` — pytest suite (`uv run pytest`)

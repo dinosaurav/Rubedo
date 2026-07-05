@@ -1,7 +1,7 @@
 import os
 
 from pydantic import BaseModel, Field
-from batchbrain import ProcessResult, describe, run, step, pipeline
+from rubedo import ProcessResult, describe, run, step, pipeline
 
 
 class CountLinesParams(BaseModel):

@@ -15,7 +15,7 @@ Then run it (zero extra dependencies — plain stdlib HTTP):
 
     uv run python examples/hn_digest/hn_digest.py
 
-The point of doing this in Batchit: classifying a story with an LLM is
+The point of doing this in Rubedo: classifying a story with an LLM is
 expensive and non-idempotent. Each classification is cached by the story's
 content, so a second run reclassifies nothing and makes *zero* LLM calls —
 and a story that gets filtered out is decided once, not once per run.
@@ -27,7 +27,7 @@ import urllib.request
 
 from pydantic import BaseModel
 
-from batchbrain import Filtered, Source, SourceItem, describe, pipeline, run, step
+from rubedo import Filtered, Source, SourceItem, describe, pipeline, run, step
 
 HN = "https://hacker-news.firebaseio.com/v0"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"

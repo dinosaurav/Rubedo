@@ -2,8 +2,8 @@ import os
 import shutil
 import pytest
 
-from batchbrain import run, step, pipeline
-from batchbrain.db import init_db
+from rubedo import run, step, pipeline
+from rubedo.db import init_db
 
 TEST_FOLDER = ".test_process_data"
 ENV_FOLDER = ".test_process_env"
@@ -17,11 +17,11 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
         
-    import batchbrain.store
-    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+    import rubedo.store
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         "sqlite:///:memory:?cache=shared"
     )
     init_db()

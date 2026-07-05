@@ -2,7 +2,7 @@
 
 import pytest
 
-from batchbrain import Selection
+from rubedo import Selection
 
 
 def test_reserved_prefixes():

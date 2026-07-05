@@ -13,7 +13,7 @@ vocabulary. One item = one (or a few) commits.
 All verified dead (zero consumers) or explicitly approved. Suggested as
 three commits: (a) engine/schema trims, (b) metadata-filtering removal,
 (c) dashboard + stale examples. Address format and schema columns change
-→ reset `.batchbrain/` per CLAUDE.md and note it in the commit.
+→ reset `.rubedo/` per CLAUDE.md and note it in the commit.
 
 **(a) Dead engine/schema code:**
 - Remove `@step(config=...)` entirely: the `config` param and
@@ -354,7 +354,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
 - **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
-- **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `batchit` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
+- **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 
 ──────────────────────────────────────────────────────────────────────

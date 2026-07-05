@@ -1,5 +1,5 @@
 """
-Data sources for Batchit pipelines. Provides mechanisms for iterating over files, CSVs, and database tables.
+Data sources for Rubedo pipelines. Provides mechanisms for iterating over files, CSVs, and database tables.
 """
 import os
 from abc import ABC, abstractmethod

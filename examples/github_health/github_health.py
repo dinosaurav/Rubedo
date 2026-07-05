@@ -14,7 +14,7 @@ Run it:
 
 Each repo is a CSV row (a coordinate). fetch_repo and activity are two chained
 network calls per repo; both carry retries and a rate limit because the GitHub
-API is exactly the kind of flaky, quota'd dependency Batchit is built around.
+API is exactly the kind of flaky, quota'd dependency Rubedo is built around.
 Re-running only re-hits GitHub for rows whose CSV entry changed.
 """
 
@@ -24,13 +24,13 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from batchbrain import CsvSource, ProcessResult, describe, pipeline, run, step
+from rubedo import CsvSource, ProcessResult, describe, pipeline, run, step
 
 API = "https://api.github.com"
 
 
 def _get(path: str):
-    req = urllib.request.Request(f"{API}{path}", headers={"User-Agent": "batchit-example"})
+    req = urllib.request.Request(f"{API}{path}", headers={"User-Agent": "rubedo-example"})
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         req.add_header("Authorization", f"Bearer {token}")

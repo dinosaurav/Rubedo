@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from batchbrain import Selection, invalidate, run, step, pipeline
-from batchbrain.db import init_db, get_session
-from batchbrain.models import (
+from rubedo import Selection, invalidate, run, step, pipeline
+from rubedo.db import init_db, get_session
+from rubedo.models import (
     ImmutabilityError,
     Materialization,
     MaterializationLifecycle,
@@ -18,8 +18,8 @@ from batchbrain.models import (
     RunCoordinateStatus,
     RunEvent,
 )
-from batchbrain.store import init_store
-from batchbrain.util import utcnow_iso
+from rubedo.store import init_store
+from rubedo.util import utcnow_iso
 
 TEST_FOLDER = ".test_immutability_data"
 ENV_FOLDER = ".test_immutability_env"
@@ -34,32 +34,32 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import batchbrain.store
+    import rubedo.store
 
-    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
 
-    import batchbrain.db
+    import rubedo.db
 
-    if batchbrain.db.engine is not None:
-        batchbrain.db.engine.dispose()
+    if rubedo.db.engine is not None:
+        rubedo.db.engine.dispose()
 
-    from batchbrain.models import Base
+    from rubedo.models import Base
     from sqlalchemy.orm import sessionmaker
 
-    batchbrain.db.engine = create_engine(
-        os.environ["BATCHBRAIN_DB_PATH"],
+    rubedo.db.engine = create_engine(
+        os.environ["RUBEDO_DB_PATH"],
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(bind=batchbrain.db.engine)
-    batchbrain.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=batchbrain.db.engine
+    Base.metadata.create_all(bind=rubedo.db.engine)
+    rubedo.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=rubedo.db.engine
     )
 
     init_store()

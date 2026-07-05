@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "batchbrain"
+name = "rubedo"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,7 +19,14 @@ dependencies = [
 # LLM examples read OPENROUTER_API_KEY from a .env file at the repo root.
 
 [tool.setuptools]
-packages = ["batchbrain"]
+packages = ["rubedo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.5.0",
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]

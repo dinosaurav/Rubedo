@@ -4,7 +4,7 @@
       (streamed)    (index)
 
 This one is self-contained: it creates a small SQLite "orders" database in your
-temp dir, then runs a Batchit pipeline over it. Each row is a coordinate.
+temp dir, then runs a Rubedo pipeline over it. Each row is a coordinate.
 
 TableSource is used in streaming mode (batch_size=100): rows are read in
 server-side chunks and payloads are fetched lazily per lane, so the whole table
@@ -22,10 +22,10 @@ import tempfile
 
 from sqlalchemy import create_engine, text
 
-from batchbrain import ProcessResult, describe, pipeline, run, step
-from batchbrain.sources import TableSource
+from rubedo import ProcessResult, describe, pipeline, run, step
+from rubedo.sources import TableSource
 
-DB_PATH = os.path.join(tempfile.gettempdir(), "batchit_demo_orders.db")
+DB_PATH = os.path.join(tempfile.gettempdir(), "rubedo_demo_orders.db")
 DB_URL = f"sqlite:///{DB_PATH}"
 
 SEED = [

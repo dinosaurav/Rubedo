@@ -4,7 +4,7 @@
                  (HTTP)   (skip_   (process    (rank)
                           cache)    executor)
 
-Real API: Project Gutenberg (public, no key). Then two Batchit features worth
+Real API: Project Gutenberg (public, no key). Then two Rubedo features worth
 showing together:
 
   - `clean` is skip_cache=True: a quick, idempotent helper that strips the
@@ -25,7 +25,7 @@ import os
 import re
 import urllib.request
 
-from batchbrain import CsvSource, describe, pipeline, run, step
+from rubedo import CsvSource, describe, pipeline, run, step
 
 GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
 
@@ -34,7 +34,7 @@ GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
 def fetch(row: dict) -> dict:
     """Download one book. row is {id, title} from books.csv."""
     url = GUTENBERG.format(id=row["id"])
-    req = urllib.request.Request(url, headers={"User-Agent": "batchit-example"})
+    req = urllib.request.Request(url, headers={"User-Agent": "rubedo-example"})
     with urllib.request.urlopen(req, timeout=30) as r:
         text = r.read().decode("utf-8", errors="replace")
     return {"title": row["title"], "text": text}

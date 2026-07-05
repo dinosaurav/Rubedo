@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import create_engine, Column, Integer, String, Float, text
 from sqlalchemy.orm import declarative_base
 
-from batchbrain import run, step, pipeline
-from batchbrain.db import init_db
-from batchbrain.sources import TableSource
+from rubedo import run, step, pipeline
+from rubedo.db import init_db
+from rubedo.sources import TableSource
 
 TEST_FOLDER = ".test_table_data"
 ENV_FOLDER = ".test_table_env"
@@ -33,11 +33,11 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import batchbrain.store
-    batchbrain.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    batchbrain.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+    import rubedo.store
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
-    os.environ["BATCHBRAIN_DB_PATH"] = (
+    os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
     init_db()
@@ -211,7 +211,7 @@ def test_streaming_load_after_delete_raises():
 
 
 def test_jsonable_types():
-    from batchbrain.sources import _jsonable
+    from rubedo.sources import _jsonable
     
     row = {
         "dec": Decimal("10.5"),
