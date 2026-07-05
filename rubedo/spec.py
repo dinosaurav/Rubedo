@@ -65,6 +65,7 @@ class StepSpec:
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
     source: Optional[str] = None  # root step: which named source it reads
+    join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
 
 
 DEFAULT_SOURCE = "__source__"
@@ -132,6 +133,7 @@ def step(
     executor: str = "thread",
     group_key: Optional[str] = None,
     source: Optional[str] = None,
+    join_on: Optional[Dict[str, str]] = None,
 ):
     """Declare a step.
 
@@ -179,10 +181,28 @@ def step(
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
-    if shape not in ("map", "reduce", "expand"):
+    if shape not in ("map", "reduce", "expand", "join"):
         raise ValueError(
-            f"Step '{name}': shape must be 'map', 'reduce', or 'expand', got {shape!r}"
+            f"Step '{name}': shape must be 'map', 'reduce', 'expand', or 'join', "
+            f"got {shape!r}"
         )
+    if shape == "join":
+        if not join_on:
+            raise ValueError(
+                f"Step '{name}': shape='join' requires join_on={{parent: field}}"
+            )
+        if len(depends_on or []) < 2:
+            raise ValueError(
+                f"Step '{name}': shape='join' requires at least two parents in "
+                "depends_on (N-way star join on a shared value)"
+            )
+        if set(join_on) != set(depends_on or []):
+            raise ValueError(
+                f"Step '{name}': join_on keys {sorted(join_on)} must match "
+                f"depends_on {sorted(depends_on or [])}"
+            )
+    if join_on is not None and shape != "join":
+        raise ValueError(f"Step '{name}': join_on requires shape='join'")
     if shape == "expand" and skip_cache:
         raise ValueError(
             f"Step '{name}': skip_cache is not supported with shape='expand'"
@@ -254,6 +274,7 @@ def step(
             executor=executor,
             group_key=group_key,
             source=source,
+            join_on=join_on,
         )
 
     return decorator
@@ -340,6 +361,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["shape"] = s.shape
         if s.group_key is not None:
             entry["group_key"] = s.group_key
+        if s.join_on is not None:
+            entry["join_on"] = dict(s.join_on)
         if s.source is not None:
             entry["source"] = s.source
         if s.executor != "thread":

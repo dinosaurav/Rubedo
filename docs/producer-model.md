@@ -301,8 +301,21 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      `(coord, step)`. Single-source behavior byte-identical (validated: full
      suite 165 green incl. `tests/test_multisource.py`). A single-source
      `source=` override is rejected on multi-source pipelines.
-   - **4b. `join`** — next. `@step(shape="join", depends_on=[left, right],
-     join_on={left: field, right: field})`: an equijoin matching the two
-     sides' `@step(index=[...])` fields by value (plan-time, value-free, like
-     `group_key`), minting pair coordinates `left|right`. Predicates are a
-     `filter` after the join. This is the only remaining piece.
+   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
+     depends_on=[a, b, ...], join_on={a: field, b: field, ...})`: an **N-way**
+     equijoin matching each side's `@step(index=[...])` field by value
+     (plan-time, value-free, like `group_key`). It buckets each side by its
+     key, intersects on shared values, and mints one lane per matched tuple
+     (cartesian within a shared value) with coordinate `a|b|...`. 2-way is the
+     common case; `join_on={a:"uid", b:"uid", c:"uid", d:"uid"}` is a 4-way
+     star. Joins on *different* pairwise keys compose by chaining join steps;
+     predicates are a `filter` after the join. Planning-only
+     (`_plan_join`/`_join_pair_decision`) — execution/ledger treat a matched
+     tuple as a multi-parent map decision, so a join lane edges to all its
+     sides. Verified: `tests/test_join.py` (5) incl. the 4-way star + full
+     suite (170) green, and a live two-source order↔customer enrichment.
+
+**The producer-model line is complete:** content-addressed lanes → `expand`
+(cached) → `group_key` reduce → multi-source → N-way `join`. Every shape
+(`map`/`filter`/`expand`/`reduce`/`join`) is now a producer, exactly as the
+taxonomy predicted.

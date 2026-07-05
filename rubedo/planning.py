@@ -351,6 +351,146 @@ def _reduce_group_decision(
     )
 
 
+def _join_pair_decision(
+    session: Session,
+    step: StepSpec,
+    pair_coord: str,
+    parent_mats: Dict[str, Any],
+    params_hash: str,
+    force: bool,
+    accepts_params: bool,
+) -> StepDecision:
+    """Reuse/execute decision for one matched join tuple (identity = its
+    members' content hashes, exactly like a multi-parent map)."""
+    input_hash = _compute_step_input_hash(step, pair_coord, "", parent_mats)
+    output_address = compute_output_address(
+        step.name,
+        step.version,
+        input_hash,
+        params_hash=params_hash if accepts_params else None,
+        code_hash=step.code_hash if step.code_mode == "auto" else None,
+    )
+    existing_mat = (
+        session.query(Materialization)
+        .filter_by(output_address=output_address, is_live=True)
+        .first()
+    )
+    expired = False
+    if existing_mat and step.stale_after is not None:
+        freshness = existing_mat.refreshed_at or existing_mat.created_at
+        expired = iso_age_seconds(freshness) > step.stale_after
+
+    if existing_mat and not force and not expired:
+        return StepDecision(
+            coordinate=pair_coord,
+            action="reuse",
+            input_hash=input_hash,
+            output_address=output_address,
+            existing=MatRef(
+                existing_mat.id,
+                existing_mat.output_address,
+                existing_mat.output_content_hash,
+                existing_mat.content_type,
+                filtered=existing_mat.filtered,
+            ),
+            code_drift=(
+                step.code_mode == "warn"
+                and step.code_hash is not None
+                and existing_mat.code_hash is not None
+                and step.code_hash != existing_mat.code_hash
+            ),
+        )
+    return StepDecision(
+        coordinate=pair_coord,
+        action="execute",
+        input_hash=input_hash,
+        output_address=output_address,
+        parent_mats=parent_mats,
+        stale=expired,
+    )
+
+
+def _plan_join(
+    session: Session,
+    step: StepSpec,
+    coord_step_mats: Dict[tuple, Any],
+    params_hash: str,
+    force: bool,
+    accepts_params: bool,
+) -> List[StepDecision]:
+    """Plan an N-way equijoin.
+
+    Bucket each side's lanes by its `join_on` field value (read from the
+    index at plan time), then emit one decision per matched tuple — the
+    cartesian product of the sides that share a value. Pair coordinate is the
+    members' coordinates joined by '|'.
+    """
+    import itertools
+
+    deps = list(step.join_on.keys())
+    buckets: Dict[str, Dict[str, List[tuple]]] = {dep: {} for dep in deps}
+    failed_parents: List[str] = []
+    blocked_parents: List[str] = []
+    pending = False
+
+    for (coord, d), ref in coord_step_mats.items():
+        if d not in buckets:
+            continue
+        if ref == "blocked":
+            blocked_parents.append(f"{d}:{coord}")
+        elif ref == "failed":
+            failed_parents.append(f"{d}:{coord}")
+        elif ref == "pending":
+            pending = True
+        elif ref == "filtered" or getattr(ref, "filtered", False):
+            pass
+        elif ref is not None:
+            field = step.join_on[d]
+            values = [
+                e.value
+                for e in session.query(MaterializationIndexEntry)
+                .filter_by(materialization_id=ref.id, field=field)
+                .all()
+            ]
+            if not values:
+                raise ValueError(
+                    f"join step '{step.name}': side '{d}' has no indexed value "
+                    f"for join field '{field}' at lane '{coord}'. Add "
+                    f"index=['{field}'] to that step."
+                )
+            for v in values:
+                buckets[d].setdefault(v, []).append((coord, ref))
+
+    if failed_parents or blocked_parents:
+        return [
+            StepDecision(
+                coordinate="@join",
+                action="blocked",
+                failed_parents=failed_parents,
+                blocked_parents=blocked_parents,
+            )
+        ]
+    if pending:
+        return [StepDecision(coordinate="@join", action="pending")]
+
+    common = set(buckets[deps[0]])
+    for dep in deps[1:]:
+        common &= set(buckets[dep])
+
+    decisions: List[StepDecision] = []
+    for value in sorted(common):
+        for combo in itertools.product(*[buckets[dep][value] for dep in deps]):
+            pair_coord = "|".join(coord for coord, _ in combo)
+            parent_mats = {dep: ref for dep, (coord, ref) in zip(deps, combo)}
+            decisions.append(
+                _join_pair_decision(
+                    session, step, pair_coord, parent_mats,
+                    params_hash, force, accepts_params,
+                )
+            )
+    return decisions
+
+
 def _plan_step(
     session: Session,
     step: StepSpec,
@@ -408,6 +548,11 @@ def _plan_step(
             )
             for gcoord, gmats in sorted(groups.items())
         ]
+
+    if step.shape == "join":
+        return _plan_join(
+            session, step, coord_step_mats, params_hash, force, accepts_params
+        )
 
     decisions = []
     

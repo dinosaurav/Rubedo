@@ -259,7 +259,7 @@ def test_registration_errors():
         def sum_v1(x):
             pass
 
-    with pytest.raises(ValueError, match="shape must be 'map', 'reduce', or 'expand'"):
+    with pytest.raises(ValueError, match="shape must be 'map', 'reduce', 'expand', or 'join'"):
         @step(name="sum", version="1", shape="banana")
         def sum_v2(x):
             pass
