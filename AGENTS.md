@@ -23,8 +23,8 @@ accurate and load-bearing; keep them updated when behavior changes.
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
 - **Design-first**: for anything ambiguous or conceptual, propose to the
-  owner before building. Start with TODO.md — item 0 first; item 9 (joins)
-  must not be built without an owner design session. The specs in TODO.md already contain the settled
+  owner before building. Start with `docs/TODO.md`; item 2 (joins)
+  must not be built without an owner design session. The specs in `docs/TODO.md` already contain the settled
   decisions — do not re-litigate them, but do flag genuine contradictions.
 - **Ruthless simplification** is a project value: prefer deleting a concept
   to adding a knob.

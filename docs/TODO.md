@@ -52,25 +52,7 @@ settled — bring a decision (keep vs. remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 2. Examples + LLM seed prompt (positioning)
-
-- `examples/llm_enrich.py`: CsvSource over a small checked-in CSV,
-  `screen` (Filtered) → `enrich` (fake-LLM function — deterministic
-  stand-in with a comment showing where a real client call goes;
-  `retries=3, retry_on=..., rate_limit="30/min"`, `index=["company"]`) →
-  reduce summary (item 1's reduce steps have shipped — wire this in).
-  Heavy comments; this is the flagship example.
-- `examples/scraper.py`: FolderSource of URL-list files or CsvSource of
-  URLs; fetch step with `stale_after="24h"`, retries, rate_limit;
-  fake fetcher (no network in examples).
-- `docs/llms.txt`: **done** — compact API-teaching doc for LLMs already
-  exists; keep it in sync with README as the API evolves.
-- README pitch paragraph: **done** — leads with "dbt-style state for
-  Python tasks, built for non-idempotent steps (LLMs, scraping)".
-
-──────────────────────────────────────────────────────────────────────
-
-## 3. Joins  **[DO NOT BUILD without a design session with the owner]**
+## 2. Joins  **[DO NOT BUILD without a design session with the owner]**
 
 Direction (not yet settled enough to build): a join creates pair lanes
 from two parents (`left|right`), which requires coordinate-*creating*
@@ -80,13 +62,13 @@ builds half the machinery. Open questions needing the owner: pair
 explosion control (predicates before materialization?), expand-step
 manifest caching, multi-source pipeline API. Bring a proposal first.
 
-## 4. Naming  **[parked by owner]**
+## 3. Naming  **[parked by owner]**
 
 Brainstorm + PyPI availability check when asked. Not the current priority.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 5. Future Product Directions (Recommended Next Steps)
+## 4. Future Product Directions (Recommended Next Steps)
 
 These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
 
@@ -127,7 +109,13 @@ enforcing invariant 8 (`before_commit` session listener,
 selection (`version:<2.0` etc. via `packaging.SpecifierSet`, version-aware
 sort in DataTable.tsx) · UI polish cluster (API error states via
 `fetchJson`, filtered lanes shown in Current Outputs, reduce badge in
-DagView) ·
+DagView) · examples + positioning (`hn_digest` — real HN + LLM
+filter→classify→reduce, the flagship non-idempotent-LLM demo;
+`github_health`/`weather_advisory` — chained retried/rate-limited APIs
+with `stale_after`; `gutenberg_stats` — `skip_cache` util +
+`executor="process"`; `orders_rollup` — `TableSource` streaming
+`batch_size`; `docs/llms.txt` LLM-authoring guide; README pitch
+paragraph) ·
 resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
 rule); plan()-in-UI (server never imports user code — use plan() in
 Python).
