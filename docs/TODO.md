@@ -35,9 +35,25 @@ The `executor="process"` option adds a layer of complexity because it forces the
 **Possible Fix:**
 Remove the `executor="process"` option from the engine entirely and default strictly to thread-based concurrency. If users have heavy CPU-bound tasks, they can implement multiprocessing *inside* their own step functions, thereby delegating the CPU-bound complexity to the user's code rather than baking it into the engine's orchestration layer.
 
+**A third option worth weighing alongside keep/remove:** swap the pool
+implementation for `loky` (joblib's process-pool backend) instead of
+stdlib `concurrent.futures.ProcessPoolExecutor`. `loky` is API-compatible
+(`.submit()`/`.result()`, drops in where `process_pool` is constructed in
+`execution.py`) but serializes with `cloudpickle`, which pickles functions
+*by value* (captures the actual code object/closure) rather than by
+`module.qualname` reference. That would likely remove both the
+module-level-function requirement and the `@step`-decorator-shadowing
+footgun (see the pairing between `analyze_book`/`analyze` in
+`examples/gutenberg_stats/gutenberg_stats.py`) without adding a
+scheduler/daemon dependency — unlike Dask/Ray (item 4), this stays purely
+local. Neither `loky` nor `cloudpickle` are current dependencies (checked
+`pyproject.toml`/`uv.lock` — absent, even transitively), so it's a new,
+small addition either way. Not evaluated for correctness/perf yet.
+
 **Status:** implemented and tested (`tests/test_process_executor.py`), but
 the overcomplication note above is a live design question, not yet
-settled — bring a decision (keep vs. remove) before touching this again.
+settled — bring a decision (keep as-is / keep with loky+cloudpickle /
+remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -111,6 +127,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 
 - **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
 - **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); item 1's `RUBEDO_HOME` work is a natural stepping stone since it already isolates where these paths get resolved.
+- **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`docs/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
 - **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
