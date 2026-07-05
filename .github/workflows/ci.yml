@@ -1,0 +1,34 @@
+# PROVISIONAL: not yet wired to run automatically on push/PR. Triggered
+# manually (workflow_dispatch) until the checklist below is trusted enough
+# to gate merges. Flip `on:` to `[push, pull_request]` when ready.
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff
+        run: uv run ruff check src/rubedo/ tests/ examples/
+
+      - name: Pytest
+        run: uv run pytest -q
+
+      - name: Web typecheck
+        run: |
+          cd web
+          npm ci
+          npx tsc -b
