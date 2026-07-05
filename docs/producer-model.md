@@ -166,14 +166,12 @@ core must never leak into the simple case.
    unboundedly, deliberately past normal size constraints. No cap, no warn.
 4. **Multi-root pipeline API.** How do you declare two roots + a join in
    `pipeline()` once `source=` is plural?
-5. **Reduce/join removal → the per-producer census.** Group-key reduce breaks
-   the `ledger.py:642` skip-reduce shortcut: reduce now emits one lane per
-   group, so a group that empties is a removal — but today's loop only diffs
-   *source* coordinates against the *source* scan, and group lanes are
-   neither. Resolved by giving reduce (and join) its own census; a vanished
-   group / unmatchable pair is detected there and reads as `removed`
-   (graceful, not an error). This is a concrete forcing function for the
-   per-producer census, not incidental.
+5. **Reduce/join removal — RESOLVED: just orphan.** A group that empties or a
+   pair whose match vanishes simply stops being emitted; its old
+   materialization orphans (live, unreferenced), exactly like a vanished
+   expanded lane. No census, no `removed` report — consistent with the step-2
+   decision that `removed` is a low-value notification, not an operation. The
+   `ledger.py:642` skip-reduce shortcut is fine to leave as-is.
 6. **Group-key stability** under content-addressed lanes (the same
    removed-vs-changed churn as A, one level up).
 
@@ -269,12 +267,18 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    is stored twice. Option **(b)** (children as views into the anchor, no
    duplication) is deferred to `TODO.md` as a post-launch optimization. The
    behavior-preserving `Producer` refactor stays **dropped** as premature.
-2. **Per-producer census** — adds removal *reporting* for minted/group lanes
-   (a vanished expanded/group lane reads as `removed` instead of silently
-   orphaning). Note: expand *caching* no longer needs this — the anchor solved
-   it — so the census is now only about removal reporting, and is optional
-   until `group_key` needs it (see step 3). Schema change (`Manifest` gains a
-   producer dimension) → `.rubedo` wipe.
-3. **`group_key` reduce** — with the "group by what" decision (plan-time value
-   access) settled first.
+2. **Per-producer census** — ❌ **dropped from the critical path (owner call).**
+   `removed` is only a *report* (a status row + event + `removed_count`); it
+   never deletes or unlives anything (`ledger.py:635-663`). Minted lanes
+   already orphan silently today (they're not in the source manifest), and
+   silent orphaning is functionally identical to "removed." So the census —
+   whose only job was extending that report to minted/group lanes — buys
+   nothing worth a schema change. If "what orphaned?" is ever wanted, it's the
+   orphan/lane-following tooling in `TODO.md` item 5, not a census.
+3. **`group_key` reduce** — **decided: group by coordinate / indexed field**
+   (never by reading parent *values* at plan time). The group key is the
+   parent's coordinate (or a function of it) or a named field from the
+   parent's `@step(index=[...])` entries — both readable at plan time from
+   hashes/index rows, keeping the plan value-free. A vanished group just
+   orphans (per step 2's decision), no removal reporting.
 4. **Multi-root + `join`** — binary collective expand, once roots are plural.
