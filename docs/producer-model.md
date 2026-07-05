@@ -248,12 +248,21 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    with an identical duplicate row collapsing to one lane. Querying keyless
    lanes by their human handle is deferred to the index/lineage tooling
    (`TODO.md` item 5) — keyed lanes stay legible so nothing regresses there.
-1. **`expand`** (`shape="expand"`, 1:N minting) — the flagship capability, next
-   up. Rides the interleaved runner (Finding 1); content-addressed minted
-   coordinates; a minimal membership record for caching (fork option **a**);
-   no schema change, orphan-on-removal. The behavior-preserving `Producer`
-   refactor is **dropped** as premature — the Source/step unification stays
-   conceptual until something needs it.
+1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE (MVP)**. A step
+   yields `(subkey, value)` pairs; each mints a lane `parent/subkey` with a
+   deterministic address `hash(step, version, parent-content, subkey)`, an edge
+   to the parent, and normal downstream chaining. `spec.py` validates it
+   (exactly one parent, no `skip_cache`); `planning.py` emits one execute
+   decision per parent lane (children unknowable until run); `execution.py`
+   fans each parent's yields into child outcomes inside the retry-protected
+   block; `ledger.py` commits them unchanged. No schema change; vanished lanes
+   orphan (Q1/Q2). Verified: `tests/test_expand.py` (7) + full suite (153)
+   green, ruff clean, and a live feed→articles→headline pipeline fans one feed
+   into 3 article lanes and caches created→reused across runs.
+   **MVP limitation:** no expand-level caching yet — the expand fn re-executes
+   every run (its identical children still reuse by content, so only the fn's
+   compute repeats). Fixed by the membership record in step 2. The
+   behavior-preserving `Producer` refactor stays **dropped** as premature.
 2. **Per-producer census** — upgrades expand caching to its general form and
    adds removal *reporting* for minted/group lanes. Schema change (`Manifest`
    gains a producer dimension) → `.rubedo` wipe. Behavior-improving, pulled in

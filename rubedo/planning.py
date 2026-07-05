@@ -359,6 +359,21 @@ def _plan_step(
             decisions.append(StepDecision(coordinate=coord, action="pending", item=it))
             continue
 
+        if step.shape == "expand":
+            # Coordinate-minting: the child lanes are unknowable until the fn
+            # runs, so there is exactly one execute decision per parent lane
+            # (no address, no reuse in the MVP). Execution mints the child
+            # coordinates and their materializations.
+            decisions.append(
+                StepDecision(
+                    coordinate=coord,
+                    action="execute",
+                    item=it,
+                    parent_mats=parent_mats,
+                )
+            )
+            continue
+
         input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)
         output_address = compute_output_address(
             step.name,

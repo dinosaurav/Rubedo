@@ -150,8 +150,19 @@ def step(
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
-    if shape not in ("map", "reduce"):
-        raise ValueError(f"Step '{name}': shape must be 'map' or 'reduce', got {shape!r}")
+    if shape not in ("map", "reduce", "expand"):
+        raise ValueError(
+            f"Step '{name}': shape must be 'map', 'reduce', or 'expand', got {shape!r}"
+        )
+    if shape == "expand" and skip_cache:
+        raise ValueError(
+            f"Step '{name}': skip_cache is not supported with shape='expand'"
+        )
+    if shape == "expand" and len(depends_on or []) != 1:
+        raise ValueError(
+            f"Step '{name}': shape='expand' requires exactly one parent in "
+            "depends_on (multi-parent expansion is a join — not yet supported)"
+        )
     if executor not in ("thread", "process"):
         raise ValueError(f"Step '{name}': executor must be 'thread' or 'process', got {executor!r}")
     if shape == "reduce" and skip_cache:

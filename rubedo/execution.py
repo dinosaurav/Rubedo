@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
 import loky
 
 
+from .hashing import compute_output_address, hash_json
 from .models import Filtered, ProcessResult
 from .planning import (
     EphemeralRef,
@@ -176,6 +177,7 @@ def _execute_step(
     and retry policy (only exceptions matching retry_on are retried).
     """
     limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
+    params_hash = hash_json(params or {})
 
     def call(decision: StepDecision, pool: Optional[Any] = None):
         # Root steps get the source payload positionally; dependent steps
@@ -210,7 +212,58 @@ def _execute_step(
             return pool.submit(step.fn, *args, **kwargs).result()
         return step.fn(*args, **kwargs)
 
-    def process(decision: StepDecision, pool: Optional[Any] = None) -> ExecutionOutcome:
+    def _expand_outcomes(
+        decision: StepDecision, pairs: List[Any], attempt: int, attempt_errors: List[str]
+    ) -> List[ExecutionOutcome]:
+        """Fan one parent lane's (subkey, value) yields into child outcomes.
+
+        Each child mints a coordinate `parent/subkey` and a deterministic
+        address from (step, version, parent content, subkey) so re-runs land on
+        the same generation. Subkeys must be unique within one expansion.
+        """
+        dep = step.depends_on[0]
+        parent_hash = decision.parent_mats[dep].output_content_hash
+        outcomes: List[ExecutionOutcome] = []
+        seen: set = set()
+        for pair in pairs:
+            if not (isinstance(pair, tuple) and len(pair) == 2):
+                raise TypeError(
+                    f"expand step '{step.name}' must yield (subkey, value) "
+                    f"pairs, got {pair!r}"
+                )
+            subkey, value = pair
+            coord = f"{decision.coordinate}/{subkey}"
+            if coord in seen:
+                raise ValueError(
+                    f"expand step '{step.name}' yielded duplicate subkey "
+                    f"{subkey!r} under parent {decision.coordinate!r}"
+                )
+            seen.add(coord)
+            child_input_hash = hash_json({"parent": parent_hash, "subkey": str(subkey)})
+            child = StepDecision(
+                coordinate=coord,
+                action="execute",
+                input_hash=child_input_hash,
+                output_address=compute_output_address(
+                    step.name,
+                    step.version,
+                    child_input_hash,
+                    params_hash=params_hash if accepts_params else None,
+                    code_hash=step.code_hash if step.code_mode == "auto" else None,
+                ),
+                parent_mats=decision.parent_mats,
+            )
+            outcomes.append(
+                ExecutionOutcome(
+                    child, True, result=value, attempts=attempt,
+                    attempt_errors=attempt_errors,
+                )
+            )
+        return outcomes
+
+    def process(
+        decision: StepDecision, pool: Optional[Any] = None
+    ) -> List[ExecutionOutcome]:
         attempt_errors: List[str] = []
         delay = step.retry_delay
         for attempt in range(1, step.retries + 2):
@@ -218,24 +271,34 @@ def _execute_step(
                 limiter.acquire()
             try:
                 result = call(decision, pool)
-                return ExecutionOutcome(
-                    decision,
-                    True,
-                    result=result,
-                    attempts=attempt,
-                    attempt_errors=attempt_errors,
-                )
+                if step.shape == "expand":
+                    # Consume the iterable inside the try so a failing
+                    # generator body is caught and retried like any other.
+                    return _expand_outcomes(
+                        decision, list(result), attempt, attempt_errors
+                    )
+                return [
+                    ExecutionOutcome(
+                        decision,
+                        True,
+                        result=result,
+                        attempts=attempt,
+                        attempt_errors=attempt_errors,
+                    )
+                ]
             except Exception as e:
                 trace = traceback.format_exc()
                 retryable = attempt <= step.retries and isinstance(e, step.retry_on)
                 if not retryable:
-                    return ExecutionOutcome(
-                        decision,
-                        False,
-                        error_trace=trace,
-                        attempts=attempt,
-                        attempt_errors=attempt_errors,
-                    )
+                    return [
+                        ExecutionOutcome(
+                            decision,
+                            False,
+                            error_trace=trace,
+                            attempts=attempt,
+                            attempt_errors=attempt_errors,
+                        )
+                    ]
                 attempt_errors.append(trace)
                 if delay > 0:
                     time.sleep(delay)
@@ -260,7 +323,7 @@ def _execute_step(
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
             futures = [executor.submit(process, d, process_pool) for d in decisions]
             for future in concurrent.futures.as_completed(futures):
-                yield future.result()
+                yield from future.result()
     finally:
         if process_pool is not None:
             process_pool.shutdown()
