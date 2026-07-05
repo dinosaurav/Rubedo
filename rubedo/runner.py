@@ -6,12 +6,13 @@ and this module wires them together.
 """
 
 import json
+import os
 import traceback
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .db import get_session
+from .db import get_session, init_db
 from .execution import _execute_step, _RunMemo
 from .hashing import hash_json
 from .ledger import (
@@ -33,7 +34,20 @@ from .planning import (
 )
 from .spec import PipelineSpec, definition
 from .sources import Source, coerce_source
+from .store import init_store
 from .util import utcnow_iso
+
+
+def _init_home(home: str):
+    """Point the DB and object store at a custom root for this call.
+
+    An explicit home always wins over RUBEDO_DB_PATH/RUBEDO_HOME env vars
+    (same precedence as passing db_path directly to init_db) — it's only
+    applied when the caller actually passes home=, so the no-arg default
+    path is untouched.
+    """
+    init_db(db_path=os.path.join(home, "rubedo.sqlite"))
+    init_store(home=home)
 
 
 def _resolve_invocation(pipeline: PipelineSpec, source, params):
@@ -85,6 +99,7 @@ def plan(
     *,
     params: Optional[dict] = None,
     force: bool = False,
+    home: Optional[str] = None,
 ) -> RunPlan:
     """Dry-run: what would run() do, and why — without writing anything.
 
@@ -92,8 +107,14 @@ def plan(
     "pending" means the answer depends on an upstream execution whose output
     (and therefore this coordinate's address) is unknowable without running;
     "removed" means the coordinate vanished from the source since last run.
+
+    home, if given, points the ledger/object store at a custom root instead
+    of the default `.rubedo`/RUBEDO_HOME (see docs/TODO.md item 1).
     """
     from .planning import _code_drift_message
+
+    if home is not None:
+        _init_home(home)
 
     pipeline, source, params = _resolve_invocation(pipeline, source, params)
     topo_steps = topological_sort(pipeline)
@@ -175,15 +196,23 @@ def run(
     params: Optional[dict] = None,
     workers: Optional[int] = None,
     force: bool = False,
+    home: Optional[str] = None,
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
     Params are validated against the first step's params_model whenever
-    one is declared.
+    one is declared. home, if given, points the ledger/object store at a
+    custom root instead of the default `.rubedo`/RUBEDO_HOME (see
+    docs/TODO.md item 1).
     """
     pipeline, source, params = _resolve_invocation(pipeline, source, params)
     return run_pipeline(
-        pipeline=pipeline, source=source, params=params, workers=workers, force=force
+        pipeline=pipeline,
+        source=source,
+        params=params,
+        workers=workers,
+        force=force,
+        home=home,
     )
 
 
@@ -193,6 +222,7 @@ def run_pipeline(
     workers: Optional[int] = None,
     force: bool = False,
     params: Optional[dict] = None,
+    home: Optional[str] = None,
 ) -> RunSummary:
     """
     Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
@@ -203,10 +233,15 @@ def run_pipeline(
         workers (Optional[int]): Number of parallel workers to use.
         force (bool): If True, forces re-execution of cached outputs.
         params (Optional[dict]): Run-level parameters.
+        home (Optional[str]): Custom ledger/object-store root, overriding
+            the default `.rubedo`/RUBEDO_HOME for this run.
 
     Returns:
         RunSummary: A summary of the executed run.
     """
+    if home is not None:
+        _init_home(home)
+
     source = pipeline.source if source is None else coerce_source(source)
 
     topo_steps = topological_sort(pipeline)

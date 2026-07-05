@@ -9,8 +9,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from .models import Base
 
-DB_PATH = ".rubedo/rubedo.sqlite"
-
 engine = None
 SessionLocal = None
 
@@ -40,8 +38,9 @@ def init_db(db_path: str = None):
     Initialize the database engine and create tables.
 
     Args:
-        db_path (str, optional): The database URL or file path. If None, uses RUBEDO_DB_PATH
-            or the default '.rubedo/rubedo.sqlite'.
+        db_path (str, optional): The database URL or file path. If None, uses
+            RUBEDO_DB_PATH, or RUBEDO_HOME/rubedo.sqlite, or the default
+            '.rubedo/rubedo.sqlite' — in that precedence order.
     """
     global engine, SessionLocal
     if engine is not None:
@@ -51,19 +50,14 @@ def init_db(db_path: str = None):
             pass
 
     if db_path is None:
-        db_path = os.environ.get("RUBEDO_DB_PATH", DB_PATH)
-        # Strip sqlite:/// prefix if present to get the dir
-        dir_path = (
-            db_path.replace("sqlite:///", "")
-            if db_path.startswith("sqlite:///")
-            else db_path
+        db_path = os.environ.get("RUBEDO_DB_PATH") or os.path.join(
+            os.environ.get("RUBEDO_HOME", ".rubedo"), "rubedo.sqlite"
         )
-    else:
-        dir_path = (
-            db_path.replace("sqlite:///", "")
-            if db_path.startswith("sqlite:///")
-            else db_path
-        )
+    dir_path = (
+        db_path.replace("sqlite:///", "")
+        if db_path.startswith("sqlite:///")
+        else db_path
+    )
 
     db_dir = os.path.dirname(dir_path)
     if db_dir:

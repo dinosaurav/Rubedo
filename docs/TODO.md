@@ -45,7 +45,7 @@ stdlib `concurrent.futures.ProcessPoolExecutor`. `loky` is API-compatible
 module-level-function requirement and the `@step`-decorator-shadowing
 footgun (see the pairing between `analyze_book`/`analyze` in
 `examples/gutenberg_stats/gutenberg_stats.py`) without adding a
-scheduler/daemon dependency — unlike Dask/Ray (item 4), this stays purely
+scheduler/daemon dependency — unlike Dask/Ray (item 3), this stays purely
 local. Neither `loky` nor `cloudpickle` are current dependencies (checked
 `pyproject.toml`/`uv.lock` — absent, even transitively), so it's a new,
 small addition either way. Not evaluated for correctness/perf yet.
@@ -57,48 +57,7 @@ remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 1. Configurable `.rubedo` location (parameter + env var)
-
-**Current state (partial):** `rubedo/db.py`'s `init_db(db_path=None)` already
-supports overriding the database path — an explicit `db_path` argument, or
-the `RUBEDO_DB_PATH` env var, falling back to `.rubedo/rubedo.sqlite`.
-`rubedo/store.py` has no equivalent: `OBJECTS_DIR`/`STAGING_DIR` are
-hardcoded module-level constants, no param, no env var. There's also no
-single unified "root" concept — the DB and store paths are two
-independently hardcoded locations that only share a `.rubedo/` prefix by
-convention.
-
-**Goal:** one `RUBEDO_HOME` root, configurable by env var and by an
-explicit parameter on the entry points that need it, with the DB path and
-object/staging directories derived from it unless individually overridden
-(`RUBEDO_DB_PATH` keeps working as the existing granular escape hatch).
-
-**Decisions:**
-- Add a `RUBEDO_HOME` env var (default `.rubedo`); `store.py` derives
-  `OBJECTS_DIR`/`STAGING_DIR` from it the same way `db.py` already derives
-  its default from `RUBEDO_DB_PATH`. `RUBEDO_DB_PATH`, if set, still wins
-  for the DB specifically (matches the precedent `init_db` already sets).
-- Match `init_db`'s existing "set-once-global" pattern in `store.py`: add
-  `init_store(home: str = None)` that resolves and stores the paths as
-  module globals, rather than threading a `home` argument through every
-  store call.
-- Add a parallel `home: Optional[str] = None` parameter on `run()`/`plan()`
-  (`runner.py`), flowing into the `init_db()`/`init_store()` calls made
-  during that run/plan.
-- `server.py` needs the same root to read what a run wrote — it's a
-  separate process, so the env var (or a `--rubedo-home` CLI flag) is the
-  only mechanism that keeps both pointed at the same place; a `run()`
-  parameter alone can't reach it.
-
-**Acceptance:** `RUBEDO_HOME=/tmp/foo uv run python examples/count_lines/count_lines.py`
-creates `/tmp/foo/rubedo.sqlite` + `/tmp/foo/objects` + `/tmp/foo/staging`;
-starting the server with the same env var sees the same data. Existing
-tests are unaffected — the per-test `.test_*_env` fixture pattern already
-passes explicit paths, not relying on defaults.
-
-──────────────────────────────────────────────────────────────────────
-
-## 2. Codebase Housekeeping & Typing Improvements
+## 1. Codebase Housekeeping & Typing Improvements
 
 **Goal:** Improve developer experience and code maintainability by expanding explicit type hints across the codebase.
 
@@ -109,7 +68,7 @@ passes explicit paths, not relying on defaults.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 3. Joins  **[DO NOT BUILD without a design session with the owner]**
+## 2. Joins  **[DO NOT BUILD without a design session with the owner]**
 
 Direction (not yet settled enough to build): a join creates pair lanes
 from two parents (`left|right`), which requires coordinate-*creating*
@@ -121,12 +80,12 @@ manifest caching, multi-source pipeline API. Bring a proposal first.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 4. Future Product Directions (Recommended Next Steps)
+## 3. Future Product Directions (Recommended Next Steps)
 
 These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
 
 - **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
-- **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); item 1's `RUBEDO_HOME` work is a natural stepping stone since it already isolates where these paths get resolved.
+- **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); the configurable `RUBEDO_HOME` root (now shipped — see Done below) is a natural stepping stone since it already isolates where these paths get resolved.
 - **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`docs/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
 - **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
@@ -170,7 +129,13 @@ filter→classify→reduce, the flagship non-idempotent-LLM demo;
 with `stale_after`; `gutenberg_stats` — `skip_cache` util +
 `executor="process"`; `orders_rollup` — `TableSource` streaming
 `batch_size`; `docs/llms.txt` LLM-authoring guide; README pitch
-paragraph) · project rename (Batchit/batchbrain -> Rubedo) ·
+paragraph) · project rename (Batchit/batchbrain -> Rubedo) · configurable
+`RUBEDO_HOME` root (env var, resolved by both `db.py` and `store.py`;
+explicit `home=` param on `run()`/`plan()` takes precedence over env vars,
+same precedence `db.py`'s `db_path` param already had; `RUBEDO_DB_PATH`
+still wins over `RUBEDO_HOME` for the DB specifically when no explicit
+param is given; `server.py` needed no code changes — it already picks up
+the same env var transitively) ·
 resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
 rule); plan()-in-UI (server never imports user code — use plan() in
 Python).

@@ -7,8 +7,12 @@ from typing import Any, Tuple
 from .models import ProcessResult
 from .hashing import hash_bytes
 
-OBJECTS_DIR = ".rubedo/objects"
-STAGING_DIR = ".rubedo/staging"
+def _default_home() -> str:
+    return os.environ.get("RUBEDO_HOME", ".rubedo")
+
+
+OBJECTS_DIR = os.path.join(_default_home(), "objects")
+STAGING_DIR = os.path.join(_default_home(), "staging")
 
 
 def _ensure_gitignore(directory: str):
@@ -26,8 +30,20 @@ def _ensure_gitignore(directory: str):
             pass
 
 
-def init_store():
-    """Ensure the objects and staging directories exist."""
+def init_store(home: str = None):
+    """Ensure the objects and staging directories exist.
+
+    home (optional): an explicit root, overriding OBJECTS_DIR/STAGING_DIR
+    for the rest of the process (mirrors db.init_db's db_path precedent).
+    With no home given, this just ensures whatever's currently configured
+    exists — it never resets an already-set custom home back to the
+    RUBEDO_HOME/default, which matters since stage_and_commit() calls this
+    with no arguments on every commit.
+    """
+    global OBJECTS_DIR, STAGING_DIR
+    if home is not None:
+        OBJECTS_DIR = os.path.join(home, "objects")
+        STAGING_DIR = os.path.join(home, "staging")
     os.makedirs(OBJECTS_DIR, exist_ok=True)
     os.makedirs(STAGING_DIR, exist_ok=True)
     _ensure_gitignore(os.path.dirname(OBJECTS_DIR))
