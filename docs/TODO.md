@@ -54,6 +54,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
     catastrophic and unrollbackable. Gate behind dry-run + a ref-count audit +
     object-versioned buckets before it is *ever* pointed at remote storage.
 - **Source API Simplification**: Remake how `Source` works so that average consumers don't feel compelled to write a full class that implements the `Source` protocol. A simpler functional or generator-based API (e.g., a `@source` decorator) would significantly reduce boilerplate for custom data sources.
+- **`expand` child views (dedup storage) — post-launch**: today `shape="expand"` uses option (a) from `docs/producer-model.md` — the step stores its full yielded list as a cache anchor *and* extracts each item into its own child materialization, so scraped data is stored twice. Option (b): make each child lane a lightweight **view** into the anchor (`(anchor-address, subkey)` + the item's content hash) instead of a separate materialization, so downstream resolves the item out of the anchor and nothing is duplicated. Wins most for large scraped payloads. Needs a new view-ref type in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash` handling; downstream per-item caching stays keyed on the item's content hash. Correctness is identical to (a) — purely a storage optimization.
 
 ──────────────────────────────────────────────────────────────────────
 

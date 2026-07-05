@@ -151,6 +151,42 @@ def test_expand_reruns_but_reuses_identical_children():
     assert (s2.created_count, s2.reused_count) == (0, 8)
 
 
+def test_expand_caches_anchor_and_skips_fn_on_rerun():
+    create_file("a.txt", "alpha\nbeta")
+    calls = []
+
+    @step(name="read", version="1")
+    def read(path):
+        return open(path).read()
+
+    @step(name="split", version="1", depends_on=["read"], shape="expand")
+    def split(read):
+        calls.append(1)  # side effect proves whether the fn re-runs
+        for i, line in enumerate(read.splitlines()):
+            yield str(i), {"line": line}
+
+    @step(name="shout", version="1", depends_on=["split"])
+    def shout(split):
+        return split["line"].upper()
+
+    pipe = pipeline(
+        id="c", name="c", source=FolderSource(TEST_FOLDER), steps=[read, split, shout]
+    )
+    assert_run(pipe)
+    assert len(calls) == 1  # scraped once
+
+    # Unchanged parent: the anchor cache-hits, children replay, fn NOT re-run.
+    s2 = assert_run(pipe)
+    assert len(calls) == 1
+    # read(1) + 2 split children + 2 shout children, all reused
+    assert (s2.created_count, s2.reused_count) == (0, 5)
+
+    # Change the parent: anchor address moves, so the expand re-runs.
+    create_file("a.txt", "alpha\nGAMMA")
+    assert_run(pipe)
+    assert len(calls) == 2
+
+
 def test_expand_reacts_to_a_changed_source_lane():
     create_file("a.txt", "alpha\nbeta")
     create_file("b.txt", "gamma")

@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
 import loky
 
 
-from .hashing import compute_output_address, hash_json
+from .hashing import hash_json
 from .models import Filtered, ProcessResult
 from .planning import (
     EphemeralRef,
@@ -22,6 +22,8 @@ from .planning import (
     StepDecision,
     _build_step_params,
     _step_accepts_params,
+    expand_anchor_address,
+    expand_child_identity,
 )
 from .spec import StepSpec
 from .sources import Source
@@ -98,6 +100,10 @@ class ExecutionOutcome:
     error_trace: Optional[str] = None
     attempts: int = 1
     attempt_errors: List[str] = field(default_factory=list)
+    # An expand step's cache anchor (the full yielded list, addressed by the
+    # parent): stored so a re-run can skip the fn, but it is not a lane — no
+    # status, count, edge, or coord_step_mats entry.
+    is_anchor: bool = False
 
 
 def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _RunMemo):
@@ -215,15 +221,17 @@ def _execute_step(
     def _expand_outcomes(
         decision: StepDecision, pairs: List[Any], attempt: int, attempt_errors: List[str]
     ) -> List[ExecutionOutcome]:
-        """Fan one parent lane's (subkey, value) yields into child outcomes.
+        """Fan one parent lane's (subkey, value) yields into outcomes.
 
-        Each child mints a coordinate `parent/subkey` and a deterministic
-        address from (step, version, parent content, subkey) so re-runs land on
-        the same generation. Subkeys must be unique within one expansion.
+        Emits the cache anchor first (the full yielded list, addressed by the
+        parent so a re-run can skip the fn), then one child per pair — each
+        minting coordinate `parent/subkey` with a deterministic address from
+        (step, version, parent content, subkey). Subkeys must be unique.
         """
         dep = step.depends_on[0]
         parent_hash = decision.parent_mats[dep].output_content_hash
-        outcomes: List[ExecutionOutcome] = []
+
+        validated: List[tuple] = []
         seen: set = set()
         for pair in pairs:
             if not (isinstance(pair, tuple) and len(pair) == 2):
@@ -232,25 +240,44 @@ def _execute_step(
                     f"pairs, got {pair!r}"
                 )
             subkey, value = pair
-            coord = f"{decision.coordinate}/{subkey}"
-            if coord in seen:
+            if subkey in seen:
                 raise ValueError(
                     f"expand step '{step.name}' yielded duplicate subkey "
                     f"{subkey!r} under parent {decision.coordinate!r}"
                 )
-            seen.add(coord)
-            child_input_hash = hash_json({"parent": parent_hash, "subkey": str(subkey)})
+            seen.add(subkey)
+            validated.append((subkey, value))
+
+        # Anchor: the full list, addressed by the parent. Not a lane.
+        anchor = StepDecision(
+            coordinate=decision.coordinate,
+            action="execute",
+            input_hash=parent_hash,
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            parent_mats=decision.parent_mats,
+        )
+        outcomes: List[ExecutionOutcome] = [
+            ExecutionOutcome(
+                anchor,
+                True,
+                result=[[sk, v] for sk, v in validated],
+                attempts=attempt,
+                attempt_errors=attempt_errors,
+                is_anchor=True,
+            )
+        ]
+
+        for subkey, value in validated:
+            child_input_hash, child_address = expand_child_identity(
+                step, parent_hash, subkey, params_hash, accepts_params
+            )
             child = StepDecision(
-                coordinate=coord,
+                coordinate=f"{decision.coordinate}/{subkey}",
                 action="execute",
                 input_hash=child_input_hash,
-                output_address=compute_output_address(
-                    step.name,
-                    step.version,
-                    child_input_hash,
-                    params_hash=params_hash if accepts_params else None,
-                    code_hash=step.code_hash if step.code_mode == "auto" else None,
-                ),
+                output_address=child_address,
                 parent_mats=decision.parent_mats,
             )
             outcomes.append(

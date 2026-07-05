@@ -13,6 +13,7 @@ from .hashing import compute_output_address, hash_json
 from .models import Materialization
 from .spec import PipelineSpec, StepSpec
 from .sources import SourceItem
+from .store import read_materialization_output
 from .util import iso_age_seconds
 
 
@@ -130,6 +131,101 @@ def _compute_step_input_hash(
         dep: parent_mats[dep].output_content_hash for dep in sorted(step.depends_on)
     }
     return hash_json(parent_hashes)
+
+
+def expand_anchor_address(
+    step: StepSpec, parent_hash: str, params_hash: str, accepts_params: bool
+) -> str:
+    """Address of an expand step's cache anchor (the full yielded list).
+
+    Keyed on the *parent* content, so it is predictable from the parent alone
+    — the entry point that lets a re-run skip the fn.
+    """
+    return compute_output_address(
+        step.name,
+        step.version,
+        parent_hash,
+        params_hash=params_hash if accepts_params else None,
+        code_hash=step.code_hash if step.code_mode == "auto" else None,
+    )
+
+
+def expand_child_identity(
+    step: StepSpec, parent_hash: str, subkey, params_hash: str, accepts_params: bool
+) -> tuple[str, str]:
+    """(input_hash, output_address) of one minted child lane of an expand."""
+    child_input_hash = hash_json({"parent": parent_hash, "subkey": str(subkey)})
+    return child_input_hash, compute_output_address(
+        step.name,
+        step.version,
+        child_input_hash,
+        params_hash=params_hash if accepts_params else None,
+        code_hash=step.code_hash if step.code_mode == "auto" else None,
+    )
+
+
+def _plan_expand_reuse(
+    session: Session,
+    step: StepSpec,
+    parent_coord: str,
+    parent_mats: Dict[str, Any],
+    params_hash: str,
+    force: bool,
+    accepts_params: bool,
+) -> Optional[List[StepDecision]]:
+    """Cached expansion → child reuse decisions (skip the fn); else None.
+
+    A hit needs the anchor live (and fresh) *and* every child it lists still
+    present — a partial cache falls back to re-running the whole expansion.
+    """
+    if force:
+        return None
+    parent_hash = parent_mats[step.depends_on[0]].output_content_hash
+    anchor = (
+        session.query(Materialization)
+        .filter_by(
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            is_live=True,
+        )
+        .first()
+    )
+    if anchor is None:
+        return None
+    if step.stale_after is not None:
+        freshness = anchor.refreshed_at or anchor.created_at
+        if iso_age_seconds(freshness) > step.stale_after:
+            return None
+
+    out: List[StepDecision] = []
+    for subkey, _value in read_materialization_output(anchor):
+        input_hash, child_addr = expand_child_identity(
+            step, parent_hash, subkey, params_hash, accepts_params
+        )
+        child = (
+            session.query(Materialization)
+            .filter_by(output_address=child_addr, is_live=True)
+            .first()
+        )
+        if child is None:
+            return None  # incomplete cache — re-run the expansion
+        out.append(
+            StepDecision(
+                coordinate=f"{parent_coord}/{subkey}",
+                action="reuse",
+                input_hash=input_hash,
+                output_address=child_addr,
+                existing=MatRef(
+                    child.id,
+                    child.output_address,
+                    child.output_content_hash,
+                    child.content_type,
+                    filtered=child.filtered,
+                ),
+            )
+        )
+    return out
 
 
 def _step_accepts_params(step: StepSpec) -> bool:
@@ -360,18 +456,23 @@ def _plan_step(
             continue
 
         if step.shape == "expand":
-            # Coordinate-minting: the child lanes are unknowable until the fn
-            # runs, so there is exactly one execute decision per parent lane
-            # (no address, no reuse in the MVP). Execution mints the child
-            # coordinates and their materializations.
-            decisions.append(
-                StepDecision(
-                    coordinate=coord,
-                    action="execute",
-                    item=it,
-                    parent_mats=parent_mats,
-                )
+            # Cached expansion (anchor + all children live) replays the child
+            # lanes without running the fn; otherwise one execute decision per
+            # parent lane mints the children (execution writes the anchor).
+            reuse = _plan_expand_reuse(
+                session, step, coord, parent_mats, params_hash, force, accepts_params
             )
+            if reuse is not None:
+                decisions.extend(reuse)
+            else:
+                decisions.append(
+                    StepDecision(
+                        coordinate=coord,
+                        action="execute",
+                        item=it,
+                        parent_mats=parent_mats,
+                    )
+                )
             continue
 
         input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)

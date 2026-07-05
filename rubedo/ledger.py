@@ -500,6 +500,13 @@ def _commit_execution_result(
                 filtered=is_filtered,
             )
 
+            if outcome.is_anchor:
+                # Cache anchor only: stored so a re-run's plan can skip the
+                # expand fn. Not a lane — no index, edge, status, count, or
+                # coord_step_mats entry.
+                session.commit()
+                return
+
             # Fresh generations get their declared value fields indexed;
             # reused/restored/refreshed rows already carry their entries
             if mat_action in ("created", "superseded") and not is_filtered:
