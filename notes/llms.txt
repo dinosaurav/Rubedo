@@ -4,7 +4,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 
 ## Concepts in 10 lines
 1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder).
-2. **Sources:** `CsvSource` or `FolderSource` define the input lanes.
+2. **Sources:** `CsvSource`/`FolderSource`/`TableSource` define input lanes. `key=` is optional on row sources (omit → content-addressed lanes; declare → stable lanes). A pipeline can have several: `pipeline(sources={"a": SrcA, "b": SrcB})`, and a root step picks one with `@step(source="a")`.
 3. **Steps:** Pure functions decorated with `@step(version="...")`.
 4. **Pipelines:** A DAG of steps over a source.
 5. **Execution:** The engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
@@ -12,7 +12,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 7. **Identity:** A step's cache identity is defined by its inputs + `version` + `params`.
 8. **Generations:** A rerun supersedes old outputs with new ones.
 9. **Filtering:** Return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
-10. **Reduce:** `@step(shape="reduce")` computes one output from all surviving lanes of its parents.
+10. **Shapes:** `map` (1:1, default); `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield (subkey, value)` to mint a lane per item, cached against its parent so a scrape runs once); `join` (N-way equijoin across sources, matched on indexed fields).
 
 ## Step Contract
 - The first argument is the payload (dict) from the Source or the upstream step.
@@ -31,7 +31,9 @@ A step's output is cached based on:
 - `rate_limit="30/min"`: Limit execution speed across all lanes.
 - `stale_after="24h"`: Force recomputation if the cached result is older than 24 hours.
 - `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step.
-- `shape="reduce"`: A reduce step receives a dict of `{lane_key: payload}` for all lanes and returns one output.
+- `shape="reduce"`: receives `{lane_key: payload}` for all lanes and returns one output. Add `group_key="field"` (an indexed field of the parent) to emit one output per group instead of one over `@all`.
+- `shape="expand"`: `yield (subkey, value)` pairs; each mints a downstream lane `parent/subkey`. Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records.
+- `shape="join"` with `join_on={parent: field, ...}`: N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are typically different sources (multi-source, above); `filter` after the join for non-equi predicates.
 
 ## Complete Worked Example
 ```python
@@ -54,8 +56,36 @@ def summarize(enrich: dict) -> dict:
     return {"total": len(enrich), "data": list(enrich.values())}
 
 source = CsvSource("input.csv", key="company")
-p = pipeline(id="enrichment", name="Enrich", folder=source, steps=[screen, enrich, summarize])
+p = pipeline(id="enrichment", name="Enrich", source=source, steps=[screen, enrich, summarize])
 run(p, params={"enrich": {"prompt_mode": "detailed"}})
+```
+
+## Join + Expand Example (multi-source)
+```python
+from rubedo import CsvSource, step, pipeline, run
+
+@step(name="order", version="1", source="orders", index=["cust"])
+def order(row): return {"oid": row["oid"], "cust": row["cust"]}
+
+@step(name="customer", version="1", source="customers", index=["cid"])
+def customer(row): return {"cid": row["cid"], "name": row["name"]}
+
+@step(name="enrich", version="1", shape="join",
+      depends_on=["order", "customer"],
+      join_on={"order": "cust", "customer": "cid"})  # match order.cust == customer.cid
+def enrich(order, customer): return {"oid": order["oid"], "name": customer["name"]}
+
+# an expand fans one lane into many; here each enriched order yields a line item
+@step(name="lines", version="1", depends_on=["enrich"], shape="expand")
+def lines(enrich):
+    for i in range(2):
+        yield f"{enrich['oid']}-{i}", {"oid": enrich["oid"], "n": i}
+
+p = pipeline(id="orders", name="Orders",
+             sources={"orders": CsvSource("orders.csv", key="oid"),
+                      "customers": CsvSource("customers.csv", key="cid")},
+             steps=[order, customer, enrich, lines])
+run(p)
 ```
 
 ## Common Mistakes

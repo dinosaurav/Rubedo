@@ -55,7 +55,7 @@ leads = pipeline(id="enrich-leads", name="Enrich Leads",
                  steps=[enrich])
 ```
 
-`key` names the column(s) that identify a row and is deliberately required: it keeps coordinates stable when rows are edited or inserted, so only changed rows recompute. Pass `key=None` to opt into content-addressed coordinates, where an edited row shows up as removed + created instead.
+`key` names the column(s) that identify a row and is optional: omit it (the default) for content-addressed coordinates, where identical rows collapse and an edited row shows up as removed + created; declare it for stable, legible coordinates that stay put when rows are edited or inserted, so only changed rows recompute (an edit reads as "changed", same coordinate, new hash). A declared key must be unique — if it maps to two different rows the scan raises rather than silently splitting them.
 
 Steps carry their own execution policies — built for flaky work like LLM calls and scraping:
 
@@ -77,6 +77,35 @@ Outputs are **searchable by their content**: `@step(index=["company", "meta.regi
 A step consumes up to two things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed) and **params** (run-level knobs, validated against `params_model` and hashed for exactly the steps that declare a `params` parameter). Root steps receive the payload positionally; dependent steps receive parent outputs by parameter name, matching `depends_on`.
 
 State lives in `.rubedo/` (SQLite database + content-addressed object store), created on first run and gitignored automatically.
+
+## Shapes
+
+By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan-out, and joins:
+
+- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of an indexed field, keyed by that value.
+- **`expand`** (1:N) — the step `yield`s `(subkey, value)` pairs and each becomes its own downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
+- **`join`** — an N-way equijoin across multiple sources, matched on an indexed field:
+
+```python
+@step(name="order", version="1", source="orders", index=["cust"])
+def order(row): return {"oid": row["oid"], "cust": row["cust"]}
+
+@step(name="customer", version="1", source="customers", index=["cid"])
+def customer(row): return {"cid": row["cid"], "name": row["name"]}
+
+@step(name="enrich", version="1", shape="join",
+      depends_on=["order", "customer"],
+      join_on={"order": "cust", "customer": "cid"})
+def enrich(order, customer):        # one lane per matched pair, coordinate order|customer
+    return {"oid": order["oid"], "name": customer["name"]}
+
+p = pipeline(id="enrich", name="Enrich",
+             sources={"orders": CsvSource("orders.csv", key="oid"),
+                      "customers": CsvSource("customers.csv", key="cid")},
+             steps=[order, customer, enrich])
+```
+
+Multiple sources are declared with `sources={name: Source}` (single `source=`/`folder=` are the one-source sugar), and each root step names its source with `@step(source="name")`. `join_on` with four sides on a shared value is a 4-way star join; joins on different keys chain through successive join steps. See [`examples/newsroom`](examples/newsroom/) for join → expand → group_key together.
 
 ## Concepts
 

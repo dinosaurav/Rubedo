@@ -25,9 +25,9 @@ accurate and load-bearing; keep them updated when behavior changes.
 - **Design-first**: for anything ambiguous or conceptual, propose to the
   owner before building. Start with `notes/TODO.md` for open work — the
   specs there already contain the settled decisions (do not re-litigate
-  them, but do flag genuine contradictions). Joins (multi-root pipelines,
-  pair-lane creation) are explicitly flagged there as needing an owner
-  design session before any build starts.
+  them, but do flag genuine contradictions). The producer model —
+  content-addressed lanes, `expand`, `group_key`, multi-source, and N-way
+  `join` — is designed and built; see `notes/producer-model.md`.
 - **Ruthless simplification** is a project value: prefer deleting a concept
   to adding a knob.
 
@@ -35,23 +35,36 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 - `src/rubedo/spec.py` — `@step` / `pipeline()` build plain
   `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
-  user code. `shape` is `"map"` (1:1 per lane, default) or `"reduce"` (N:1
-  fan-in over a parent's surviving lanes, single `"@all"` lane key);
-  `executor` is `"thread"` (default) or `"process"` (registration rejects
-  closures — the fn must be module-level/picklable). `describe()` renders
-  DAGs (text/Mermaid); `definition()` is the JSON snapshot each run records.
+  user code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
+  parent's surviving lanes; `group_key` partitions into one output per
+  indexed-field value, else a single `"@all"`) / `expand` (1:N — the fn
+  yields `(subkey, value)`, minting `parent/subkey` lanes) / `join` (N-way
+  equijoin on `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes).
+  `pipeline(sources={name: Source})` declares multiple roots and a root step
+  picks one with `@step(source="name")` (`source=`/`folder=` stay
+  single-source). `executor` is `"thread"` (default) or `"process"` (a `loky`
+  pool serializing via `cloudpickle`, so closures are fine). `describe()`
+  renders DAGs (text/Mermaid); `definition()` is the JSON snapshot each run
+  records.
 - `src/rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
   payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
   `batch_size` streaming mode, `source_id` built without leaking
-  credentials). A coordinate is a **lane key**: engine-facing
-  dataflow/incrementality key, unique within a scan (sources disambiguate
-  collisions mechanically), stable across scans. Not identity, not the
-  search handle.
+  credentials). `key=` is optional on Csv/Table: omit it for
+  content-addressed `row-<hash>` lanes (identical rows collapse), or declare
+  it for stable legible lanes — a non-unique declared key raises in
+  `_finalize` (no more content-suffixing). A coordinate is a **lane key**:
+  engine-facing dataflow/incrementality key, unique within a scan, stable
+  across scans (or content-addressed). Not identity (that's the output
+  address), not the search handle (that's `index=`).
 - `src/rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
-  Reduce steps get one decision instead of one per lane.
+  Per shape: reduce → one decision per group (`_group_reduce_lanes`); expand
+  → one execute decision per parent lane, reused without re-running the fn via
+  a parent-addressed cache anchor (`_plan_expand_reuse`); join → one decision
+  per matched tuple (`_plan_join`). `group_key`/`join_on` read `index` rows at
+  plan time, so planning stays value-free.
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, per-run memo for
   skip_cache utils.

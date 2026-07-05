@@ -1,8 +1,10 @@
 # The Producer Model — design
 
-Status: **owner design session in progress.** This supersedes the direction
-notes in `TODO.md` — item 1 (Joins) and the `expand`/`flat_map` bullet in
-item 2. Nothing here is built yet. Read `invariants.md` for vocabulary first.
+Status: **✅ designed and shipped** (this doc is now the design + build log).
+The whole line landed: content-addressed lanes → `expand` (cached) →
+`group_key` reduce → multi-source → N-way `join`. It superseded `TODO.md`
+item 1 (Joins) and the `expand`/`flat_map` bullet. Read `invariants.md` for
+vocabulary first; the sequencing section at the bottom traces what was built.
 
 ## The move
 
