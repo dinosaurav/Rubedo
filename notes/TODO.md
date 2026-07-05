@@ -1,77 +1,117 @@
 # TODO
 
 Each open item below is written as a self-contained spec: the design
-decisions are already made (do not re-litigate; flag genuine
-contradictions), with file pointers, gotchas, and acceptance criteria.
-Read `CLAUDE.md` first for conventions, and `notes/invariants.md` for
-vocabulary. One item = one (or a few) commits.
+decisions are already made (do not re-litigate; flag genuine contradictions),
+with file pointers, gotchas, and acceptance criteria. Read `CLAUDE.md` first
+for conventions, and `notes/invariants.md` for vocabulary. One item = one (or
+a few) commits.
 
-──────────────────────────────────────────────────────────────────────
+The **producer model is done** (content-addressed lanes → `expand` →
+`group_key` → multi-source → N-way `join`); see the Done changelog and
+`notes/producer-model.md`. What's left is grouped into four tiers below.
 
+## Priority snapshot (recommended order — owner may reshuffle)
 
+- **Tier 1 · Launch polish** — the producer model is a natural "feature
+  complete" moment; before a `pip install rubedo` push, make the public API
+  trustworthy and custom sources pleasant: **1** mypy/`py.typed`/packaging ·
+  **2** `@source` decorator · **3** data-quality assertions.
+- **Tier 2 · DX & observability** — make it delightful to watch and drive:
+  **4** CLI + terminal UI · **5** live run view (SSE) · **6** continue/resume.
+- **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
+  demand is real: **7** cloud sources → **8** incremental scan → **9** cloud
+  ledger+store → **10** distributed execution; **11** lane-pipelined execution
+  (independent).
+- **Tier 4 · Deferred / careful** — **12** storage GC (**dangerous**) ·
+  **13** `expand` child-views (storage optimization) · **14** lane tooling.
 
-## 1. Joins  **[✅ DONE — shipped as the producer model, see Done + `notes/producer-model.md`]**
+══════════════════════════════════════════════════════════════════════
+# Tier 1 · Launch polish
+══════════════════════════════════════════════════════════════════════
 
-The whole producer-model line shipped: content-addressed lanes → `expand`
-(cached) → `group_key` reduce → multi-source → **N-way `join`**
-(`shape="join"`, equijoin on indexed fields, `left|right` pair coordinates).
-Kept here only as a pointer; details in the Done changelog and
-`notes/producer-model.md`.
+## 1. Type checking (mypy) + `py.typed` + packaging
 
-──────────────────────────────────────────────────────────────────────
+No static type checking today — `ruff` covers lint, not types. Add `mypy` (dev
+dependency group + a `[tool.mypy]` block in `pyproject.toml`) and run it in CI
+once the workflow triggers automatically. Ship a `py.typed` marker so the
+public API is type-checkable downstream. Worth doing before the `pip install
+rubedo` push — a clean `mypy` pass + `py.typed` is part of what makes the
+public surface trustworthy. Acceptance: `uv run mypy src/rubedo` is clean (or
+has an explicit, documented ignore list) and `py.typed` ships in the wheel.
+Gotcha: `store.py`/`ledger.py` have deliberate `Any`s (heterogeneous step
+return values) — don't force false precision there; a narrow `# type: ignore`
+with a reason beats a dishonest type.
 
-## 2. Future Product Directions (Recommended Next Steps)
+## 2. Source API simplification (`@source` decorator)
 
-These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
+Writing a custom `Source` today means subclassing the ABC and implementing
+`id`/`scan`/`load` (`src/rubedo/sources.py`) — more ceremony than a casual user
+wants. Offer a functional form: a `@source(id="...")` decorator over a
+generator/function that yields `(coordinate, content_hash, payload)` (or, with
+`key=`, over rows where the engine derives the coordinate the same way
+`CsvSource` does). The engine wraps it into a `Source` whose `load()` is a
+passthrough of the carried payload. **Decision:** the decorator covers the
+*eager* case (scan yields payloads inline); power users still subclass for the
+*lazy* `load()`/streaming protocol (`TableSource(batch_size=…)` style). This
+also expresses the producer-model framing directly — a source is the root
+producer. Acceptance: a ~5-line `@source` function works as a `pipeline`
+source, content-addressed by default (reusing `_finalize`), with `key=` opt-in
+for stable lanes.
 
-- **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
-- **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); the configurable `RUBEDO_HOME` root (now shipped — see Done below) is a natural stepping stone since it already isolates where these paths get resolved.
-- **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`notes/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
-- **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
-- **Dynamic Lane Expansion (`flat_map` shape)** — ✅ *shipped as `shape="expand"` (1:N coordinate-minting, cached via a parent-addressed list anchor). See Done + `notes/producer-model.md`.*
-- **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
-- **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
-- **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
-  - **⚠️ DANGER — GC is genuinely hazardous; do not build casually.** The
-    orphan-retention decision (`producer-model.md` open Q2) is *keep orphans*
-    for good reasons; any GC that deletes bytes fights that and can corrupt
-    live state. Four traps: **(1) Shared objects.** The store dedupes identical
-    bytes (`hash[:2]/hash[2:4]/hash`), so one physical object can back *many*
-    materializations across different addresses — "this materialization is
-    orphaned" does **not** mean "its bytes are unreferenced." A sweep MUST
-    ref-count physical objects against *all* live materializations before
-    deleting a single byte, or it silently guts live outputs (violates
-    invariants 1 & 3). **(2) Direction of truth.** Sweep by walking the ledger
-    (truth) and ref-counting; **never** by walking the store (derived); and
-    never delete ledger rows (append-only). **(3) Concurrency.** A commit on
-    another machine can *restore* (re-reference) bytes a sweep is mid-way
-    through deleting — GC racing the restore path deletes live data. **(4)
-    Cloud irreversibility.** On S3/GCS deletes are permanent and unrecoverable
-    (no filesystem trash) — a buggy pass against a random cloud bucket is
-    catastrophic and unrollbackable. Gate behind dry-run + a ref-count audit +
-    object-versioned buckets before it is *ever* pointed at remote storage.
-- **Source API Simplification**: Remake how `Source` works so that average consumers don't feel compelled to write a full class that implements the `Source` protocol. A simpler functional or generator-based API (e.g., a `@source` decorator) would significantly reduce boilerplate for custom data sources.
-- **`expand` child views (dedup storage) — post-launch**: today `shape="expand"` uses option (a) from `notes/producer-model.md` — the step stores its full yielded list as a cache anchor *and* extracts each item into its own child materialization, so scraped data is stored twice. Option (b): make each child lane a lightweight **view** into the anchor (`(anchor-address, subkey)` + the item's content hash) instead of a separate materialization, so downstream resolves the item out of the anchor and nothing is duplicated. Wins most for large scraped payloads. Needs a new view-ref type in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash` handling; downstream per-item caching stays keyed on the item's content hash. Correctness is identical to (a) — purely a storage optimization.
+## 3. Data quality assertions
 
-──────────────────────────────────────────────────────────────────────
+Like dbt tests: let a step declare lightweight assertions on its output so
+malformed data fails/blocks the lane loudly instead of flowing downstream. We
+already have `params_model` (Pydantic) as precedent — the natural fit is
+`@step(..., output_model=SomeModel)` validating the return value at commit,
+plus an escape hatch `assertions=[lambda v: ...]` for cross-field checks.
+**Decisions:** a failed assertion is an **execution failure** (clear message in
+the ledger, honors `retry_on`/`retries`), *not* a cached verdict — unlike
+`Filtered`, which is a deliberate, cacheable "decline." It runs in
+`execution.py` right after the fn returns, before `stage_and_commit`. Downstream
+sees the lane as `failed`/`blocked` exactly as it would for a raised exception.
+Acceptance: a step with `output_model` that returns a missing/ill-typed field
+fails that lane with a validation error visible in `run_events`, and its
+siblings proceed.
 
-## 3. Runner rework for the producer model  **[✅ largely resolved — went vertical, not via a big-bang refactor]**
+══════════════════════════════════════════════════════════════════════
+# Tier 2 · DX & observability
+══════════════════════════════════════════════════════════════════════
 
-The producer model shipped by adding capabilities that reused the existing
-interleaved plan→execute runner, *not* by a behavior-preserving Source→Producer
-rewrite (that was dropped as premature — see `notes/producer-model.md`, "go
-vertical, skip the churn"). What actually landed: `expand`/`join` mint
-coordinates via the runner's existing "executed MatRefs feed forward"
-mechanism; `group_key` on `reduce`; and multi-source threading (`run()`/
-`plan()`/`run_pipeline()` now scan each source and thread a per-step
-`step_sources` map into execution). The **per-producer census** was
-deliberately *not* built — removal is only a low-value report and minted lanes
-orphan silently (`notes/producer-model.md` open Q1/Q2). Nothing left here unless
-that census is ever wanted.
+## 4. CLI & terminal UI (`rich`)
 
-──────────────────────────────────────────────────────────────────────
+Local-first developers love the terminal. Add a `rubedo` console entry point
+(`[project.scripts]` in `pyproject.toml`) with: `rubedo run
+<module:factory>` / `rubedo plan <…>` (import the user module, find the
+`PipelineSpec`, run/dry-run it), `rubedo ls` / `rubedo show <run>` (browse
+runs, materializations, current outputs straight from the ledger — the
+terminal twin of the web UI), and `rubedo invalidate <selection>`. Use `rich`
+for a live DAG: per-step progress bars and created/reused/failed counts ticking
+as lanes complete. **Gotcha:** `rubedo run` is the one CLI path that *does*
+import user code (the runner already does) — the read-only `ls`/`show` commands
+must stay ledger-only, never importing pipelines, exactly like `server.py`.
+Shares its live-render logic with item 5 (same event stream, terminal vs
+browser). Acceptance: `rubedo run examples.count_lines.count_lines:make_pipeline`
+runs with a live progress display; `rubedo ls` lists past runs with no user
+imports.
 
-## 4. Continue / resume an interrupted run
+## 5. Live run view (streaming progress)
+
+A run already writes `run_events` and `run_coordinate_statuses` as it goes, and
+`server.py` is read-only and ledger-derived. Add a streaming endpoint so the
+web UI can watch a run execute live — the DAG lighting up, per-step
+created/reused/failed/blocked counts ticking. **Mechanism:** prefer **SSE**
+(Server-Sent Events) over WebSockets — one-way (all "view a run as it goes"
+needs), plain HTTP, no new deps; the server tails new ledger rows for a
+`run_id` and pushes them. **Tailing constraint:** SQLite has no
+`LISTEN/NOTIFY`, so cross-process (run in one process, server in another) means
+polling the ledger on a short interval; an in-process event bus is only
+possible if run and server share a process. Stays consistent with "server never
+imports user code." Pairs with the `rich` CLI live-DAG (item 4). Acceptance: a
+long run streams per-step counts to a connected browser within ~1s of each
+commit.
+
+## 6. Continue / resume an interrupted run
 
 Crash-safety is already implicit: a died run's committed materializations
 persist and the *next* run reuses them by address (invariant 3). What's missing
@@ -79,19 +119,149 @@ is an explicit affordance to **continue a specific interrupted run** — re-plan
 only its pending/failed/blocked lanes and keep the run identity for reporting —
 so a long, expensive LLM run that dies at lane 900/1000 resumes without reading
 as a conceptually fresh run. Largely a UX/reporting layer over the existing
-content-addressed reconcile, so keep it thin. Open: same `run_id` vs a new run
-linked to the old; re-scan vs reuse the prior manifest; interaction with
+content-addressed reconcile, so keep it thin. **Open:** same `run_id` vs a new
+run linked to the old; re-scan vs reuse the prior manifest; interaction with
 selection-scoped/partial runs. Design-first.
 
-──────────────────────────────────────────────────────────────────────
+══════════════════════════════════════════════════════════════════════
+# Tier 3 · Scale & cloud
+══════════════════════════════════════════════════════════════════════
 
-## 5. Lane tooling — following & invalidation  **[deferred; post-`notes/producer-model.md`]**
+## 7. Cloud object storage sources (`S3Source` / `GCSSource`)
 
-Two families of utilities that ride on machinery that already exists
-(`MaterializationEdge` lineage, `MaterializationIndexEntry` labels) — deferred
-until the producer-model refactor lands, since lanes become the load-bearing
-navigation surface then. Not to be built yet; captured so the direction isn't
-lost.
+Local folders and SQL are great starts, but modern data lives in buckets. Add
+`Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`): `scan()`
+lists objects under a prefix → coordinates = keys relative to the prefix;
+`load()` downloads the object bytes; `source_id` = `s3://bucket/prefix` (no
+credentials — use the ambient boto3 / google-cloud-storage client). **The load-
+bearing gotcha:** hashing an object means *downloading* it, so `scan()` must
+**not** content-hash eagerly. Use the object's **ETag/size/mtime as the change
+token** instead of a true content hash (S3 ETag is the MD5 for single-part
+uploads but not for multipart — fall back to size+mtime or a stored checksum
+there). This is exactly the producer-model insight that "scan produces a
+content hash eagerly" is the *folder* assumption; cloud sources need a change
+token that isn't the content hash — which is what item 8 formalizes. Ship
+boto3/gcs as optional extras (`rubedo[s3]`, `rubedo[gcs]`). Acceptance: scan a
+bucket prefix → coordinates; a step reads object bytes; a re-run reuses
+untouched objects without re-downloading to hash them.
+
+## 8. Incremental source scanning (high watermarks)
+
+Sources scan their whole domain every run today (relying on cache identity to
+skip *work*, but still enumerating everything). For massive tables/buckets,
+let a source skip *scanning* untouched coordinates via a watermark
+(`updated_at > last_run`), cutting planning cost. Persist the watermark per
+`source_id` (small ledger table, or on `Manifest`); pass the last watermark
+into `scan()`, which returns only new/changed coordinates + the new watermark.
+**The gotcha that needs a decision:** a delta scan can't detect *removals* by
+absence (a removed coordinate is simply not in the delta). So watermark mode is
+**"creations/changes only"** — removal is either not reported (consistent with
+the producer-model decision that removal is a low-value report), or handled by
+an occasional full reconciliation scan, or by source-provided tombstones.
+Pairs with item 7 (ETag/mtime change tokens are the watermark signal).
+Acceptance: a `TableSource` given an `updated_at` column re-scans only changed
+rows across runs, with unchanged rows never re-enumerated.
+
+## 9. Configurable cloud ledger + object store (Postgres / S3-GCS)
+
+Distinct from item 7 (input data) — this is the *internal* materialization
+store (`src/rubedo/store.py`) and ledger DB (`src/rubedo/db.py`) that back every
+run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is
+comparatively mechanical (the WAL/`busy_timeout` pragma hook is SQLite-specific
+and must become conditional). `store.py`'s content-addressed layout
+(`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every
+`os.path`/`open()`/`os.replace()` in it assumes a local filesystem and needs an
+abstraction swapped in behind the same interface (atomic `replace` becomes a
+conditional-put). This — **not** the execution backend — is the real
+prerequisite for genuine multi-machine/cloud execution (item 10): a distributed
+worker can't write to a purely local SQLite file + local objects dir. The
+`RUBEDO_HOME` root (shipped) is a natural stepping stone since it already
+isolates where these paths resolve. Acceptance: a run whose `store`/`db` point
+at Postgres + a bucket produces identical ledger/reuse behavior to the local
+default.
+
+## 10. Pluggable distributed execution backend (Dask / Ray)  **[depends on item 9]**
+
+Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
+`_execute_step`'s `call()` already treats "the pool" as anything satisfying
+`.submit(fn, *args, **kwargs) -> Future-with-.result()` (the same shape
+`dask.distributed.Client` and a thin `ray` wrapper expose), so a third
+`executor="dask"`/`"ray"` value is a small change to *that call site*. The real
+cost is architectural, not mechanical: it needs a running scheduler/cluster —
+which cuts against the "zero-daemon" positioning (`notes/framework_analysis.md`)
+— and it **depends on item 9** (a distributed worker can't reach a local
+SQLite + objects dir). **Owner design session before building:** add it as a
+third `executor=` value alongside `"process"`, or *replace* `"process"` (a
+Dask/Ray `LocalCluster` subsumes the local-multi-process case; `loky` already
+solved the picklability pain far more cheaply). Acceptance: an
+`executor="dask"` step runs on a `LocalCluster` and reuses across runs via the
+cloud store (item 9).
+
+## 11. Non-topological (lane-pipelined) execution
+
+Today the runner is **staged**: `for step in topo: plan → execute all lanes →
+commit` (`src/rubedo/runner.py`), so every step waits for *all* lanes of the
+previous step before any lane advances — max parallelism within a step, zero
+pipelining across steps. A lane can't race ahead through `scrape → parse →
+classify` while a sibling is still scraping. Goal: let a lane flow through
+consecutive **per-lane** steps (`map`/`filter`/`expand`) as far as it can,
+independent of its siblings. Wins: first results land far sooner (latency),
+long-running/streaming pipelines make continuous progress, workers don't stall
+at stage boundaries. **Not** for the collective steps — `reduce`/`join` are
+true barriers (they need the whole input set), so pipelining applies only to
+the per-lane runs *between* barriers (the owner flagged this is about the
+non-join-heavy cases). Cost is a real execution-model rework: the interleaved
+plan→execute and `coord_step_mats` both assume whole-step staging; a
+lane-pipelined engine needs a scheduler over `(lane, step)` tasks with
+dependency edges that stops a lane at the next barrier and synchronizes there.
+Interacts with the `expand` cache anchor (per-parent) and reduce/join barriers.
+Design-first.
+
+══════════════════════════════════════════════════════════════════════
+# Tier 4 · Deferred / careful
+══════════════════════════════════════════════════════════════════════
+
+## 12. Storage sprawl management + garbage collection  **[⚠️ DANGEROUS]**
+
+Content-addressed stores keep everything; without cleanup the `.rubedo`
+directory balloons. Useful *safe* features first: disk-usage warnings, storage
+limits, age-out policies. Actual byte-deleting GC is genuinely hazardous and
+must not be built casually — the orphan-retention decision
+(`producer-model.md` Q2) is *keep orphans* for good reasons, and any GC that
+deletes bytes fights that and can corrupt live state. **Four traps:**
+**(1) Shared objects** — the store dedupes identical bytes
+(`hash[:2]/hash[2:4]/hash`), so one physical object can back *many*
+materializations across different addresses; "this materialization is orphaned"
+does **not** mean "its bytes are unreferenced." A sweep MUST ref-count physical
+objects against *all* live materializations before deleting a byte, or it
+silently guts live outputs (violates invariants 1 & 3). **(2) Direction of
+truth** — sweep by walking the ledger and ref-counting; **never** the store;
+never delete ledger rows (append-only). **(3) Concurrency** — a commit on
+another machine can *restore* (re-reference) bytes a sweep is mid-delete on.
+**(4) Cloud irreversibility** — S3/GCS deletes are permanent (no trash); a
+buggy pass against a bucket is catastrophic. Gate any real GC behind dry-run +
+a ref-count audit + object-versioned buckets before it *ever* points at remote
+storage.
+
+## 13. `expand` child views (dedup storage) — post-launch optimization
+
+Today `shape="expand"` uses option (a) from `notes/producer-model.md` — the
+step stores its full yielded list as a cache anchor *and* extracts each item
+into its own child materialization, so scraped data is stored twice. Option
+(b): make each child lane a lightweight **view** into the anchor
+(`(anchor-address, subkey)` + the item's content hash) instead of a separate
+materialization, so downstream resolves the item out of the anchor and nothing
+is duplicated. Wins most for large scraped payloads. Needs a new view-ref type
+in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash`
+handling; downstream per-item caching stays keyed on the item's content hash.
+Correctness is identical to (a) — purely a storage optimization, so only worth
+it once double-storage actually bites.
+
+## 14. Lane tooling — following & invalidation
+
+Two utilities that ride on machinery that already exists (`MaterializationEdge`
+lineage, `MaterializationIndexEntry` labels); now that lanes can go
+content-addressed/minted, they're the load-bearing navigation surface.
 
 - **Lane-following (lineage queries).** "Find the results connected to a label
   at a certain step": index-lookup (`MaterializationIndexEntry`) to seed
@@ -99,73 +269,16 @@ lost.
   to reach connected outputs at other steps. Pure query over existing tables —
   a recursive CTE, no new bookkeeping. Survives reduce/expand/join because it
   is a materialization graph, not coordinate-equality. This is the "follow the
-  path of a lane" utility that replaces a legible coordinate once lanes go
-  opaque/content-addressed. Root-of-lineage → source row is answered by
-  indexing source metadata at the root (decide: always index it).
-- **Lane-level invalidation.** Today `invalidate(selection)` flips `is_live`
-  on the selected materializations only, and the settled core semantics are
+  path of a lane" utility that replaces a legible coordinate once lanes are
+  opaque. Root-of-lineage → source row is answered by indexing source metadata
+  at the root (decide: always index it).
+- **Lane-level invalidation.** Today `invalidate(selection)` flips `is_live` on
+  the selected materializations only, and the settled core semantics are
   lazy-via-recompute (invalidate a specific bad case, let the next run
-  recompute — no eager descendant cascade; see `producer-model.md` open
-  question 1). The deferred tooling is broader selection-driven invalidation
-  over a *lane* (e.g. "invalidate everything this label touched, all steps"),
-  built on the same lineage traversal above. Design-first; the core stays
-  minimal.
-
-──────────────────────────────────────────────────────────────────────
-
-## 6. Live run view (streaming progress)
-
-A run already writes `run_events` and `run_coordinate_statuses` as it
-progresses, and `server.py` is read-only and ledger-derived. Add a streaming
-endpoint so the web UI can watch a run execute live — the DAG lighting up,
-per-step created/reused/failed/blocked counts ticking as lanes complete.
-Mechanism: prefer **SSE** (Server-Sent Events) over raw WebSockets — it is
-one-way (all that "view a run as it goes" needs), plain HTTP, and pulls in no
-new deps; the server tails new ledger rows for a `run_id` and pushes them. The
-tailing constraint to design around: SQLite has no `LISTEN/NOTIFY`, so
-cross-process (run in one process, server in another) means polling the ledger
-on a short interval; an in-process event bus is only possible if run and server
-share a process. Stays consistent with "server never imports user code" — the
-feed is purely ledger-derived. Pairs naturally with the `rich` CLI/TUI
-live-DAG item in section 2.
-
-──────────────────────────────────────────────────────────────────────
-
-## 7. Non-topological (lane-pipelined) execution
-
-Today the runner is **staged**: `for step in topo: plan → execute all lanes →
-commit` (`runner.py:294`), so every step waits for *all* lanes of the previous
-step before any lane advances — max parallelism within a step, zero pipelining
-across steps. A lane can't race ahead through `scrape → parse → classify` while
-a sibling is still scraping.
-
-Goal: let a lane flow through consecutive **per-lane** steps (map/filter/expand)
-as far as it can, independently of its siblings, instead of stopping at every
-stage boundary. Wins: first results land far sooner (latency), long-running /
-streaming pipelines make continuous progress, and workers don't stall at stage
-boundaries. Explicitly **not** for the collective steps — `reduce`/`join` are
-true barriers (they need the whole input set), so pipelining only applies to the
-map/expand/filter runs *between* barriers; the owner already flagged this is
-about the non-join-heavy cases.
-
-Cost is a real execution-model rework: the current interleaved plan→execute and
-`coord_step_mats` both assume whole-step staging. A lane-pipelined engine needs
-a scheduler over `(lane, step)` tasks with dependency edges, that stops a lane's
-advance at the next barrier and synchronizes there. Interacts with the expand
-cache anchor (per-parent) and reduce/join barriers. Design-first; likely lands
-after the producer-model line (`notes/producer-model.md`) settles, since barriers
-(reduce/join) define exactly where pipelining must stop.
-
-──────────────────────────────────────────────────────────────────────
-
-## 8. Type checking (mypy)
-
-No static type checking today — `ruff` covers lint, not types. Add `mypy`
-(dev dependency group + a `[tool.mypy]` block in `pyproject.toml`) and run it
-in CI once the workflow is actually wired to trigger automatically. Worth
-doing before the `pip install rubedo` push, since a `py.typed` marker + clean
-`mypy` pass is part of what makes the public API trustworthy to type-check
-against downstream.
+  recompute — no eager descendant cascade; `producer-model.md` Q1). The
+  deferred tooling is broader selection-driven invalidation over a *lane* (e.g.
+  "invalidate everything this label touched, all steps"), built on the same
+  lineage traversal above. Design-first; the core stays minimal.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -232,7 +345,9 @@ pipelines (`sources={name: Source}`, root `@step(source=...)`, per-step
 `step_sources` threaded through execution, `tests/test_multisource.py`) ·
 N-way `join` (`shape="join"`, equijoin on indexed fields, `left|right` pair
 coordinates, 4-way star supported, `tests/test_join.py`) — every shape is now
-a producer · resolved-won't-do: arbitrary-rules plugin surface
+a producer · Runner rework resolved by going vertical (no big-bang
+Source→Producer refactor; `expand`/`join` reuse the interleaved plan→execute
+runner) · resolved-won't-do: arbitrary-rules plugin surface
 (wrapper-or-built-in rule); plan()-in-UI (server never imports user code — use
 plan() in Python); per-producer census (removal is a low-value report, minted
 lanes orphan silently); behavior-preserving Source→Producer refactor (went
