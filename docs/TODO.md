@@ -34,6 +34,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 - **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
+- **Source API Simplification**: Remake how `Source` works so that average consumers don't feel compelled to write a full class that implements the `Source` protocol. A simpler functional or generator-based API (e.g., a `@source` decorator) would significantly reduce boilerplate for custom data sources.
 
 ──────────────────────────────────────────────────────────────────────
 
