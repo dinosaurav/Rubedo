@@ -67,19 +67,14 @@ def test_csv_source_composite_key(tmp_path):
     assert coords == {"east|alice", "west|alice"}
 
 
-def test_csv_source_duplicate_keys_disambiguate_lanes(tmp_path):
+def test_csv_source_duplicate_keys_raise(tmp_path):
     csv_path = str(tmp_path / "rows.csv")
     write_csv(csv_path, "id,name\n1,alice\n1,bob\n2,carol\n")
 
-    items = CsvSource(csv_path, key="id").scan()
-    coords = sorted(it.coordinate for it in items)
-
-    # Colliding key -> content-suffixed lanes; unique key stays clean
-    assert coords[2] == "2"
-    assert all(c.startswith("1#") for c in coords[:2])
-    assert len(set(coords)) == 3
-    collided = [it for it in items if it.coordinate != "2"]
-    assert all(it.metadata.get("key_collision") for it in collided)
+    # A declared key that maps to two different rows is an error, not a
+    # silent content-suffix. Omit key= for content-addressed lanes instead.
+    with pytest.raises(ValueError, match="must be unique"):
+        CsvSource(csv_path, key="id").scan()
 
 
 def test_csv_source_identical_duplicate_rows_collapse(tmp_path):
@@ -89,6 +84,18 @@ def test_csv_source_identical_duplicate_rows_collapse(tmp_path):
     items = CsvSource(csv_path, key="id").scan()
     # Same key, same content: indistinguishable work, one lane, no suffix
     assert [it.coordinate for it in items] == ["1"]
+
+
+def test_csv_source_key_optional_defaults_to_content_addressed(tmp_path):
+    csv_path = str(tmp_path / "rows.csv")
+    write_csv(csv_path, "id,name\n1,alice\n1,bob\n")
+
+    # No key at all: content-addressed lanes. Two different rows that would
+    # have collided on a key are simply two distinct coordinates.
+    items = CsvSource(csv_path).scan()
+    assert len(items) == 2
+    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
+    assert CsvSource(csv_path).id == f"csv:{csv_path}#key=@content"
 
 
 def test_csv_source_missing_key_column_raises(tmp_path):

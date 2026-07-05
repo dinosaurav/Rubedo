@@ -95,39 +95,40 @@ def test_table_source_partial_update():
     assert summary2.created_count == 1  # Alice recomputed
     assert summary2.reused_count == 1   # Bob reused
     
-def test_table_source_disambiguate_duplicates():
-    # We use key="name" so we can insert duplicate names without violating the PK on id.
-    
-    # Insert a duplicate key with DIFFERENT content
+def test_table_source_duplicate_key_raises():
+    # A duplicate name with DIFFERENT content under key="name": the declared
+    # key is not unique, so the scan raises rather than content-suffixing.
     execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
-    
+
     source = TableSource(REMOTE_DB_PATH, table="leads", key="name")
-    items = source.scan()
-    
-    # 3 items: Alice, Bob#hash, Bob#hash2
-    assert len(items) == 3
-    
-    bobs = [it for it in items if it.coordinate.startswith("Bob#")]
-    assert len(bobs) == 2
-    assert bobs[0].metadata.get("key_collision") is True
-    assert bobs[1].metadata.get("key_collision") is True
-    
-    # Insert a duplicate key with EXACT SAME content
-    # (Notice we have a different id=4, but if key="name" and we only hash some columns?
-    # Wait, the whole row is hashed! Since id is in the row, the content hash will be DIFFERENT!
-    # So to test exact same content, we must use columns=["name", "score"] in TableSource!)
-    
-    source_cols = TableSource(REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"])
-    
-    # Insert a row that has exactly the same name and score as Alice
+    with pytest.raises(ValueError, match="must be unique"):
+        source.scan()
+
+
+def test_table_source_identical_rows_collapse():
+    # Under a column projection, a duplicate row with EXACT SAME content is one
+    # indistinguishable unit of work and collapses to a single lane.
     execute_remote("INSERT INTO leads (id, name, score) VALUES (4, 'Alice', 9.5)")
-    
-    items2 = source_cols.scan()
-    # 3 items: Alice (collapsed), Bob#hash, Bob#hash2
-    assert len(items2) == 3
-    alices = [it for it in items2 if it.coordinate == "Alice"]
-    assert len(alices) == 1
-    
+
+    source = TableSource(
+        REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"]
+    )
+    items = source.scan()
+    # Alice (id 1 and 4 collapse under the name+score projection) + Bob
+    assert len(items) == 2
+    assert len([it for it in items if it.coordinate == "Alice"]) == 1
+
+
+def test_table_source_content_addressed_no_key():
+    # No key: content-addressed lanes. A duplicate name is simply a distinct
+    # coordinate (the whole row differs), never an error.
+    execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
+
+    items = TableSource(REMOTE_DB_PATH, table="leads").scan()
+    assert len(items) == 3
+    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
+    assert TableSource(REMOTE_DB_PATH, table="leads").id.endswith("#key=@content")
+
 def test_credential_stripping():
     # Provide a URL with credentials
     url = "postgresql://user:secretpass@localhost:5432/mydb"
@@ -188,17 +189,21 @@ def test_streaming_partial_update():
     assert s2.reused_count == 1   # Bob reused
 
 
-def test_streaming_duplicate_key_load_picks_by_content():
-    execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
+def test_streaming_load_picks_planned_content_on_later_duplicate():
+    # Streaming keys are unique at scan. If a duplicate row appears *after* the
+    # scan, load() still returns the row whose content matches what was
+    # planned, not an arbitrary match.
     src = TableSource(
         REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"], batch_size=1
     )
-    items = src.scan()
-    bobs = [it for it in items if it.coordinate.startswith("Bob#")]
-    assert len(bobs) == 2
+    items = src.scan()  # Alice, Bob — unique names
+    bob = next(it for it in items if it.coordinate == "Bob")
 
-    loaded = [src.load(it) for it in bobs]
-    assert sorted(r["score"] for r in loaded) == [7.5, 8.0]
+    # A second Bob with a different score appears only now
+    execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
+
+    loaded = src.load(bob)
+    assert loaded["score"] == 8.0  # the planned Bob, not the newcomer
 
 
 def test_streaming_load_after_delete_raises():

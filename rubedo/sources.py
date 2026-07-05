@@ -22,36 +22,38 @@ class SourceItem:
     ref: Any = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-def _disambiguate(
+def _finalize(
     rows: List[tuple[str, str, Any, Dict[str, Any]]]
 ) -> List[SourceItem]:
-    """Resolve duplicate keys into single coordinates or content-suffixed coordinates."""
-    from collections import defaultdict
-    
-    # base lane key -> {content_hash: (ref, metadata)}; identical (key, content)
-    # rows are indistinguishable units of work and collapse to one lane
-    groups: Dict[str, Dict[str, tuple]] = defaultdict(dict)
-    
-    for base, content_hash, ref, meta in rows:
-        groups[base].setdefault(content_hash, (ref, meta))
-        
+    """Turn (coordinate, content_hash, ref, meta) rows into SourceItems.
+
+    Identical (coordinate, content) rows are indistinguishable units of work
+    and collapse to a single lane. A coordinate that maps to two *different*
+    contents means a declared key is not unique — that is an error, not a
+    silent content-suffix. Omit key= for content-addressed lanes, where
+    distinct rows are simply distinct coordinates and identical rows collapse.
+    """
+    seen: Dict[str, str] = {}
     items: List[SourceItem] = []
-    for base, variants in groups.items():
-        collided = len(variants) > 1
-        for content_hash, (ref, meta) in variants.items():
-            coordinate = f"{base}#{content_hash[:6]}" if collided else base
-            metadata = dict(meta)
-            if collided:
-                metadata["key_collision"] = True
-            items.append(
-                SourceItem(
-                    coordinate=coordinate,
-                    content_hash=content_hash,
-                    ref=ref,
-                    metadata=metadata,
+    for coordinate, content_hash, ref, meta in rows:
+        prior = seen.get(coordinate)
+        if prior is not None:
+            if prior != content_hash:
+                raise ValueError(
+                    f"coordinate {coordinate!r} maps to two different rows: a "
+                    "declared key must be unique. Omit key= for "
+                    "content-addressed lanes."
                 )
+            continue  # identical unit of work — one lane
+        seen[coordinate] = content_hash
+        items.append(
+            SourceItem(
+                coordinate=coordinate,
+                content_hash=content_hash,
+                ref=ref,
+                metadata=meta,
             )
-            
+        )
     return items
 
 
@@ -118,22 +120,19 @@ class FolderSource(Source):
 
 
 class CsvSource(Source):
-    """Rows of a CSV file. Coordinate = key column value(s), payload = row dict.
+    """Rows of a CSV file. Payload = row dict.
 
-    `key` is deliberately required: coordinates must stay stable when rows are
-    inserted or edited, and only the caller knows which column(s) identify a
-    row. Pass key=None to opt into content-addressed coordinates, where an
-    edited row shows up as removed + created rather than changed.
-
-    The coordinate is a lane key, not a uniqueness constraint on your data:
-    duplicate keys are handled mechanically. Rows sharing a key *and* content
-    are indistinguishable units of work and collapse into one lane; rows
-    sharing a key with different content get content-suffixed lanes
-    ("bob#3f2a9c"), where an edit reads as removed + created. Searching by
-    the human-facing key value is the job of indexed fields, not the lane.
+    `key` is optional. Omit it (the default) for **content-addressed lanes**:
+    the coordinate is `row-<hash>`, identical rows collapse to one lane, and an
+    edited row reads as removed + created. Declare `key=` (one or more columns)
+    for **stable, legible lanes**: the coordinate is the key value, so an
+    edited row keeps its coordinate and reads as changed. A declared key must
+    be unique — if it maps to two different rows the scan raises, rather than
+    silently splitting them. Searching by the human-facing key value is the job
+    of indexed fields, not the lane.
     """
 
-    def __init__(self, path: str, *, key):
+    def __init__(self, path: str, *, key=None):
         self.path = path
         if isinstance(key, str):
             key = [key]
@@ -168,7 +167,7 @@ class CsvSource(Source):
 
                 rows.append((base, content_hash, row, {"line": row_num}))
 
-        return _disambiguate(rows)
+        return _finalize(rows)
 
     def load(self, item: SourceItem) -> Dict[str, str]:
         return item.ref
@@ -220,6 +219,10 @@ class TableSource(Source):
     `batch_size` is an operational knob: it changes *how* rows are read, not
     which coordinates or content exist, so it is deliberately absent from
     `id` and toggling it never invalidates the cache.
+
+    `key` is optional (as for CsvSource): omit it for content-addressed lanes,
+    or declare column(s) for stable, legible lanes. Streaming mode
+    (`batch_size`) requires a key, since `load()` re-fetches a row by it.
     """
 
     def __init__(
@@ -227,7 +230,7 @@ class TableSource(Source):
         engine_url: str,
         *,
         table: str,
-        key,
+        key=None,
         columns: Optional[List[str]] = None,
         batch_size: Optional[int] = None,
     ):
@@ -235,10 +238,15 @@ class TableSource(Source):
         self.table = table
         if isinstance(key, str):
             key = [key]
-        self.key: List[str] = key
+        self.key: Optional[List[str]] = key
         self.columns = columns
         if batch_size is not None and batch_size < 1:
             raise ValueError(f"batch_size must be a positive int, got {batch_size!r}")
+        if batch_size is not None and not key:
+            raise ValueError(
+                "TableSource streaming (batch_size) requires key= to re-fetch "
+                "rows by key; omit batch_size for content-addressed eager mode"
+            )
         self.batch_size = batch_size
         self._engine = None
 
@@ -254,7 +262,7 @@ class TableSource(Source):
 
         # Build dialect+host+database+table#key=id
         safe_url = f"{parsed.scheme}://{safe_netloc}{parsed.path}"
-        key_part = ",".join(self.key)
+        key_part = ",".join(self.key) if self.key else "@content"
         return f"table:{safe_url}/{self.table}#key={key_part}"
 
     def _get_engine(self):
@@ -285,12 +293,15 @@ class TableSource(Source):
                 row_dict = _jsonable(dict(row))
                 content_hash = hash_json(row_dict)
 
-                missing = [k for k in self.key if k not in row_dict]
-                if missing:
-                    raise ValueError(
-                        f"{self.table}: key column(s) {missing} not found in row"
-                    )
-                base = "|".join(str(row_dict[k]) for k in self.key)
+                if self.key:
+                    missing = [k for k in self.key if k not in row_dict]
+                    if missing:
+                        raise ValueError(
+                            f"{self.table}: key column(s) {missing} not found in row"
+                        )
+                    base = "|".join(str(row_dict[k]) for k in self.key)
+                else:
+                    base = f"row-{content_hash[:12]}"
 
                 if self.batch_size is None:
                     # Eager: carry the payload so load() is a passthrough.
@@ -301,7 +312,7 @@ class TableSource(Source):
                     ref = {k: row[k] for k in self.key}
                 rows_data.append((base, content_hash, ref, {}))
 
-            return _disambiguate(rows_data)
+            return _finalize(rows_data)
         finally:
             conn.close()
 
