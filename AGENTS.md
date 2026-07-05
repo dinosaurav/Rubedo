@@ -23,7 +23,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
 - **Design-first**: for anything ambiguous or conceptual, propose to the
-  owner before building. Start with `docs/TODO.md` for open work — the
+  owner before building. Start with `notes/TODO.md` for open work — the
   specs there already contain the settled decisions (do not re-litigate
   them, but do flag genuine contradictions). Joins (multi-root pipelines,
   pair-lane creation) are explicitly flagged there as needing an owner
