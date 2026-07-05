@@ -62,13 +62,9 @@ builds half the machinery. Open questions needing the owner: pair
 explosion control (predicates before materialization?), expand-step
 manifest caching, multi-source pipeline API. Bring a proposal first.
 
-## 3. Naming  **[parked by owner]**
-
-Brainstorm + PyPI availability check when asked. Not the current priority.
-
 ──────────────────────────────────────────────────────────────────────
 
-## 4. Future Product Directions (Recommended Next Steps)
+## 3. Future Product Directions (Recommended Next Steps)
 
 These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
 
@@ -115,7 +111,7 @@ filter→classify→reduce, the flagship non-idempotent-LLM demo;
 with `stale_after`; `gutenberg_stats` — `skip_cache` util +
 `executor="process"`; `orders_rollup` — `TableSource` streaming
 `batch_size`; `docs/llms.txt` LLM-authoring guide; README pitch
-paragraph) ·
+paragraph) · project rename (Batchit/batchbrain -> Rubedo) ·
 resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
 rule); plan()-in-UI (server never imports user code — use plan() in
 Python).
