@@ -41,7 +41,48 @@ settled — bring a decision (keep vs. remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 1. Codebase Housekeeping & Typing Improvements
+## 1. Configurable `.rubedo` location (parameter + env var)
+
+**Current state (partial):** `rubedo/db.py`'s `init_db(db_path=None)` already
+supports overriding the database path — an explicit `db_path` argument, or
+the `RUBEDO_DB_PATH` env var, falling back to `.rubedo/rubedo.sqlite`.
+`rubedo/store.py` has no equivalent: `OBJECTS_DIR`/`STAGING_DIR` are
+hardcoded module-level constants, no param, no env var. There's also no
+single unified "root" concept — the DB and store paths are two
+independently hardcoded locations that only share a `.rubedo/` prefix by
+convention.
+
+**Goal:** one `RUBEDO_HOME` root, configurable by env var and by an
+explicit parameter on the entry points that need it, with the DB path and
+object/staging directories derived from it unless individually overridden
+(`RUBEDO_DB_PATH` keeps working as the existing granular escape hatch).
+
+**Decisions:**
+- Add a `RUBEDO_HOME` env var (default `.rubedo`); `store.py` derives
+  `OBJECTS_DIR`/`STAGING_DIR` from it the same way `db.py` already derives
+  its default from `RUBEDO_DB_PATH`. `RUBEDO_DB_PATH`, if set, still wins
+  for the DB specifically (matches the precedent `init_db` already sets).
+- Match `init_db`'s existing "set-once-global" pattern in `store.py`: add
+  `init_store(home: str = None)` that resolves and stores the paths as
+  module globals, rather than threading a `home` argument through every
+  store call.
+- Add a parallel `home: Optional[str] = None` parameter on `run()`/`plan()`
+  (`runner.py`), flowing into the `init_db()`/`init_store()` calls made
+  during that run/plan.
+- `server.py` needs the same root to read what a run wrote — it's a
+  separate process, so the env var (or a `--rubedo-home` CLI flag) is the
+  only mechanism that keeps both pointed at the same place; a `run()`
+  parameter alone can't reach it.
+
+**Acceptance:** `RUBEDO_HOME=/tmp/foo uv run python examples/count_lines/count_lines.py`
+creates `/tmp/foo/rubedo.sqlite` + `/tmp/foo/objects` + `/tmp/foo/staging`;
+starting the server with the same env var sees the same data. Existing
+tests are unaffected — the per-test `.test_*_env` fixture pattern already
+passes explicit paths, not relying on defaults.
+
+──────────────────────────────────────────────────────────────────────
+
+## 2. Codebase Housekeeping & Typing Improvements
 
 **Goal:** Improve developer experience and code maintainability by expanding explicit type hints across the codebase.
 
@@ -52,7 +93,7 @@ settled — bring a decision (keep vs. remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 2. Joins  **[DO NOT BUILD without a design session with the owner]**
+## 3. Joins  **[DO NOT BUILD without a design session with the owner]**
 
 Direction (not yet settled enough to build): a join creates pair lanes
 from two parents (`left|right`), which requires coordinate-*creating*
@@ -64,11 +105,12 @@ manifest caching, multi-source pipeline API. Bring a proposal first.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 3. Future Product Directions (Recommended Next Steps)
+## 4. Future Product Directions (Recommended Next Steps)
 
 These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
 
 - **Cloud Object Storage Sources (`S3Source` / `GCSSource`)**: Local folders and SQL are great starts, but modern data engineering lives in cloud buckets. Adding native sources for scanning and pulling from S3 or GCS is critical for adoption.
+- **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); item 1's `RUBEDO_HOME` work is a natural stepping stone since it already isolates where these paths get resolved.
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
 - **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.

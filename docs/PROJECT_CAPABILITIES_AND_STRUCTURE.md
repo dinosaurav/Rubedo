@@ -23,7 +23,7 @@ Rubedo is a batch processing framework designed to efficiently run pipelines ove
 Below is the breakdown of the top-level directories and critical files, and how they contribute to the project.
 
 ### `/rubedo/`
-This is the core Python backend package containing the execution engine, database logic, and API. There is no CLI (see `docs/TODO.md` item 3 for that as a future direction) — pipelines run from library code (`rubedo.run`/`rubedo.plan`).
+This is the core Python backend package containing the execution engine, database logic, and API. There is no CLI (see `docs/TODO.md` item 4 for that as a future direction) — pipelines run from library code (`rubedo.run`/`rubedo.plan`).
 
 - **Definitions (`spec.py`)**: `@step` and `pipeline()` build plain `StepSpec`/`PipelineSpec` objects (no registry, no magic module loading); `describe()` renders a DAG as text or Mermaid before it ever runs.
 - **Run Phases (`planning.py`, `execution.py`, `ledger.py`, `runner.py`)**: read-only planning (decisions, addresses, staleness/drift), DB-free execution (thread/process pool, retries, rate limits, ephemeral utils), all ledger writes (manifests, statuses, events, generations), and the `run()`/`plan()` orchestrators. Each run snapshots its pipeline definition into the ledger.
