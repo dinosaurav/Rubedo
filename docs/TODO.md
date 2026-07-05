@@ -45,7 +45,7 @@ stdlib `concurrent.futures.ProcessPoolExecutor`. `loky` is API-compatible
 module-level-function requirement and the `@step`-decorator-shadowing
 footgun (see the pairing between `analyze_book`/`analyze` in
 `examples/gutenberg_stats/gutenberg_stats.py`) without adding a
-scheduler/daemon dependency — unlike Dask/Ray (item 3), this stays purely
+scheduler/daemon dependency — unlike Dask/Ray (item 2), this stays purely
 local. Neither `loky` nor `cloudpickle` are current dependencies (checked
 `pyproject.toml`/`uv.lock` — absent, even transitively), so it's a new,
 small addition either way. Not evaluated for correctness/perf yet.
@@ -57,18 +57,7 @@ remove) before touching this again.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 1. Codebase Housekeeping & Typing Improvements
-
-**Goal:** Improve developer experience and code maintainability by expanding explicit type hints across the codebase.
-
-**Decisions:**
-- **Type Hints**: Expand type hinting for `RunMemo._values`, `Producer` Callables, and parameters in `execution.py`. (Not yet done — `RunMemo._values` is still `Dict[Any, Any]`.)
-- **API Typing**: In `server.py`, some endpoints like `get_object_metadata` and `download_object` return untyped dictionaries or direct `FileResponse` objects. Add explicit Pydantic schemas (e.g. `ObjectMetadataOut`) to these to improve the API documentation.
-- **`typing.Any` reduction**: Where possible, replace `Any` with specific generics or unions, particularly around serialized output data in `store.py`.
-
-──────────────────────────────────────────────────────────────────────
-
-## 2. Joins  **[DO NOT BUILD without a design session with the owner]**
+## 1. Joins  **[DO NOT BUILD without a design session with the owner]**
 
 Direction (not yet settled enough to build): a join creates pair lanes
 from two parents (`left|right`), which requires coordinate-*creating*
@@ -80,7 +69,7 @@ manifest caching, multi-source pipeline API. Bring a proposal first.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 3. Future Product Directions (Recommended Next Steps)
+## 2. Future Product Directions (Recommended Next Steps)
 
 These are strategic feature recommendations to expand the engine's capabilities for real-world, large-scale workflows:
 
@@ -135,7 +124,16 @@ explicit `home=` param on `run()`/`plan()` takes precedence over env vars,
 same precedence `db.py`'s `db_path` param already had; `RUBEDO_DB_PATH`
 still wins over `RUBEDO_HOME` for the DB specifically when no explicit
 param is given; `server.py` needed no code changes — it already picks up
-the same env var transitively) ·
+the same env var transitively) · codebase typing pass (`_RunMemo._values`
+typed as `Dict[Tuple[str, str], Tuple[Literal["ok", "err"], Any]]`;
+`store.py`'s `read_materialization_output` param was fully unannotated,
+now a `HasOutputContentHash` Protocol satisfied structurally by both
+`Materialization` and `MatRef`; `ObjectMetadataOut`/
+`MaterializationIndexEntryOut` schemas replace `get_object_metadata`'s
+untyped dict return, `download_object` got an explicit `-> FileResponse`
+return type; `_serialize`/`stage_and_commit`'s `result: Any` stayed `Any`
+deliberately — step return values are genuinely heterogeneous, no
+narrower type is honest there) ·
 resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
 rule); plan()-in-UI (server never imports user code — use plan() in
 Python).
