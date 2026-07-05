@@ -1,0 +1,145 @@
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,400&display=swap');
+
+:root {
+  --bg-color: #ffffff;
+  --text-primary: #1a1a1a;
+  --accent-primary: #FF0033; /* Important Red */
+  --accent-secondary: #8B0000; /* Dark Crimson */
+  --font-primary: 'Satoshi', sans-serif;
+  --border-color: #FF0033;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-primary);
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 1rem;
+}
+
+a {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--accent-secondary);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.btn {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  background-color: var(--bg-color);
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  font-family: var(--font-primary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn:hover {
+  background-color: var(--accent-primary);
+  color: var(--bg-color);
+}
+
+.btn-solid {
+  background-color: var(--accent-primary);
+  color: var(--bg-color);
+}
+
+.btn-solid:hover {
+  background-color: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+}
+
+pre {
+  background-color: #f9f9f9;
+  border: 1px solid var(--border-color);
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+
+code {
+  font-family: monospace;
+  background-color: #f9f9f9;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #e0e0e0;
+}
+
+/* Blueprint Grid Background - Optional paperclip punk detail */
+.blueprint-bg {
+  background-image: 
+    linear-gradient(rgba(255, 0, 51, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 0, 51, 0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Paperclip Punk Tooltip */
+.tooltip-container {
+  position: relative;
+  display: inline-block;
+  border-bottom: 1px dotted var(--accent-primary);
+  cursor: help;
+}
+
+.tooltip-content {
+  visibility: hidden;
+  width: 250px;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-primary);
+  padding: 0.75rem;
+  position: absolute;
+  z-index: 1;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-size: 0.9rem;
+  box-shadow: 4px 4px 0px rgba(255, 0, 51, 0.1);
+}
+
+.tooltip-container:hover .tooltip-content {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Card Style */
+.card {
+  border: 1px solid var(--border-color);
+  padding: 1.5rem;
+  background-color: var(--bg-color);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 4px 4px 0px rgba(255, 0, 51, 0.2);
+}
