@@ -61,8 +61,9 @@ class StepSpec:
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     index: Tuple[str, ...] = ()  # value fields extracted into the search index
-    shape: str = "map"  # map | reduce
+    shape: str = "map"  # map | reduce | expand
     executor: str = "thread"
+    group_key: Optional[str] = None  # reduce: indexed field to group lanes by
 
 
 @dataclass
@@ -103,6 +104,7 @@ def step(
     index: Optional[List[str]] = None,
     shape: str = "map",
     executor: str = "thread",
+    group_key: Optional[str] = None,
 ):
     """Declare a step.
 
@@ -169,6 +171,11 @@ def step(
         raise ValueError(f"Step '{name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
     if shape == "reduce" and not depends_on:
         raise ValueError(f"Step '{name}': shape='reduce' requires at least one parent in depends_on")
+    if group_key is not None and shape != "reduce":
+        raise ValueError(
+            f"Step '{name}': group_key requires shape='reduce' (it partitions a "
+            "reduction's input lanes by an indexed field)"
+        )
     if version == "auto":
         raise ValueError(
             f"Step '{name}': version is a semantic label; use code='auto' "
@@ -218,6 +225,7 @@ def step(
             index=tuple(index or ()),
             shape=shape,
             executor=executor,
+            group_key=group_key,
         )
 
     return decorator

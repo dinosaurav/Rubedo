@@ -133,6 +133,33 @@ live-DAG item in section 2.
 
 ──────────────────────────────────────────────────────────────────────
 
+## 7. Non-topological (lane-pipelined) execution
+
+Today the runner is **staged**: `for step in topo: plan → execute all lanes →
+commit` (`runner.py:294`), so every step waits for *all* lanes of the previous
+step before any lane advances — max parallelism within a step, zero pipelining
+across steps. A lane can't race ahead through `scrape → parse → classify` while
+a sibling is still scraping.
+
+Goal: let a lane flow through consecutive **per-lane** steps (map/filter/expand)
+as far as it can, independently of its siblings, instead of stopping at every
+stage boundary. Wins: first results land far sooner (latency), long-running /
+streaming pipelines make continuous progress, and workers don't stall at stage
+boundaries. Explicitly **not** for the collective steps — `reduce`/`join` are
+true barriers (they need the whole input set), so pipelining only applies to the
+map/expand/filter runs *between* barriers; the owner already flagged this is
+about the non-join-heavy cases.
+
+Cost is a real execution-model rework: the current interleaved plan→execute and
+`coord_step_mats` both assume whole-step staging. A lane-pipelined engine needs
+a scheduler over `(lane, step)` tasks with dependency edges, that stops a lane's
+advance at the next barrier and synchronizes there. Interacts with the expand
+cache anchor (per-parent) and reduce/join barriers. Design-first; likely lands
+after the producer-model line (`docs/producer-model.md`) settles, since barriers
+(reduce/join) define exactly where pipelining must stop.
+
+──────────────────────────────────────────────────────────────────────
+
 ## Done (compressed changelog — context for the above)
 
 Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·

@@ -275,10 +275,20 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    whose only job was extending that report to minted/group lanes — buys
    nothing worth a schema change. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
-3. **`group_key` reduce** — **decided: group by coordinate / indexed field**
-   (never by reading parent *values* at plan time). The group key is the
-   parent's coordinate (or a function of it) or a named field from the
-   parent's `@step(index=[...])` entries — both readable at plan time from
-   hashes/index rows, keeping the plan value-free. A vanished group just
-   orphans (per step 2's decision), no removal reporting.
+3. **`group_key` reduce** — ✅ **DONE**. `@step(shape="reduce",
+   group_key="field")` partitions the reduction's parent lanes by a named
+   `@step(index=[...])` field of the parent output, emitting one output per
+   group (coordinate = the group value); `group_key=None` is the old single
+   `@all`. Grouping reads `MaterializationIndexEntry` rows at plan time — no
+   value reads, plan stays value-free (`_group_reduce_lanes`,
+   `_reduce_group_decision`). A lane with several values for the field joins
+   each group (list-valued index); a lane with none raises (index it on the
+   parent). Also fixed reduce to gather lanes from `coord_step_mats` rather
+   than only source coordinates, so a reduce now folds in **minted/expanded
+   lanes** — `expand → group_key reduce` works. A vanished group just orphans
+   (step 2). Execution/ledger unchanged (a group is a decision whose
+   `parent_mats` is scoped to that group). Verified: `tests/test_group_key.py`
+   (6) + full suite (160) green, ruff clean, and a live feed → 5 story lanes →
+   per-topic digest pipeline.
 4. **Multi-root + `join`** — binary collective expand, once roots are plural.
+   The finale, and the last item on the path.

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
-from .models import Materialization
+from .models import Materialization, MaterializationIndexEntry
 from .spec import PipelineSpec, StepSpec
 from .sources import SourceItem
 from .store import read_materialization_output
@@ -251,6 +251,106 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
     )
 
 
+def _group_reduce_lanes(
+    session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Any]]
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Partition a reduce's parent lanes into groups by an indexed field.
+
+    Reads each lane's `MaterializationIndexEntry` rows for `step.group_key`: a
+    lane with several values (a list-valued index) joins each group; a lane
+    with none raises, since you cannot group by a field it never indexed.
+    """
+    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for dep, coord_refs in parent_mats.items():
+        for coord, ref in coord_refs.items():
+            values = [
+                e.value
+                for e in session.query(MaterializationIndexEntry)
+                .filter_by(materialization_id=ref.id, field=step.group_key)
+                .all()
+            ]
+            if not values:
+                raise ValueError(
+                    f"reduce step '{step.name}': group_key '{step.group_key}' "
+                    f"has no indexed value for lane '{coord}' (parent '{dep}'). "
+                    f"Add index=['{step.group_key}'] to that step."
+                )
+            for v in values:
+                groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
+    return groups
+
+
+def _reduce_group_decision(
+    session: Session,
+    step: StepSpec,
+    group_coord: str,
+    group_mats: Dict[str, Dict[str, Any]],
+    params_hash: str,
+    force: bool,
+    accepts_params: bool,
+) -> StepDecision:
+    """Reuse/execute decision for one reduce group (or the sole '@all')."""
+    hash_data = {}
+    for dep, coords_dict in sorted(group_mats.items()):
+        hash_data[dep] = {
+            c: coords_dict[c].output_content_hash for c in sorted(coords_dict.keys())
+        }
+    # A real group folds its key into identity, so two groups with coincidentally
+    # identical members still get distinct addresses; '@all' keeps the plain
+    # shape so existing (ungrouped) reduce caches stay valid.
+    if step.group_key is None:
+        input_hash = hash_json(hash_data)
+    else:
+        input_hash = hash_json({"group": group_coord, "members": hash_data})
+
+    output_address = compute_output_address(
+        step.name,
+        step.version,
+        input_hash,
+        params_hash=params_hash if accepts_params else None,
+        code_hash=step.code_hash if step.code_mode == "auto" else None,
+    )
+
+    existing_mat = (
+        session.query(Materialization)
+        .filter_by(output_address=output_address, is_live=True)
+        .first()
+    )
+    expired = False
+    if existing_mat and step.stale_after is not None:
+        freshness = existing_mat.refreshed_at or existing_mat.created_at
+        expired = iso_age_seconds(freshness) > step.stale_after
+
+    if existing_mat and not force and not expired:
+        return StepDecision(
+            coordinate=group_coord,
+            action="reuse",
+            input_hash=input_hash,
+            output_address=output_address,
+            existing=MatRef(
+                existing_mat.id,
+                existing_mat.output_address,
+                existing_mat.output_content_hash,
+                existing_mat.content_type,
+                filtered=existing_mat.filtered,
+            ),
+            code_drift=(
+                step.code_mode == "warn"
+                and step.code_hash is not None
+                and existing_mat.code_hash is not None
+                and step.code_hash != existing_mat.code_hash
+            ),
+        )
+    return StepDecision(
+        coordinate=group_coord,
+        action="execute",
+        input_hash=input_hash,
+        output_address=output_address,
+        parent_mats=group_mats,
+        stale=expired,
+    )
+
+
 def _plan_step(
     session: Session,
     step: StepSpec,
@@ -265,23 +365,23 @@ def _plan_step(
         parent_mats: Dict[str, Dict[str, Any]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
-        filtered_parents: List[str] = []
         pending = False
 
-        for it in scanned_items:
-            coord = it.coordinate
-            for dep in step.depends_on:
-                ref = coord_step_mats.get((coord, dep))
-                if ref == "blocked":
-                    blocked_parents.append(f"{dep}:{coord}")
-                elif ref == "failed":
-                    failed_parents.append(f"{dep}:{coord}")
-                elif ref == "pending":
-                    pending = True
-                elif ref == "filtered" or getattr(ref, "filtered", False):
-                    pass
-                elif ref is not None:
-                    parent_mats[dep][coord] = ref
+        # Gather every surviving parent lane from coord_step_mats (not just
+        # source coordinates), so a reduce also folds in minted/expanded lanes.
+        for (coord, d), ref in coord_step_mats.items():
+            if d not in parent_mats:
+                continue
+            if ref == "blocked":
+                blocked_parents.append(f"{d}:{coord}")
+            elif ref == "failed":
+                failed_parents.append(f"{d}:{coord}")
+            elif ref == "pending":
+                pending = True
+            elif ref == "filtered" or getattr(ref, "filtered", False):
+                pass
+            elif ref is not None:
+                parent_mats[d][coord] = ref
 
         if failed_parents or blocked_parents:
             return [
@@ -294,66 +394,20 @@ def _plan_step(
             ]
         if pending:
             return [StepDecision(coordinate="@all", action="pending")]
-            
-        hash_data = {}
-        for dep, coords_dict in sorted(parent_mats.items()):
-            hash_data[dep] = {
-                c: coords_dict[c].output_content_hash for c in sorted(coords_dict.keys())
-            }
-        input_hash = hash_json(hash_data)
-        
-        output_address = compute_output_address(
-            step.name,
-            step.version,
-            input_hash,
-            params_hash=params_hash if accepts_params else None,
-            code_hash=step.code_hash if step.code_mode == "auto" else None,
-        )
 
-        existing_mat = (
-            session.query(Materialization)
-            .filter_by(output_address=output_address, is_live=True)
-            .first()
-        )
-
-        expired = False
-        if existing_mat and step.stale_after is not None:
-            freshness = existing_mat.refreshed_at or existing_mat.created_at
-            expired = iso_age_seconds(freshness) > step.stale_after
-
-        if existing_mat and not force and not expired:
-            return [
-                StepDecision(
-                    coordinate="@all",
-                    action="reuse",
-                    input_hash=input_hash,
-                    output_address=output_address,
-                    existing=MatRef(
-                        existing_mat.id,
-                        existing_mat.output_address,
-                        existing_mat.output_content_hash,
-                        existing_mat.content_type,
-                        filtered=existing_mat.filtered,
-                    ),
-                    code_drift=(
-                        step.code_mode == "warn"
-                        and step.code_hash is not None
-                        and existing_mat.code_hash is not None
-                        and step.code_hash != existing_mat.code_hash
-                    ),
-                )
-            ]
+        # One group ("@all") unless group_key partitions the lanes by an
+        # indexed field of the parent output.
+        if step.group_key is None:
+            groups = {"@all": parent_mats}
         else:
-            return [
-                StepDecision(
-                    coordinate="@all",
-                    action="execute",
-                    input_hash=input_hash,
-                    output_address=output_address,
-                    parent_mats=parent_mats,
-                    stale=expired,
-                )
-            ]
+            groups = _group_reduce_lanes(session, step, parent_mats)
+
+        return [
+            _reduce_group_decision(
+                session, step, gcoord, gmats, params_hash, force, accepts_params
+            )
+            for gcoord, gmats in sorted(groups.items())
+        ]
 
     decisions = []
     
