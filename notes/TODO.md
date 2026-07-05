@@ -3,20 +3,20 @@
 Each open item below is written as a self-contained spec: the design
 decisions are already made (do not re-litigate; flag genuine
 contradictions), with file pointers, gotchas, and acceptance criteria.
-Read `CLAUDE.md` first for conventions, and `docs/invariants.md` for
+Read `CLAUDE.md` first for conventions, and `notes/invariants.md` for
 vocabulary. One item = one (or a few) commits.
 
 ──────────────────────────────────────────────────────────────────────
 
 
 
-## 1. Joins  **[✅ DONE — shipped as the producer model, see Done + `docs/producer-model.md`]**
+## 1. Joins  **[✅ DONE — shipped as the producer model, see Done + `notes/producer-model.md`]**
 
 The whole producer-model line shipped: content-addressed lanes → `expand`
 (cached) → `group_key` reduce → multi-source → **N-way `join`**
 (`shape="join"`, equijoin on indexed fields, `left|right` pair coordinates).
 Kept here only as a pointer; details in the Done changelog and
-`docs/producer-model.md`.
+`notes/producer-model.md`.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); the configurable `RUBEDO_HOME` root (now shipped — see Done below) is a natural stepping stone since it already isolates where these paths get resolved.
 - **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`notes/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
-- **Dynamic Lane Expansion (`flat_map` shape)** — ✅ *shipped as `shape="expand"` (1:N coordinate-minting, cached via a parent-addressed list anchor). See Done + `docs/producer-model.md`.*
+- **Dynamic Lane Expansion (`flat_map` shape)** — ✅ *shipped as `shape="expand"` (1:N coordinate-minting, cached via a parent-addressed list anchor). See Done + `notes/producer-model.md`.*
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 - **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
@@ -51,7 +51,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
     catastrophic and unrollbackable. Gate behind dry-run + a ref-count audit +
     object-versioned buckets before it is *ever* pointed at remote storage.
 - **Source API Simplification**: Remake how `Source` works so that average consumers don't feel compelled to write a full class that implements the `Source` protocol. A simpler functional or generator-based API (e.g., a `@source` decorator) would significantly reduce boilerplate for custom data sources.
-- **`expand` child views (dedup storage) — post-launch**: today `shape="expand"` uses option (a) from `docs/producer-model.md` — the step stores its full yielded list as a cache anchor *and* extracts each item into its own child materialization, so scraped data is stored twice. Option (b): make each child lane a lightweight **view** into the anchor (`(anchor-address, subkey)` + the item's content hash) instead of a separate materialization, so downstream resolves the item out of the anchor and nothing is duplicated. Wins most for large scraped payloads. Needs a new view-ref type in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash` handling; downstream per-item caching stays keyed on the item's content hash. Correctness is identical to (a) — purely a storage optimization.
+- **`expand` child views (dedup storage) — post-launch**: today `shape="expand"` uses option (a) from `notes/producer-model.md` — the step stores its full yielded list as a cache anchor *and* extracts each item into its own child materialization, so scraped data is stored twice. Option (b): make each child lane a lightweight **view** into the anchor (`(anchor-address, subkey)` + the item's content hash) instead of a separate materialization, so downstream resolves the item out of the anchor and nothing is duplicated. Wins most for large scraped payloads. Needs a new view-ref type in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash` handling; downstream per-item caching stays keyed on the item's content hash. Correctness is identical to (a) — purely a storage optimization.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -59,14 +59,14 @@ These are strategic feature recommendations to expand the engine's capabilities 
 
 The producer model shipped by adding capabilities that reused the existing
 interleaved plan→execute runner, *not* by a behavior-preserving Source→Producer
-rewrite (that was dropped as premature — see `docs/producer-model.md`, "go
+rewrite (that was dropped as premature — see `notes/producer-model.md`, "go
 vertical, skip the churn"). What actually landed: `expand`/`join` mint
 coordinates via the runner's existing "executed MatRefs feed forward"
 mechanism; `group_key` on `reduce`; and multi-source threading (`run()`/
 `plan()`/`run_pipeline()` now scan each source and thread a per-step
 `step_sources` map into execution). The **per-producer census** was
 deliberately *not* built — removal is only a low-value report and minted lanes
-orphan silently (`docs/producer-model.md` open Q1/Q2). Nothing left here unless
+orphan silently (`notes/producer-model.md` open Q1/Q2). Nothing left here unless
 that census is ever wanted.
 
 ──────────────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ selection-scoped/partial runs. Design-first.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 5. Lane tooling — following & invalidation  **[deferred; post-`docs/producer-model.md`]**
+## 5. Lane tooling — following & invalidation  **[deferred; post-`notes/producer-model.md`]**
 
 Two families of utilities that ride on machinery that already exists
 (`MaterializationEdge` lineage, `MaterializationIndexEntry` labels) — deferred
@@ -153,7 +153,7 @@ Cost is a real execution-model rework: the current interleaved plan→execute an
 a scheduler over `(lane, step)` tasks with dependency edges, that stops a lane's
 advance at the next barrier and synchronizes there. Interacts with the expand
 cache anchor (per-parent) and reduce/join barriers. Design-first; likely lands
-after the producer-model line (`docs/producer-model.md`) settles, since barriers
+after the producer-model line (`notes/producer-model.md`) settles, since barriers
 (reduce/join) define exactly where pipelining must stop.
 
 ──────────────────────────────────────────────────────────────────────
@@ -203,7 +203,7 @@ filter→classify→reduce, the flagship non-idempotent-LLM demo;
 `github_health`/`weather_advisory` — chained retried/rate-limited APIs
 with `stale_after`; `gutenberg_stats` — `skip_cache` util +
 `executor="process"`; `orders_rollup` — `TableSource` streaming
-`batch_size`; `docs/llms.txt` LLM-authoring guide; README pitch
+`batch_size`; `notes/llms.txt` LLM-authoring guide; README pitch
 paragraph) · project rename (Batchit/batchbrain -> Rubedo) · configurable
 `RUBEDO_HOME` root (env var, resolved by both `db.py` and `store.py`;
 explicit `home=` param on `run()`/`plan()` takes precedence over env vars,
@@ -222,7 +222,7 @@ deliberately — step return values are genuinely heterogeneous, no
 narrower type is honest there) · CPU-bound parallelism migrated to `loky` +
 `cloudpickle` (`executor="process"`), allowing closures in process-executed
 steps (`tests/test_process_executor.py` updated to verify local functions) ·
-**producer model** (`docs/producer-model.md` — the owner design session and
+**producer model** (`notes/producer-model.md` — the owner design session and
 build): content-addressed lanes (`key=` optional, `_disambiguate` gone,
 `tests/test_sources.py`) · `expand` (`shape="expand"`, 1:N coordinate-minting,
 cached via a parent-addressed list-anchor so a scrape runs once,

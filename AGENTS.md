@@ -4,7 +4,7 @@ Local-first batch engine: DAG pipelines over keyed collections (files, CSV
 rows) with content-addressed caching, an append-only run ledger, and
 surgical invalidation. Think "dbt state for Python tasks," built for
 non-idempotent steps (LLM calls, scraping). Read `README.md` for the user
-view and `docs/invariants.md` for the vocabulary and guarantees — both are
+view and `notes/invariants.md` for the vocabulary and guarantees — both are
 accurate and load-bearing; keep them updated when behavior changes.
 
 ## Conventions (owner-established, follow exactly)

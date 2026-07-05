@@ -80,7 +80,7 @@ State lives in `.rubedo/` (SQLite database + content-addressed object store), cr
 
 ## Concepts
 
-See [docs/invariants.md](docs/invariants.md) for the core vocabulary (coordinate, materialization, output address, manifest) and the invariants the engine guarantees — most importantly: a materialization row exists only if its output bytes committed atomically, committed outputs are immutable, and invalidation is a logical tombstone, never a silent delete.
+See [notes/invariants.md](notes/invariants.md) for the core vocabulary (coordinate, materialization, output address, manifest) and the invariants the engine guarantees — most importantly: a materialization row exists only if its output bytes committed atomically, committed outputs are immutable, and invalidation is a logical tombstone, never a silent delete.
 
 **Code changes and caching** are two independent axes on `@step`. `version` is the semantic identity — bump it for deliberate behavior changes (also the escape hatch for edits the engine can't see, like helpers your step calls). `code` decides what a *source edit* means: `code="auto"` folds the function's source hash into the cache identity, so any edit recomputes without version bookkeeping (right for cheap, deterministic steps); `code="warn"` (the default) never recomputes on edits, but warns loudly — in the run output, the event log, and `plan()` — whenever it reuses an output whose code has since changed, so recomputing an expensive LLM step stays a deliberate choice. Only the step function's own source is hashed; helper edits are what the version bump is for.
 
