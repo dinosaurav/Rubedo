@@ -64,15 +64,41 @@ class StepSpec:
     shape: str = "map"  # map | reduce | expand
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
+    source: Optional[str] = None  # root step: which named source it reads
+
+
+DEFAULT_SOURCE = "__source__"
 
 
 @dataclass
 class PipelineSpec:
-    """The static definition of a complete DAG pipeline."""
+    """The static definition of a complete DAG pipeline.
+
+    `sources` maps a name to a Source. Single-source pipelines use one entry
+    under DEFAULT_SOURCE; multi-source pipelines (for joins) name each one and
+    root steps pick with `@step(source="name")`.
+    """
     id: str
     name: str
-    source: Source
+    sources: Dict[str, Source]
     steps: List[StepSpec]
+
+    @property
+    def source(self) -> Source:
+        """The sole source — convenience for single-source pipelines."""
+        if len(self.sources) == 1:
+            return next(iter(self.sources.values()))
+        raise ValueError(
+            "pipeline has multiple sources; use .sources or a step's source="
+        )
+
+    def source_for(self, step: "StepSpec") -> Optional[Source]:
+        """The Source a (root) step reads, or None for a dependent step."""
+        if step.depends_on:
+            return None
+        if step.source is not None:
+            return self.sources[step.source]
+        return next(iter(self.sources.values()))  # single-source default
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -105,6 +131,7 @@ def step(
     shape: str = "map",
     executor: str = "thread",
     group_key: Optional[str] = None,
+    source: Optional[str] = None,
 ):
     """Declare a step.
 
@@ -226,6 +253,7 @@ def step(
             shape=shape,
             executor=executor,
             group_key=group_key,
+            source=source,
         )
 
     return decorator
@@ -237,29 +265,48 @@ def pipeline(
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
     source: Optional[Source] = None,
+    sources: Optional[Dict[str, Source]] = None,
 ):
-    """Construct a pipeline specification from a source and a list of steps."""
-    if (source is None) == (folder is None):
-        raise ValueError("Pass exactly one of source= or folder= (FolderSource sugar)")
-    if source is None:
-        from .sources import FolderSource
+    """Construct a pipeline from its source(s) and steps.
 
-        source = FolderSource(folder)
+    Pass exactly one of `folder=` (FolderSource sugar), `source=` (a single
+    Source), or `sources={name: Source}` (multiple, for joins — root steps pick
+    one with `@step(source="name")`).
+    """
+    given = [x for x in (folder, source, sources) if x is not None]
+    if len(given) != 1:
+        raise ValueError("Pass exactly one of folder=, source=, or sources=")
 
-    consumed = {dep for s in (steps or []) for dep in s.depends_on}
-    for s in steps or []:
+    if sources is None:
+        if folder is not None:
+            from .sources import FolderSource
+
+            source = FolderSource(folder)
+        sources = {DEFAULT_SOURCE: source}
+
+    steps = steps or []
+    single = len(sources) == 1
+    for s in steps:
+        if s.source is not None and s.source not in sources:
+            raise ValueError(
+                f"Step '{s.name}' reads source '{s.source}', which is not in "
+                f"sources={sorted(sources)}"
+            )
+        if not s.depends_on and s.source is None and not single:
+            raise ValueError(
+                f"Root step '{s.name}' must declare source= (pipeline has "
+                f"multiple sources {sorted(sources)})"
+            )
+
+    consumed = {dep for s in steps for dep in s.depends_on}
+    for s in steps:
         if s.skip_cache and s.name not in consumed:
             raise ValueError(
                 f"Step '{s.name}' has skip_cache but no consumer: its output "
                 "would never be computed or stored"
             )
 
-    return PipelineSpec(
-        id=id or name,
-        name=name,
-        source=source,
-        steps=steps or [],
-    )
+    return PipelineSpec(id=id or name, name=name, sources=sources, steps=steps)
 
 
 def definition(spec: PipelineSpec) -> Dict[str, Any]:
@@ -291,6 +338,10 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["params_schema"] = s.params_model.model_json_schema()
         if s.shape != "map":
             entry["shape"] = s.shape
+        if s.group_key is not None:
+            entry["group_key"] = s.group_key
+        if s.source is not None:
+            entry["source"] = s.source
         if s.executor != "thread":
             entry["executor"] = s.executor
         steps.append(entry)
@@ -298,7 +349,7 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
     return {
         "id": spec.id,
         "name": spec.name,
-        "source_id": spec.source.id,
+        "source_id": ",".join(sorted(s.id for s in spec.sources.values())),
         "steps": steps,
     }
 
@@ -327,9 +378,14 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
     if format != "text":
         raise ValueError(f"Unknown format {format!r}: expected 'text' or 'mermaid'")
 
-    lines = [f"Pipeline '{spec.id}' over {spec.source.id}"]
+    src_desc = ", ".join(
+        (f"{name}={s.id}" if name != DEFAULT_SOURCE else s.id)
+        for name, s in sorted(spec.sources.items())
+    )
+    lines = [f"Pipeline '{spec.id}' over {src_desc}"]
     for s in topo:
-        deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
+        root_tag = f" (root:{s.source})" if s.source else " (root)"
+        deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else root_tag
         policies = []
         if s.skip_cache:
             policies.append("skip_cache")

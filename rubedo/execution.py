@@ -106,13 +106,15 @@ class ExecutionOutcome:
     is_anchor: bool = False
 
 
-def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _RunMemo):
+def _resolve_parent_value(
+    ref, step_sources: Dict[str, Source], params: Optional[dict], memo: _RunMemo
+):
     """
     Resolve the output value of a parent step, computing it lazily if ephemeral.
 
     Args:
         ref: The reference to the parent output (MatRef or EphemeralRef).
-        source (Source): The data source.
+        step_sources: step name -> the Source it reads (root/skip_cache roots).
         params (Optional[dict]): Run parameters.
         memo (_RunMemo): The run memoizer for ephemeral steps.
 
@@ -120,24 +122,27 @@ def _resolve_parent_value(ref, source: Source, params: Optional[dict], memo: _Ru
         Any: The resolved output value.
     """
     if isinstance(ref, EphemeralRef):
-        return _compute_ephemeral(ref, source, params, memo)
+        return _compute_ephemeral(ref, step_sources, params, memo)
     return read_materialization_output(ref)
 
 
 def _compute_ephemeral(
-    ref: EphemeralRef, source: Source, params: Optional[dict], memo: _RunMemo
+    ref: EphemeralRef, step_sources: Dict[str, Source], params: Optional[dict],
+    memo: _RunMemo,
 ):
     """Lazily compute a skip_cache step's value, at most once per run."""
 
     def produce():
         step = ref.step
         if not step.depends_on:
-            args = [source.load(ref.item)]
+            args = [step_sources[step.name].load(ref.item)]
             kwargs = {}
         else:
             args = []
             kwargs = {
-                dep: _resolve_parent_value(ref.parent_refs[dep], source, params, memo)
+                dep: _resolve_parent_value(
+                    ref.parent_refs[dep], step_sources, params, memo
+                )
                 for dep in step.depends_on
             }
         if _step_accepts_params(step):
@@ -171,7 +176,7 @@ def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
 def _execute_step(
     step: StepSpec,
     decisions: List[StepDecision],
-    source: Source,
+    step_sources: Dict[str, Source],
     params: Optional[dict],
     accepts_params: bool,
     workers: Optional[int],
@@ -181,6 +186,8 @@ def _execute_step(
 
     Honors the step's rate limit (shared across workers, retries included)
     and retry policy (only exceptions matching retry_on are retried).
+    `step_sources` maps a step name to the Source it reads (root/skip_cache
+    roots), so each root loads from its own source in a multi-source pipeline.
     """
     limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
     params_hash = hash_json(params or {})
@@ -190,14 +197,14 @@ def _execute_step(
         # get parent outputs by parameter name. Either kind may declare
         # `params`.
         if not step.depends_on:
-            args = [source.load(decision.item)]
+            args = [step_sources[step.name].load(decision.item)]
             kwargs = {}
         elif step.shape == "reduce":
             args = []
             kwargs = {
                 dep: {
                     lane: _resolve_parent_value(
-                        ref, source, params, memo
+                        ref, step_sources, params, memo
                     )
                     for lane, ref in decision.parent_mats[dep].items()
                 }
@@ -207,7 +214,7 @@ def _execute_step(
             args = []
             kwargs = {
                 dep: _resolve_parent_value(
-                    decision.parent_mats[dep], source, params, memo
+                    decision.parent_mats[dep], step_sources, params, memo
                 )
                 for dep in step.depends_on
             }

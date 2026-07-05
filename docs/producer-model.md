@@ -290,5 +290,19 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    `parent_mats` is scoped to that group). Verified: `tests/test_group_key.py`
    (6) + full suite (160) green, ruff clean, and a live feed → 5 story lanes →
    per-topic digest pipeline.
-4. **Multi-root + `join`** — binary collective expand, once roots are plural.
-   The finale, and the last item on the path.
+4. **Multi-root + `join`** — the finale, split in two:
+   - **4a. Multi-source** — ✅ **DONE**. `pipeline(sources={name: Source})`
+     (decided API: named sources dict); root steps pick one with
+     `@step(source="name")`. `pipeline(source=X)` / `folder=X` unchanged
+     (single source under `DEFAULT_SOURCE`). The runner scans each source,
+     threads a per-step `step_sources` map into execution so each root loads
+     from its own source, and snapshots each source's manifest separately.
+     Coordinates don't collide because `coord_step_mats` is keyed by
+     `(coord, step)`. Single-source behavior byte-identical (validated: full
+     suite 165 green incl. `tests/test_multisource.py`). A single-source
+     `source=` override is rejected on multi-source pipelines.
+   - **4b. `join`** — next. `@step(shape="join", depends_on=[left, right],
+     join_on={left: field, right: field})`: an equijoin matching the two
+     sides' `@step(index=[...])` fields by value (plan-time, value-free, like
+     `group_key`), minting pair coordinates `left|right`. Predicates are a
+     `filter` after the join. This is the only remaining piece.

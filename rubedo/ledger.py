@@ -594,14 +594,21 @@ def _snapshot_source(
     ctx: _RunContext,
     scanned_items: List[SourceItem],
     topo_steps: List[StepSpec],
+    source_id: Optional[str] = None,
 ) -> int:
-    """Record the manifest and mark removed coordinates. Returns removed count."""
+    """Record one source's manifest and mark its removed coordinates.
+
+    `source_id` identifies which source this snapshot is for (defaults to the
+    run's combined id — correct for a single-source pipeline); `topo_steps` are
+    the steps to mark `removed` for a vanished coordinate.
+    """
+    source_id = source_id or ctx.source_id
     now_iso = utcnow_iso()
     manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
 
     prev_manifest = (
         session.query(Manifest)
-        .filter(Manifest.source_id == ctx.source_id)
+        .filter(Manifest.source_id == source_id)
         .order_by(Manifest.created_at.desc())
         .first()
     )
@@ -609,7 +616,7 @@ def _snapshot_source(
     manifest = Manifest(
         id=manifest_id,
         run_id=ctx.run_id,
-        source_id=ctx.source_id,
+        source_id=source_id,
         parent_manifest_id=prev_manifest.id if prev_manifest else None,
         created_at=now_iso,
     )
