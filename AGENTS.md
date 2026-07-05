@@ -23,9 +23,11 @@ accurate and load-bearing; keep them updated when behavior changes.
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
 - **Design-first**: for anything ambiguous or conceptual, propose to the
-  owner before building. Start with `docs/TODO.md`; item 2 (joins)
-  must not be built without an owner design session. The specs in `docs/TODO.md` already contain the settled
-  decisions — do not re-litigate them, but do flag genuine contradictions.
+  owner before building. Start with `docs/TODO.md` for open work — the
+  specs there already contain the settled decisions (do not re-litigate
+  them, but do flag genuine contradictions). Joins (multi-root pipelines,
+  pair-lane creation) are explicitly flagged there as needing an owner
+  design session before any build starts.
 - **Ruthless simplification** is a project value: prefer deleting a concept
   to adding a knob.
 
@@ -33,19 +35,26 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 - `rubedo/spec.py` — `@step` / `pipeline()` build plain
   `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
-  user code. `describe()` renders DAGs (text/Mermaid); `definition()` is the
-  JSON snapshot each run records.
+  user code. `shape` is `"map"` (1:1 per lane, default) or `"reduce"` (N:1
+  fan-in over a parent's surviving lanes, single `"@all"` lane key);
+  `executor` is `"thread"` (default) or `"process"` (registration rejects
+  closures — the fn must be module-level/picklable). `describe()` renders
+  DAGs (text/Mermaid); `definition()` is the JSON snapshot each run records.
 - `rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
-  payload); `FolderSource`, `CsvSource`. A coordinate is a **lane key**:
-  engine-facing dataflow/incrementality key, unique within a scan (sources
-  disambiguate collisions mechanically), stable across scans. Not identity,
-  not the search handle.
+  payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
+  `batch_size` streaming mode, `source_id` built without leaking
+  credentials). A coordinate is a **lane key**: engine-facing
+  dataflow/incrementality key, unique within a scan (sources disambiguate
+  collisions mechanically), stable across scans. Not identity, not the
+  search handle.
 - `rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
-- `rubedo/execution.py` — DB-free execute phase: thread pool, retry
-  loop, rate limiter, per-run memo for skip_cache utils.
+  Reduce steps get one decision instead of one per lane.
+- `rubedo/execution.py` — DB-free execute phase: thread or process pool
+  (per `step.executor`), retry loop, rate limiter, per-run memo for
+  skip_cache utils.
 - `rubedo/ledger.py` — every DB write: manifests, per-lane statuses,
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
@@ -63,7 +72,8 @@ accurate and load-bearing; keep them updated when behavior changes.
   flushes a demotion before its lifecycle row exists) and skips savepoint
   releases (`in_nested_transaction()`).
 - `rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
-  language) + the materialization query.
+  language: lane-key globs, indexed fields, `version:<2.0`-style semantic
+  version ranges via `packaging.SpecifierSet`) + the materialization query.
 - `rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines.
 - `web/` — React/Vite dashboard. `DagView.tsx` renders definition
