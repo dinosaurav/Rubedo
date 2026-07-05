@@ -1,4 +1,4 @@
-"""Shared pipeline for the executor showdown — thread vs process on real CPU work.
+"""executor="thread" vs executor="process" on real CPU-bound work, timed.
 
     dictionary (8 chunks) ─▶ analyze ─▶ combine (reduce)
                              (CPU-bound)  (merge + report)
@@ -12,39 +12,44 @@ the signature). The reduce step merges every chunk's partial groups and
 reports the largest anagram group, the largest rotation-invariant group,
 and the dictionary's most common letter.
 
-`run_thread.py` and `run_process.py` both call `build_pipeline()` here,
-differing only in `executor=`. Their step names differ too
-(`analyze_thread` vs `analyze_process`) — deliberately: an output address is
-`hash(step_name, version, input_hash, ...)` (rubedo/hashing.py), which does
-NOT include the pipeline id, so two pipelines with a same-named step over
-identical input would silently share one cached materialization. Distinct
-names keep each script's timing honest regardless of run order.
+This runs the *same* pipeline twice — once with executor="thread" (the
+default), once with executor="process" — and times each. CPU-bound work
+under threads doesn't parallelize (the GIL lets only one thread execute
+Python bytecode at a time); under processes it does, one core per chunk.
 
-Note on `analyze_chunk` below: it's built into a StepSpec via the call form
-`step(...)(analyze_chunk)`, not the `@step` decorator, on purpose — decorating
-in place would rebind the module-level name `analyze_chunk` to the StepSpec,
-and a process-executor step is pickled by looking up its `module.qualname`.
-If that name no longer pointed at the function, pickling `step.fn` would
-fail. Keeping the function and its StepSpec under different names (like
-`examples/gutenberg_stats/gutenberg_stats.py` does with `analyze_book`/
-`analyze`) sidesteps that entirely — and here it's required twice over,
-since two different StepSpecs wrap the same function.
+Run it:
+
+    uv run python examples/executor_showdown/executor_showdown.py [--force]
+
+Pass --force to bypass Rubedo's cache and re-pay the full CPU cost —
+otherwise the *second* time you run this script, both variants just reuse
+their cached results almost instantly (Rubedo's whole point), and the
+thread-vs-process difference only shows up on a first/forced run.
+
+Two things worth knowing about how this is built:
+
+- The "thread" and "process" pipelines use differently-named steps
+  (`analyze_thread`/`analyze_process`) rather than one shared step name.
+  An output address is `hash(step_name, version, input_hash, ...)`
+  (rubedo/hashing.py) — it does NOT include the pipeline id, so two
+  pipelines with a same-named step over identical input would silently
+  share one cached materialization, which would quietly break the timing
+  comparison after the first run.
+- `analyze_chunk` is wired into a StepSpec via the call form
+  `step(...)(analyze_chunk)`, not the `@step` decorator — decorating in
+  place would rebind the module-level name `analyze_chunk` to the
+  StepSpec, and a process-executor step is pickled by looking up its
+  `module.qualname`. If that name no longer pointed at the function,
+  pickling `step.fn` would fail. Keeping the function and its StepSpec(s)
+  under different names (like `examples/gutenberg_stats/gutenberg_stats.py`
+  does with `analyze_book`/`analyze`) sidesteps that — needed twice over
+  here, since the same function is wrapped into two different StepSpecs.
 
 The word list download happens once and is cached to a local file next to
-this script (gitignored) — that's different from every other example's
-"download inside a step" pattern, because Rubedo's own materialization
-cache only covers step outputs, not Source.scan() itself, and chunking has
-to happen before any step exists to cache anything.
-
-Run either variant:
-
-    uv run python examples/executor_showdown/run_thread.py
-    uv run python examples/executor_showdown/run_process.py
-
-Pass --force to either to bypass Rubedo's cache and re-pay the full CPU
-cost (otherwise a second run of the *same* script just reuses its cached
-result almost instantly — which is Rubedo's whole point, but it means the
-thread-vs-process comparison only shows up on a first/forced run).
+this script (gitignored) — different from every other example's "download
+inside a step" pattern, because Rubedo's own materialization cache only
+covers step outputs, not Source.scan() itself, and chunking has to happen
+before any step exists to cache anything.
 """
 import hashlib
 import os
@@ -213,8 +218,7 @@ def _fetch_result(run_id: str, combine_step_name: str):
         return read_materialization_output(mat)
 
 
-def main(executor: str):
-    force = "--force" in sys.argv
+def run_variant(executor: str, force: bool) -> float:
     pipe = build_pipeline(executor)
     print(describe(pipe))
     print()
@@ -227,17 +231,24 @@ def main(executor: str):
         f"executor={executor!r} elapsed={elapsed:.2f}s "
         f"created={summary.created_count} reused={summary.reused_count}"
     )
-
     if summary.reused_count and not summary.created_count:
-        print(
-            "\nEverything was reused from a previous run (Rubedo caches by content) — "
-            "elapsed time above reflects lookup/ledger overhead, not the real compute "
-            "cost. Pass --force to pay it again and see the executor difference."
-        )
+        if force:
+            # force=True re-executes every step regardless of cache — elapsed
+            # above is real compute time. reused_count is still high because
+            # the recomputed bytes are identical to what's already stored, so
+            # the generations protocol dedupes rather than writing a new one
+            # (rubedo/ledger.py's _commit_materialization) — reused here means
+            # "no new generation," not "skipped execution."
+            print("(recomputed via --force; bytes matched the prior run, so no new generation)")
+        else:
+            print(
+                "(reused from a previous run — pass --force to pay the real compute "
+                "cost and see the executor difference)"
+            )
 
     result = _fetch_result(summary.run_id, f"combine_{executor}")
     if result:
-        print(f"\ntotal words analyzed:        {result['total_words']}")
+        print(f"total words analyzed: {result['total_words']}")
         print(
             f"largest anagram group ({len(result['largest_anagram_group'])} words): "
             f"{result['largest_anagram_group']}"
@@ -246,4 +257,21 @@ def main(executor: str):
             "largest rotation-invariant group size: "
             f"{result['largest_rotation_invariant_group_size']}"
         )
-        print(f"most common letter:          {result['most_common_letter']!r}")
+        print(f"most common letter: {result['most_common_letter']!r}")
+    print()
+    return elapsed
+
+
+def main():
+    force = "--force" in sys.argv
+    thread_elapsed = run_variant("thread", force)
+    process_elapsed = run_variant("process", force)
+
+    print(f"thread:  {thread_elapsed:.2f}s")
+    print(f"process: {process_elapsed:.2f}s")
+    if process_elapsed > 0:
+        print(f"({thread_elapsed / process_elapsed:.1f}x)")
+
+
+if __name__ == "__main__":
+    main()
