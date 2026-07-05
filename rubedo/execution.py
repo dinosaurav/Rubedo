@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
 
 from .models import Filtered, ProcessResult
 from .planning import (
@@ -60,15 +60,15 @@ class _RunMemo:
     def __init__(self):
         """Initialize the run memoizer with a reentrant lock."""
         self._lock = threading.RLock()
-        self._values: Dict[Any, Any] = {}
+        self._values: Dict[Tuple[str, str], Tuple[Literal["ok", "err"], Any]] = {}
 
-    def compute(self, key, producer):
+    def compute(self, key: Tuple[str, str], producer: Callable[[], Any]) -> Any:
         """
         Compute or retrieve a memoized value for the given key.
 
         Args:
-            key (Any): The cache key.
-            producer (Callable): A zero-argument function that produces the value.
+            key: (step_name, coordinate) — see _compute_ephemeral's call site.
+            producer: A zero-argument function that produces the value.
 
         Returns:
             Any: The produced or cached value.

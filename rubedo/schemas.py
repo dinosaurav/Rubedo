@@ -118,3 +118,30 @@ class PipelineOut(BaseModel):
     last_run_at: Optional[str] = None
     # DAG snapshot recorded by the most recent run (steps, edges, policies)
     definition: Optional[Dict[str, Any]] = None
+
+
+class MaterializationIndexEntryOut(BaseModel):
+    """One indexed field/value pair for a materialization."""
+    field: str
+    value: str
+
+
+class ObjectMetadataOut(BaseModel):
+    """Metadata and a content preview for a materialized object."""
+    output_address: str
+    exists: bool
+    size_bytes: int
+    preview_kind: str  # "text" | "json" | "binary"
+    preview_text: Optional[str] = None
+    preview_json: Optional[Any] = None
+    pipeline_id: str
+    step_name: str
+    code_version: str
+    created_by_run_id: str
+    created_at: str
+    is_live: bool
+    invalidated_at: Optional[str] = None
+    invalidation_reason: Optional[str] = None
+    output_content_hash: str
+    content_type: Optional[str] = None
+    index: List[MaterializationIndexEntryOut]

@@ -3,9 +3,18 @@ Content-addressed object store operations.
 """
 import os
 import json
-from typing import Any, Tuple
+from typing import Any, Optional, Protocol, Tuple
 from .models import ProcessResult
 from .hashing import hash_bytes
+
+
+class HasOutputContentHash(Protocol):
+    """Structural type for read_materialization_output's argument — a
+    Materialization row and a runner MatRef both satisfy this without
+    either needing to know about the other."""
+
+    output_content_hash: str
+    content_type: Optional[str]
 
 def _default_home() -> str:
     return os.environ.get("RUBEDO_HOME", ".rubedo")
@@ -107,7 +116,7 @@ def stage_and_commit(run_id: str, coordinate: str, result: Any) -> Tuple[str, st
     return final_path, content_hash, content_type
 
 
-def read_materialization_output(materialization) -> Any:
+def read_materialization_output(materialization: Optional[HasOutputContentHash]) -> Any:
     """Reads and deserializes a materialization output from the store.
 
     Accepts anything carrying output_content_hash and content_type

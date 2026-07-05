@@ -31,6 +31,7 @@ from .schemas import (
     SelectionPreviewResponse,
     SelectionInvalidateResponse,
     PipelineOut,
+    ObjectMetadataOut,
 )
 
 
@@ -215,7 +216,7 @@ def _resolve_materialization(session, output_address: str):
     )
 
 
-@app.get("/api/objects/{output_address}")
+@app.get("/api/objects/{output_address}", response_model=ObjectMetadataOut)
 def get_object_metadata(output_address: str):
     """Get metadata and a preview for a materialized object."""
     with get_session() as session:
@@ -296,7 +297,7 @@ def get_object_metadata(output_address: str):
 
 
 @app.get("/api/objects/{output_address}/download")
-def download_object(output_address: str):
+def download_object(output_address: str) -> FileResponse:
     """Download the raw bytes of a materialized object."""
     with get_session() as session:
         mat = _resolve_materialization(session, output_address)
