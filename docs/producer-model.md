@@ -177,9 +177,64 @@ core must never leak into the simple case.
 6. **Group-key stability** under content-addressed lanes (the same
    removed-vs-changed churn as A, one level up).
 
+## Step 2+ design (grounded in the runner)
+
+Reading the runner before building step 2 changed the plan — two findings:
+
+**Finding 1 — the runner already interleaves plan→execute per step and feeds
+executed results forward.** `run_pipeline` loops `for step in topo: plan →
+execute` (`runner.py:294-313`), and `_commit_execution_result` writes each
+executed `MatRef` into `coord_step_mats[(coord, step)]` (`ledger.py:559`),
+which the next step's `_plan_step` reads to find its parents
+(`planning.py:267-280`). So a coordinate-**minting** step needs almost no new
+scheduling: an `expand` executes and writes *N* entries for *N* minted
+coordinates instead of one; the next step gathers them like any parent's. In
+`plan()` (dry-run) expand can't run, so downstream is `pending` — the existing
+mechanism. **Expand needs no new execution model.**
+
+**Finding 2 — expand needs no schema change and no census for a correct MVP.**
+Minted coordinates are just strings in `run_coordinate_statuses` +
+`materializations`. They are not source coordinates, so source-manifest removal
+never touches them; a vanished expanded lane simply becomes orphaned-live —
+exactly the resolved Q1/Q2 behavior. So the schema-touching per-producer census
+is **not** a prerequisite for expand.
+
+**Revised sequencing — go vertical, skip the churn.** The behavior-preserving
+`Source`→`Producer` refactor buys nothing until something uses the generality,
+so it is premature abstraction. Instead ship the capability first and let the
+census follow when a concrete need (expand *caching*) pulls it in.
+
+**Expand emit contract (proposed):**
+- `@step(shape="expand")`; the fn returns an iterable of `(subkey, value)`.
+- Minted coordinate: content-addressed by decision A — `row-<hash(value)>` by
+  default; the fn's `subkey` may seed a lineage-legible `f"{parent}/{subkey}"`
+  when declared. (Not identity — identity stays the content-addressed output.)
+- Execution: `_execute_step` yields one outcome per emitted pair;
+  `_commit_execution_result` writes one materialization per minted coordinate,
+  each `MaterializationEdge`-linked to the parent.
+
+**The one real fork — expand caching.** An expand is 1:N, so it cannot cache
+by a single `output_address` like a map, and re-running a non-idempotent expand
+(LLM) every run is unacceptable. To reuse when the parent lane is unchanged we
+must remember what the expand emitted for that parent (its membership). Two
+options: **(a)** a minimal membership record now — a small table keyed
+`(step, parent_coord) → {subkey: content_hash}` enabling "parent unchanged →
+replay emitted lanes without running"; ships with expand. **(b)** the full
+per-producer census now — more work, but it is coming anyway. **Recommend (a)**,
+generalized to (b) when the census lands.
+
+**`group_key`'s distinct constraint (later):** grouping parent lanes by a field
+of their *value* needs values at plan time, but planning only reads content
+hashes. So `group_key` must either group by coordinate / an indexed field, or
+reduce-planning must read parent values (tolerable, since reduce is already a
+barrier). Decision deferred to that increment — and it is why `expand`, not
+`group_key`, is the cleaner next step.
+
 ## Sequencing
 
-1. **Content-addressed lanes** (drop `_disambiguate`, make `key=` optional) —
+*(revised after the runner findings above)*
+
+0. **Content-addressed lanes** (drop `_disambiguate`, make `key=` optional) —
    the substrate; stands alone. ✅ **DONE** (`sources.py`). `key=` is now
    optional on `CsvSource`/`TableSource`: omit it for content-addressed
    `row-<hash>` lanes (identical rows collapse, edits read as removed+added);
@@ -193,8 +248,16 @@ core must never leak into the simple case.
    with an identical duplicate row collapsing to one lane. Querying keyless
    lanes by their human handle is deferred to the index/lineage tooling
    (`TODO.md` item 5) — keyed lanes stay legible so nothing regresses there.
-2. **Producer abstraction + per-producer census** — refactor `Source` into a
-   root producer, behavior-preserving.
-3. **`expand`** (1:N minting) — the core new capability.
-4. **`group_key` reduce** — independent, slot anytime.
-5. **Multi-root + `join`** — binary collective expand, once roots are plural.
+1. **`expand`** (`shape="expand"`, 1:N minting) — the flagship capability, next
+   up. Rides the interleaved runner (Finding 1); content-addressed minted
+   coordinates; a minimal membership record for caching (fork option **a**);
+   no schema change, orphan-on-removal. The behavior-preserving `Producer`
+   refactor is **dropped** as premature — the Source/step unification stays
+   conceptual until something needs it.
+2. **Per-producer census** — upgrades expand caching to its general form and
+   adds removal *reporting* for minted/group lanes. Schema change (`Manifest`
+   gains a producer dimension) → `.rubedo` wipe. Behavior-improving, pulled in
+   by expand's caching need rather than done speculatively.
+3. **`group_key` reduce** — with the "group by what" decision (plan-time value
+   access) settled first.
+4. **Multi-root + `join`** — binary collective expand, once roots are plural.
