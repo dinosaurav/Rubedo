@@ -10,15 +10,16 @@ vocabulary. One item = one (or a few) commits.
 
 
 
-## 1. Joins  **[DO NOT BUILD without a design session with the owner]**
+## 1. Joins  **[now designed in `docs/producer-model.md` — build per that doc's sequencing]**
 
-Direction (not yet settled enough to build): a join creates pair lanes
-from two parents (`left|right`), which requires coordinate-*creating*
-steps (shape="expand") and multi-root pipelines. The conceptual
-foundation (lane keys vs identity vs search) is settled and reduce
-builds half the machinery. Open questions needing the owner: pair
-explosion control (predicates before materialization?), expand-step
-manifest caching, multi-source pipeline API. Bring a proposal first.
+The owner design session happened: joins are no longer a standalone item but
+the last step of the **producer model** (`docs/producer-model.md`), where a
+join is the binary, collective member of the `expand` family — it matches two
+independent roots on a declared equijoin key (hashed) and mints `left|right`
+pair coordinates. Pair-explosion control is resolved (equijoin key, not
+arbitrary predicate; predicate is a post-join `filter`). Do not build in
+isolation — it lands after content-addressed lanes → producer refactor →
+`expand` → `group_key`, per the doc's sequencing.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -30,11 +31,104 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Configurable cloud ledger + object store (Postgres / S3-GCS)**: distinct from the Source item above, which is about *input* data — this is about the *internal* materialization store (`store.py`) and ledger DB (`db.py`) that back every run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is comparatively mechanical (the WAL/busy_timeout pragma hook is SQLite-specific and would need to become conditional); `store.py`'s content-addressed layout (`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every `os.path`/`open()`/`os.replace()` call in it assumes a local filesystem and would need an abstraction swapped in behind the same interface. This — not the execution backend — is the real prerequisite for genuine multi-machine/cloud execution (see the executor="process" and Dask discussion in item 0's history); the configurable `RUBEDO_HOME` root (now shipped — see Done below) is a natural stepping stone since it already isolates where these paths get resolved.
 - **Pluggable distributed execution backend (Dask / Ray / cloud)**: today `execution.py` only offers `executor="thread"|"process"`, both single-machine. `execution._execute_step`'s `call()` already treats "the pool" as anything satisfying `.submit(fn, *args, **kwargs) -> Future-with-.result()` (see `pool.submit(step.fn, *args, **kwargs).result()`), which is the same shape `dask.distributed.Client` and `ray` (via a thin wrapper) expose — so a third `executor="dask"`/`executor="ray"` value is a comparatively small change to *this specific call site*. The real cost is architectural, not mechanical: it requires a running scheduler/cluster, which cuts directly against this project's "zero-daemon" positioning (`docs/framework_analysis.md`), and it depends on the cloud ledger/object-store item above (a distributed worker can't write to a purely local SQLite file + local objects dir). Needs an owner design session before building: whether to add this as a third `executor=` value alongside `"process"`, or have it *replace* `"process"` outright (a Dask/Ray `LocalCluster` subsumes the same local-multi-process case — see item 0's loky/cloudpickle note for a lower-cost alternative that solves the picklability pain without any of this).
 - **Incremental Source Scanning (High Watermarks)**: Currently, sources scan their entire domain on every run (relying on cache identity to skip work). For massive tables or buckets, a source should support an `updated_at > last_run` watermark to skip scanning untouched coordinates entirely, drastically speeding up the planning phase.
-- **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
+- **Dynamic Lane Expansion (`flat_map` shape)** — *now designed in `docs/producer-model.md` as the `expand` producer (1:N coordinate-minting); build per that doc, not this bullet.* Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` shape (1:N) lets a step `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
 - **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
+  - **⚠️ DANGER — GC is genuinely hazardous; do not build casually.** The
+    orphan-retention decision (`producer-model.md` open Q2) is *keep orphans*
+    for good reasons; any GC that deletes bytes fights that and can corrupt
+    live state. Four traps: **(1) Shared objects.** The store dedupes identical
+    bytes (`hash[:2]/hash[2:4]/hash`), so one physical object can back *many*
+    materializations across different addresses — "this materialization is
+    orphaned" does **not** mean "its bytes are unreferenced." A sweep MUST
+    ref-count physical objects against *all* live materializations before
+    deleting a single byte, or it silently guts live outputs (violates
+    invariants 1 & 3). **(2) Direction of truth.** Sweep by walking the ledger
+    (truth) and ref-counting; **never** by walking the store (derived); and
+    never delete ledger rows (append-only). **(3) Concurrency.** A commit on
+    another machine can *restore* (re-reference) bytes a sweep is mid-way
+    through deleting — GC racing the restore path deletes live data. **(4)
+    Cloud irreversibility.** On S3/GCS deletes are permanent and unrecoverable
+    (no filesystem trash) — a buggy pass against a random cloud bucket is
+    catastrophic and unrollbackable. Gate behind dry-run + a ref-count audit +
+    object-versioned buckets before it is *ever* pointed at remote storage.
 - **Source API Simplification**: Remake how `Source` works so that average consumers don't feel compelled to write a full class that implements the `Source` protocol. A simpler functional or generator-based API (e.g., a `@source` decorator) would significantly reduce boilerplate for custom data sources.
+
+──────────────────────────────────────────────────────────────────────
+
+## 3. Runner rework for the producer model  **[part of `docs/producer-model.md`]**
+
+The orchestration layer (`runner.py`: `run()` / `plan()` / `run_pipeline()`)
+hardcodes the source-privileged flow today: scan source → `_snapshot_source`
+manifest → plan each step in topo order → execute → commit. Under the producer
+model it must drive every producer uniformly — the source is just the nullary
+root — threading the emitted-lane namespace from one producer to the next,
+minting coordinates for `expand`/`join`, honoring `group_key` on `reduce`, and
+running a **per-producer census** instead of one source snapshot. This is where
+the `spec` / `planning` / `ledger` changes converge, so sequence it after those
+per the doc. Non-negotiable: the map-a-folder common path stays a one-liner —
+the general core must not leak into the simple case.
+
+──────────────────────────────────────────────────────────────────────
+
+## 4. Continue / resume an interrupted run
+
+Crash-safety is already implicit: a died run's committed materializations
+persist and the *next* run reuses them by address (invariant 3). What's missing
+is an explicit affordance to **continue a specific interrupted run** — re-plan
+only its pending/failed/blocked lanes and keep the run identity for reporting —
+so a long, expensive LLM run that dies at lane 900/1000 resumes without reading
+as a conceptually fresh run. Largely a UX/reporting layer over the existing
+content-addressed reconcile, so keep it thin. Open: same `run_id` vs a new run
+linked to the old; re-scan vs reuse the prior manifest; interaction with
+selection-scoped/partial runs. Design-first.
+
+──────────────────────────────────────────────────────────────────────
+
+## 5. Lane tooling — following & invalidation  **[deferred; post-`docs/producer-model.md`]**
+
+Two families of utilities that ride on machinery that already exists
+(`MaterializationEdge` lineage, `MaterializationIndexEntry` labels) — deferred
+until the producer-model refactor lands, since lanes become the load-bearing
+navigation surface then. Not to be built yet; captured so the direction isn't
+lost.
+
+- **Lane-following (lineage queries).** "Find the results connected to a label
+  at a certain step": index-lookup (`MaterializationIndexEntry`) to seed
+  materializations carrying the label, then BFS up/down `MaterializationEdge`
+  to reach connected outputs at other steps. Pure query over existing tables —
+  a recursive CTE, no new bookkeeping. Survives reduce/expand/join because it
+  is a materialization graph, not coordinate-equality. This is the "follow the
+  path of a lane" utility that replaces a legible coordinate once lanes go
+  opaque/content-addressed. Root-of-lineage → source row is answered by
+  indexing source metadata at the root (decide: always index it).
+- **Lane-level invalidation.** Today `invalidate(selection)` flips `is_live`
+  on the selected materializations only, and the settled core semantics are
+  lazy-via-recompute (invalidate a specific bad case, let the next run
+  recompute — no eager descendant cascade; see `producer-model.md` open
+  question 1). The deferred tooling is broader selection-driven invalidation
+  over a *lane* (e.g. "invalidate everything this label touched, all steps"),
+  built on the same lineage traversal above. Design-first; the core stays
+  minimal.
+
+──────────────────────────────────────────────────────────────────────
+
+## 6. Live run view (streaming progress)
+
+A run already writes `run_events` and `run_coordinate_statuses` as it
+progresses, and `server.py` is read-only and ledger-derived. Add a streaming
+endpoint so the web UI can watch a run execute live — the DAG lighting up,
+per-step created/reused/failed/blocked counts ticking as lanes complete.
+Mechanism: prefer **SSE** (Server-Sent Events) over raw WebSockets — it is
+one-way (all that "view a run as it goes" needs), plain HTTP, and pulls in no
+new deps; the server tails new ledger rows for a `run_id` and pushes them. The
+tailing constraint to design around: SQLite has no `LISTEN/NOTIFY`, so
+cross-process (run in one process, server in another) means polling the ledger
+on a short interval; an in-process event bus is only possible if run and server
+share a process. Stays consistent with "server never imports user code" — the
+feed is purely ledger-derived. Pairs naturally with the `rich` CLI/TUI
+live-DAG item in section 2.
 
 ──────────────────────────────────────────────────────────────────────
 

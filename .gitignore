@@ -85,3 +85,6 @@ lerna-debug.log*
 Thumbs.db
 db.lock
 Desktop.ini
+
+# Marketing
+marketing/
