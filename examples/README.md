@@ -20,6 +20,8 @@ that the second run recomputes only what actually changed.
 | [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | `TableSource` in streaming (`batch_size`) mode |
 | [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
+| [`expand_feed`](expand_feed/) | local files (self-contained) | expand | `shape="expand"` — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
+| [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multi-source `sources={}`, N-way `shape="join"`, `shape="expand"`, and a `group_key` reduce |
 
 ## Keys
 
