@@ -8,54 +8,7 @@ vocabulary. One item = one (or a few) commits.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 0. CPU-bound parallelism — `@step(executor="process")`
 
-**Decisions (Currently Implemented):**
-- `StepSpec.executor: str = "thread"` (`thread` | `process`).
-- Registration-time validation for `process`: the fn must be picklable —
-  reject when `"<locals>" in fn.__qualname__` (closures/test-local defs)
-  with a clear message ("process-executor steps must be module-level").
-- **Parent-side orchestration, child runs the bare fn**: in
-  `execution._execute_step`, when `executor == "process"`, build
-  args/kwargs in the parent (so `_resolve_parent_value` / ephemeral
-  resolution and `_build_step_params` stay parent-side; the resulting
-  values must pickle — document this), then submit `step.fn` itself to a
-  `ProcessPoolExecutor`. Retries and the rate limiter stay in the parent:
-  acquire the limiter before each submit; on failure, resubmit per the
-  retry policy. The existing `process()` closure logic can be reshaped so
-  the attempt loop wraps "submit + future.result()" for the process case
-  and the direct call for the thread case.
-- One pool per step execution (same lifecycle as the current
-  ThreadPoolExecutor), `max_workers=workers or step.workers`.
-- `Filtered`/`ProcessResult` returns work unchanged (they pickle).
-
-**The Overcomplication:**
-The `executor="process"` option adds a layer of complexity because it forces the orchestrator (`execution._execute_step`) to manage two different concurrency primitives (`ThreadPoolExecutor` and `ProcessPoolExecutor`). This means we have to maintain a delicate balance where retries and rate limits run in the parent thread while the actual execution happens in the child process. It also imposes strict pickling constraints on step arguments and functions (no closures), which can confuse users when their data or inner functions fail to serialize.
-
-**Possible Fix:**
-Remove the `executor="process"` option from the engine entirely and default strictly to thread-based concurrency. If users have heavy CPU-bound tasks, they can implement multiprocessing *inside* their own step functions, thereby delegating the CPU-bound complexity to the user's code rather than baking it into the engine's orchestration layer.
-
-**A third option worth weighing alongside keep/remove:** swap the pool
-implementation for `loky` (joblib's process-pool backend) instead of
-stdlib `concurrent.futures.ProcessPoolExecutor`. `loky` is API-compatible
-(`.submit()`/`.result()`, drops in where `process_pool` is constructed in
-`execution.py`) but serializes with `cloudpickle`, which pickles functions
-*by value* (captures the actual code object/closure) rather than by
-`module.qualname` reference. That would likely remove both the
-module-level-function requirement and the `@step`-decorator-shadowing
-footgun (see the pairing between `analyze_book`/`analyze` in
-`examples/gutenberg_stats/gutenberg_stats.py`) without adding a
-scheduler/daemon dependency — unlike Dask/Ray (item 2), this stays purely
-local. Neither `loky` nor `cloudpickle` are current dependencies (checked
-`pyproject.toml`/`uv.lock` — absent, even transitively), so it's a new,
-small addition either way. Not evaluated for correctness/perf yet.
-
-**Status:** implemented and tested (`tests/test_process_executor.py`), but
-the overcomplication note above is a live design question, not yet
-settled — bring a decision (keep as-is / keep with loky+cloudpickle /
-remove) before touching this again.
-
-──────────────────────────────────────────────────────────────────────
 
 ## 1. Joins  **[DO NOT BUILD without a design session with the owner]**
 
@@ -80,6 +33,7 @@ These are strategic feature recommendations to expand the engine's capabilities 
 - **Dynamic Lane Expansion (`flat_map` shape)**: Currently we have `map` (1:1) and `reduce` (N:1). Adding an `expand` or `flat_map` shape (1:N) would allow a step to `yield` multiple outputs from a single lane (e.g., fetching an RSS feed and yielding an output lane for each article).
 - **Robust CLI & Terminal UI**: The Web UI is excellent, but local-first developers love the terminal. A `rubedo` CLI with rich terminal output (using a library like `rich`) to show live DAG execution, progress bars for lanes, and interactive plan confirmations would greatly enhance the core DX.
 - **Data Quality Assertions**: Similar to dbt tests, allowing users to define lightweight assertions or schemas on step outputs to automatically fail/block lanes if the data is malformed (e.g., an LLM returns invalid JSON that parses but misses required fields).
+- **Storage Sprawl Management**: Include useful features to prevent storage sprawl, such as disk usage warnings, storage limits, automated policies to reduce/expire old data, and mark-and-sweep garbage collection to clean up unlinked or orphaned data.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -133,7 +87,9 @@ now a `HasOutputContentHash` Protocol satisfied structurally by both
 untyped dict return, `download_object` got an explicit `-> FileResponse`
 return type; `_serialize`/`stage_and_commit`'s `result: Any` stayed `Any`
 deliberately — step return values are genuinely heterogeneous, no
-narrower type is honest there) ·
+narrower type is honest there) · CPU-bound parallelism migrated to `loky` +
+`cloudpickle` (`executor="process"`), allowing closures in process-executed
+steps (`tests/test_process_executor.py` updated to verify local functions) ·
 resolved-won't-do: arbitrary-rules plugin surface (wrapper-or-built-in
 rule); plan()-in-UI (server never imports user code — use plan() in
 Python).
