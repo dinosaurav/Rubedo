@@ -133,7 +133,7 @@ def plan(
     "removed" means the coordinate vanished from the source since last run.
 
     home, if given, points the ledger/object store at a custom root instead
-    of the default `.rubedo`/RUBEDO_HOME (see docs/TODO.md item 1).
+    of the default `.rubedo`/RUBEDO_HOME (see notes/TODO.md item 1).
     """
     from .planning import _code_drift_message
 
@@ -234,7 +234,7 @@ def run(
     Params are validated against the first step's params_model whenever
     one is declared. home, if given, points the ledger/object store at a
     custom root instead of the default `.rubedo`/RUBEDO_HOME (see
-    docs/TODO.md item 1).
+    notes/TODO.md item 1).
     """
     pipeline, source, params = _resolve_invocation(pipeline, source, params)
     return run_pipeline(

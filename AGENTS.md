@@ -18,7 +18,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   `uv run python examples/count_lines/count_lines.py` twice (expect Created: 15 then
   Reused: 15). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
-  warnings), `uv run ruff check rubedo/ tests/ examples/`,
+  warnings), `uv run ruff check src/rubedo/ tests/ examples/`,
   `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
@@ -33,35 +33,35 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 ## Architecture map
 
-- `rubedo/spec.py` — `@step` / `pipeline()` build plain
+- `src/rubedo/spec.py` — `@step` / `pipeline()` build plain
   `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
   user code. `shape` is `"map"` (1:1 per lane, default) or `"reduce"` (N:1
   fan-in over a parent's surviving lanes, single `"@all"` lane key);
   `executor` is `"thread"` (default) or `"process"` (registration rejects
   closures — the fn must be module-level/picklable). `describe()` renders
   DAGs (text/Mermaid); `definition()` is the JSON snapshot each run records.
-- `rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
+- `src/rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
   payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
   `batch_size` streaming mode, `source_id` built without leaking
   credentials). A coordinate is a **lane key**: engine-facing
   dataflow/incrementality key, unique within a scan (sources disambiguate
   collisions mechanically), stable across scans. Not identity, not the
   search handle.
-- `rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
+- `src/rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
   Reduce steps get one decision instead of one per lane.
-- `rubedo/execution.py` — DB-free execute phase: thread or process pool
+- `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, per-run memo for
   skip_cache utils.
-- `rubedo/ledger.py` — every DB write: manifests, per-lane statuses,
+- `src/rubedo/ledger.py` — every DB write: manifests, per-lane statuses,
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
   transition appends a `materialization_lifecycle` row).
-- `rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run,
+- `src/rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run,
   writes nothing), `run_pipeline()`.
-- `rubedo/models.py` — schema + **immutability guards**: ledger tables
+- `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,
   `Materialization.is_live`/`refreshed_at`). Tests that must backdate rows
@@ -71,10 +71,10 @@ accurate and load-bearing; keep them updated when behavior changes.
   the same transaction. It accumulates across flushes (the supersede path
   flushes a demotion before its lifecycle row exists) and skips savepoint
   releases (`in_nested_transaction()`).
-- `rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
+- `src/rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
   language: lane-key globs, indexed fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
-- `rubedo/server.py` — read-only FastAPI + invalidation endpoint.
+- `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines.
 - `web/` — React/Vite dashboard. `DagView.tsx` renders definition
   snapshots. Dark-theme CSS variables in `index.css`.

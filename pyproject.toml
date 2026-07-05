@@ -23,6 +23,7 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["rubedo"]
+package-dir = {"" = "src"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

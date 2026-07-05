@@ -86,7 +86,7 @@ See [docs/invariants.md](docs/invariants.md) for the core vocabulary (coordinate
 
 ## Layout
 
-- `rubedo/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
+- `src/rubedo/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
 - `web/` — React + Vite dashboard (runs, materializations, lineage, selection-based invalidation)
 - `examples/` — runnable demo pipelines
 - `tests/` — pytest suite (`uv run pytest`)
