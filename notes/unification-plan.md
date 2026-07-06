@@ -72,15 +72,19 @@ live `pipeline(steps=[fetch(root expand)→classify→group_key reduce])` verifi
 created→reused with the root re-scanning each run. **Closed:** the core of the
 unification.
 
-### Phase 3 — Content-address row sources; drop `key=`
-Remove `key=` from `CsvSource`/`TableSource`; always content-address
-(coordinate = `row-<hash(row)>`). `_finalize` collapses to a plain
-content-dedup (its uniqueness error can't occur without keys). Touch:
-`sources.py`, `tests/test_sources.py`, `tests/test_table_source.py`, and every
-example/test passing `key=` (`gutenberg`, `weather`, `github`, `orders`,
-`newsroom`, `test_join`) — the joins still match on **indexed fields**, so they
-keep working once the join keys are indexed. **Closes:** `key=` removal,
-`_finalize` simplification. *Decision D1 (folders) deferred to Phase 6.*
+### Phase 3 — Content-address row sources; drop `key=`  ✅ DONE
+`CsvSource` lost `key=` entirely; both Csv/Table always content-address
+(coordinate = `row-<hash(row)>`), `source_id` no longer carries a key.
+`TableSource` keeps `key=` but **only** as the streaming (`batch_size`)
+re-fetch handle — never the coordinate (the legit physical need; the deferred
+lazy story). `_finalize` unchanged (it already dedups content-addressed coords
++ guards prefix collisions). Migrated `tests/{test_sources,test_table_source,
+test_join}.py` and the examples (`newsroom`/`weather`/`gutenberg`/`github`
+dropped `key=`; `orders_rollup` kept it for streaming). Joins still work —
+they match on **indexed fields**, not coordinates. Full suite green (165); a
+live newsroom join over content-addressed CSVs gives the right per-region
+digests. **Closed:** `key=` removal. *Folders (D1) stay path-keyed until
+Phase 6.*
 
 ### Phase 4 — `@source` + built-ins as root-expand sugar; migrate examples
 Add `@source` = sugar for a root expand (`@step(shape="expand")`, no deps),

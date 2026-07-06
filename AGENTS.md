@@ -51,12 +51,11 @@ accurate and load-bearing; keep them updated when behavior changes.
 - `src/rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
   payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
   `batch_size` streaming mode, `source_id` built without leaking
-  credentials). `key=` is optional on Csv/Table: omit it for
-  content-addressed `row-<hash>` lanes (identical rows collapse), or declare
-  it for stable legible lanes — a non-unique declared key raises in
-  `_finalize` (no more content-suffixing). A coordinate is a **lane key**:
-  engine-facing dataflow/incrementality key, unique within a scan, stable
-  across scans (or content-addressed). Not identity (that's the output
+  credentials). Lanes are **always content-addressed** (`row-<hash>`;
+  identical rows collapse) — no `key=`. `TableSource.key=` is only the
+  streaming (`batch_size`) re-fetch handle, never the coordinate. A
+  coordinate is a **lane key**: engine-facing dataflow/incrementality key,
+  content-addressed. Not identity (that's the output
   address), not the search handle (that's `index=`).
 - `src/rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;

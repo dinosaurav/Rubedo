@@ -92,7 +92,7 @@ def make_pipeline():
     return pipeline(
         id="repo-health",
         name="Repo Health",
-        source=CsvSource(os.path.join(os.path.dirname(__file__), "repos.csv"), key="repo"),
+        source=CsvSource(os.path.join(os.path.dirname(__file__), "repos.csv")),
         steps=[fetch_repo, activity, score, report],
     )
 

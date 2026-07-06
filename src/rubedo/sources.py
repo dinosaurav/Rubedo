@@ -120,28 +120,20 @@ class FolderSource(Source):
 
 
 class CsvSource(Source):
-    """Rows of a CSV file. Payload = row dict.
+    """Rows of a CSV file. Payload = row dict; content-addressed lanes.
 
-    `key` is optional. Omit it (the default) for **content-addressed lanes**:
-    the coordinate is `row-<hash>`, identical rows collapse to one lane, and an
-    edited row reads as removed + created. Declare `key=` (one or more columns)
-    for **stable, legible lanes**: the coordinate is the key value, so an
-    edited row keeps its coordinate and reads as changed. A declared key must
-    be unique — if it maps to two different rows the scan raises, rather than
-    silently splitting them. Searching by the human-facing key value is the job
-    of indexed fields, not the lane.
+    Each row is a lane keyed by its content (`row-<hash>`): identical rows
+    collapse to one lane, and an edited row reads as removed + created. To find
+    or track a row by a human field (email, id), index it downstream with
+    `@step(index=[...])` and query — the coordinate is never a human key.
     """
 
-    def __init__(self, path: str, *, key=None):
+    def __init__(self, path: str):
         self.path = path
-        if isinstance(key, str):
-            key = [key]
-        self.key: Optional[List[str]] = key
 
     @property
     def id(self) -> str:
-        key_part = ",".join(self.key) if self.key else "@content"
-        return f"csv:{self.path}#key={key_part}"
+        return f"csv:{self.path}"
 
     def scan(self) -> List[SourceItem]:
         import csv
@@ -154,18 +146,9 @@ class CsvSource(Source):
         with open(self.path, newline="", encoding="utf-8") as f:
             for row_num, row in enumerate(csv.DictReader(f), start=2):
                 content_hash = hash_json(row)
-
-                if self.key:
-                    missing = [k for k in self.key if k not in row]
-                    if missing:
-                        raise ValueError(
-                            f"{self.path}: key column(s) {missing} not found in CSV header"
-                        )
-                    base = "|".join(str(row[k]) for k in self.key)
-                else:
-                    base = f"row-{content_hash[:12]}"
-
-                rows.append((base, content_hash, row, {"line": row_num}))
+                rows.append(
+                    (f"row-{content_hash[:12]}", content_hash, row, {"line": row_num})
+                )
 
         return _finalize(rows)
 
@@ -220,9 +203,10 @@ class TableSource(Source):
     which coordinates or content exist, so it is deliberately absent from
     `id` and toggling it never invalidates the cache.
 
-    `key` is optional (as for CsvSource): omit it for content-addressed lanes,
-    or declare column(s) for stable, legible lanes. Streaming mode
-    (`batch_size`) requires a key, since `load()` re-fetches a row by it.
+    Lanes are content-addressed (`row-<hash>`) like CsvSource. `key` is *not* a
+    lane key — it names the column(s) `load()` re-fetches a streamed row by, so
+    it is required only when `batch_size` is set and is otherwise unused. It
+    never affects the coordinate.
     """
 
     def __init__(
@@ -244,8 +228,9 @@ class TableSource(Source):
             raise ValueError(f"batch_size must be a positive int, got {batch_size!r}")
         if batch_size is not None and not key:
             raise ValueError(
-                "TableSource streaming (batch_size) requires key= to re-fetch "
-                "rows by key; omit batch_size for content-addressed eager mode"
+                "TableSource streaming (batch_size) requires key= — the "
+                "column(s) load() re-fetches a row by (not the lane key; lanes "
+                "are content-addressed). Omit batch_size for eager mode."
             )
         self.batch_size = batch_size
         self._engine = None
@@ -260,10 +245,9 @@ class TableSource(Source):
         if parsed.port:
             safe_netloc += f":{parsed.port}"
 
-        # Build dialect+host+database+table#key=id
+        # Build dialect+host+database+table (key is a re-fetch detail, not identity)
         safe_url = f"{parsed.scheme}://{safe_netloc}{parsed.path}"
-        key_part = ",".join(self.key) if self.key else "@content"
-        return f"table:{safe_url}/{self.table}#key={key_part}"
+        return f"table:{safe_url}/{self.table}"
 
     def _get_engine(self):
         # Cached and reused: streaming mode re-enters the DB on every load(),
@@ -292,16 +276,7 @@ class TableSource(Source):
             for row in conn.execute(query).mappings():
                 row_dict = _jsonable(dict(row))
                 content_hash = hash_json(row_dict)
-
-                if self.key:
-                    missing = [k for k in self.key if k not in row_dict]
-                    if missing:
-                        raise ValueError(
-                            f"{self.table}: key column(s) {missing} not found in row"
-                        )
-                    base = "|".join(str(row_dict[k]) for k in self.key)
-                else:
-                    base = f"row-{content_hash[:12]}"
+                base = f"row-{content_hash[:12]}"
 
                 if self.batch_size is None:
                     # Eager: carry the payload so load() is a passthrough.
@@ -335,8 +310,8 @@ class TableSource(Source):
             )
         if len(candidates) == 1:
             return candidates[0]
-        # Duplicate key: content-suffixed lanes share a key, so pick the row
-        # whose bytes match the coordinate we planned.
+        # The re-fetch key matched more than one row (non-unique key, or the row
+        # changed since scan): pick the one whose bytes match the planned lane.
         for row_dict in candidates:
             if hash_json(row_dict) == item.content_hash:
                 return row_dict

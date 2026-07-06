@@ -51,11 +51,11 @@ def enrich(row: dict):
     return {"email": row["email"], "summary": call_llm(row["notes"])}
 
 leads = pipeline(id="enrich-leads", name="Enrich Leads",
-                 source=CsvSource("data/leads.csv", key="email"),
+                 source=CsvSource("data/leads.csv"),
                  steps=[enrich])
 ```
 
-`key` names the column(s) that identify a row and is optional: omit it (the default) for content-addressed coordinates, where identical rows collapse and an edited row shows up as removed + created; declare it for stable, legible coordinates that stay put when rows are edited or inserted, so only changed rows recompute (an edit reads as "changed", same coordinate, new hash). A declared key must be unique — if it maps to two different rows the scan raises rather than silently splitting them.
+Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created. To find or track a row by a human field (email, id), `@step(index=[...])` it and query — the coordinate is never a human key. (`TableSource`'s `key=` is only the re-fetch handle for its `batch_size` streaming mode, not a coordinate.)
 
 Steps carry their own execution policies — built for flaky work like LLM calls and scraping:
 
@@ -100,8 +100,8 @@ def enrich(order, customer):        # one lane per matched pair, coordinate orde
     return {"oid": order["oid"], "name": customer["name"]}
 
 p = pipeline(id="enrich", name="Enrich",
-             sources={"orders": CsvSource("orders.csv", key="oid"),
-                      "customers": CsvSource("customers.csv", key="cid")},
+             sources={"orders": CsvSource("orders.csv"),
+                      "customers": CsvSource("customers.csv")},
              steps=[order, customer, enrich])
 ```
 

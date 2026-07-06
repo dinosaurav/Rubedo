@@ -90,7 +90,7 @@ def make_pipeline():
     return pipeline(
         id="gutenberg-stats",
         name="Gutenberg Stats",
-        source=CsvSource(os.path.join(os.path.dirname(__file__), "books.csv"), key="id"),
+        source=CsvSource(os.path.join(os.path.dirname(__file__), "books.csv")),
         steps=[fetch, clean, analyze, report],
     )
 

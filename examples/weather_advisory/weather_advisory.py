@@ -100,7 +100,7 @@ def make_pipeline():
     return pipeline(
         id="weather-advisory",
         name="Weather Advisory",
-        source=CsvSource(os.path.join(os.path.dirname(__file__), "cities.csv"), key="city"),
+        source=CsvSource(os.path.join(os.path.dirname(__file__), "cities.csv")),
         steps=[geocode, forecast, advice, briefing],
     )
 

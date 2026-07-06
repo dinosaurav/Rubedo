@@ -96,8 +96,8 @@ def make_pipeline(folder):
         id="newsroom",
         name="Newsroom",
         sources={
-            "feeds": CsvSource(os.path.join(folder, "feeds.csv"), key="feed_id"),
-            "publishers": CsvSource(os.path.join(folder, "publishers.csv"), key="publisher"),
+            "feeds": CsvSource(os.path.join(folder, "feeds.csv")),
+            "publishers": CsvSource(os.path.join(folder, "publishers.csv")),
         },
         steps=[feed, publisher, feed_meta, articles, digest],
     )

@@ -116,8 +116,8 @@ def test_two_way_equijoin():
     pipe = pipeline(
         id="j", name="j",
         sources={
-            "orders": CsvSource(os.path.join(DATA, "orders.csv"), key="oid"),
-            "customers": CsvSource(os.path.join(DATA, "customers.csv"), key="cid"),
+            "orders": CsvSource(os.path.join(DATA, "orders.csv")),
+            "customers": CsvSource(os.path.join(DATA, "customers.csv")),
         },
         steps=[order, customer, enrich],
     )
@@ -167,7 +167,7 @@ def test_four_way_star_join():
     pipe = pipeline(
         id="star", name="star",
         sources={
-            n: CsvSource(os.path.join(DATA, f"{n}.csv"), key="uid")
+            n: CsvSource(os.path.join(DATA, f"{n}.csv"))
             for n in ("a", "b", "c", "d")
         },
         steps=[a, b, c, d, merge],

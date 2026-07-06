@@ -8,8 +8,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import CsvSource, FolderSource, step, pipeline, run
 from rubedo.db import init_db, get_session
-from rubedo.models import RunCoordinateStatus
-from rubedo.store import init_store
+from rubedo.models import Materialization, RunCoordinateStatus
+from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_sources_data"
 ENV_FOLDER = ".test_sources_env"
@@ -46,74 +46,27 @@ def write_csv(path, text):
         f.write(text)
 
 
-def test_csv_source_scan_with_key(tmp_path):
+def test_csv_source_scan_content_addressed(tmp_path):
     csv_path = str(tmp_path / "rows.csv")
     write_csv(csv_path, "id,name\n1,alice\n2,bob\n")
 
-    src = CsvSource(csv_path, key="id")
-    items = {it.coordinate: it for it in src.scan()}
+    src = CsvSource(csv_path)
+    items = src.scan()
 
-    assert set(items) == {"1", "2"}
-    assert src.load(items["1"]) == {"id": "1", "name": "alice"}
-    assert src.id == f"csv:{csv_path}#key=id"
-
-
-def test_csv_source_composite_key(tmp_path):
-    csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "region,name,v\neast,alice,1\nwest,alice,2\n")
-
-    src = CsvSource(csv_path, key=["region", "name"])
-    coords = {it.coordinate for it in src.scan()}
-    assert coords == {"east|alice", "west|alice"}
+    # Every lane is content-addressed; the payload is the whole row.
+    assert len(items) == 2
+    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
+    assert {src.load(it)["name"] for it in items} == {"alice", "bob"}
+    assert src.id == f"csv:{csv_path}"
 
 
-def test_csv_source_duplicate_keys_raise(tmp_path):
-    csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "id,name\n1,alice\n1,bob\n2,carol\n")
-
-    # A declared key that maps to two different rows is an error, not a
-    # silent content-suffix. Omit key= for content-addressed lanes instead.
-    with pytest.raises(ValueError, match="must be unique"):
-        CsvSource(csv_path, key="id").scan()
-
-
-def test_csv_source_identical_duplicate_rows_collapse(tmp_path):
+def test_csv_source_identical_rows_collapse(tmp_path):
     csv_path = str(tmp_path / "rows.csv")
     write_csv(csv_path, "id,name\n1,alice\n1,alice\n")
 
-    items = CsvSource(csv_path, key="id").scan()
-    # Same key, same content: indistinguishable work, one lane, no suffix
-    assert [it.coordinate for it in items] == ["1"]
-
-
-def test_csv_source_key_optional_defaults_to_content_addressed(tmp_path):
-    csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "id,name\n1,alice\n1,bob\n")
-
-    # No key at all: content-addressed lanes. Two different rows that would
-    # have collided on a key are simply two distinct coordinates.
+    # Same content: one indistinguishable unit of work → one lane.
     items = CsvSource(csv_path).scan()
-    assert len(items) == 2
-    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
-    assert CsvSource(csv_path).id == f"csv:{csv_path}#key=@content"
-
-
-def test_csv_source_missing_key_column_raises(tmp_path):
-    csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "id,name\n1,alice\n")
-
-    with pytest.raises(ValueError, match="key column"):
-        CsvSource(csv_path, key="email").scan()
-
-
-def test_csv_source_content_hash_mode(tmp_path):
-    csv_path = str(tmp_path / "rows.csv")
-    write_csv(csv_path, "id,name\n1,alice\n2,bob\n")
-
-    src = CsvSource(csv_path, key=None)
-    items = src.scan()
-    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
-    assert src.id == f"csv:{csv_path}#key=@content"
+    assert len(items) == 1
 
 
 # ---------- End-to-end: caching over CSV rows ----------
@@ -177,7 +130,7 @@ def make_row_pipeline(csv_path):
     return pipeline(
         id="rows",
         name="Rows",
-        source=CsvSource(csv_path, key="id"),
+        source=CsvSource(csv_path),
         steps=[parse, grade],
     )
 
@@ -195,27 +148,32 @@ def test_csv_pipeline_row_level_caching():
     s2 = run(p, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 6)
 
-    # Edit one row: only that coordinate recomputes (both steps)
+    # Edit one row: its content changes → its lane recomputes (both steps),
+    # the others reuse. (Content-addressed: reads as the old lane removed + a
+    # new one created, but only 2 outputs are computed.)
     write_csv(csv_path, "id,name,score\n1,alice,80\n2,bob,90\n3,carol,60\n")
     s3 = run(p, workers=1)
     assert (s3.created_count, s3.reused_count) == (2, 4)
 
-    # Insert a row at the top: coordinates are key-based, nothing shifts
+    # Insert a row at the top: content-addressed, so existing lanes don't shift
     write_csv(csv_path, "id,name,score\n4,dave,10\n1,alice,80\n2,bob,90\n3,carol,60\n")
     s4 = run(p, workers=1)
     assert (s4.created_count, s4.reused_count) == (2, 6)
 
-    # Dependent step saw the row payload, not a path
+    # Dependent step saw the row payload (a dict), not a path
     with get_session() as session:
         rc = (
             session.query(RunCoordinateStatus)
-            .filter_by(coordinate="2", step_name="grade", status="created")
-            .order_by(RunCoordinateStatus.id.desc())
+            .filter_by(step_name="grade")
+            .filter(RunCoordinateStatus.materialization_id.isnot(None))
             .first()
         )
-        assert rc is not None
+        out = read_materialization_output(
+            session.get(Materialization, rc.materialization_id)
+        )
+        assert set(out.keys()) == {"name", "passed"}
 
-    # Remove a row: marked removed for both steps
+    # Remove a row: its lane is marked removed
     write_csv(csv_path, "id,name,score\n1,alice,80\n2,bob,90\n3,carol,60\n")
     s5 = run(p, workers=1)
     assert s5.removed_count == 1

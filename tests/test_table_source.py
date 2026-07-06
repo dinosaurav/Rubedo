@@ -95,48 +95,37 @@ def test_table_source_partial_update():
     assert summary2.created_count == 1  # Alice recomputed
     assert summary2.reused_count == 1   # Bob reused
     
-def test_table_source_duplicate_key_raises():
-    # A duplicate name with DIFFERENT content under key="name": the declared
-    # key is not unique, so the scan raises rather than content-suffixing.
+def test_table_source_content_addressed():
+    # No key: content-addressed lanes. A duplicate name with different content
+    # is simply two distinct rows, never an error.
     execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
 
-    source = TableSource(REMOTE_DB_PATH, table="leads", key="name")
-    with pytest.raises(ValueError, match="must be unique"):
-        source.scan()
+    src = TableSource(REMOTE_DB_PATH, table="leads")
+    items = src.scan()
+    assert len(items) == 3  # Alice, Bob(8.0), Bob(7.5) — all distinct rows
+    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
+    assert src.id.endswith("/leads")
 
 
 def test_table_source_identical_rows_collapse():
-    # Under a column projection, a duplicate row with EXACT SAME content is one
-    # indistinguishable unit of work and collapses to a single lane.
+    # Under a column projection, two rows with the exact same projected content
+    # are one indistinguishable unit of work → one lane.
     execute_remote("INSERT INTO leads (id, name, score) VALUES (4, 'Alice', 9.5)")
 
-    source = TableSource(
-        REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"]
-    )
-    items = source.scan()
-    # Alice (id 1 and 4 collapse under the name+score projection) + Bob
+    items = TableSource(
+        REMOTE_DB_PATH, table="leads", columns=["name", "score"]
+    ).scan()
+    # Alice (id 1 & 4 → same {name, score}) collapses; Bob distinct → 2 lanes
     assert len(items) == 2
-    assert len([it for it in items if it.coordinate == "Alice"]) == 1
 
-
-def test_table_source_content_addressed_no_key():
-    # No key: content-addressed lanes. A duplicate name is simply a distinct
-    # coordinate (the whole row differs), never an error.
-    execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
-
-    items = TableSource(REMOTE_DB_PATH, table="leads").scan()
-    assert len(items) == 3
-    assert all(it.coordinate == f"row-{it.content_hash[:12]}" for it in items)
-    assert TableSource(REMOTE_DB_PATH, table="leads").id.endswith("#key=@content")
 
 def test_credential_stripping():
-    # Provide a URL with credentials
     url = "postgresql://user:secretpass@localhost:5432/mydb"
-    source = TableSource(url, table="leads", key="id")
-    
+    source = TableSource(url, table="leads")
+
     assert "user" not in source.id
     assert "secretpass" not in source.id
-    assert source.id == "table:postgresql://localhost:5432/mydb/leads#key=id"
+    assert source.id == "table:postgresql://localhost:5432/mydb/leads"
     
 def test_batch_size_must_be_positive():
     with pytest.raises(ValueError, match="batch_size must be a positive int"):
@@ -196,8 +185,8 @@ def test_streaming_load_picks_planned_content_on_later_duplicate():
     src = TableSource(
         REMOTE_DB_PATH, table="leads", key="name", columns=["name", "score"], batch_size=1
     )
-    items = src.scan()  # Alice, Bob — unique names
-    bob = next(it for it in items if it.coordinate == "Bob")
+    items = src.scan()  # Alice, Bob — unique names (the re-fetch key)
+    bob = next(it for it in items if it.ref["name"] == "Bob")
 
     # A second Bob with a different score appears only now
     execute_remote("INSERT INTO leads (id, name, score) VALUES (3, 'Bob', 7.5)")
@@ -210,7 +199,7 @@ def test_streaming_load_after_delete_raises():
     src = TableSource(REMOTE_DB_PATH, table="leads", key="id", batch_size=1)
     items = src.scan()
     execute_remote("DELETE FROM leads WHERE id = 1")
-    alice = next(it for it in items if it.coordinate == "1")
+    alice = next(it for it in items if it.ref["id"] == 1)
     with pytest.raises(ValueError, match="gone since the scan"):
         src.load(alice)
 
