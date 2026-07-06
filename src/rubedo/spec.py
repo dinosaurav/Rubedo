@@ -284,6 +284,30 @@ def step(
     return decorator
 
 
+def source(fn=None, *, name=None, version="1", **step_kwargs):
+    """A root source: sugar for a parentless `expand` step.
+
+    Decorate a generator that yields payloads — each becomes a content-addressed
+    lane:
+
+        @source
+        def hn_top():
+            for sid in fetch_top_ids():
+                yield fetch_story(sid)
+
+    It is exactly `@step(shape="expand")` with no `depends_on`, so drop it in
+    `pipeline(steps=[...])` with no `source=`. `name` defaults to the function
+    name; other `@step` policies (`index=`, `retries=`, `rate_limit=`, …)
+    forward through.
+    """
+    def wrap(f):
+        return step(
+            name=name or f.__name__, version=version, shape="expand", **step_kwargs
+        )(f)
+
+    return wrap(fn) if fn is not None else wrap
+
+
 def pipeline(
     name: str,
     folder: Optional[str] = None,

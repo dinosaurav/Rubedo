@@ -6,6 +6,7 @@ coordinates with content-addressed caching, durable run history, and surgical in
 """
 from .spec import (
     step,
+    source,
     pipeline,
     describe,
     PipelineSpec,
@@ -28,6 +29,7 @@ __all__ = [
     "FolderSource",
     "CsvSource",
     "step",
+    "source",
     "pipeline",
     "describe",
     "PipelineSpec",

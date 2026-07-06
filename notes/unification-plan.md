@@ -86,14 +86,15 @@ live newsroom join over content-addressed CSVs gives the right per-region
 digests. **Closed:** `key=` removal. *Folders (D1) stay path-keyed until
 Phase 6.*
 
-### Phase 4 — `@source` + built-ins as root-expand sugar; migrate examples
-Add `@source` = sugar for a root expand (`@step(shape="expand")`, no deps),
-content-addressed, id defaulted to qualname. Reimplement `CsvSource`/
-`TableSource`/`FolderSource`/`folder=` as helpers that **return a root-expand
-step** (or a Source adapter the engine runs as one). Migrate examples to the
-root-expand idiom where it reads cleaner; keep `source=` as sugar. Touch:
-`sources.py`, `spec.py`/`__init__.py` (export `source`), examples, a new
-`examples` showing `@source`. **Closes:** Tier-1 TODO #2 (`@source`).
+### Phase 4 — `@source` decorator  ✅ DONE
+`@source` (exported from `rubedo`) is sugar for a parentless `expand`:
+`@source def f(): yield {...}` → a root-expand step; `name` defaults to the fn
+name, other `@step` policies (`index=`, `retries=`, …) forward through. Drop it
+in `pipeline(steps=[...])` with no `source=`. `spec.py` (`source()`),
+`__init__.py` (export), `tests/test_expand.py` (a `@source` pipeline). **Closed:**
+Tier-1 TODO #2. *Built-ins-as-root-expand-sugar folds into Phase 6 (the built-in
+`Source` classes stay working via `source=` until then); example migration +
+output printing happens after Phase 6.*
 
 ### Phase 5 — Reconsider `removed`/manifest/`source_id`
 Redefine **Current Outputs** as the latest run's live coordinates (server

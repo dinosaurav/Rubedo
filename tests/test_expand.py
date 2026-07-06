@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import FolderSource, run, step, pipeline
+from rubedo import FolderSource, run, source, step, pipeline
 from rubedo.runner import plan
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
@@ -236,6 +236,39 @@ def test_expand_identical_payloads_collapse():
             .all()
         )
     assert len(lanes) == 2  # {v:1} and {v:2}; the duplicate collapsed
+
+
+def test_source_decorator():
+    calls = []
+
+    @source
+    def things():
+        calls.append(1)  # a source re-scans each run
+        for x in ["a", "b", "c"]:
+            yield {"x": x}
+
+    @step(name="up", version="1", depends_on=["things"])
+    def up(things):
+        return things["x"].upper()
+
+    pipe = pipeline(id="s", name="s", steps=[things, up])  # no source=
+    s = assert_run(pipe)
+    assert (s.created_count, s.reused_count) == (6, 0)  # 3 things + 3 up
+    assert calls == [1]
+
+    s2 = assert_run(pipe)
+    assert (s2.created_count, s2.reused_count) == (0, 6)
+    assert calls == [1, 1]  # re-scanned, but every lane reused
+
+    with get_session() as session:
+        vals = {
+            read_materialization_output(session.get(Materialization, r.materialization_id))
+            for r in session.query(RunCoordinateStatus)
+            .filter_by(step_name="up")
+            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
+            .all()
+        }
+    assert vals == {"A", "B", "C"}
 
 
 def test_expand_at_most_one_parent():
