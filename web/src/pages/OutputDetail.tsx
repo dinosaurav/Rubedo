@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { fetchObject, invalidateSelection } from '../api';
+import { fetchObject } from '../api';
 
 export default function OutputDetail() {
   const { address } = useParams();
@@ -17,14 +17,6 @@ export default function OutputDetail() {
 
   if (!obj) return <div>Loading...</div>;
   if (obj.error) return <div>{obj.error}</div>;
-
-  const handleInvalidate = async () => {
-    if (!confirm("Invalidate this output?")) return;
-    await invalidateSelection({
-      output_address: obj.output_address
-    }, "Invalidated from UI");
-    alert("Invalidated. Please reload.");
-  };
 
   return (
     <div>
@@ -55,8 +47,7 @@ export default function OutputDetail() {
           )}
         </div>
         <div style={{ marginTop: '1rem' }}>
-          <button className="btn btn-danger" onClick={handleInvalidate} disabled={!!obj.invalidated_at}>Invalidate</button>
-          <a className="btn btn-outline" style={{ marginLeft: '1rem' }} href={`http://localhost:8000/api/objects/${obj.output_address}/download`} download>
+          <a className="btn btn-outline" href={`http://localhost:8000/api/objects/${obj.output_address}/download`} download>
             Download
           </a>
         </div>
