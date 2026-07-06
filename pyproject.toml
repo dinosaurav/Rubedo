@@ -31,6 +31,25 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "httpx2>=2.5.0",
+    "mypy>=2.1.0",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "rubedo.models",
+    "rubedo.planning",
+    "rubedo.invalidation",
+    "rubedo.server",
+    "rubedo.ledger",
+    "rubedo.runner"
+]
+ignore_errors = true

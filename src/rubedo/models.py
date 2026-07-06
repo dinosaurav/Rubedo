@@ -15,9 +15,10 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import Session, declarative_base
+from sqlalchemy.orm import Session, DeclarativeBase
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 class Run(Base):

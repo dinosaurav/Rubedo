@@ -120,7 +120,7 @@ def get_selection_materialization_ids(
                 .order_by(RunCoordinateStatus.id.desc())
                 .first()
             )
-            if not co or not fnmatch.fnmatch(co.coordinate, selection.coordinate_glob):
+            if not co or not fnmatch.fnmatch(str(co.coordinate), str(selection.coordinate_glob)):
                 continue
                 
         # Version range check
@@ -129,7 +129,7 @@ def get_selection_materialization_ids(
             from packaging.specifiers import SpecifierSet
             try:
                 specifier_set = SpecifierSet(selection.version_range)
-                parsed_version = Version(m.code_version)
+                parsed_version = Version(str(m.code_version))
                 if parsed_version not in specifier_set:
                     continue
             except InvalidVersion:
@@ -140,4 +140,4 @@ def get_selection_materialization_ids(
 
         result_ids.append(m.id)
 
-    return result_ids
+    return result_ids # type: ignore

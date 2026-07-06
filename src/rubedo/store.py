@@ -39,7 +39,7 @@ def _ensure_gitignore(directory: str):
             pass
 
 
-def init_store(home: str = None):
+def init_store(home: Optional[str] = None):
     """Ensure the objects and staging directories exist.
 
     home (optional): an explicit root, overriding OBJECTS_DIR/STAGING_DIR

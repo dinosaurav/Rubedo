@@ -207,9 +207,11 @@ def _execute_step(
         # get parent outputs by parameter name. Either kind may declare
         # `params`. A *root expand* is itself a source — it reads no payload.
         if not step.depends_on:
-            args = [] if step.shape == "expand" else [
-                step_sources[step.name].load(decision.item)
-            ]
+            if step.shape == "expand":
+                args = []
+            else:
+                assert decision.item is not None
+                args = [step_sources[step.name].load(decision.item)]
             kwargs = {}
         elif step.shape == "reduce":
             args = []
@@ -340,6 +342,16 @@ def _execute_step(
                 if delay > 0:
                     time.sleep(delay)
                 delay *= step.retry_backoff
+
+        return [
+            ExecutionOutcome(
+                decision,
+                False,
+                error_trace="Retries exhausted.",
+                attempts=step.retries + 1,
+                attempt_errors=attempt_errors,
+            )
+        ]
 
     # Never spin up more workers (or subprocesses) than there is work.
     pool_size = min(workers or step.workers, len(decisions))

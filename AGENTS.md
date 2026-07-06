@@ -19,7 +19,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   Reused: 15). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check src/rubedo/ tests/ examples/`,
-  `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the
+  `uv run mypy src/rubedo`, `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
 - **Design-first**: for anything ambiguous or conceptual, propose to the

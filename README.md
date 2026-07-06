@@ -118,4 +118,4 @@ See [notes/invariants.md](notes/invariants.md) for the core vocabulary (coordina
 - `src/rubedo/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
 - `web/` — React + Vite dashboard (read-only browser for runs, materializations, lineage, and current outputs)
 - `examples/` — runnable demo pipelines
-- `tests/` — pytest suite (`uv run pytest`)
+- `tests/` — pytest suite (`uv run pytest` and `uv run mypy src/rubedo`)

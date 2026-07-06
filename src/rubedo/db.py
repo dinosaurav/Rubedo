@@ -7,10 +7,11 @@ is gitignored, configuring WAL mode for concurrency, and providing sessions.
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from typing import Optional, Any
 from .models import Base
 
-engine = None
-SessionLocal = None
+engine: Any = None
+SessionLocal: Any = None
 
 
 def _ensure_gitignore(directory: str):
@@ -33,7 +34,7 @@ def _ensure_gitignore(directory: str):
             pass
 
 
-def init_db(db_path: str = None):
+def init_db(db_path: Optional[str] = None):
     """
     Initialize the database engine and create tables.
 

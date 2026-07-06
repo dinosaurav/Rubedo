@@ -233,7 +233,7 @@ class TableSource(Source):
                 "are content-addressed). Omit batch_size for eager mode."
             )
         self.batch_size = batch_size
-        self._engine = None
+        self._engine: Any = None
 
     @property
     def id(self) -> str:
@@ -272,7 +272,7 @@ class TableSource(Source):
             conn = conn.execution_options(yield_per=self.batch_size)
         try:
             query = text(f"SELECT {self._cols()} FROM {self.table}")
-            rows_data = []
+            rows_data: List[tuple[str, str, Any, Dict[str, Any]]] = []
             for row in conn.execute(query).mappings():
                 row_dict = _jsonable(dict(row))
                 content_hash = hash_json(row_dict)
@@ -284,6 +284,7 @@ class TableSource(Source):
                 else:
                     # Streaming: keep only what re-fetches the row later. Raw
                     # DB values (not the jsonable copy) so binds match types.
+                    assert self.key is not None
                     ref = {k: row[k] for k in self.key}
                 rows_data.append((base, content_hash, ref, {}))
 
@@ -298,6 +299,7 @@ class TableSource(Source):
         from sqlalchemy import text
         from .hashing import hash_json
 
+        assert self.key is not None
         where = " AND ".join(f"{k} = :k{i}" for i, k in enumerate(self.key))
         binds = {f"k{i}": item.ref[k] for i, k in enumerate(self.key)}
         query = text(f"SELECT {self._cols()} FROM {self.table} WHERE {where}")

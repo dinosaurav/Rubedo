@@ -3,7 +3,7 @@ Hashing utilities for content addressing and cache keys.
 """
 import hashlib
 import json
-from typing import Any
+from typing import Any, Optional
 
 
 def hash_bytes(data: bytes) -> str:
@@ -35,8 +35,8 @@ def compute_output_address(
     step: str,
     code_version: str,
     input_hash: str,
-    params_hash: str = None,
-    code_hash: str = None,
+    params_hash: Optional[str] = None,
+    code_hash: Optional[str] = None,
 ) -> str:
     """Cache identity: version + data, plus run params for
     steps that consume them and the source hash for steps with code='auto'.
