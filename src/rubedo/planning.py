@@ -150,15 +150,24 @@ def expand_anchor_address(
     )
 
 
+def expand_child_coord(child_hash: str) -> str:
+    """Content-addressed coordinate of an expand child lane."""
+    return f"row-{child_hash[:12]}"
+
+
 def expand_child_identity(
-    step: StepSpec, parent_hash: str, subkey, params_hash: str, accepts_params: bool
+    step: StepSpec, child_hash: str, params_hash: str, accepts_params: bool
 ) -> tuple[str, str]:
-    """(input_hash, output_address) of one minted child lane of an expand."""
-    child_input_hash = hash_json({"parent": parent_hash, "subkey": str(subkey)})
-    return child_input_hash, compute_output_address(
+    """(input_hash, output_address) of one content-addressed expand child.
+
+    The child's identity *is* its content (`child_hash = hash(value)`), so
+    identical children collapse and a re-run lands on the same generation —
+    exactly like a source lane. No parent/subkey in the identity.
+    """
+    return child_hash, compute_output_address(
         step.name,
         step.version,
-        child_input_hash,
+        child_hash,
         params_hash=params_hash if accepts_params else None,
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
@@ -167,7 +176,6 @@ def expand_child_identity(
 def _plan_expand_reuse(
     session: Session,
     step: StepSpec,
-    parent_coord: str,
     parent_mats: Dict[str, Any],
     params_hash: str,
     force: bool,
@@ -199,9 +207,9 @@ def _plan_expand_reuse(
             return None
 
     out: List[StepDecision] = []
-    for subkey, _value in read_materialization_output(anchor):
+    for child_hash in read_materialization_output(anchor):  # list of content hashes
         input_hash, child_addr = expand_child_identity(
-            step, parent_hash, subkey, params_hash, accepts_params
+            step, child_hash, params_hash, accepts_params
         )
         child = (
             session.query(Materialization)
@@ -212,7 +220,7 @@ def _plan_expand_reuse(
             return None  # incomplete cache — re-run the expansion
         out.append(
             StepDecision(
-                coordinate=f"{parent_coord}/{subkey}",
+                coordinate=expand_child_coord(child_hash),
                 action="reuse",
                 input_hash=input_hash,
                 output_address=child_addr,
@@ -659,7 +667,7 @@ def _plan_step(
             # lanes without running the fn; otherwise one execute decision per
             # parent lane mints the children (execution writes the anchor).
             reuse = _plan_expand_reuse(
-                session, step, coord, parent_mats, params_hash, force, accepts_params
+                session, step, parent_mats, params_hash, force, accepts_params
             )
             if reuse is not None:
                 decisions.extend(reuse)

@@ -9,8 +9,8 @@ from sqlalchemy.pool import StaticPool
 from rubedo import FolderSource, run, step, pipeline
 from rubedo.runner import plan
 from rubedo.db import init_db, get_session
-from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent
-from rubedo.store import init_store
+from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
+from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_expand_data"
 ENV_FOLDER = ".test_expand_env"
@@ -93,8 +93,8 @@ def _read():
 def _split():
     @step(name="split", version="1", depends_on=["read"], shape="expand")
     def split(read):
-        for i, line in enumerate(read.splitlines()):
-            yield str(i), {"line": line}
+        for line in read.splitlines():
+            yield {"line": line}  # yield payloads; content-addressed lanes
 
     return split
 
@@ -126,13 +126,17 @@ def test_expand_mints_child_lanes_and_chains_downstream():
     assert (s1.created_count, s1.reused_count) == (8, 0)
 
     with get_session() as session:
-        shout_coords = sorted(
-            r.coordinate
-            for r in session.query(RunCoordinateStatus)
+        shout = (
+            session.query(RunCoordinateStatus)
             .filter_by(step_name="shout", status="created")
             .all()
         )
-        assert shout_coords == ["a.txt/0", "a.txt/1", "b.txt/0"]
+        assert len(shout) == 3  # alpha, beta, gamma → 3 content-addressed lanes
+        values = {
+            read_materialization_output(session.get(Materialization, r.materialization_id))
+            for r in shout
+        }
+        assert values == {"ALPHA", "BETA", "GAMMA"}
 
         # Lineage: 3 read->split edges + 3 split->shout edges
         assert session.query(MaterializationEdge).count() == 6
@@ -162,8 +166,8 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
     @step(name="split", version="1", depends_on=["read"], shape="expand")
     def split(read):
         calls.append(1)  # side effect proves whether the fn re-runs
-        for i, line in enumerate(read.splitlines()):
-            yield str(i), {"line": line}
+        for line in read.splitlines():
+            yield {"line": line}
 
     @step(name="shout", version="1", depends_on=["split"])
     def shout(split):
@@ -211,19 +215,27 @@ def test_expand_plan_marks_downstream_pending():
     assert actions.get("shout") == "pending"
 
 
-def test_expand_duplicate_subkey_fails():
-    create_file("a.txt", "x\ny")
+def test_expand_identical_payloads_collapse():
+    create_file("a.txt", "x")
 
     @step(name="dup", version="1", depends_on=["read"], shape="expand")
     def dup(read):
-        yield "same", {"v": 1}
-        yield "same", {"v": 2}
+        yield {"v": 1}
+        yield {"v": 1}  # identical payload — collapses to one lane
+        yield {"v": 2}
 
     pipe = pipeline(
         id="d", name="d", source=FolderSource(TEST_FOLDER), steps=[_read(), dup]
     )
-    s = run(pipe, workers=1)
-    assert s.failed_count == 1
+    assert_run(pipe)
+    with get_session() as session:
+        lanes = (
+            session.query(RunCoordinateStatus)
+            .filter_by(step_name="dup")
+            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
+            .all()
+        )
+    assert len(lanes) == 2  # {v:1} and {v:2}; the duplicate collapsed
 
 
 def test_expand_requires_exactly_one_parent():

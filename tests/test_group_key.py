@@ -182,7 +182,7 @@ def test_group_key_reduce_after_expand():
     )
     def articles(read):
         for i, cat in enumerate(read):
-            yield str(i), {"category": cat}
+            yield {"category": cat, "i": i}  # distinct payloads (i) so both "tech" survive
 
     @step(
         name="rollup", version="1", depends_on=["articles"],

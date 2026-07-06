@@ -38,7 +38,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   user code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
   parent's surviving lanes; `group_key` partitions into one output per
   indexed-field value, else a single `"@all"`) / `expand` (1:N — the fn
-  yields `(subkey, value)`, minting `parent/subkey` lanes) / `join` (N-way
+  yields payloads, minting content-addressed `row-<hash>` child lanes) / `join` (N-way
   equijoin on `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes).
   `pipeline(sources={name: Source})` declares multiple roots and a root step
   picks one with `@step(source="name")` (`source=`/`folder=` stay

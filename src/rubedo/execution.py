@@ -23,6 +23,7 @@ from .planning import (
     _build_step_params,
     _step_accepts_params,
     expand_anchor_address,
+    expand_child_coord,
     expand_child_identity,
 )
 from .spec import StepSpec
@@ -226,36 +227,28 @@ def _execute_step(
         return step.fn(*args, **kwargs)
 
     def _expand_outcomes(
-        decision: StepDecision, pairs: List[Any], attempt: int, attempt_errors: List[str]
+        decision: StepDecision, values: List[Any], attempt: int, attempt_errors: List[str]
     ) -> List[ExecutionOutcome]:
-        """Fan one parent lane's (subkey, value) yields into outcomes.
+        """Fan one parent lane's yielded payloads into content-addressed lanes.
 
-        Emits the cache anchor first (the full yielded list, addressed by the
-        parent so a re-run can skip the fn), then one child per pair — each
-        minting coordinate `parent/subkey` with a deterministic address from
-        (step, version, parent content, subkey). Subkeys must be unique.
+        Emits the cache anchor first (the list of child content hashes,
+        addressed by the parent so a re-run can skip the fn), then one child
+        per distinct payload — each minting a content-addressed lane
+        `row-<hash>`. Identical payloads collapse to one child.
         """
         dep = step.depends_on[0]
         parent_hash = decision.parent_mats[dep].output_content_hash
 
-        validated: List[tuple] = []
         seen: set = set()
-        for pair in pairs:
-            if not (isinstance(pair, tuple) and len(pair) == 2):
-                raise TypeError(
-                    f"expand step '{step.name}' must yield (subkey, value) "
-                    f"pairs, got {pair!r}"
-                )
-            subkey, value = pair
-            if subkey in seen:
-                raise ValueError(
-                    f"expand step '{step.name}' yielded duplicate subkey "
-                    f"{subkey!r} under parent {decision.coordinate!r}"
-                )
-            seen.add(subkey)
-            validated.append((subkey, value))
+        children: List[tuple] = []  # (child_hash, value)
+        for value in values:
+            child_hash = hash_json(value)
+            if child_hash in seen:
+                continue  # identical payload — one lane
+            seen.add(child_hash)
+            children.append((child_hash, value))
 
-        # Anchor: the full list, addressed by the parent. Not a lane.
+        # Anchor: the child hashes, addressed by the parent. Not a lane.
         anchor = StepDecision(
             coordinate=decision.coordinate,
             action="execute",
@@ -269,21 +262,21 @@ def _execute_step(
             ExecutionOutcome(
                 anchor,
                 True,
-                result=[[sk, v] for sk, v in validated],
+                result=[h for h, _ in children],
                 attempts=attempt,
                 attempt_errors=attempt_errors,
                 is_anchor=True,
             )
         ]
 
-        for subkey, value in validated:
-            child_input_hash, child_address = expand_child_identity(
-                step, parent_hash, subkey, params_hash, accepts_params
+        for child_hash, value in children:
+            input_hash, child_address = expand_child_identity(
+                step, child_hash, params_hash, accepts_params
             )
             child = StepDecision(
-                coordinate=f"{decision.coordinate}/{subkey}",
+                coordinate=expand_child_coord(child_hash),
                 action="execute",
-                input_hash=child_input_hash,
+                input_hash=input_hash,
                 output_address=child_address,
                 parent_mats=decision.parent_mats,
             )

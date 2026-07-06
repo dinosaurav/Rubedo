@@ -76,8 +76,8 @@ def feed_meta(feed: dict, publisher: dict) -> dict:
 def articles(feed_meta: dict):
     fid = feed_meta["feed_id"]
     print(f"  scraping feed {fid} ...")  # runs once per feed, then cached
-    for i, title in enumerate(FEED_ARTICLES[fid]):
-        yield f"{fid}-{i}", {"title": title, "region": feed_meta["region"]}
+    for title in FEED_ARTICLES[fid]:
+        yield {"title": title, "region": feed_meta["region"]}  # yield payloads
 
 
 @step(

@@ -45,14 +45,17 @@ sources don't have today.
 Order matters: align the contract, prove root-expand alongside the old path,
 migrate, then delete. The map-a-folder common path stays working throughout.
 
-### Phase 1 — Expand yields payloads, content-addressed
-Change `expand` from `yield (subkey, value)` → `yield value`; child coordinate
-becomes `parent/row-<hash(value)>` and child identity is the value's content
-hash (two identical children collapse). Anchor caching stays keyed on parent
-content. Touch: `spec.py`, `execution.py` (`_expand_outcomes`), `planning.py`
-(`_plan_expand_reuse`/address helpers), `tests/test_expand.py`,
-`examples/expand_feed`, `examples/newsroom`. **Closes:** the source⇄expand
-contract mismatch. *Decision D5.*
+### Phase 1 — Expand yields payloads, content-addressed  ✅ DONE
+`expand` now `yield`s a payload (not `(subkey, value)`); each child is a
+content-addressed lane `row-<hash(value)>`, identical payloads collapse, child
+identity = the value's content hash (no parent/subkey). The anchor stores the
+child *hashes* (keyed on parent content for cache reuse) — which also ends the
+double-storage since it no longer holds the values. `execution._expand_outcomes`,
+`planning.expand_child_identity`/`expand_child_coord`/`_plan_expand_reuse`,
+`tests/test_expand.py` (+ a collapse test replacing the subkey-collision one),
+`tests/test_group_key.py`, `examples/{expand_feed,newsroom}`. Full suite green
+(170); both examples verified created→reused with no re-scrape. **Closed:** the
+source⇄expand contract mismatch.
 
 ### Phase 2 — Root expand = source (new path, additive)
 Let a `shape="expand"` step with no `depends_on` be a pipeline root: it takes no

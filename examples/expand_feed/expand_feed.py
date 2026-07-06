@@ -38,8 +38,8 @@ def fetch(path: str) -> list:
 
 @step(name="articles", version="1", depends_on=["fetch"], shape="expand")
 def articles(fetch: list):
-    for art in fetch:  # 1:N — mint a lane per article
-        yield art["id"], art
+    for art in fetch:  # 1:N — yield a payload per article; content-addressed lanes
+        yield art
 
 
 @step(name="headline", version="1", depends_on=["articles"])
