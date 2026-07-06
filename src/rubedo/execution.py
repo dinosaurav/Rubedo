@@ -174,6 +174,15 @@ def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
     return out
 
 
+def _validate_output(step: StepSpec, value: Any) -> None:
+    """Run data quality assertions on a step's output."""
+    if step.output_model is not None:
+        step.output_model.model_validate(value)
+    if step.assertions:
+        for assertion in step.assertions:
+            assertion(value)
+
+
 def _execute_step(
     step: StepSpec,
     decisions: List[StepDecision],
@@ -242,6 +251,7 @@ def _execute_step(
         seen: set = set()
         children: List[tuple] = []  # (child_hash, value)
         for value in values:
+            _validate_output(step, value)
             child_hash = hash_json(value)
             if child_hash in seen:
                 continue  # identical payload — one lane
@@ -303,6 +313,7 @@ def _execute_step(
                     return _expand_outcomes(
                         decision, list(result), attempt, attempt_errors
                     )
+                _validate_output(step, result)
                 return [
                     ExecutionOutcome(
                         decision,

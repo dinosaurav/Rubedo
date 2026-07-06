@@ -1,0 +1,177 @@
+"""Tests for data quality assertions (`output_model` and `assertions`)."""
+
+import os
+import shutil
+import uuid
+
+import pytest
+from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
+
+from rubedo import run, step, pipeline
+from rubedo.db import init_db, get_session
+from rubedo.models import RunCoordinateStatus
+from rubedo.store import init_store
+
+TEST_FOLDER = ".test_dq_data"
+ENV_FOLDER = ".test_dq_env"
+
+
+@pytest.fixture(autouse=True)
+def isolated_env():
+    abs_test_folder = os.path.abspath(TEST_FOLDER)
+    abs_env_folder = os.path.abspath(ENV_FOLDER)
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+    import rubedo.store
+
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+
+    os.environ["RUBEDO_DB_PATH"] = (
+        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
+    )
+    init_db()
+
+    import rubedo.db
+
+    if rubedo.db.engine is not None:
+        rubedo.db.engine.dispose()
+
+    from rubedo.models import Base
+    from sqlalchemy.orm import sessionmaker
+
+    rubedo.db.engine = create_engine(
+        os.environ["RUBEDO_DB_PATH"],
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=rubedo.db.engine)
+    rubedo.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=rubedo.db.engine
+    )
+
+    init_store()
+
+    yield
+
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+
+
+def create_file(name, content):
+    with open(os.path.join(TEST_FOLDER, name), "w") as f:
+        f.write(content)
+
+
+class UserRecord(BaseModel):
+    id: int
+    name: str
+
+
+def test_output_model_success():
+    create_file("f1.txt", "1,alice")
+
+    @step(name="parse", version="1", output_model=UserRecord)
+    def parse(path):
+        parts = open(path).read().split(",")
+        return {"id": int(parts[0]), "name": parts[1]}
+
+    pipe = pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[parse])
+    summary = run(pipe, workers=1)
+
+    assert summary.created_count == 1
+    assert summary.failed_count == 0
+
+
+def test_output_model_failure():
+    create_file("f1.txt", "1,alice")
+
+    # Missing the required "id" field in the return value
+    @step(name="parse", version="1", output_model=UserRecord)
+    def parse(path):
+        return {"name": "alice"}
+
+    pipe = pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[parse])
+    summary = run(pipe, workers=1)
+
+    assert summary.created_count == 0
+    assert summary.failed_count == 1
+
+    with get_session() as session:
+        rc = session.query(RunCoordinateStatus).one()
+        assert rc.status == "failed"
+        assert rc.error_message is not None
+        assert "ValidationError" in rc.error_message
+
+
+def test_assertions_success():
+    create_file("f1.txt", "1,alice")
+
+    def must_be_positive(val):
+        assert val["id"] > 0, "ID must be positive"
+
+    @step(name="parse", version="1", assertions=[must_be_positive])
+    def parse(path):
+        parts = open(path).read().split(",")
+        return {"id": int(parts[0]), "name": parts[1]}
+
+    pipe = pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[parse])
+    summary = run(pipe, workers=1)
+
+    assert summary.created_count == 1
+    assert summary.failed_count == 0
+
+
+def test_assertions_failure():
+    create_file("f1.txt", "-5,alice")
+
+    def must_be_positive(val):
+        if val["id"] <= 0:
+            raise ValueError("ID must be positive")
+
+    @step(name="parse", version="1", assertions=[must_be_positive])
+    def parse(path):
+        parts = open(path).read().split(",")
+        return {"id": int(parts[0]), "name": parts[1]}
+
+    pipe = pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[parse])
+    summary = run(pipe, workers=1)
+
+    assert summary.created_count == 0
+    assert summary.failed_count == 1
+
+    with get_session() as session:
+        rc = session.query(RunCoordinateStatus).one()
+        assert rc.status == "failed"
+        assert rc.error_message is not None
+        assert "ID must be positive" in rc.error_message
+
+
+def test_expand_step_validation():
+    create_file("f1.txt", "dummy")
+
+    class ItemModel(BaseModel):
+        num: int
+
+    @step(name="produce", version="1", shape="expand", output_model=ItemModel)
+    def produce():
+        yield {"num": 1}
+        yield {"bad_key": 2} # This should fail validation
+
+    pipe = pipeline(id="p", name="p", folder=TEST_FOLDER, steps=[produce])
+    summary = run(pipe, workers=1)
+
+    # Expand step runs once per parent. The entire parent execution fails if any child fails.
+    assert summary.failed_count == 1
+
+    with get_session() as session:
+        rc = session.query(RunCoordinateStatus).one()
+        assert rc.status == "failed"
+        assert rc.error_message is not None
+        assert "ValidationError" in rc.error_message

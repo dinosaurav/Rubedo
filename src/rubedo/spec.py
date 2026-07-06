@@ -66,6 +66,8 @@ class StepSpec:
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
     source: Optional[str] = None  # root step: which named source it reads
     join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
+    output_model: Optional[Type[BaseModel]] = None
+    assertions: Optional[List[Callable[[Any], None]]] = None
 
 
 DEFAULT_SOURCE = "__source__"
@@ -138,6 +140,8 @@ def step(
     group_key: Optional[str] = None,
     source: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
+    output_model: Optional[Type[BaseModel]] = None,
+    assertions: Optional[List[Callable[[Any], None]]] = None,
 ):
     """Declare a step.
 
@@ -249,6 +253,12 @@ def step(
     parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
     parsed_stale = parse_duration(stale_after) if stale_after else None
 
+    if assertions is not None:
+        if not isinstance(assertions, (list, tuple)) or not all(callable(a) for a in assertions):
+            raise ValueError(
+                f"Step '{name}': assertions must be a list of callables"
+            )
+
     def decorator(fn: Callable):
         code_hash = _hash_source(fn)
         if code == "auto" and code_hash is None:
@@ -279,6 +289,8 @@ def step(
             group_key=group_key,
             source=source,
             join_on=join_on,
+            output_model=output_model,
+            assertions=list(assertions) if assertions else None,
         )
 
     return decorator
@@ -410,6 +422,13 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["source"] = s.source
         if s.executor != "thread":
             entry["executor"] = s.executor
+        if s.output_model is not None:
+            entry["output_schema"] = s.output_model.model_json_schema()
+        if s.assertions:
+            entry["assertions"] = [
+                a.__name__ if hasattr(a, "__name__") and a.__name__ != "<lambda>" else "assertion" 
+                for a in s.assertions
+            ]
         steps.append(entry)
 
     return {
