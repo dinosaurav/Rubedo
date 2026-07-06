@@ -196,9 +196,11 @@ def _execute_step(
     def call(decision: StepDecision, pool: Optional[Any] = None):
         # Root steps get the source payload positionally; dependent steps
         # get parent outputs by parameter name. Either kind may declare
-        # `params`.
+        # `params`. A *root expand* is itself a source — it reads no payload.
         if not step.depends_on:
-            args = [step_sources[step.name].load(decision.item)]
+            args = [] if step.shape == "expand" else [
+                step_sources[step.name].load(decision.item)
+            ]
             kwargs = {}
         elif step.shape == "reduce":
             args = []
@@ -231,14 +233,12 @@ def _execute_step(
     ) -> List[ExecutionOutcome]:
         """Fan one parent lane's yielded payloads into content-addressed lanes.
 
-        Emits the cache anchor first (the list of child content hashes,
-        addressed by the parent so a re-run can skip the fn), then one child
-        per distinct payload — each minting a content-addressed lane
-        `row-<hash>`. Identical payloads collapse to one child.
+        A dependent expand emits the cache anchor first (the child content
+        hashes, addressed by the parent so a re-run can skip the fn). A *root*
+        expand (a source) has no parent to cache against, so it writes no
+        anchor and always re-runs. Then one child per distinct payload — each a
+        content-addressed lane `row-<hash>`; identical payloads collapse.
         """
-        dep = step.depends_on[0]
-        parent_hash = decision.parent_mats[dep].output_content_hash
-
         seen: set = set()
         children: List[tuple] = []  # (child_hash, value)
         for value in values:
@@ -248,26 +248,25 @@ def _execute_step(
             seen.add(child_hash)
             children.append((child_hash, value))
 
-        # Anchor: the child hashes, addressed by the parent. Not a lane.
-        anchor = StepDecision(
-            coordinate=decision.coordinate,
-            action="execute",
-            input_hash=parent_hash,
-            output_address=expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params
-            ),
-            parent_mats=decision.parent_mats,
-        )
-        outcomes: List[ExecutionOutcome] = [
-            ExecutionOutcome(
-                anchor,
-                True,
-                result=[h for h, _ in children],
-                attempts=attempt,
-                attempt_errors=attempt_errors,
-                is_anchor=True,
+        outcomes: List[ExecutionOutcome] = []
+        if step.depends_on:
+            # Anchor: the child hashes, addressed by the parent. Not a lane.
+            parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
+            anchor = StepDecision(
+                coordinate=decision.coordinate,
+                action="execute",
+                input_hash=parent_hash,
+                output_address=expand_anchor_address(
+                    step, parent_hash, params_hash, accepts_params
+                ),
+                parent_mats=decision.parent_mats,
             )
-        ]
+            outcomes.append(
+                ExecutionOutcome(
+                    anchor, True, result=[h for h, _ in children],
+                    attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
+                )
+            )
 
         for child_hash, value in children:
             input_hash, child_address = expand_child_identity(

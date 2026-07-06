@@ -67,8 +67,11 @@ def _run_source_id(sources: Dict[str, Source]) -> str:
 
 
 def _source_name_for(pipeline: PipelineSpec, sources: Dict[str, Source], step):
-    """The source name a root step reads (None for a dependent step)."""
-    if step.depends_on:
+    """The source name a step reads, or None if it reads none.
+
+    Dependent steps and root *expand* steps (themselves sources) read nothing.
+    """
+    if step.depends_on or step.shape == "expand":
         return None
     return step.source if step.source is not None else next(iter(sources))
 

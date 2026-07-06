@@ -57,15 +57,20 @@ double-storage since it no longer holds the values. `execution._expand_outcomes`
 (170); both examples verified created→reused with no re-scrape. **Closed:** the
 source⇄expand contract mismatch.
 
-### Phase 2 — Root expand = source (new path, additive)
-Let a `shape="expand"` step with no `depends_on` be a pipeline root: it takes no
-payload, is called with `params` only, **always executes** (the re-run rule),
-and mints top-level `row-<hash>` lanes into `coord_step_mats`. Allow
-`pipeline(steps=[...])` with such a root and no `source=`. The existing
-`source=` path keeps working (unchanged). Touch: `spec.py` (validation:
-root expand ok), `planning.py` (no-parent expand branch), `execution.py`
-(`call()` for a no-parent expand), `runner.py` (a pipeline rooted in an expand),
-new `tests/test_root_expand.py`. **Closes:** the core of the unification.
+### Phase 2 — Root expand = source (new path, additive)  ✅ DONE
+A `shape="expand"` step with no `depends_on` is now a pipeline root: it takes no
+payload, **always executes** (the re-run rule — no parent to cache against, so
+no anchor), and mints top-level `row-<hash>` lanes. `pipeline(steps=[...])`
+works with no `source=` (validation: a source-less pipeline needs a root
+expand). The old `source=` path is untouched — additive. `spec.py`
+(expand allows 0–1 parents; `pipeline()`/`source_for`), `planning.py` (root
+expand branch → one always-execute decision), `execution.py` (`call()` reads no
+source, `_expand_outcomes` skips the anchor when parentless), `runner.py`
+(`_source_name_for` returns None for root expands, empty-sources ok),
+`tests/test_expand.py` (root-expand-as-source test). Full suite green (171); a
+live `pipeline(steps=[fetch(root expand)→classify→group_key reduce])` verified
+created→reused with the root re-scanning each run. **Closed:** the core of the
+unification.
 
 ### Phase 3 — Content-address row sources; drop `key=`
 Remove `key=` from `CsvSource`/`TableSource`; always content-address

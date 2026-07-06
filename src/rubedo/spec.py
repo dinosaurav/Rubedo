@@ -94,8 +94,12 @@ class PipelineSpec:
         )
 
     def source_for(self, step: "StepSpec") -> Optional[Source]:
-        """The Source a (root) step reads, or None for a dependent step."""
-        if step.depends_on:
+        """The Source a step reads, or None if it reads none.
+
+        Dependent steps and root *expand* steps (which are themselves sources)
+        read nothing; a root non-expand step reads a named/sole source.
+        """
+        if step.depends_on or step.shape == "expand":
             return None
         if step.source is not None:
             return self.sources[step.source]
@@ -207,10 +211,10 @@ def step(
         raise ValueError(
             f"Step '{name}': skip_cache is not supported with shape='expand'"
         )
-    if shape == "expand" and len(depends_on or []) != 1:
+    if shape == "expand" and len(depends_on or []) > 1:
         raise ValueError(
-            f"Step '{name}': shape='expand' requires exactly one parent in "
-            "depends_on (multi-parent expansion is a join — not yet supported)"
+            f"Step '{name}': shape='expand' takes at most one parent — none = a "
+            "root (a source that yields the initial lanes); two+ would be a join"
         )
     if executor not in ("thread", "process"):
         raise ValueError(f"Step '{name}': executor must be 'thread' or 'process', got {executor!r}")
@@ -288,36 +292,51 @@ def pipeline(
     source: Optional[Source] = None,
     sources: Optional[Dict[str, Source]] = None,
 ):
-    """Construct a pipeline from its source(s) and steps.
+    """Construct a pipeline from its steps (and optional source sugar).
 
-    Pass exactly one of `folder=` (FolderSource sugar), `source=` (a single
-    Source), or `sources={name: Source}` (multiple, for joins — root steps pick
-    one with `@step(source="name")`).
+    Pass at most one of `folder=` (FolderSource sugar), `source=` (one Source),
+    or `sources={name: Source}` (multiple). Or pass none: then a root
+    `shape="expand"` step *is* the source (it yields the initial lanes).
     """
     given = [x for x in (folder, source, sources) if x is not None]
-    if len(given) != 1:
-        raise ValueError("Pass exactly one of folder=, source=, or sources=")
+    if len(given) > 1:
+        raise ValueError("Pass at most one of folder=, source=, or sources=")
 
     if sources is None:
         if folder is not None:
             from .sources import FolderSource
 
-            source = FolderSource(folder)
-        sources = {DEFAULT_SOURCE: source}
+            sources = {DEFAULT_SOURCE: FolderSource(folder)}
+        elif source is not None:
+            sources = {DEFAULT_SOURCE: source}
+        else:
+            sources = {}  # no source: a root expand step yields the lanes
 
     steps = steps or []
     single = len(sources) == 1
+    roots = [s for s in steps if not s.depends_on]
+    if not sources and not any(s.shape == "expand" for s in roots):
+        raise ValueError(
+            "pipeline has no source — a root step must be shape='expand' "
+            "(a source that yields the initial lanes)"
+        )
     for s in steps:
         if s.source is not None and s.source not in sources:
             raise ValueError(
                 f"Step '{s.name}' reads source '{s.source}', which is not in "
                 f"sources={sorted(sources)}"
             )
-        if not s.depends_on and s.source is None and not single:
-            raise ValueError(
-                f"Root step '{s.name}' must declare source= (pipeline has "
-                f"multiple sources {sorted(sources)})"
-            )
+        # a root non-expand step reads a source; a root expand reads none
+        if not s.depends_on and s.shape != "expand":
+            if not sources:
+                raise ValueError(
+                    f"Root step '{s.name}' needs a source, or must be shape='expand'"
+                )
+            if s.source is None and not single:
+                raise ValueError(
+                    f"Root step '{s.name}' must declare source= (pipeline has "
+                    f"multiple sources {sorted(sources)})"
+                )
 
     consumed = {dep for s in steps for dep in s.depends_on}
     for s in steps:

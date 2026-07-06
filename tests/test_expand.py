@@ -238,14 +238,45 @@ def test_expand_identical_payloads_collapse():
     assert len(lanes) == 2  # {v:1} and {v:2}; the duplicate collapsed
 
 
-def test_expand_requires_exactly_one_parent():
-    with pytest.raises(ValueError, match="exactly one parent"):
-        step(name="bad", version="1", shape="expand")(lambda: None)
-
-    with pytest.raises(ValueError, match="exactly one parent"):
+def test_expand_at_most_one_parent():
+    # A parentless expand is valid now — it's a root (a source).
+    step(name="root", version="1", shape="expand")(lambda: None)
+    # Two or more parents would be a join, not an expand.
+    with pytest.raises(ValueError, match="at most one parent"):
         step(name="bad", version="1", depends_on=["a", "b"], shape="expand")(
             lambda a, b: None
         )
+
+
+def test_root_expand_is_a_source():
+    # A root expand and no source= at all: the expand yields the initial lanes.
+    @step(name="rows", version="1", shape="expand")
+    def rows():
+        for i in range(3):
+            yield {"n": i}
+
+    @step(name="double", version="1", depends_on=["rows"])
+    def double(rows):
+        return rows["n"] * 2
+
+    pipe = pipeline(id="r", name="r", steps=[rows, double])  # no source
+    s = assert_run(pipe)
+    assert (s.created_count, s.reused_count) == (6, 0)  # 3 rows + 3 double
+
+    # Re-run: the root re-executes (re-scan) but yields identical payloads, so
+    # every lane reuses — a source's behavior.
+    s2 = assert_run(pipe)
+    assert (s2.created_count, s2.reused_count) == (0, 6)
+
+    with get_session() as session:
+        vals = {
+            read_materialization_output(session.get(Materialization, r.materialization_id))
+            for r in session.query(RunCoordinateStatus)
+            .filter_by(step_name="double")
+            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
+            .all()
+        }
+    assert vals == {0, 2, 4}
 
 
 def test_expand_rejects_skip_cache():

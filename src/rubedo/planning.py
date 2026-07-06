@@ -562,6 +562,11 @@ def _plan_step(
             session, step, coord_step_mats, params_hash, force, accepts_params
         )
 
+    if step.shape == "expand" and not step.depends_on:
+        # Root expand = source: no parent to cache against, so it always
+        # executes (re-scan the world every run). Execution mints the lanes.
+        return [StepDecision(coordinate="@root", action="execute", parent_mats={})]
+
     decisions = []
     
     if not step.depends_on:
