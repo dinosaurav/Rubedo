@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useLayoutEffect, type MouseEvent as ReactMouseEvent } from 'react';
+import { useState, useEffect, useRef, useLayoutEffect, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -7,7 +7,7 @@ import {
   flexRender,
 } from '@tanstack/react-table';
 import type { ColumnDef, Column, Header } from '@tanstack/react-table';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ListFilter, ArrowDownAZ, ArrowUpAZ, X, EyeOff, Columns3, Copy, Check } from 'lucide-react';
 
 /* ---------------------------------------------------------------------------
@@ -255,6 +255,18 @@ function ColumnsMenu({ table }: { table: any }) {
    Table
 --------------------------------------------------------------------------- */
 
+// Sort <-> URL. `col:desc,col2:asc`
+function encodeSort(sorting: any[]): string {
+  return (sorting || []).map((s) => `${s.id}:${s.desc ? 'desc' : 'asc'}`).join(',');
+}
+function parseSort(s: string | null): any[] {
+  if (!s) return [];
+  return s.split(',').map((part) => {
+    const [id, dir] = part.split(':');
+    return { id, desc: dir === 'desc' };
+  }).filter((x) => x.id);
+}
+
 const versionSort = (rowA: any, rowB: any, columnId: string) => {
   const a = rowA.getValue(columnId) as string;
   const b = rowB.getValue(columnId) as string;
@@ -272,9 +284,40 @@ const versionSort = (rowA: any, rowB: any, columnId: string) => {
   return 0;
 };
 
-export function DataTable({ data, columns, initialColumnVisibility }: { data: any[]; columns: ColumnDef<any, any>[]; initialColumnVisibility?: Record<string, boolean> }) {
-  const [sorting, setSorting] = useState<any[]>([]);
-  const [columnFilters, setColumnFilters] = useState<any[]>([]);
+export function DataTable({ data, columns, initialColumnVisibility, urlKey }: { data: any[]; columns: ColumnDef<any, any>[]; initialColumnVisibility?: Record<string, boolean>; urlKey?: string }) {
+  // Sort + all column filters live in the URL, so a sorted/filtered view is a
+  // shareable link. `urlKey` namespaces pages that have more than one table.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prefix = urlKey ? `${urlKey}.` : '';
+  const sortKey = prefix + 'sort';
+  const filterPrefix = prefix + 'f.';
+
+  const sorting = useMemo(() => parseSort(searchParams.get(sortKey)), [searchParams, sortKey]);
+  const columnFilters = useMemo(() => {
+    const out: any[] = [];
+    searchParams.forEach((value, key) => {
+      if (key.startsWith(filterPrefix)) out.push({ id: key.slice(filterPrefix.length), value });
+    });
+    return out;
+  }, [searchParams, filterPrefix]);
+
+  const setSorting = (updater: any) => {
+    const next = typeof updater === 'function' ? updater(sorting) : updater;
+    const p = new URLSearchParams(searchParams);
+    const enc = encodeSort(next);
+    if (enc) p.set(sortKey, enc); else p.delete(sortKey);
+    setSearchParams(p, { replace: true });
+  };
+  const setColumnFilters = (updater: any) => {
+    const next = typeof updater === 'function' ? updater(columnFilters) : updater;
+    const p = new URLSearchParams(searchParams);
+    Array.from(p.keys()).forEach((k) => { if (k.startsWith(filterPrefix)) p.delete(k); });
+    (next || []).forEach((f: any) => {
+      if (f.value !== undefined && f.value !== null && f.value !== '') p.set(filterPrefix + f.id, String(f.value));
+    });
+    setSearchParams(p, { replace: true });
+  };
+
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(initialColumnVisibility ?? {});
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 

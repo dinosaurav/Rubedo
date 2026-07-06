@@ -118,10 +118,10 @@ export default function RunDetail() {
       </div>
 
       {tab === 'coords' && (
-        <DataTable data={coords} columns={coordColumns} initialColumnVisibility={{ input_hash: false, error_type: false }} />
+        <DataTable data={coords} columns={coordColumns} urlKey="coords" initialColumnVisibility={{ input_hash: false, error_type: false }} />
       )}
       {tab === 'events' && (
-        <DataTable data={events} columns={eventColumns} initialColumnVisibility={{ data_json: false }} />
+        <DataTable data={events} columns={eventColumns} urlKey="events" initialColumnVisibility={{ data_json: false }} />
       )}
     </div>
   );
