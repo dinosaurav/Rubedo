@@ -14,8 +14,7 @@ The **producer model is done** (content-addressed lanes → `expand` →
 
 - **Tier 1 · Launch polish** — the producer model is a natural "feature
   complete" moment; before a `pip install rubedo` push, make the public API
-  trustworthy and custom sources pleasant: **1** mypy/`py.typed`/packaging ·
-  **2** `@source` decorator · **3** data-quality assertions.
+  trustworthy and custom sources pleasant: **1** mypy/`py.typed`/packaging.
 - **Tier 2 · DX & observability** — make it delightful to watch and drive:
   **4** CLI + terminal UI (bumped up due to web UI invalidation removal) · **5** live run view (SSE) · **6** continue/resume · **7** incremental scan (unblocked by removal tracking deletion).
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
@@ -41,37 +40,9 @@ Gotcha: `store.py`/`ledger.py` have deliberate `Any`s (heterogeneous step
 return values) — don't force false precision there; a narrow `# type: ignore`
 with a reason beats a dishonest type.
 
-## 2. Source API simplification (`@source` decorator)
 
-Writing a custom `Source` today means subclassing the ABC and implementing
-`id`/`scan`/`load` (`src/rubedo/sources.py`) — more ceremony than a casual user
-wants. Offer a functional form: a `@source(id="...")` decorator over a
-generator/function that yields `(coordinate, content_hash, payload)` (or, with
-`key=`, over rows where the engine derives the coordinate the same way
-`CsvSource` does). The engine wraps it into a `Source` whose `load()` is a
-passthrough of the carried payload. **Decision:** the decorator covers the
-*eager* case (scan yields payloads inline); power users still subclass for the
-*lazy* `load()`/streaming protocol (`TableSource(batch_size=…)` style). This
-also expresses the producer-model framing directly — a source is the root
-producer. Acceptance: a ~5-line `@source` function works as a `pipeline`
-source, content-addressed by default (reusing `_finalize`), with `key=` opt-in
-for stable lanes.
 
-## 3. Data quality assertions
 
-Like dbt tests: let a step declare lightweight assertions on its output so
-malformed data fails/blocks the lane loudly instead of flowing downstream. We
-already have `params_model` (Pydantic) as precedent — the natural fit is
-`@step(..., output_model=SomeModel)` validating the return value at commit,
-plus an escape hatch `assertions=[lambda v: ...]` for cross-field checks.
-**Decisions:** a failed assertion is an **execution failure** (clear message in
-the ledger, honors `retry_on`/`retries`), *not* a cached verdict — unlike
-`Filtered`, which is a deliberate, cacheable "decline." It runs in
-`execution.py` right after the fn returns, before `stage_and_commit`. Downstream
-sees the lane as `failed`/`blocked` exactly as it would for a raised exception.
-Acceptance: a step with `output_model` that returns a missing/ill-typed field
-fails that lane with a validation error visible in `run_events`, and its
-siblings proceed.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 2 · DX & observability
