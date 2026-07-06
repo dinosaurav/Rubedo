@@ -118,7 +118,7 @@ def test_invalidation_shows_execute_and_pending_chain():
     assert actions(p)[("f1.txt", "upper")] == "pending"
 
 
-def test_removed_coordinate_reported():
+def test_deleted_coordinate_absent_from_plan():
     pipe = make_two_step_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
@@ -126,9 +126,12 @@ def test_removed_coordinate_reported():
 
     os.remove(os.path.join(TEST_FOLDER, "f2.txt"))
     p = plan(pipe)
-    assert actions(p)[("f2.txt", "read")] == "removed"
-    assert actions(p)[("f2.txt", "upper")] == "removed"
-    assert actions(p)[("f1.txt", "read")] == "reuse"
+    # A vanished coordinate simply isn't scanned, so it isn't in the plan —
+    # no "removed" action. Only f1.txt remains, and it reuses.
+    acts = actions(p)
+    assert ("f2.txt", "read") not in acts
+    assert ("f2.txt", "upper") not in acts
+    assert acts[("f1.txt", "read")] == "reuse"
 
 
 def test_plan_writes_nothing():

@@ -57,28 +57,6 @@ class RunEvent(Base):
     data_json = Column(String)
 
 
-class Manifest(Base):
-    """A snapshot of the coordinates present in a source during a run."""
-    __tablename__ = "manifests"
-    id = Column(String, primary_key=True)
-    run_id = Column(String, ForeignKey("runs.id"), nullable=False)
-    source_id = Column(String, nullable=False, index=True)
-    parent_manifest_id = Column(String, ForeignKey("manifests.id"))
-    created_at = Column(String, nullable=False)
-
-
-class ManifestEntry(Base):
-    """A single coordinate and its content hash in a manifest."""
-    __tablename__ = "manifest_entries"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    manifest_id = Column(String, ForeignKey("manifests.id"), nullable=False, index=True)
-    coordinate = Column(String, nullable=False)
-    content_hash = Column(String, nullable=False)
-    __table_args__ = (
-        UniqueConstraint("manifest_id", "coordinate", name="_manifest_coord_uc"),
-    )
-
-
 class MaterializationEdge(Base):
     """A directed lineage edge between parent and child materializations."""
     __tablename__ = "materialization_edges"
@@ -207,8 +185,6 @@ class ImmutabilityError(RuntimeError):
 
 _APPEND_ONLY = (
     RunEvent,
-    Manifest,
-    ManifestEntry,
     MaterializationEdge,
     MaterializationIndexEntry,
     MaterializationLifecycle,
@@ -359,6 +335,5 @@ class RunSummary(BaseModel):
     created_count: int = 0
     reused_count: int = 0
     failed_count: int = 0
-    removed_count: int = 0
     blocked_count: int = 0
     filtered_count: int = 0

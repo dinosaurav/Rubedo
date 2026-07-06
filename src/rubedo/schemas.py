@@ -17,7 +17,6 @@ class RunListItem(BaseModel):
     created_count: int = 0
     reused_count: int = 0
     failed_count: int = 0
-    removed_count: int = 0
     blocked_count: int = 0
     filtered_count: int = 0
 

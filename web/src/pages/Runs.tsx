@@ -52,7 +52,6 @@ export default function Runs() {
     { accessorKey: 'failed_count', header: 'Failed' },
     { accessorKey: 'blocked_count', header: 'Blocked' },
     { accessorKey: 'filtered_count', header: 'Filtered' },
-    { accessorKey: 'removed_count', header: 'Removed' },
   ];
 
   return (

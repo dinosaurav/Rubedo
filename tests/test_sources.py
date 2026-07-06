@@ -173,8 +173,8 @@ def test_csv_pipeline_row_level_caching():
         )
         assert set(out.keys()) == {"name", "passed"}
 
-    # Remove a row: its lane is marked removed
+    # Remove a row: its lane simply isn't scanned this run (no removed-tracking);
+    # the remaining 3 rows x 2 steps all reuse.
     write_csv(csv_path, "id,name,score\n1,alice,80\n2,bob,90\n3,carol,60\n")
     s5 = run(p, workers=1)
-    assert s5.removed_count == 1
     assert (s5.created_count, s5.reused_count) == (0, 6)

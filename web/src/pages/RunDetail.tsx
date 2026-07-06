@@ -102,7 +102,6 @@ export default function RunDetail() {
         {stat('Failed', run.failed_count, 'var(--status-error)')}
         {stat('Blocked', run.blocked_count, 'var(--status-warning)')}
         {stat('Filtered', run.filtered_count, 'var(--text-muted)')}
-        {stat('Removed', run.removed_count, 'var(--status-warning)')}
       </div>
 
       {run.definition?.steps?.length > 0 && (

@@ -39,7 +39,7 @@ const COUNT_COLORS: Record<string, string> = {
 function countsLine(counts?: Record<string, number>): { label: string; color: string }[] {
   if (!counts) return [];
   return Object.entries(counts)
-    .filter(([k, v]) => v > 0 && k !== 'removed')
+    .filter(([, v]) => v > 0)
     .map(([k, v]) => ({ label: `${v} ${k}`, color: COUNT_COLORS[k] ?? 'var(--text-muted)' }));
 }
 

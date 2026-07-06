@@ -96,13 +96,18 @@ Tier-1 TODO #2. *Built-ins-as-root-expand-sugar folds into Phase 6 (the built-in
 `Source` classes stay working via `source=` until then); example migration +
 output printing happens after Phase 6.*
 
-### Phase 5 — Reconsider `removed`/manifest/`source_id`
-Redefine **Current Outputs** as the latest run's live coordinates (server
-query), so a deleted item simply isn't current — no `removed` needed. Then
-delete `_snapshot_source`, the `removed` status path, `Manifest`/
-`ManifestEntry`, and `source_id` (or keep it purely for display). Schema change
-→ `.rubedo` wipe + repopulate. Touch: `ledger.py`, `runner.py`, `models.py`,
-`server.py`, `web/` (drop the Removed column/stat), tests. **Closes:** the
+### Phase 5 — Delete `removed`/manifest; current = latest run  ✅ DONE
+**Current Outputs** is now each pipeline's *latest run's* live lanes (server
+query joins the max-`started_at` run per pipeline), so a vanished item simply
+isn't current — no `removed` needed. Deleted `_snapshot_source`, the whole
+`removed`-marking path (run + plan), `Manifest`/`ManifestEntry` (+ the
+`manifest_created`/`coordinate_removed` events), `removed_count`/`removed`
+across `RunSummary`/schemas/summary_json/web (Runs column, RunDetail stat,
+DagView/format filters). `source_id` **kept** (display + current-outputs
+grouping). Migrated the removal tests to assert the vanished lane is just absent
+(`test_engine`/`test_run_status`/`test_plan`/`test_sources`/`test_api`). Suite
+green (166); web `tsc` clean; `.rubedo` wiped + repopulated (count_lines 15→15,
+expand_feed/newsroom cached); current-outputs verified live. **Closed:** the
 `removed`/manifest deletion. *Decision D2.*
 
 ### Phase 6 — Delete `Source`; `pipeline(steps=[...])` only; folders

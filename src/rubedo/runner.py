@@ -21,9 +21,8 @@ from .ledger import (
     _finish_run,
     _record_planned,
     _RunContext,
-    _snapshot_source,
 )
-from .models import Manifest, ManifestEntry, Run, RunSummary
+from .models import Run, RunSummary
 from .planning import (
     EphemeralRef,  # noqa: F401  (re-exported: part of the runner's public surface)
     MatRef,  # noqa: F401
@@ -94,7 +93,7 @@ class PlannedCoordinate:
     """A projected action for a single coordinate in a specific step."""
     coordinate: str
     step_name: str
-    action: str  # reuse | execute | pending | removed
+    action: str  # reuse | execute | pending | filtered
     output_address: Optional[str] = None
 
 
@@ -132,8 +131,7 @@ def plan(
 
     "execute" means the step function would run for that coordinate;
     "pending" means the answer depends on an upstream execution whose output
-    (and therefore this coordinate's address) is unknowable without running;
-    "removed" means the coordinate vanished from the source since last run.
+    (and therefore this coordinate's address) is unknowable without running.
 
     home, if given, points the ledger/object store at a custom root instead
     of the default `.rubedo`/RUBEDO_HOME (see notes/TODO.md item 1).
@@ -153,34 +151,7 @@ def plan(
     plan_warnings: List[str] = []
     coord_step_mats: Dict[tuple, Any] = {}
 
-    single = len(sources) == 1
     with get_session() as session:
-        for name, src in sources.items():
-            prev_manifest = (
-                session.query(Manifest)
-                .filter(Manifest.source_id == src.id)
-                .order_by(Manifest.created_at.desc())
-                .first()
-            )
-            if not prev_manifest:
-                continue
-            scanned_coordinates = {it.coordinate for it in items_by_source[name]}
-            if single:
-                steps_to_mark = [s for s in topo_steps if not s.skip_cache]
-            else:
-                steps_to_mark = [
-                    s for s in topo_steps
-                    if _source_name_for(pipeline, sources, s) == name
-                ]
-            for pe in (
-                session.query(ManifestEntry).filter_by(manifest_id=prev_manifest.id).all()
-            ):
-                if pe.coordinate not in scanned_coordinates:
-                    for step in steps_to_mark:
-                        items.append(
-                            PlannedCoordinate(pe.coordinate, step.name, "removed")
-                        )
-
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
             sname = _source_name_for(pipeline, sources, step)
@@ -287,9 +258,9 @@ def run_pipeline(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         pipeline_id=pipeline.id,
         source_id=_run_source_id(sources),
-        totals={"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0},
+        totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
         by_step={
-            s.name: {"created": 0, "reused": 0, "failed": 0, "removed": 0, "blocked": 0, "filtered": 0}
+            s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
             for s in topo_steps
             if not s.skip_cache
         },
@@ -320,21 +291,6 @@ def run_pipeline(
 
         try:
             items_by_source = {name: src.scan() for name, src in sources.items()}
-
-            single = len(sources) == 1
-            removed_count = 0
-            for name, src in sources.items():
-                steps_to_mark = topo_steps if single else [
-                    s for s in topo_steps
-                    if _source_name_for(pipeline, sources, s) == name
-                ]
-                removed_count += _snapshot_source(
-                    session, ctx, items_by_source[name], steps_to_mark,
-                    source_id=src.id,
-                )
-            ctx.totals["removed"] = removed_count
-            for counts in ctx.by_step.values():
-                counts["removed"] = removed_count
 
             params_hash = hash_json(params or {})
             memo = _RunMemo()

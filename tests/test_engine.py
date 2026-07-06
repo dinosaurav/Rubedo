@@ -9,8 +9,6 @@ from rubedo.models import (
     Run,
     RunCoordinateStatus,
     Materialization,
-    Manifest,
-    ManifestEntry,
 )
 from rubedo.selection import Selection
 from rubedo.invalidation import invalidate
@@ -90,10 +88,6 @@ def test_first_run_creates_all():
 
         mats = session.query(Materialization).all()
         assert len(mats) == 2
-
-        manifest = session.query(Manifest).filter_by(run_id=res.run_id).first()
-        cur = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
-        assert len(cur) == 2
 
 
 def test_second_run_reuses_all():
@@ -232,44 +226,29 @@ def test_logical_deletion():
     res1 = run(test_pipeline, "test_input", workers=1)
     assert res1.created_count == 2
     assert res1.reused_count == 0
-    assert res1.removed_count == 0
 
-    # Verify current outputs has 2 items
     with db.get_session() as session:
-        manifest = session.query(Manifest).filter_by(run_id=res1.run_id).first()
-        currents = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
-        assert len(currents) == 2
-
-        # Verify materializations
         mats = session.query(Materialization).all()
         assert len(mats) == 2
 
     # 2. Delete one file
     os.remove("test_input/a.txt")
 
-    # 3. Second run
+    # 3. Second run: a.txt simply isn't scanned — there is no "removed"
+    #    bookkeeping. "Current" is just the latest run's lanes.
     res2 = run(test_pipeline, "test_input", workers=1)
     assert res2.created_count == 0
-    assert res2.reused_count == 1
-    assert res2.removed_count == 1
+    assert res2.reused_count == 1  # only b.txt
 
     with db.get_session() as session:
-        # Current outputs should drop to 1
-        manifest = session.query(Manifest).filter_by(run_id=res2.run_id).first()
-        currents = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
-        assert len(currents) == 1
-        assert currents[0].coordinate == "b.txt"
-
-        # Run coordinates should have 1 reused and 1 removed
+        # This run touched only b.txt — no status row for the vanished a.txt.
         run_coords = (
             session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         )
-        assert len(run_coords) == 2
         statuses = {rc.coordinate: rc.status for rc in run_coords}
-        assert statuses["a.txt"] == "removed"
-        assert statuses["b.txt"] == "reused"
+        assert statuses == {"b.txt": "reused"}
 
-        # Materialization for a.txt is STILL there and valid
+        # a.txt's materialization is untouched and still live — a re-add reuses it.
         mats = session.query(Materialization).all()
         assert len(mats) == 2
         for m in mats:
@@ -292,4 +271,3 @@ def test_restore_deleted_reuses_cache():
     res3 = run(test_pipeline, "test_input", workers=1)
     assert res3.created_count == 0
     assert res3.reused_count == 2  # a.txt and b.txt
-    assert res3.removed_count == 0

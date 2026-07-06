@@ -79,7 +79,6 @@ def test_get_runs():
     assert run["created_count"] == 2
     assert run["reused_count"] == 0
     assert run["failed_count"] == 0
-    assert run["removed_count"] == 0
     assert run["status"] == "completed"
 
 

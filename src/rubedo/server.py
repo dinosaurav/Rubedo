@@ -77,7 +77,6 @@ def get_runs():
             d["created_count"] = summary.get("created", 0)
             d["reused_count"] = summary.get("reused", 0)
             d["failed_count"] = summary.get("failed", 0)
-            d["removed_count"] = summary.get("removed", 0)
             d["blocked_count"] = summary.get("blocked", 0)
             d["filtered_count"] = summary.get("filtered", 0)
             results.append(d)
@@ -102,7 +101,6 @@ def get_run(run_id: str):
         d["created_count"] = summary.get("created", 0)
         d["reused_count"] = summary.get("reused", 0)
         d["failed_count"] = summary.get("failed", 0)
-        d["removed_count"] = summary.get("removed", 0)
         d["blocked_count"] = summary.get("blocked", 0)
         d["filtered_count"] = summary.get("filtered", 0)
         d["by_step"] = summary.get("by_step")
@@ -154,10 +152,36 @@ def get_materializations(
 
 @app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
 def get_current_outputs():
-    """Get the latest live output for every coordinate across all sources."""
+    """The current outputs: each pipeline's *latest run's* live lanes.
+
+    "Current" is the latest run's lanes — nothing more. A coordinate that
+    vanished from a source simply isn't in the latest run, so it isn't current;
+    there is no cross-run "removed" bookkeeping.
+    """
     with get_session() as session:
+        # The latest run per pipeline (by start time).
+        latest_started = (
+            session.query(
+                Run.pipeline_id.label("pid"),
+                func.max(Run.started_at).label("mx"),
+            )
+            .group_by(Run.pipeline_id)
+            .subquery()
+        )
+        latest_run_ids = (
+            session.query(Run.id)
+            .join(
+                latest_started,
+                (Run.pipeline_id == latest_started.c.pid)
+                & (Run.started_at == latest_started.c.mx),
+            )
+            .subquery()
+        )
         latest_ids_subq = (
             session.query(func.max(RunCoordinateStatus.id).label("max_id"))
+            .filter(
+                RunCoordinateStatus.run_id.in_(session.query(latest_run_ids.c.id))
+            )
             .group_by(RunCoordinateStatus.source_id, RunCoordinateStatus.coordinate)
             .subquery()
         )

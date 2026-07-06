@@ -68,7 +68,7 @@ class Source(ABC):
     @property
     @abstractmethod
     def id(self) -> str:
-        """Stable identity string, recorded as source_id on runs/manifests."""
+        """Stable identity string, recorded as source_id on runs."""
 
     @abstractmethod
     def scan(self) -> List[SourceItem]:

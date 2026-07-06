@@ -8,8 +8,6 @@ from rubedo.models import (
     Run,
     RunCoordinateStatus,
     Materialization,
-    Manifest,
-    ManifestEntry,
     RunEvent,
 )
 from rubedo.runner import run
@@ -98,7 +96,6 @@ def test_first_run_creates_statuses(setup_teardown):
         assert summary["created"] == 3
         assert summary["reused"] == 0
         assert summary["failed"] == 0
-        assert summary["removed"] == 0
 
 
 def test_second_run_reuses_statuses(setup_teardown):
@@ -151,7 +148,7 @@ def test_changed_file_creates_one(setup_teardown):
         assert len(mats) == 4  # 3 original + 1 new
 
 
-def test_deleted_file_records_removed(setup_teardown):
+def test_deleted_file_absent_from_next_run(setup_teardown):
     input_dir = setup_teardown
     res1 = run(p_dummy, input_dir, workers=1)
 
@@ -175,20 +172,15 @@ def test_deleted_file_records_removed(setup_teardown):
             .filter_by(run_id=res2.run_id)
             .all()
         }
-        assert coords["a.txt"].status == "removed"
+        # a.txt simply isn't scanned this run — no "removed" status, no manifest.
+        assert "a.txt" not in coords
         assert coords["b.txt"].status == "reused"
         assert coords["c.txt"].status == "reused"
 
         run_row = session.query(Run).filter_by(id=res2.run_id).first()
         summary = json.loads(run_row.summary_json)
-        assert summary["removed"] == 1
+        assert "removed" not in summary
         assert summary["reused"] == 2
-
-        # Check manifest
-        manifest = session.query(Manifest).filter_by(run_id=res2.run_id).first()
-        entries = session.query(ManifestEntry).filter_by(manifest_id=manifest.id).all()
-        assert len(entries) == 2
-        assert "a.txt" not in [e.coordinate for e in entries]
 
         # Output bytes still exist logically (materialization row still there)
         mat = (
@@ -235,7 +227,6 @@ def test_event_log_populated(setup_teardown):
         events = session.query(RunEvent).filter_by(run_id=res.run_id).all()
         types = [e.event_type for e in events]
         assert "run_started" in types
-        assert "manifest_created" in types
         assert "step_processing_started" in types
         assert "materialization_created" in types
         assert "run_completed" in types

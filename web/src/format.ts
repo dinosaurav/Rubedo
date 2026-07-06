@@ -24,14 +24,13 @@ export function runStatusClass(status: string): string {
   return 'warning';
 }
 
-// created | reused | failed | blocked | removed | filtered | pending
+// created | reused | failed | blocked | filtered | pending
 export function coordStatusClass(status: string): string {
   switch (status) {
     case 'created': return 'success';
     case 'reused': return 'info';
     case 'failed': return 'error';
-    case 'blocked':
-    case 'removed': return 'warning';
+    case 'blocked': return 'warning';
     default: return 'info';
   }
 }

@@ -1,6 +1,6 @@
 """Ledger phase: every database write a run makes.
 
-Records manifests, per-coordinate statuses, run events, and
+Records per-coordinate statuses, run events, and
 materializations (honoring the generations model). The append-only
 discipline is enforced by the guards in models.py; this module is the
 only code that should be writing run history.
@@ -8,7 +8,6 @@ only code that should be writing run history.
 
 import json
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -18,8 +17,6 @@ from .db import get_session
 from .execution import ExecutionOutcome, _materialized_ancestors
 from .models import (
     Filtered,
-    Manifest,
-    ManifestEntry,
     Materialization,
     MaterializationEdge,
     MaterializationIndexEntry,
@@ -32,7 +29,6 @@ from .models import (
 )
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
-from .sources import SourceItem
 from .store import stage_and_commit
 from .util import utcnow_iso
 
@@ -589,103 +585,12 @@ def _commit_execution_result(
         session.commit()
 
 
-def _snapshot_source(
-    session: Session,
-    ctx: _RunContext,
-    scanned_items: List[SourceItem],
-    topo_steps: List[StepSpec],
-    source_id: Optional[str] = None,
-) -> int:
-    """Record one source's manifest and mark its removed coordinates.
-
-    `source_id` identifies which source this snapshot is for (defaults to the
-    run's combined id — correct for a single-source pipeline); `topo_steps` are
-    the steps to mark `removed` for a vanished coordinate.
-    """
-    source_id = source_id or ctx.source_id
-    now_iso = utcnow_iso()
-    manifest_id = f"manifest_{uuid.uuid4().hex[:12]}"
-
-    prev_manifest = (
-        session.query(Manifest)
-        .filter(Manifest.source_id == source_id)
-        .order_by(Manifest.created_at.desc())
-        .first()
-    )
-
-    manifest = Manifest(
-        id=manifest_id,
-        run_id=ctx.run_id,
-        source_id=source_id,
-        parent_manifest_id=prev_manifest.id if prev_manifest else None,
-        created_at=now_iso,
-    )
-    session.add(manifest)
-
-    for it in scanned_items:
-        session.add(
-            ManifestEntry(
-                manifest_id=manifest_id,
-                coordinate=it.coordinate,
-                content_hash=it.content_hash,
-            )
-        )
-
-    _emit(
-        session,
-        ctx,
-        "info",
-        "manifest_created",
-        data={
-            "manifest_id": manifest_id,
-            "parent_manifest_id": manifest.parent_manifest_id,
-        },
-    )
-    session.commit()
-
-    scanned_coordinates = {it.coordinate for it in scanned_items}
-
-    removed_count = 0
-    if prev_manifest:
-        prev_entries = (
-            session.query(ManifestEntry).filter_by(manifest_id=prev_manifest.id).all()
-        )
-        for pe in prev_entries:
-            if pe.coordinate not in scanned_coordinates:
-                for step in topo_steps:
-                    if step.skip_cache or step.shape == "reduce":
-                        continue
-                    session.add(
-                        _new_status(
-                            ctx,
-                            step.name,
-                            pe.coordinate,
-                            "removed",
-                            input_hash=pe.content_hash,  # Best approximation for removed
-                        )
-                    )
-
-                    _emit(
-                        session,
-                        ctx,
-                        "info",
-                        "coordinate_removed",
-                        step_name=step.name,
-                        coordinate=pe.coordinate,
-                        message="Coordinate removed because it is absent from the latest manifest",
-                    )
-                removed_count += 1
-    session.commit()
-    return removed_count
-
-
 def _finish_run(ctx: _RunContext) -> RunSummary:
     """Finalize the run status and return a summary of all outcomes."""
     full_summary = {
         "created": ctx.totals["created"],
         "reused": ctx.totals["reused"],
         "failed": ctx.totals["failed"],
-        "removed": ctx.totals["removed"],
         "blocked": ctx.totals["blocked"],
         "filtered": ctx.totals["filtered"],
         "total": ctx.totals,
@@ -719,7 +624,6 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         created_count=ctx.totals["created"],
         reused_count=ctx.totals["reused"],
         failed_count=ctx.totals["failed"],
-        removed_count=ctx.totals["removed"],
         blocked_count=ctx.totals["blocked"],
         filtered_count=ctx.totals["filtered"],
     )
