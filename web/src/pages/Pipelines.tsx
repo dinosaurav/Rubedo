@@ -19,8 +19,8 @@ export default function Pipelines() {
 
   return (
     <div className="page-container">
-      <div className="page-header">
-        <h1>Pipelines</h1>
+      <div className="page-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+        <h1 className="page-title">Pipelines</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
           Derived from the run ledger — a pipeline appears here once it has run,
           shown with the DAG its latest run recorded.

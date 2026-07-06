@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchCurrentOutputs } from '../api';
-import { DataTable } from '../components/DataTable';
+import { DataTable, TruncatedText, HashCell } from '../components/DataTable';
+import { fmtTime } from '../format';
 import type { ColumnDef } from '@tanstack/react-table';
 
 export default function CurrentOutputs() {
@@ -17,56 +18,36 @@ export default function CurrentOutputs() {
   }, []);
 
   if (loading) return <div>Loading current outputs...</div>;
-  if (error) return <div className="page-container">API unreachable: {error}</div>;
+  if (error) return <div>API unreachable: {error}</div>;
 
   const columns: ColumnDef<any, any>[] = [
-    {
-      accessorKey: 'source_id',
-      header: 'Source',
-      meta: { filterVariant: 'select' },
-    },
+    { accessorKey: 'coordinate', header: 'Coordinate', cell: (info) => <TruncatedText value={info.getValue()} /> },
     {
       accessorKey: 'status',
       header: 'Status',
       meta: { filterVariant: 'select' },
-      cell: (info) => {
-        const val = info.getValue();
-        if (val === 'filtered') {
-          return <span className="badge" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>filtered</span>;
-        }
-        return <span className="badge badge-success">active</span>;
-      }
+      cell: (info) => info.getValue() === 'filtered'
+        ? <span className="badge badge-warning">filtered</span>
+        : <span className="badge badge-success">active</span>,
     },
-    {
-      accessorKey: 'coordinate',
-      header: 'Coordinate',
-    },
-    {
-      accessorKey: 'step_name',
-      header: 'Step',
-      meta: { filterVariant: 'select' },
-    },
-    {
-      accessorKey: 'code_version',
-      header: 'Code Version',
-      meta: { filterVariant: 'select' },
-    },
+    { accessorKey: 'source_id', header: 'Source', meta: { filterVariant: 'select' }, cell: (info) => <TruncatedText value={info.getValue()} maxWidth={200} /> },
+    { accessorKey: 'pipeline_id', header: 'Pipeline', cell: (info) => <TruncatedText value={info.getValue()} /> },
+    { accessorKey: 'step_name', header: 'Step', meta: { filterVariant: 'select' } },
+    { accessorKey: 'code_version', header: 'Code Version', meta: { filterVariant: 'select' } },
     {
       accessorKey: 'output_address',
       header: 'Output Address',
-      cell: (info) => {
-        const val = info.getValue();
-        return val ? <Link to={`/objects/${val}`} style={{ fontFamily: 'monospace' }}>{val.slice(0, 16)}...</Link> : '-';
-      },
+      cell: (info) => info.getValue() ? <HashCell value={info.getValue()} to={`/objects/${info.getValue()}`} /> : '—',
     },
+    { accessorKey: 'input_hash', header: 'Input Hash', cell: (info) => <HashCell value={info.getValue()} /> },
     {
-      accessorKey: 'updated_at',
-      header: 'Updated At',
-      cell: (info) => {
-        const val = info.getValue();
-        return val ? new Date(val).toLocaleString() : '-';
-      },
-    }
+      accessorKey: 'run_id',
+      header: 'Run',
+      cell: (info) => info.getValue()
+        ? <Link to={`/runs/${info.getValue()}`} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{info.getValue()}</Link>
+        : '—',
+    },
+    { accessorKey: 'updated_at', header: 'Updated', cell: (info) => fmtTime(info.getValue()) },
   ];
 
   return (
@@ -74,7 +55,11 @@ export default function CurrentOutputs() {
       <div className="page-header">
         <h1 className="page-title">Current Outputs</h1>
       </div>
-      <DataTable data={outputs} columns={columns} />
+      <DataTable
+        data={outputs}
+        columns={columns}
+        initialColumnVisibility={{ input_hash: false, run_id: false }}
+      />
     </div>
   );
 }

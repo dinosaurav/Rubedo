@@ -33,6 +33,7 @@ class RunDetailOut(RunListItem):
 class RunCoordinateStatusOut(BaseModel):
     """Status of a single coordinate for a step during a run."""
     coordinate: str
+    step_name: Optional[str] = None
     status: str
     pipeline_id: Optional[str] = None
     input_hash: Optional[str] = None
