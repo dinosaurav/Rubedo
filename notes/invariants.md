@@ -49,7 +49,7 @@ step picks one with `@step(source="name")`. Conceptually a source is the root
 
 **Run-coordinate status:**
 Relationship between a run and a coordinate: created, reused, failed, blocked,
-removed, filtered. "Filtered" means a step declined the coordinate — a cached,
+filtered. "Filtered" means a step declined the coordinate — a cached,
 first-class verdict, not an error.
 
 **Invalidation:**
@@ -70,7 +70,7 @@ columns are a projection of the `run_events` log.
 2. A committed materialization is immutable.
 3. Workers may die at any point without corrupting committed state.
 4. Skip-if-exists checks materialization existence, not worker memory.
-5. Users enumerate through manifests/current views, never raw object storage.
+5. Users enumerate through current views (the latest run's active lanes), never raw object storage.
 6. Run status lives on the run-coordinate edge, not on output bytes.
 7. Invalidation never silently deletes historical facts.
 8. Ledger tables are append-only, enforced by ORM guards; the only legal

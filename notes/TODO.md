@@ -17,10 +17,9 @@ The **producer model is done** (content-addressed lanes → `expand` →
   trustworthy and custom sources pleasant: **1** mypy/`py.typed`/packaging ·
   **2** `@source` decorator · **3** data-quality assertions.
 - **Tier 2 · DX & observability** — make it delightful to watch and drive:
-  **4** CLI + terminal UI · **5** live run view (SSE) · **6** continue/resume.
+  **4** CLI + terminal UI (bumped up due to web UI invalidation removal) · **5** live run view (SSE) · **6** continue/resume · **7** incremental scan (unblocked by removal tracking deletion).
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real: **7** cloud sources → **8** incremental scan → **9** cloud
-  ledger+store → **10** distributed execution; **11** lane-pipelined execution
+  demand is real: **8** cloud sources → **9** cloud ledger+store → **10** distributed execution; **11** lane-pipelined execution
   (independent).
 - **Tier 4 · Deferred / careful** — **12** storage GC (**dangerous**) ·
   **13** `expand` child-views (storage optimization) · **14** lane tooling.
@@ -85,7 +84,7 @@ Local-first developers love the terminal. Add a `rubedo` console entry point
 <module:factory>` / `rubedo plan <…>` (import the user module, find the
 `PipelineSpec`, run/dry-run it), `rubedo ls` / `rubedo show <run>` (browse
 runs, materializations, current outputs straight from the ledger — the
-terminal twin of the web UI), and `rubedo invalidate <selection>`. Use `rich`
+terminal twin of the web UI), and `rubedo invalidate <selection>` (this is especially important now that the web UI invalidation feature was removed). Use `rich`
 for a live DAG: per-step progress bars and created/reused/failed counts ticking
 as lanes complete. **Gotcha:** `rubedo run` is the one CLI path that *does*
 import user code (the runner already does) — the read-only `ls`/`show` commands
@@ -123,11 +122,27 @@ content-addressed reconcile, so keep it thin. **Open:** same `run_id` vs a new
 run linked to the old; re-scan vs reuse the prior manifest; interaction with
 selection-scoped/partial runs. Design-first.
 
+## 7. Incremental source scanning (high watermarks)
+
+Sources scan their whole domain every run today (relying on cache identity to
+skip *work*, but still enumerating everything). For massive tables/buckets,
+let a source skip *scanning* untouched coordinates via a watermark
+(`updated_at > last_run`), cutting planning cost. Persist the watermark per
+`source_id` (small ledger table); pass the last watermark
+into `scan()`, which returns only new/changed coordinates + the new watermark.
+**Blocker resolved:** Previously, a delta scan couldn't detect *removals* by
+absence. With the recent core engine change dropping "removed" tracking entirely,
+delta scanning perfectly aligns with the current architecture (it's purely
+creations/changes now).
+Pairs with item 8 (ETag/mtime change tokens are the watermark signal).
+Acceptance: a `TableSource` given an `updated_at` column re-scans only changed
+rows across runs, with unchanged rows never re-enumerated.
+
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
 ══════════════════════════════════════════════════════════════════════
 
-## 7. Cloud object storage sources (`S3Source` / `GCSSource`)
+## 8. Cloud object storage sources (`S3Source` / `GCSSource`)
 
 Local folders and SQL are great starts, but modern data lives in buckets. Add
 `Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`): `scan()`
@@ -140,27 +155,10 @@ token** instead of a true content hash (S3 ETag is the MD5 for single-part
 uploads but not for multipart — fall back to size+mtime or a stored checksum
 there). This is exactly the producer-model insight that "scan produces a
 content hash eagerly" is the *folder* assumption; cloud sources need a change
-token that isn't the content hash — which is what item 8 formalizes. Ship
+token that isn't the content hash — which is what item 7 formalizes. Ship
 boto3/gcs as optional extras (`rubedo[s3]`, `rubedo[gcs]`). Acceptance: scan a
 bucket prefix → coordinates; a step reads object bytes; a re-run reuses
 untouched objects without re-downloading to hash them.
-
-## 8. Incremental source scanning (high watermarks)
-
-Sources scan their whole domain every run today (relying on cache identity to
-skip *work*, but still enumerating everything). For massive tables/buckets,
-let a source skip *scanning* untouched coordinates via a watermark
-(`updated_at > last_run`), cutting planning cost. Persist the watermark per
-`source_id` (small ledger table, or on `Manifest`); pass the last watermark
-into `scan()`, which returns only new/changed coordinates + the new watermark.
-**The gotcha that needs a decision:** a delta scan can't detect *removals* by
-absence (a removed coordinate is simply not in the delta). So watermark mode is
-**"creations/changes only"** — removal is either not reported (consistent with
-the producer-model decision that removal is a low-value report), or handled by
-an occasional full reconciliation scan, or by source-provided tombstones.
-Pairs with item 7 (ETag/mtime change tokens are the watermark signal).
-Acceptance: a `TableSource` given an `updated_at` column re-scans only changed
-rows across runs, with unchanged rows never re-enumerated.
 
 ## 9. Configurable cloud ledger + object store (Postgres / S3-GCS)
 
@@ -278,7 +276,7 @@ content-addressed/minted, they're the load-bearing navigation surface.
   recompute — no eager descendant cascade; `producer-model.md` Q1). The
   deferred tooling is broader selection-driven invalidation over a *lane* (e.g.
   "invalidate everything this label touched, all steps"), built on the same
-  lineage traversal above. Design-first; the core stays minimal.
+  lineage traversal above. Note: since the invalidation UI was removed from the web dashboard, this invalidation tooling must be robust for CLI and code-first use cases. Design-first; the core stays minimal.
 
 ──────────────────────────────────────────────────────────────────────
 

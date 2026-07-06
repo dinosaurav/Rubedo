@@ -2,7 +2,7 @@
 
 A local-first batch processing engine that provides dbt-style state for Python tasks, built for non-idempotent steps (LLMs, scraping). It runs DAG pipelines over collections of coordinates — files in a folder, rows in a CSV — with content-addressed caching, durable run history, and surgical invalidation.
 
-Every step output is stored immutably at a deterministic address — `hash(step, code_version, input_hash)` — so re-running a pipeline only recomputes what actually changed. A run ledger records what happened to every coordinate in every run (`created`, `reused`, `failed`, `blocked`, `removed`), and lineage edges connect each output to the outputs it was derived from.
+Every step output is stored immutably at a deterministic address — `hash(step, code_version, input_hash)` — so re-running a pipeline only recomputes what actually changed. A run ledger records what happened to every coordinate in every run (`created`, `reused`, `failed`, `blocked`, `filtered`), and lineage edges connect each output to the outputs it was derived from.
 
 ## Quickstart
 
@@ -30,14 +30,14 @@ print(summary.created_count, summary.reused_count)
 
 There is no registry and no magic module: the engine never imports your code — you import the engine. Each run snapshots the pipeline's definition (steps, edges, policies) into the ledger, so the UI can show the DAG of anything that has run.
 
-Then inspect it in the web UI — a read-only browser over runs, materializations, lineage, and current outputs, plus surgical invalidation ("this output is bad, redo it"):
+Then inspect it in the web UI — a purely read-only dashboard over runs, materializations, lineage, and current outputs:
 
 ```bash
 uv run uvicorn rubedo.server:app --reload   # API on :8000
 cd web && npm run dev                            # UI on :5173
 ```
 
-Running and recomputing always happen from library code; the UI's only write action is invalidation.
+Running, recomputing, and invalidation always happen from library code; the UI is entirely read-only.
 
 ## Sources
 
@@ -116,6 +116,6 @@ See [notes/invariants.md](notes/invariants.md) for the core vocabulary (coordina
 ## Layout
 
 - `src/rubedo/` — engine (sources, hashing, runner), SQLAlchemy models, object store, FastAPI server
-- `web/` — React + Vite dashboard (runs, materializations, lineage, selection-based invalidation)
+- `web/` — React + Vite dashboard (read-only browser for runs, materializations, lineage, and current outputs)
 - `examples/` — runnable demo pipelines
 - `tests/` — pytest suite (`uv run pytest`)

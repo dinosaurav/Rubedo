@@ -69,7 +69,7 @@ accurate and load-bearing; keep them updated when behavior changes.
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, per-run memo for
   skip_cache utils.
-- `src/rubedo/ledger.py` — every DB write: manifests, per-lane statuses,
+- `src/rubedo/ledger.py` — every DB write: per-lane statuses,
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
   transition appends a `materialization_lifecycle` row).
@@ -91,7 +91,7 @@ accurate and load-bearing; keep them updated when behavior changes.
 - `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines.
 - `web/` — React/Vite dashboard. `DagView.tsx` renders definition
-  snapshots. Dark-theme CSS variables in `index.css`.
+  snapshots. Light-themed ("blueprint") CSS variables in `index.css`. The UI is purely read-only.
 
 ## Test conventions
 
