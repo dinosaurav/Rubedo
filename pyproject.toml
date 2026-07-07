@@ -15,6 +15,7 @@ dependencies = [
     "packaging>=26.2",
     "loky>=3.5.6",
     "cloudpickle>=3.1.2",
+    "litellm>=1.91.0",
 ]
 
 # The examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via

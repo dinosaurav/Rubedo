@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graphify Visualizer</title>
+  
+  <!-- Force Graph Library -->
+  <script src="//unpkg.com/force-graph"></script>
+  
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Loading Overlay -->
+  <div id="loading" class="overlay active">
+    <div class="spinner"></div>
+    <h2>Loading Graph...</h2>
+  </div>
+
+  <!-- Top Toolbar -->
+  <div id="top-toolbar">
+    <div class="search-container">
+      <input type="text" id="node-search" placeholder="Search nodes (e.g. store.py)..." autocomplete="off" />
+      <div id="search-results" class="dropdown-hidden"></div>
+    </div>
+    
+    <div class="view-controls">
+      <label for="view-select">View:</label>
+      <select id="view-select">
+        <option value="full">Full Architecture</option>
+        <option value="files">Files Only</option>
+        <option value="pagerank">God Nodes (PageRank)</option>
+      </select>
+      <label for="label-select" style="margin-left: 15px;">Labels:</label>
+      <select id="label-select" style="margin-left: 5px;">
+        <option value="none">None</option>
+        <option value="files" selected>Files Only</option>
+        <option value="all">All Nodes</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- The Graph Canvas -->
+  <div id="graph"></div>
+
+  <!-- Glassmorphism Chatbox -->
+  <div id="chatbox">
+    <div class="chat-header">Graphify AI Expert</div>
+    <div id="chat-messages">
+      <div class="message system">Hello! I am Claude. I have full context of this graph. Ask me anything about the architecture!</div>
+    </div>
+    <div class="chat-input-area">
+      <input type="text" id="chat-input" placeholder="Ask about the code..." />
+      <button id="chat-send">Send</button>
+    </div>
+  </div>
+
+  <!-- Glassmorphism Side Panel -->
+  <aside id="side-panel">
+    <button id="close-panel" aria-label="Close panel">✕</button>
+    <div id="panel-content">
+      <div class="panel-header">
+        <span id="node-type" class="badge"></span>
+        <h2 id="node-id"></h2>
+        <p id="node-community"></p>
+      </div>
+      <div class="panel-body">
+        <h3>Semantic Summary</h3>
+        <p id="node-summary">Select a node to view its AI-generated architectural summary.</p>
+        
+        <h3>Connections</h3>
+        <div id="node-connections">
+          <!-- Populated via JS -->
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <script src="app.js"></script>
+</body>
+</html>
