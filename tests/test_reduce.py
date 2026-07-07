@@ -297,3 +297,28 @@ def test_registration_errors():
         @step(name="sum", version="1", shape="reduce")
         def sum_v3():
             pass
+
+def test_reduce_all_filtered():
+    create_file("a.txt", "10")
+    create_file("b.txt", "20")
+
+    @step(name="parse", version="1")
+    def parse(path):
+        from rubedo import Filtered
+        return Filtered("reason")
+
+    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    def sum_values(parse):
+        return sum(parse.values())
+
+    pipe = pipeline(id="reduce_empty", name="reduce_empty", folder=TEST_FOLDER, steps=[parse, sum_values])
+    s1 = run(pipe, workers=1)
+    
+    assert s1.failed_count == 0
+    assert s1.blocked_count == 0
+    assert s1.filtered_count == 2
+    assert s1.created_count == 1 # 1 sum
+    
+    with get_session() as session:
+        status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
+        assert status.status == "created"

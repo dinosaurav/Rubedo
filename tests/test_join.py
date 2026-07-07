@@ -272,3 +272,34 @@ def test_join_on_must_match_depends_on():
             name="bad", version="1", shape="join",
             depends_on=["a", "b"], join_on={"a": "k", "c": "k"},
         )(lambda a, b: None)
+
+def test_join_empty():
+    write_csv("a.csv", "id,val\n1,A\n")
+    write_csv("b.csv", "id,val\n2,B\n")
+
+    @step(name="a", version="1", source="a", index=["id"])
+    def load_a(row):
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(name="b", version="1", source="b", index=["id"])
+    def load_b(row):
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(
+        name="merge", version="1", shape="join",
+        depends_on=["a", "b"], join_on={"a": "id", "b": "id"}
+    )
+    def merge(a, b):
+        return a["v"] + b["v"]
+
+    pipe = pipeline(
+        id="join_empty", name="join_empty",
+        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
+        steps=[load_a, load_b, merge],
+    )
+    s1 = run(pipe, workers=1)
+    
+    assert s1.failed_count == 0
+    assert s1.blocked_count == 0
+    assert s1.created_count == 2 # 1 a + 1 b
+    assert _outputs("merge") == {}

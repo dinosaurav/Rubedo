@@ -28,7 +28,7 @@ def get_recent_runs(session: Session, limit: int = 50) -> List[RunListItem]:
         summary = {}
         if run.summary_json:
             try:
-                summary = json.loads(run.summary_json)
+                summary = json.loads(str(run.summary_json))
             except Exception:
                 pass
         d["created_count"] = summary.get("created", 0)
@@ -50,7 +50,7 @@ def get_run_summary(session: Session, run_id: str) -> Optional[RunDetailOut]:
     summary = {}
     if run.summary_json:
         try:
-            summary = json.loads(run.summary_json)
+            summary = json.loads(str(run.summary_json))
         except Exception:
             pass
     d["created_count"] = summary.get("created", 0)
@@ -61,7 +61,7 @@ def get_run_summary(session: Session, run_id: str) -> Optional[RunDetailOut]:
     d["by_step"] = summary.get("by_step")
     if run.definition_json:
         try:
-            d["definition"] = json.loads(run.definition_json)
+            d["definition"] = json.loads(str(run.definition_json))
         except Exception:
             pass
     return RunDetailOut(**d)

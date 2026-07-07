@@ -112,9 +112,9 @@ def cmd_invalidate(args):
         console.print(f"[red]Error parsing selection:[/red] {e}")
         sys.exit(1)
         
-    result = invalidate(selection)
-    console.print(f"Invalidated [bold green]{result.invalidated_count}[/bold green] materializations.")
-    console.print(f"New Run ID recorded for invalidation: [cyan]{result.run_id}[/cyan]")
+    result = invalidate(selection, args.reason)
+    console.print(f"Invalidated [bold green]{result['invalidated_count']}[/bold green] materializations.")
+    console.print(f"New Run ID recorded for invalidation: [cyan]{result['run_id']}[/cyan]")
 
 
 def main():
@@ -133,6 +133,7 @@ def main():
     
     parser_inv = subparsers.add_parser("invalidate", help="Invalidate materializations by selection query")
     parser_inv.add_argument("selection", help="Selection query (e.g., 'pipeline:my-pipe step:extract')")
+    parser_inv.add_argument("--reason", required=True, help="Reason for invalidation")
     parser_inv.set_defaults(func=cmd_invalidate)
     
     args = parser.parse_args()

@@ -188,6 +188,11 @@ def step(
     fields index one entry per element. Purely operational — changing
     index= never affects cache identity, and only newly created
     materializations are indexed under the new declaration.
+
+    on_failed controls the partial fan-in behavior for collective steps 
+    (reduce/join). "use_passed" (default) allows the step to proceed with 
+    the surviving lanes if some parent lanes fail or are blocked. "block" 
+    halts the entire step if any parent lane is unavailable.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
@@ -436,6 +441,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["params_schema"] = s.params_model.model_json_schema()
         if s.shape != "map":
             entry["shape"] = s.shape
+            if s.on_failed != "use_passed":
+                entry["on_failed"] = s.on_failed
         if s.group_key is not None:
             entry["group_key"] = s.group_key
         if s.join_on is not None:
@@ -507,6 +514,8 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
             policies.append("code=auto")
         if s.params_model is not None:
             policies.append(f"params={s.params_model.__name__}")
+        if s.shape in ("reduce", "join") and s.on_failed == "block":
+            policies.append("on_failed=block")
         policy_str = f"  [{', '.join(policies)}]" if policies else ""
         lines.append(f"  {s.name} ({s.version}){deps}{policy_str}")
     return "\n".join(lines)

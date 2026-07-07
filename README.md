@@ -95,9 +95,9 @@ State lives in `.rubedo/` (SQLite database + content-addressed object store), cr
 
 By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan-out, and joins:
 
-- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of an indexed field, keyed by that value.
+- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of an indexed field, keyed by that value. By default, it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
-- **`join`** — an N-way equijoin across multiple sources, matched on an indexed field:
+- **`join`** — an N-way equijoin across multiple sources, matched on an indexed field. By default, it proceeds despite failed parents (`on_failed="use_passed"`):
 
 ```python
 @step(name="order", version="1", source="orders", index=["cust"])

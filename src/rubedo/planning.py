@@ -424,14 +424,16 @@ def _plan_join(
             combo_list.append((pair_coord, parent_mats, input_hash, output_address))
 
     if not combo_list:
-        return [
-            StepDecision(
-                coordinate="@join",
-                action="blocked",
-                failed_parents=failed_parents,
-                blocked_parents=blocked_parents,
-            )
-        ]
+        if failed_parents or blocked_parents:
+            return [
+                StepDecision(
+                    coordinate="@join",
+                    action="blocked",
+                    failed_parents=failed_parents,
+                    blocked_parents=blocked_parents,
+                )
+            ]
+        return []
 
     addrs = [out_addr for _, _, _, out_addr in combo_list]
     mats_by_addr = {}
@@ -539,7 +541,7 @@ def _plan_step(
         if pending:
             return [StepDecision(coordinate="@all", action="pending")]
 
-        if not any(parent_mats[d] for d in step.depends_on):
+        if all(not lanes for lanes in parent_mats.values()) and (failed_parents or blocked_parents):
             return [
                 StepDecision(
                     coordinate="@all",

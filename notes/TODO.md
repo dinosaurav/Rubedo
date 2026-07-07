@@ -370,7 +370,7 @@ for building the step's `params` kwarg. Decide whether steps[0] fallback
 survives (probably: deprecate quietly, validate against the pipeline model
 when present).
 
-## 15. Partial fan-in policy for `reduce`/`join`  **[⚠️ subtle]**
+## [DONE] 15. Partial fan-in policy for `reduce`/`join`  **[⚠️ subtle]**
 
 Today a collective step blocks entirely when *any* upstream lane failed or
 was blocked: the reduce branch of `_plan_step` and `_plan_join` both emit a

@@ -52,6 +52,9 @@ Relationship between a run and a coordinate: created, reused, failed, blocked,
 filtered. "Filtered" means a step declined the coordinate — a cached,
 first-class verdict, not an error.
 
+**Collective Steps & Fan-in:**
+Collective steps (`reduce` / `join`) default to partial fan-in (`on_failed="use_passed"`): if a parent lane fails or is blocked, the step drops it and proceeds with the surviving lanes (firing a `partial_fan_in` warning). They block entirely only if `on_failed="block"` is requested, or if zero lanes survive and the emptiness is caused by failures/blocks.
+
 **Invalidation:**
 Removal from current/canonical eligibility, not necessarily physical deletion.
 
