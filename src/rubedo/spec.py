@@ -189,10 +189,13 @@ def step(
     index= never affects cache identity, and only newly created
     materializations are indexed under the new declaration.
 
-    on_failed controls the partial fan-in behavior for collective steps 
-    (reduce/join). "use_passed" (default) allows the step to proceed with 
-    the surviving lanes if some parent lanes fail or are blocked. "block" 
-    halts the entire step if any parent lane is unavailable.
+    on_failed controls the partial fan-in behavior for collective steps
+    (reduce/join). "use_passed" (default) allows the step to proceed with
+    the surviving lanes if some parent lanes fail or are blocked. "block"
+    halts the entire step if any parent lane is unavailable. Note that
+    "use_passed" is literal: a multi-parent reduce whose parents all failed
+    for one dep still runs, receiving an empty dict for that kwarg — declare
+    on_failed="block" if every parent must contribute.
     """
     if code not in ("warn", "auto"):
         raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
