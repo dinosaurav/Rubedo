@@ -17,11 +17,12 @@ stable.
 - **Tier 1 · Product shape & packaging** — the producer model is a natural
   "feature complete" moment; before a `pip install rubedo` push, keep the
   public surface trustworthy and the install lean: **1** dependency & packaging
-  hygiene.
+  hygiene · **2** read-only ops CLI (build early — a terminal view of ledger
+  state is the fastest way to eyeball the output of everything else while
+  building it).
 - **Tier 2 · DX, Observability & UI** — make it delightful to watch and drive:
-  **2** live run view animations (backend + wiring already shipped) · **3** CLI
-  + terminal UI · **4** pipelines-page enhancements · **5** rich output
-  visualization.
+  **3** live run view animations (backend + wiring already shipped) · **4**
+  pipelines-page enhancements · **5** rich output visualization.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
   distributed execution; **9** lane-pipelined execution (independent).
@@ -48,11 +49,50 @@ Keep `pip install rubedo` lean and honest about what the engine actually needs.
   ships. Acceptance: a clean-venv wheel install runs `examples/count_lines`
   end-to-end with only core deps present.
 
+## 2. Read-only ops CLI (`rich`)
+
+A terminal window into ledger state — the fastest way to inspect what a run
+produced while building the rest of the roadmap (it's a dev tool for verifying
+other commands' output as much as a user feature). Add a `rubedo` console entry
+point (`[project.scripts]` in `pyproject.toml`). **Scope is deliberately the
+read/ops surface only** — the terminal twin of the read-only web dashboard:
+
+- `rubedo ls` — recent runs (id, pipeline, status, created/reused/failed
+  counts, timing).
+- `rubedo show <run>` — one run's steps, per-step counts, coordinate statuses,
+  events; `--json` for scripting.
+- `rubedo invalidate <selection>` — surgical invalidation from the terminal
+  (the invalidation UI was removed from the dashboard, so the CLI + code are
+  now the home for this; see item 12).
+
+**Reuse, don't duplicate — this is the point of doing it now:**
+- `invalidate` is already a standalone public API (`invalidation.invalidate`)
+  taking a `Selection`; `Selection.parse()` builds one from a query string. The
+  CLI command is a thin wrapper over `invalidate(Selection.parse(arg))` — zero
+  new query logic.
+- `ls`/`show` read the same ledger the server does, but those queries are
+  currently **inlined** in `server.py`'s FastAPI handlers (`get_runs`,
+  `get_run`, and the summary-JSON unpacking). Factor them into a shared
+  read-query layer (plain functions returning dicts/dataclasses, no FastAPI
+  types) that **both** `server.py` and the CLI call — so the HTTP API and the
+  CLI can never drift. `rich` renders the tables. Reads `RUBEDO_HOME` like
+  everything else; imports **zero** user pipeline code.
+
+**Explicitly out of scope: `rubedo run` / `rubedo plan` as first-class
+commands.** Pipelines are Python and already have a natural entry point
+(`python my_pipeline.py` calling `run(pipe)`); a `module:factory` string would
+reintroduce exactly the registry/discovery indirection the engine deliberately
+rejects ("no registry; the engine never imports user code"), while being weaker
+than the code path it replaces (stringly-typed, no args, no type-checking). If
+a `rubedo run` ever appears it is at most **syntactic sugar** — e.g. exec a file
+path that itself calls `run()` — never a discovery mechanism, and never the
+recommended way to run a pipeline. Design-first if even the sugar is wanted.
+
 ══════════════════════════════════════════════════════════════════════
 # Tier 2 · DX, Observability & UI
 ══════════════════════════════════════════════════════════════════════
 
-## 2. Live run view (streaming progress) — animation polish
+## 3. Live run view (streaming progress) — animation polish
 
 **Backend and wiring already shipped** (commit "feat(ui): Live run view and
 lineage search"): `server.py` exposes `GET /api/runs/{run_id}/stream` as an SSE
@@ -69,14 +109,6 @@ smooth counter increments rather than snapping, per-step created/reused/failed
 badges ticking. Make watching a run feel dynamic. **Also fix here:**
 `RunDetail.tsx` hardcodes `http://localhost:8000` in the `EventSource` URL —
 route it through the same base-URL helper the rest of `api.ts` uses.
-
-## 3. CLI & terminal UI (`rich`)
-
-Local-first developers love the terminal. Add a `rubedo` console entry point
-(`[project.scripts]` in `pyproject.toml`) with: `rubedo run
-<module:factory>` / `rubedo plan <…>`, `rubedo ls` / `rubedo show <run>`,
-and `rubedo invalidate <selection>`. Use `rich` for a live DAG: per-step progress
-bars and created/reused/failed counts ticking as lanes complete.
 
 ## 4. Pipelines Page Enhancements
 
@@ -237,7 +269,7 @@ Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
 Pipeline Run Search & Step Inspection UI (RunInspector, deep value search) ·
 Live run view backend + wiring (SSE `GET /api/runs/{id}/stream` + `RunDetail`
-`EventSource`; animation polish still open, item 2) ·
+`EventSource`; animation polish still open, item 3) ·
 `PipelineBuilder` helper · data quality assertions (`assertions=[]`) ·
 Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·
 type checking pass (mypy configured, py.typed shipped, public API typed) ·
