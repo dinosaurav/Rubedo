@@ -595,7 +595,9 @@ def _plan_step(
         pending = False
 
         for dep in step.depends_on:
-            parent_mat = coord_step_mats.get((coord, dep))
+            if (coord, dep) not in coord_step_mats:
+                raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use shape='join'")
+            parent_mat = coord_step_mats[(coord, dep)]
             if parent_mat == "blocked":
                 blocked_parents.append(dep)
             elif parent_mat == "failed":
