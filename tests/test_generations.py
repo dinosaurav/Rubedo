@@ -209,7 +209,7 @@ def test_params_are_part_of_cache_identity():
         return "pass" if score["ok"] else "fail"
 
     pipe = pipeline(
-id="par", name="par", folder=TEST_FOLDER, steps=[score, label])
+id="par", name="par", folder=TEST_FOLDER, steps=[score, label], params_model=Thresh)
     create_file("f1.txt", "hello")
 
     s1 = run(pipe, params={"threshold": 1}, workers=1)

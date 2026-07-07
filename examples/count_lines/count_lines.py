@@ -20,10 +20,11 @@ p = PipelineBuilder(
     id="count-lines",
     name="Count Lines DAG",
     folder=os.path.join(os.path.dirname(__file__), "input"),
+    params_model=CountLinesParams,
 )
 
 
-@p.step(name="read_lines", version="read-v1", params_model=CountLinesParams)
+@p.step(name="read_lines", version="read-v1")
 def read_lines(path: str, params: CountLinesParams):
     text = open(path).read()
     lines = text.splitlines()

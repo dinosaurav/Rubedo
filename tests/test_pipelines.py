@@ -77,7 +77,7 @@ def make_pipeline():
         return {"val": params.my_val}
 
     return pipeline(
-        id="test-proc", name="Test Proc", folder=TEST_FOLDER, steps=[my_proc]
+        id="test-proc", name="Test Proc", folder=TEST_FOLDER, steps=[my_proc], params_model=MyParams
     )
 
 

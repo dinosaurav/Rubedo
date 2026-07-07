@@ -10,7 +10,8 @@ import os
 import traceback
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+import contextlib
 
 from .db import get_session, init_db
 from .execution import _execute_step, _RunMemo
@@ -80,9 +81,8 @@ def _resolve_invocation(pipeline: PipelineSpec, source, params):
     if source is not None:
         source = coerce_source(source)
 
-    first = pipeline.steps[0] if pipeline.steps else None
-    if first and first.params_model:
-        params = first.params_model.model_validate(params or {}).model_dump(
+    if pipeline.params_model:
+        params = pipeline.params_model.model_validate(params or {}).model_dump(
             mode="json"
         )
     return pipeline, source, params
@@ -202,10 +202,12 @@ def run(
     workers: Optional[int] = None,
     force: bool = False,
     home: Optional[str] = None,
+    progress: bool = False,
+    progress_cb: Optional[Callable[[str, str, str], None]] = None,
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
-    Params are validated against the first step's params_model whenever
+    Params are validated against the pipeline's params_model whenever
     one is declared. home, if given, points the ledger/object store at a
     custom root instead of the default `.rubedo`/RUBEDO_HOME (see
     notes/TODO.md item 1).
@@ -218,6 +220,8 @@ def run(
         workers=workers,
         force=force,
         home=home,
+        progress=progress,
+        progress_cb=progress_cb,
     )
 
 
@@ -228,6 +232,8 @@ def run_pipeline(
     force: bool = False,
     params: Optional[dict] = None,
     home: Optional[str] = None,
+    progress: bool = False,
+    progress_cb: Optional[Callable[[str, str, str], None]] = None,
 ) -> RunSummary:
     """
     Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
@@ -247,7 +253,15 @@ def run_pipeline(
     if home is not None:
         _init_home(home)
 
-    sources = _resolve_sources(pipeline, source)
+    from .progress import TerminalProgress
+    
+    cm = TerminalProgress() if progress else contextlib.nullcontext()
+    
+    with cm as prog:
+        if progress and prog:
+            progress_cb = prog.update
+
+        sources = _resolve_sources(pipeline, source)
     topo_steps = topological_sort(pipeline)
     step_sources = {
         s.name: sources[_source_name_for(pipeline, sources, s)]
@@ -310,12 +324,27 @@ def run_pipeline(
                 )
                 _record_planned(session, ctx, step, decisions)
                 session.commit()
+                if progress_cb:
+                    for d in decisions:
+                        if d.action != "execute":
+                            progress_cb(step.name, d.coordinate, d.action)
 
                 to_execute = [d for d in decisions if d.action == "execute"]
                 for outcome in _execute_step(
                     step, to_execute, step_sources, params, accepts_params, workers, memo
                 ):
+                    status = outcome.get("status")
+                    if status is None:
+                        if "error" in outcome:
+                            status = "failed"
+                        elif "filtered" in outcome and outcome.get("filtered"):
+                            status = "filtered"
+                        else:
+                            status = "created"
+                    
                     _commit_execution_result(ctx, step, outcome)
+                    if progress_cb:
+                        progress_cb(step.name, outcome["coordinate"], status)
 
             return _finish_run(ctx)
 

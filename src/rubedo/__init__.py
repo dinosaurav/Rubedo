@@ -18,6 +18,7 @@ from .selection import Selection
 from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate
 from .runner import plan, run, RunPlan
+from .progress import TerminalProgress
 
 __all__ = [
     "invalidate",
@@ -39,4 +40,5 @@ __all__ = [
     "run",
     "plan",
     "RunPlan",
+    "TerminalProgress",
 ]

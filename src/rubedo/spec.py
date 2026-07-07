@@ -84,8 +84,10 @@ class PipelineSpec:
     """
     id: str
     name: str
-    sources: Dict[str, Source]
+    folder: Optional[str]
+    sources: Dict[str, "Source"]
     steps: List[StepSpec]
+    params_model: Optional[Type[BaseModel]] = None
 
     @property
     def source(self) -> Source:
@@ -341,8 +343,9 @@ def pipeline(
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
     source: Optional[Source] = None,
-    sources: Optional[Dict[str, Source]] = None,
-):
+    sources: Optional[Dict[str, "Source"]] = None,
+    params_model: Optional[Type[BaseModel]] = None,
+) -> PipelineSpec:
     """Construct a pipeline from its steps (and optional source sugar).
 
     Pass at most one of `folder=` (FolderSource sugar), `source=` (one Source),
@@ -412,7 +415,14 @@ def pipeline(
                         f"Step '{s.name}': group_key requires materialized parents, but '{dep}' is skip_cache"
                     )
 
-    return PipelineSpec(id=id or name, name=name, sources=sources, steps=steps)
+    return PipelineSpec(
+        id=id or name,
+        name=name,
+        folder=folder,
+        sources=sources,
+        steps=steps,
+        params_model=params_model,
+    )
 
 
 def definition(spec: PipelineSpec) -> Dict[str, Any]:
@@ -530,8 +540,9 @@ class PipelineBuilder:
     Instead of passing a list of steps to `pipeline(steps=[...])`, you can 
     use `@p.step()` to accumulate them on the builder instance.
     """
-    def __init__(self, **pipeline_kwargs):
+    def __init__(self, params_model: Optional[Type[BaseModel]] = None, **pipeline_kwargs):
         self.pipeline_kwargs = pipeline_kwargs
+        self.params_model = params_model
         self.steps: List[StepSpec] = []
         
     def step(self, *args, **kwargs):
@@ -551,7 +562,9 @@ class PipelineBuilder:
         return wrap(fn) if fn is not None else wrap
         
     def build(self, **kwargs) -> PipelineSpec:
-        """Build the final PipelineSpec using the accumulated steps."""
+        """Construct the final PipelineSpec using the accumulated steps."""
         merged = {**self.pipeline_kwargs, **kwargs}
         merged["steps"] = self.steps + merged.get("steps", [])
+        if self.params_model and "params_model" not in merged:
+            merged["params_model"] = self.params_model
         return pipeline(**merged)
