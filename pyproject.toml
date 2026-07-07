@@ -10,20 +10,20 @@ license = "MIT"
 dependencies = [
     "sqlalchemy",
     "pydantic",
-    "fastapi",
-    "uvicorn",
     "packaging>=26.2",
     "loky>=3.5.6",
     "cloudpickle>=3.1.2",
 ]
 
+[project.optional-dependencies]
+server = ["fastapi", "uvicorn"]
+
 # The examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via
 # OpenRouter) using only the standard library — no extra dependencies to install.
 # LLM examples read OPENROUTER_API_KEY from a .env file at the repo root.
 
-[tool.setuptools]
-packages = ["rubedo"]
-package-dir = {"" = "src"}
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

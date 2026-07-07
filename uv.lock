@@ -1988,11 +1988,15 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
-    { name = "fastapi" },
     { name = "loky" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
+]
+
+[package.optional-dependencies]
+server = [
+    { name = "fastapi" },
     { name = "uvicorn" },
 ]
 
@@ -2013,13 +2017,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
-    { name = "fastapi" },
+    { name = "fastapi", marker = "extra == 'server'" },
     { name = "loky", specifier = ">=3.5.6" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
-    { name = "uvicorn" },
+    { name = "uvicorn", marker = "extra == 'server'" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [

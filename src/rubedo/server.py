@@ -3,9 +3,10 @@ FastAPI server for the read-only web UI and invalidation API.
 """
 import os
 import json
+import time
+import asyncio
 from contextlib import asynccontextmanager
 from typing import List
-import asyncio
 from fastapi import FastAPI, HTTPException, Request, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,8 +48,8 @@ app = FastAPI(title="Rubedo", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Total-Count"],
@@ -117,7 +118,7 @@ def get_run(run_id: str):
 @app.get("/api/runs/{run_id}/stream")
 async def stream_run(run_id: str):
     """Stream live progress of a run via Server-Sent Events (SSE)."""
-    async def event_generator():
+    def event_generator():
         while True:
             with get_session() as session:
                 run = session.query(Run).filter_by(id=run_id).first()
@@ -157,7 +158,7 @@ async def stream_run(run_id: str):
                 if run.status != "running":
                     break
                     
-            await asyncio.sleep(1.0)
+            time.sleep(1.0)
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -555,40 +556,42 @@ async def invalidate_selection(request: Request):
 
 @app.get("/api/pipelines", response_model=List[PipelineOut])
 def get_pipelines_api():
-    """Ledger-derived: a pipeline exists here once it has run.
-
-    The server never imports user pipeline code; definitions live in the
-    caller's codebase and are snapshotted into the ledger by run().
-    """
+    """Ledger-derived: a pipeline exists here once it has run."""
     with get_session() as session:
-        rows = (
+        latest_subq = (
             session.query(
                 Run.pipeline_id,
-                func.count(Run.id),
-                func.max(Run.started_at),
+                func.max(Run.started_at).label("last_run_at"),
+                func.count(Run.id).label("run_count"),
             )
             .filter(Run.pipeline_id.isnot(None), Run.kind == "process")
             .group_by(Run.pipeline_id)
+            .subquery()
+        )
+
+        rows = (
+            session.query(Run, latest_subq.c.run_count)
+            .join(
+                latest_subq,
+                (Run.pipeline_id == latest_subq.c.pipeline_id)
+                & (Run.started_at == latest_subq.c.last_run_at)
+            )
             .all()
         )
 
         out = []
-        for pipeline_id, run_count, last_run_at in rows:
-            latest = (
-                session.query(Run)
-                .filter_by(pipeline_id=pipeline_id, kind="process")
-                .order_by(Run.started_at.desc())
-                .first()
-            )
+        seen = set()
+        for run, run_count in rows:
+            if run.pipeline_id in seen:
+                continue
+            seen.add(run.pipeline_id)
             out.append(
                 PipelineOut(
-                    id=pipeline_id,
-                    source_id=latest.source_id,  # type: ignore
+                    id=run.pipeline_id,
+                    source_id=getattr(run, 'source_id', ''),
                     run_count=run_count,
-                    last_run_at=last_run_at,
-                    definition=json.loads(latest.definition_json)  # type: ignore
-                    if latest.definition_json  # type: ignore
-                    else None,
+                    last_run_at=getattr(run, 'started_at', ''),
+                    definition=json.loads(getattr(run, 'definition_json', '{}')) if getattr(run, 'definition_json', None) else None,
                 )
             )
         return out

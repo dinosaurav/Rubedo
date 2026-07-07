@@ -2,6 +2,7 @@
 Content-addressed object store operations.
 """
 import os
+from .util import _ensure_gitignore
 import json
 from typing import Any, Optional, Protocol, Tuple
 from .models import ProcessResult
@@ -22,21 +23,6 @@ def _default_home() -> str:
 
 OBJECTS_DIR = os.path.join(_default_home(), "objects")
 STAGING_DIR = os.path.join(_default_home(), "staging")
-
-
-def _ensure_gitignore(directory: str):
-    """Ensure a directory is gitignored."""
-    if not directory:
-        return
-    gitignore_path = os.path.join(directory, ".gitignore")
-    if not os.path.exists(gitignore_path):
-        try:
-            with open(gitignore_path, "w") as f:
-                f.write(
-                    "# Ignore everything in this directory\n*\n# Except this file\n!.gitignore\n"
-                )
-        except Exception:
-            pass
 
 
 def init_store(home: Optional[str] = None):

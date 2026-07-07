@@ -5,6 +5,7 @@ Provides utilities for setting up the SQLite database, ensuring the directory
 is gitignored, configuring WAL mode for concurrency, and providing sessions.
 """
 import os
+from .util import _ensure_gitignore
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional, Any
@@ -12,26 +13,6 @@ from .models import Base
 
 engine: Any = None
 SessionLocal: Any = None
-
-
-def _ensure_gitignore(directory: str):
-    """
-    Ensure the given directory has a .gitignore file that ignores all contents except itself.
-    
-    Args:
-        directory (str): The path to the directory to protect.
-    """
-    if not directory:
-        return
-    gitignore_path = os.path.join(directory, ".gitignore")
-    if not os.path.exists(gitignore_path):
-        try:
-            with open(gitignore_path, "w") as f:
-                f.write(
-                    "# Ignore everything in this directory\n*\n# Except this file\n!.gitignore\n"
-                )
-        except Exception:
-            pass
 
 
 def init_db(db_path: Optional[str] = None):
