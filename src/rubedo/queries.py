@@ -7,9 +7,8 @@ used by both the HTTP server and the CLI.
 import json
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from .models import Run, RunCoordinateStatus, Materialization
+from .models import Run, RunCoordinateStatus
 from .schemas import RunListItem, RunDetailOut
 
 

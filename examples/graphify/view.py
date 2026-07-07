@@ -21,7 +21,7 @@ def main():
     # networkx node_link_data exports edges as 'links'
     edges = data.get("links", [])
 
-    print(f"=== Graphify Stats ===")
+    print("=== Graphify Stats ===")
     print(f"  Nodes: {len(nodes)}")
     print(f"  Edges: {len(edges)}")
     
