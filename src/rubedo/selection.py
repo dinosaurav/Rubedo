@@ -152,4 +152,5 @@ def get_selection_materialization_ids(
 
         result_ids.append(m.id)
 
-    return result_ids # type: ignore
+    return result_ids  # type: ignore
+

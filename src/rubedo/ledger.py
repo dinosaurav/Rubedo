@@ -149,7 +149,7 @@ def _record_planned(
             ctx.coord_step_mats[(d.coordinate, step.name)] = d.existing
             # A cached filter verdict reads as "filtered" in the ledger:
             # "reused" is reserved for coordinates with a usable output
-            status = "filtered" if d.existing.filtered else "reused"
+            status = "filtered" if d.existing.filtered else "reused"  # type: ignore
             session.add(
                 _new_status(
                     ctx,
@@ -158,7 +158,7 @@ def _record_planned(
                     status,
                     input_hash=d.input_hash,
                     output_address=d.output_address,
-                    materialization_id=d.existing.id,
+                    materialization_id=d.existing.id,  # type: ignore
                 )
             )
             _emit(
@@ -245,7 +245,7 @@ def _commit_materialization(
     if live:
         if live.output_content_hash == output_content_hash:
             if refresh:
-                live.refreshed_at = utcnow_iso()
+                live.refreshed_at = utcnow_iso()  # type: ignore
                 session.add(
                     MaterializationLifecycle(
                         materialization_id=live.id,
@@ -257,7 +257,7 @@ def _commit_materialization(
                 )
                 return live, "refreshed"
             return live, "reused"
-        live.is_live = False
+        live.is_live = False  # type: ignore
         # Demote before inserting the replacement so the one-live-per-address
         # index never sees two live generations
         session.flush()
@@ -274,7 +274,7 @@ def _commit_materialization(
             .first()
         )
         if prior:
-            prior.is_live = True
+            prior.is_live = True  # type: ignore
             session.add(
                 MaterializationLifecycle(
                     materialization_id=prior.id,
@@ -318,7 +318,7 @@ def _commit_materialization(
             if live.output_content_hash == output_content_hash:
                 return live, "reused"
             
-            live.is_live = False
+            live.is_live = False  # type: ignore
             session.flush()
             superseded = live
             
@@ -375,7 +375,7 @@ def _extract_index_entries(session: Session, mat_id: int, step: StepSpec, result
     for path in step.index:
         node = value
         for part in path.split("."):
-            node = node.get(part) if isinstance(node, dict) else None
+            node = node.get(part) if isinstance(node, dict) else None  # type: ignore
             if node is None:
                 break
         if node is None:
@@ -456,9 +456,9 @@ def _commit_execution_result(
                 ctx,
                 step,
                 decision,
-                error_message=outcome.error_trace,
+                error_message=outcome.error_trace,  # type: ignore
                 error_type="ExecutionError",
-                event_message=outcome.error_trace,
+                event_message=outcome.error_trace,  # type: ignore
                 metadata_json=attempts_meta,
             )
             session.commit()
@@ -485,8 +485,8 @@ def _commit_execution_result(
                 session,
                 pipeline_id=ctx.pipeline_id,
                 step=step,
-                input_hash=decision.input_hash,
-                output_address=decision.output_address,
+                input_hash=decision.input_hash,  # type: ignore
+                output_address=decision.output_address,  # type: ignore
                 output_content_hash=output_content_hash,
                 content_type=content_type,
                 output_path=final_path,
@@ -506,7 +506,7 @@ def _commit_execution_result(
             # Fresh generations get their declared value fields indexed;
             # reused/restored/refreshed rows already carry their entries
             if mat_action in ("created", "superseded") and not is_filtered:
-                _extract_index_entries(session, mat.id, step, result)
+                _extract_index_entries(session, mat.id, step, result)  # type: ignore
 
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
@@ -600,21 +600,21 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
     with get_session() as session:
         final_run = session.query(Run).filter_by(id=ctx.run_id).first()
         if ctx.totals["failed"] == 0 and ctx.totals["blocked"] == 0:
-            final_run.status = "completed"
+            final_run.status = "completed"  # type: ignore
         elif ctx.totals["created"] == 0 and ctx.totals["reused"] == 0 and ctx.totals["filtered"] == 0:
-            final_run.status = "failed"
+            final_run.status = "failed"  # type: ignore
         else:
-            final_run.status = "completed_with_failures"
+            final_run.status = "completed_with_failures"  # type: ignore
 
-        final_status = final_run.status
-        final_run.finished_at = utcnow_iso()
-        final_run.summary_json = json.dumps(full_summary)
+        final_status = final_run.status  # type: ignore
+        final_run.finished_at = utcnow_iso()  # type: ignore
+        final_run.summary_json = json.dumps(full_summary)  # type: ignore
         _emit(
             session,
             ctx,
             "info",
             "run_completed" if final_status != "failed" else "run_failed",
-            message=f"Run finished with status {final_run.status}",
+            message=f"Run finished with status {final_run.status}",  # type: ignore
         )
         session.commit()
 

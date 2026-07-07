@@ -5,7 +5,7 @@ access is the live-materialization lookup that answers "is this cached?".
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 
 from sqlalchemy.orm import Session
 
@@ -199,7 +199,7 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
 
 
 def _group_reduce_lanes(
-    session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Any]]
+    session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Partition a reduce's parent lanes into groups by an indexed field.
 
@@ -211,10 +211,10 @@ def _group_reduce_lanes(
     coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
         for coord, ref in coord_refs.items():
-            mat_ids.append(ref.id)
+            mat_ids.append(ref.id)  # type: ignore
             coord_ref_map.append((dep, coord, ref))
 
-    vals_by_mat = {}
+    vals_by_mat: Dict[int, List[str]] = {}
     if mat_ids:
         rows = (
             session.query(MaterializationIndexEntry)
@@ -225,11 +225,11 @@ def _group_reduce_lanes(
             .all()
         )
         for row in rows:
-            vals_by_mat.setdefault(row.materialization_id, []).append(row.value)
+            vals_by_mat.setdefault(row.materialization_id, []).append(row.value)  # type: ignore
 
-    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    groups: Dict[str, Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]] = {}
     for dep, coord, ref in coord_ref_map:
-        values = vals_by_mat.get(ref.id)
+        values = vals_by_mat.get(ref.id)  # type: ignore
         if not values:
             raise ValueError(
                 f"reduce step '{step.name}': group_key '{step.group_key}' "
@@ -245,7 +245,7 @@ def _reduce_group_decision(
     session: Session,
     step: StepSpec,
     group_coord: str,
-    group_mats: Dict[str, Dict[str, Any]],
+    group_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]],
     params_hash: str,
     force: bool,
     accepts_params: bool,
@@ -280,7 +280,7 @@ def _reduce_group_decision(
     expired = False
     if existing_mat and step.stale_after is not None:
         freshness = existing_mat.refreshed_at or existing_mat.created_at
-        expired = iso_age_seconds(freshness) > step.stale_after
+        expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
 
     if existing_mat and not force and not expired:
         return StepDecision(
@@ -318,7 +318,7 @@ def _reduce_group_decision(
 def _plan_join(
     session: Session,
     step: StepSpec,
-    coord_step_mats: Dict[tuple, Any],
+    coord_step_mats: Dict[Tuple[str, str], Union[MatRef, EphemeralRef, Literal["blocked", "failed", "pending", "filtered"]]],
     params_hash: str,
     force: bool,
     accepts_params: bool,
@@ -332,14 +332,14 @@ def _plan_join(
     """
     import itertools
 
-    deps = list(step.join_on.keys())
+    deps = list(step.join_on.keys())  # type: ignore
     buckets: Dict[str, Dict[str, List[tuple]]] = {dep: {} for dep in deps}
     failed_parents: List[str] = []
     blocked_parents: List[str] = []
     pending = False
 
-    mat_ids_by_dep = {dep: [] for dep in deps}
-    coord_ref_map = {dep: [] for dep in deps}
+    mat_ids_by_dep: Dict[str, List[int]] = {dep: [] for dep in deps}
+    coord_ref_map: Dict[str, List[Tuple[str, Any]]] = {dep: [] for dep in deps}
 
     for (coord, d), ref in coord_step_mats.items():
         if d not in buckets:
@@ -353,7 +353,7 @@ def _plan_join(
         elif ref == "filtered" or getattr(ref, "filtered", False):
             pass
         elif ref is not None:
-            mat_ids_by_dep[d].append(ref.id)
+            mat_ids_by_dep[d].append(ref.id)  # type: ignore
             coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
@@ -368,7 +368,7 @@ def _plan_join(
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
-    vals_by_mat_by_dep = {dep: {} for dep in deps}
+    vals_by_mat_by_dep: Dict[str, Dict[int, List[str]]] = {dep: {} for dep in deps}
     for d in deps:
         if not mat_ids_by_dep[d]:
             continue
@@ -376,15 +376,15 @@ def _plan_join(
             session.query(MaterializationIndexEntry)
             .filter(
                 MaterializationIndexEntry.materialization_id.in_(mat_ids_by_dep[d]),
-                MaterializationIndexEntry.field == step.join_on[d],
+                MaterializationIndexEntry.field == step.join_on[d],  # type: ignore
             )
             .all()
         )
         for row in rows:
-            vals_by_mat_by_dep[d].setdefault(row.materialization_id, []).append(row.value)
+            vals_by_mat_by_dep[d].setdefault(row.materialization_id, []).append(row.value)  # type: ignore
 
     for d in deps:
-        field = step.join_on[d]
+        field = step.join_on[d]  # type: ignore
         for coord, ref in coord_ref_map[d]:
             values = vals_by_mat_by_dep[d].get(ref.id)
             if not values:
@@ -427,7 +427,7 @@ def _plan_join(
 
     decisions: List[StepDecision] = []
     for pair_coord, parent_mats, input_hash, output_address in combo_list:
-        existing_mat = mats_by_addr.get(output_address)
+        existing_mat = mats_by_addr.get(output_address)  # type: ignore
         expired = False
         if existing_mat and step.stale_after is not None:
             freshness = existing_mat.refreshed_at or existing_mat.created_at
@@ -474,14 +474,14 @@ def _plan_step(
     session: Session,
     step: StepSpec,
     scanned_items: List[SourceItem],
-    coord_step_mats: Dict[tuple, Any],
+    coord_step_mats: Dict[Tuple[str, str], Union[MatRef, EphemeralRef, Literal["blocked", "failed", "pending", "filtered"]]],
     params_hash: str,
     force: bool,
     accepts_params: bool,
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only."""
     if step.shape == "reduce":
-        parent_mats: Dict[str, Dict[str, Any]] = {dep: {} for dep in step.depends_on}
+        parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
         pending = False
@@ -563,9 +563,9 @@ def _plan_step(
     anchor_addrs = []
 
     for coord, it, sf_content_hash in targets:
-        parent_mats: Dict[str, MatRef] = {}
-        failed_parents: List[str] = []
-        blocked_parents: List[str] = []
+        parent_mats: Dict[str, MatRef] = {}  # type: ignore
+        failed_parents: List[str] = []  # type: ignore
+        blocked_parents: List[str] = []  # type: ignore
         filtered_parents: List[str] = []
         pending = False
 
@@ -582,7 +582,7 @@ def _plan_step(
             elif parent_mat == "filtered" or getattr(parent_mat, "filtered", False):
                 filtered_parents.append(dep)
             else:
-                parent_mats[dep] = parent_mat
+                parent_mats[dep] = parent_mat  # type: ignore
 
         if step.skip_cache:
             if failed_parents or blocked_parents:
@@ -596,7 +596,7 @@ def _plan_step(
                     "step": step.name,
                     "version": step.version,
                     "parents": {
-                        dep: ref.output_content_hash
+                        dep: ref.output_content_hash  # type: ignore
                         for dep, ref in parent_mats.items()
                     }
                     if step.depends_on
@@ -605,7 +605,7 @@ def _plan_step(
                 if accepts_params:
                     identity["params"] = params_hash
                 if step.code_mode == "auto":
-                    identity["code"] = step.code_hash
+                    identity["code"] = step.code_hash  # type: ignore
                 coord_step_mats[(coord, step.name)] = EphemeralRef(
                     step=step,
                     item=it,
@@ -642,14 +642,14 @@ def _plan_step(
             continue
 
         if step.shape == "expand":
-            parent_hash = parent_mats[step.depends_on[0]].output_content_hash
+            parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
             anchor_address = expand_anchor_address(
                 step, parent_hash, params_hash, accepts_params
             )
             anchor_addrs.append(anchor_address)
             resolved_targets.append(("expand", coord, it, parent_mats, anchor_address, parent_hash))
         else:
-            input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)
+            input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)  # type: ignore
             output_address = compute_output_address(
                 step.name,
                 step.version,
@@ -681,9 +681,9 @@ def _plan_step(
                 continue
             if step.stale_after is not None:
                 freshness = anchor.refreshed_at or anchor.created_at
-                if iso_age_seconds(freshness) > step.stale_after:
+                if iso_age_seconds(freshness) > step.stale_after:  # type: ignore
                     continue
-            children_hashes = read_materialization_output(anchor)
+            children_hashes = read_materialization_output(anchor)  # type: ignore
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:
@@ -706,7 +706,7 @@ def _plan_step(
     for kind, *args in resolved_targets:
         if kind == "expand":
             coord, it, parent_mats, anchor_address, parent_hash = args
-            identities = child_identities_by_target.get(coord)
+            identities = child_identities_by_target.get(coord)  # type: ignore
             if identities is None:
                 decisions.append(
                     StepDecision(
@@ -721,7 +721,7 @@ def _plan_step(
             incomplete = False
             out = []
             for child_hash, input_hash, child_addr in identities:
-                child = child_mats_by_addr.get(child_addr)
+                child = child_mats_by_addr.get(child_addr)  # type: ignore
                 if child is None:
                     incomplete = True
                     break
@@ -760,7 +760,7 @@ def _plan_step(
             expired = False
             if existing_mat and step.stale_after is not None:
                 freshness = existing_mat.refreshed_at or existing_mat.created_at
-                expired = iso_age_seconds(freshness) > step.stale_after
+                expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
 
             if existing_mat and not force and not expired:
                 decisions.append(

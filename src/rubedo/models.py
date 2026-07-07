@@ -234,7 +234,7 @@ for _model in _APPEND_ONLY:
     event.listen(_model, "before_update", _reject_update)
     event.listen(_model, "before_delete", _reject_delete)
 
-for _model, _allowed in _PROJECTION_COLUMNS.items():
+for _model, _allowed in _PROJECTION_COLUMNS.items():  # type: ignore
     event.listen(_model, "before_update", _projection_guard(_allowed))
     event.listen(_model, "before_delete", _reject_delete)
 

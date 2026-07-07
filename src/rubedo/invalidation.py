@@ -55,7 +55,7 @@ def invalidate(selection: Selection, reason: str) -> dict:
             for mat_id in mat_ids:
                 mat = session.get(Materialization, mat_id)
                 if mat and mat.is_live:
-                    mat.is_live = False
+                    mat.is_live = False  # type: ignore
                     session.add(
                         MaterializationLifecycle(
                             materialization_id=mat.id,
@@ -67,8 +67,8 @@ def invalidate(selection: Selection, reason: str) -> dict:
                     )
                     invalidated_count += 1
 
-            run.status = "completed"
-            run.finished_at = utcnow_iso()
+            run.status = "completed"  # type: ignore
+            run.finished_at = utcnow_iso()  # type: ignore
 
             event = RunEvent(
                 run_id=run_id,
@@ -87,9 +87,9 @@ def invalidate(selection: Selection, reason: str) -> dict:
             }
         except Exception as e:
             session.rollback()
-            run.status = "failed"
-            run.error_message = str(e)
-            run.finished_at = utcnow_iso()
+            run.status = "failed"  # type: ignore
+            run.error_message = str(e)  # type: ignore
+            run.finished_at = utcnow_iso()  # type: ignore
             session.commit()
             raise e
 

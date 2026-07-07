@@ -326,7 +326,7 @@ def _execute_step(
             )
         return outcomes
 
-    def process(
+    def process(  # type: ignore
         decision: StepDecision, pool: Optional[Any] = None
     ) -> List[ExecutionOutcome]:
         attempt_errors: List[str] = []

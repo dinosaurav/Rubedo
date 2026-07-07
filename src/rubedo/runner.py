@@ -323,9 +323,9 @@ def run_pipeline(
             with get_session() as err_session:
                 err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                 if err_run:
-                    err_run.status = "failed"
-                    err_run.error_message = traceback.format_exc()
-                    err_run.finished_at = utcnow_iso()
+                    err_run.status = "failed"  # type: ignore
+                    err_run.error_message = traceback.format_exc()  # type: ignore
+                    err_run.finished_at = utcnow_iso()  # type: ignore
                     _emit_event(
                         err_session,
                         ctx.run_id,

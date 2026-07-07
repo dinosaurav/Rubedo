@@ -48,13 +48,4 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_unused_configs = true
 
-[[tool.mypy.overrides]]
-module = [
-    "rubedo.models",
-    "rubedo.planning",
-    "rubedo.invalidation",
-    "rubedo.server",
-    "rubedo.ledger",
-    "rubedo.runner"
-]
-ignore_errors = true
+

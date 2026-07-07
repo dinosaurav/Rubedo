@@ -73,7 +73,7 @@ def get_runs():
             summary = {}
             if run.summary_json:
                 try:
-                    summary = json.loads(run.summary_json)
+                    summary = json.loads(run.summary_json)  # type: ignore
                 except Exception:
                     pass
             d["created_count"] = summary.get("created", 0)
@@ -97,7 +97,7 @@ def get_run(run_id: str):
         summary = {}
         if run.summary_json:
             try:
-                summary = json.loads(run.summary_json)
+                summary = json.loads(run.summary_json)  # type: ignore
             except Exception:
                 pass
         d["created_count"] = summary.get("created", 0)
@@ -108,7 +108,7 @@ def get_run(run_id: str):
         d["by_step"] = summary.get("by_step")
         if run.definition_json:
             try:
-                d["definition"] = json.loads(run.definition_json)
+                d["definition"] = json.loads(run.definition_json)  # type: ignore
             except Exception:
                 pass
         return d
@@ -312,8 +312,8 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
             (MaterializationEdge.parent_id.in_(run_mat_ids)) | (MaterializationEdge.child_id.in_(run_mat_ids))
         ).all()
 
-        parents = {m: [] for m in run_mat_ids}
-        children = {m: [] for m in run_mat_ids}
+        parents = {m: [] for m in run_mat_ids}  # type: ignore
+        children = {m: [] for m in run_mat_ids}  # type: ignore
         for e in all_edges:
             if e.child_id in run_mat_ids and e.parent_id in run_mat_ids:
                 parents[e.child_id].append(e.parent_id)
@@ -522,7 +522,7 @@ async def preview_selection(request: Request):
                     "code_version": m.code_version,
                     "output_address": m.output_address,
                     "output_content_hash": m.output_content_hash,
-                    "metadata": json.loads(m.metadata_json) if m.metadata_json else {},
+                    "metadata": json.loads(m.metadata_json) if m.metadata_json else {},  # type: ignore
                     "invalidated": not m.is_live,
                 }
             )
@@ -583,11 +583,11 @@ def get_pipelines_api():
             out.append(
                 PipelineOut(
                     id=pipeline_id,
-                    source_id=latest.source_id,
+                    source_id=latest.source_id,  # type: ignore
                     run_count=run_count,
                     last_run_at=last_run_at,
-                    definition=json.loads(latest.definition_json)
-                    if latest.definition_json
+                    definition=json.loads(latest.definition_json)  # type: ignore
+                    if latest.definition_json  # type: ignore
                     else None,
                 )
             )
