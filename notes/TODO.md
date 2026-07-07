@@ -59,6 +59,17 @@ Local-first developers love the terminal. Add a `rubedo` console entry point
 and `rubedo invalidate <selection>`. Use `rich` for a live DAG: per-step progress
 bars and created/reused/failed counts ticking as lanes complete.
 
+## 7. Pipelines Page Enhancements
+
+The pipelines page should act as a richer entry point into a pipeline's state.
+- **Last Run Details:** Surface more comprehensive information about the most recent run for each pipeline (status, duration, coordinate counts).
+- **Step Drill-Down:** Allow clicking on a specific step from the pipeline page to get deeper information about that step.
+- **Direct Materialization View:** Provide a way to view and browse the latest materializations specifically produced by that selected step.
+
+## 8. Rich Output Visualization
+
+Improve how materializations and outputs are displayed across the UI. Go beyond simple metadata and raw JSON/text previews to show more useful information, such as the actual calculated content for a step in a cleaner, more readable format.
+
 
 
 ══════════════════════════════════════════════════════════════════════
