@@ -375,12 +375,27 @@ def pipeline(
                 )
 
     consumed = {dep for s in steps for dep in s.depends_on}
+    name_to_step = {s.name: s for s in steps}
     for s in steps:
         if s.skip_cache and s.name not in consumed:
             raise ValueError(
                 f"Step '{s.name}' has skip_cache but no consumer: its output "
                 "would never be computed or stored"
             )
+        if s.shape == "join":
+            for dep in s.join_on or {}:
+                parent = name_to_step.get(dep)
+                if parent and parent.skip_cache:
+                    raise ValueError(
+                        f"Step '{s.name}': shape='join' cannot have a skip_cache parent ('{dep}')"
+                    )
+        if s.shape == "reduce" and s.group_key is not None:
+            for dep in s.depends_on:
+                parent = name_to_step.get(dep)
+                if parent and parent.skip_cache:
+                    raise ValueError(
+                        f"Step '{s.name}': group_key requires materialized parents, but '{dep}' is skip_cache"
+                    )
 
     return PipelineSpec(id=id or name, name=name, sources=sources, steps=steps)
 
