@@ -11,6 +11,7 @@ from .spec import (
     describe,
     PipelineSpec,
     StepSpec,
+    PipelineBuilder,
 )
 from .models import Filtered, ProcessResult, RunSummary
 from .selection import Selection
@@ -34,6 +35,7 @@ __all__ = [
     "describe",
     "PipelineSpec",
     "StepSpec",
+    "PipelineBuilder",
     "run",
     "plan",
     "RunPlan",

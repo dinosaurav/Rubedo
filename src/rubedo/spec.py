@@ -488,3 +488,36 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
         policy_str = f"  [{', '.join(policies)}]" if policies else ""
         lines.append(f"  {s.name} ({s.version}){deps}{policy_str}")
     return "\n".join(lines)
+
+
+class PipelineBuilder:
+    """A helper for constructing pipelines using the builder pattern.
+    
+    Instead of passing a list of steps to `pipeline(steps=[...])`, you can 
+    use `@p.step()` to accumulate them on the builder instance.
+    """
+    def __init__(self, **pipeline_kwargs):
+        self.pipeline_kwargs = pipeline_kwargs
+        self.steps: List[StepSpec] = []
+        
+    def step(self, *args, **kwargs):
+        """Decorate a function to define it as a step in this pipeline."""
+        def decorator(fn):
+            s = step(*args, **kwargs)(fn)
+            self.steps.append(s)
+            return s
+        return decorator
+
+    def source(self, fn=None, **kwargs):
+        """Decorate a function to define it as a source step in this pipeline."""
+        def wrap(f):
+            s = source(**kwargs)(f)
+            self.steps.append(s)
+            return s
+        return wrap(fn) if fn is not None else wrap
+        
+    def build(self, **kwargs) -> PipelineSpec:
+        """Build the final PipelineSpec using the accumulated steps."""
+        merged = {**self.pipeline_kwargs, **kwargs}
+        merged["steps"] = self.steps + merged.get("steps", [])
+        return pipeline(**merged)

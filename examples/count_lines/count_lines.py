@@ -1,7 +1,7 @@
 import os
 
 from pydantic import BaseModel, Field
-from rubedo import ProcessResult, describe, run, step, pipeline
+from rubedo import ProcessResult, describe, run, PipelineBuilder
 
 
 class CountLinesParams(BaseModel):
@@ -16,14 +16,21 @@ class CountLinesParams(BaseModel):
     )
 
 
-@step(name="read_lines", version="read-v1", params_model=CountLinesParams)
+p = PipelineBuilder(
+    id="count-lines",
+    name="Count Lines DAG",
+    folder=os.path.join(os.path.dirname(__file__), "input"),
+)
+
+
+@p.step(name="read_lines", version="read-v1", params_model=CountLinesParams)
 def read_lines(path: str, params: CountLinesParams):
     text = open(path).read()
     lines = text.splitlines()
     return {"lines": lines, "params": params.model_dump()}
 
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
+@p.step(name="count_lines", version="count-v1", depends_on=["read_lines"])
 def count_lines(read_lines: dict) -> ProcessResult:
     lines = read_lines["lines"]
     params = CountLinesParams(**read_lines["params"])
@@ -47,16 +54,11 @@ def count_lines(read_lines: dict) -> ProcessResult:
     )
 
 
-@step(name="total_lines", version="total-v1", depends_on=["count_lines"], shape="reduce")
+@p.step(name="total_lines", version="total-v1", depends_on=["count_lines"], shape="reduce")
 def total_lines(count_lines: dict):
     return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
 
-count_lines_pipeline = pipeline(
-    id="count-lines",
-    name="Count Lines DAG",
-    folder=os.path.join(os.path.dirname(__file__), "input"),
-    steps=[read_lines, count_lines, total_lines],
-)
+count_lines_pipeline = p.build()
 
 if __name__ == "__main__":
     print(describe(count_lines_pipeline))
