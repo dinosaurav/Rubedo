@@ -65,9 +65,9 @@ class _RunMemo:
     """
 
     def __init__(self):
-        """Initialize the run memoizer with a reentrant lock."""
-        self._lock = threading.RLock()
-        self._values: Dict[Tuple[str, str], Tuple[Literal["ok", "err"], Any]] = {}
+        """Initialize the run memoizer with a per-key locking scheme."""
+        self._lock = threading.Lock()
+        self._values: Dict[Tuple[str, str], Tuple[str, Any]] = {}
 
     def compute(self, key: Tuple[str, str], producer: Callable[[], Any]) -> Any:
         """
@@ -81,12 +81,36 @@ class _RunMemo:
             Any: The produced or cached value.
         """
         with self._lock:
-            if key not in self._values:
-                try:
-                    self._values[key] = ("ok", producer())
-                except Exception as e:
-                    self._values[key] = ("err", e)
-        kind, value = self._values[key]
+            state = self._values.get(key)
+            if state is None:
+                event = threading.Event()
+                self._values[key] = ("computing", event)
+            elif state[0] == "done":
+                kind, value = state[1]
+                if kind == "err":
+                    raise value
+                return value
+            else:
+                event = state[1]
+
+        if state is not None:
+            event.wait()
+            kind, value = self._values[key][1]
+            if kind == "err":
+                raise value
+            return value
+
+        try:
+            val = producer()
+            res = ("ok", val)
+        except Exception as e:
+            res = ("err", e)
+
+        with self._lock:
+            self._values[key] = ("done", res)
+            event.set()
+
+        kind, value = res
         if kind == "err":
             raise value
         return value
