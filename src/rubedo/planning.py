@@ -420,7 +420,7 @@ def _plan_join(
     if addrs:
         mats = (
             session.query(Materialization)
-            .filter(Materialization.output_address.in_(addrs), Materialization.is_live == True)
+            .filter(Materialization.output_address.in_(addrs), Materialization.is_live.is_(True))
             .all()
         )
         mats_by_addr = {m.output_address: m for m in mats}
@@ -664,7 +664,7 @@ def _plan_step(
     mats_by_addr = {}
     if all_addrs:
         mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_addrs), Materialization.is_live == True
+            Materialization.output_address.in_(all_addrs), Materialization.is_live.is_(True)
         ).all()
         mats_by_addr = {m.output_address: m for m in mats}
 
@@ -699,7 +699,7 @@ def _plan_step(
     child_mats_by_addr = {}
     if all_child_addrs:
         child_mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_child_addrs), Materialization.is_live == True
+            Materialization.output_address.in_(all_child_addrs), Materialization.is_live.is_(True)
         ).all()
         child_mats_by_addr = {m.output_address: m for m in child_mats}
 

@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import loky
 
