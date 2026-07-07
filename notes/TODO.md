@@ -8,50 +8,69 @@ a few) commits.
 
 The **producer model is done** (content-addressed lanes → `expand` →
 `group_key` → multi-source → N-way `join`); see the Done changelog and
-`notes/producer-model.md`. What's left is grouped into four tiers below.
+`notes/producer-model.md`. What's left is grouped into four tiers below, and
+items are numbered sequentially (1..12) across tiers so cross-references stay
+stable.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-- **Tier 1 · Launch polish** — the producer model is a natural "feature
-  complete" moment; before a `pip install rubedo` push, make the public API
-  trustworthy and custom sources pleasant. *(All initial polish tasks complete)*
+- **Tier 1 · Product shape & packaging** — the producer model is a natural
+  "feature complete" moment; before a `pip install rubedo` push, keep the
+  public surface trustworthy and the install lean: **1** dependency & packaging
+  hygiene.
 - **Tier 2 · DX, Observability & UI** — make it delightful to watch and drive:
-  **4** live run view (SSE) + animations · **6** CLI + terminal UI.
+  **2** live run view animations (backend + wiring already shipped) · **3** CLI
+  + terminal UI · **4** pipelines-page enhancements · **5** rich output
+  visualization.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real: **8** cloud sources → **9** cloud ledger+store → **10** distributed execution; **11** lane-pipelined execution
-  (independent).
-- **Tier 4 · Deferred / careful** — **12** storage GC (**dangerous**) ·
-  **13** `expand` child-views (storage optimization) · **14** lane tooling.
+  demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
+  distributed execution; **9** lane-pipelined execution (independent).
+- **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous**) · **11**
+  `expand` child-views (storage optimization) · **12** lane tooling.
 
 ══════════════════════════════════════════════════════════════════════
-# Tier 1 · Launch polish
+# Tier 1 · Product shape & packaging
 ══════════════════════════════════════════════════════════════════════
 
+## 1. Dependency & packaging hygiene
 
+Keep `pip install rubedo` lean and honest about what the engine actually needs.
 
+- **Done:** `litellm` moved out of core `dependencies` into the `dev`
+  dependency-group — it was never imported under `src/`, only by the
+  `graphify` example (alongside its `networkx`/`tree-sitter`, already in `dev`).
+  Core install no longer drags in litellm's dependency tree.
+- **Remaining:** a smoke-install check (build the wheel, install it into a
+  clean venv, `import rubedo` + run a trivial pipeline) so the packaged
+  artifact — not just the editable checkout — is known-good. When cloud sources
+  land (items 6–7), give them **optional extras** (`rubedo[s3]`, `rubedo[gcs]`,
+  `rubedo[postgres]`) rather than core deps, same pattern. `py.typed` already
+  ships. Acceptance: a clean-venv wheel install runs `examples/count_lines`
+  end-to-end with only core deps present.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 2 · DX, Observability & UI
 ══════════════════════════════════════════════════════════════════════
 
-## 4. Live run view (streaming progress) with animations
+## 2. Live run view (streaming progress) — animation polish
 
-A run already writes `run_events` and `run_coordinate_statuses` as it goes, and
-`server.py` is read-only and ledger-derived. Add a streaming endpoint so the
-web UI can watch a run execute live — the DAG lighting up, per-step
-created/reused/failed/blocked counts ticking. **Mechanism:** prefer **SSE**
-(Server-Sent Events) over WebSockets — one-way (all "view a run as it goes"
-needs), plain HTTP, no new deps; the server tails new ledger rows for a
-`run_id` and pushes them. **Tailing constraint:** SQLite has no
+**Backend and wiring already shipped** (commit "feat(ui): Live run view and
+lineage search"): `server.py` exposes `GET /api/runs/{run_id}/stream` as an SSE
+endpoint that polls `run_coordinate_statuses` on a 1s interval and pushes
+per-step + total created/reused/failed/blocked/filtered counts; `RunDetail.tsx`
+consumes it via `EventSource`, updating counts live and closing the stream when
+the run leaves `running`. The polling design is correct — SQLite has no
 `LISTEN/NOTIFY`, so cross-process (run in one process, server in another) means
-polling the ledger on a short interval.
-**Animations:** The UI should animate transitions and node states (e.g., pulsating
-running states, smooth counter increments) to make watching a run a dynamic, visually
-engaging experience.
+tailing the ledger on a short interval.
 
+**What's actually left is the visual layer:** the DAG should *light up* as a
+run executes — animate node state transitions (e.g. pulsating running states),
+smooth counter increments rather than snapping, per-step created/reused/failed
+badges ticking. Make watching a run feel dynamic. **Also fix here:**
+`RunDetail.tsx` hardcodes `http://localhost:8000` in the `EventSource` URL —
+route it through the same base-URL helper the rest of `api.ts` uses.
 
-
-## 6. CLI & terminal UI (`rich`)
+## 3. CLI & terminal UI (`rich`)
 
 Local-first developers love the terminal. Add a `rubedo` console entry point
 (`[project.scripts]` in `pyproject.toml`) with: `rubedo run
@@ -59,24 +78,22 @@ Local-first developers love the terminal. Add a `rubedo` console entry point
 and `rubedo invalidate <selection>`. Use `rich` for a live DAG: per-step progress
 bars and created/reused/failed counts ticking as lanes complete.
 
-## 7. Pipelines Page Enhancements
+## 4. Pipelines Page Enhancements
 
 The pipelines page should act as a richer entry point into a pipeline's state.
 - **Last Run Details:** Surface more comprehensive information about the most recent run for each pipeline (status, duration, coordinate counts).
 - **Step Drill-Down:** Allow clicking on a specific step from the pipeline page to get deeper information about that step.
 - **Direct Materialization View:** Provide a way to view and browse the latest materializations specifically produced by that selected step.
 
-## 8. Rich Output Visualization
+## 5. Rich Output Visualization
 
 Improve how materializations and outputs are displayed across the UI. Go beyond simple metadata and raw JSON/text previews to show more useful information, such as the actual calculated content for a step in a cleaner, more readable format.
-
-
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
 ══════════════════════════════════════════════════════════════════════
 
-## 8. Cloud object storage sources (`S3Source` / `GCSSource`)
+## 6. Cloud object storage sources (`S3Source` / `GCSSource`)
 
 Local folders and SQL are great starts, but modern data lives in buckets. Add
 `Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`): `scan()`
@@ -89,14 +106,14 @@ token** instead of a true content hash (S3 ETag is the MD5 for single-part
 uploads but not for multipart — fall back to size+mtime or a stored checksum
 there). This is exactly the producer-model insight that "scan produces a
 content hash eagerly" is the *folder* assumption; cloud sources need a change
-token that isn't the content hash — which is what item 7 formalizes. Ship
-boto3/gcs as optional extras (`rubedo[s3]`, `rubedo[gcs]`). Acceptance: scan a
-bucket prefix → coordinates; a step reads object bytes; a re-run reuses
-untouched objects without re-downloading to hash them.
+token that isn't the content hash. Ship boto3/gcs as optional extras
+(`rubedo[s3]`, `rubedo[gcs]`; see item 1). Acceptance: scan a bucket prefix →
+coordinates; a step reads object bytes; a re-run reuses untouched objects
+without re-downloading to hash them.
 
-## 9. Configurable cloud ledger + object store (Postgres / S3-GCS)
+## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)
 
-Distinct from item 7 (input data) — this is the *internal* materialization
+Distinct from item 6 (input data) — this is the *internal* materialization
 store (`src/rubedo/store.py`) and ledger DB (`src/rubedo/db.py`) that back every
 run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is
 comparatively mechanical (the WAL/`busy_timeout` pragma hook is SQLite-specific
@@ -105,14 +122,14 @@ and must become conditional). `store.py`'s content-addressed layout
 `os.path`/`open()`/`os.replace()` in it assumes a local filesystem and needs an
 abstraction swapped in behind the same interface (atomic `replace` becomes a
 conditional-put). This — **not** the execution backend — is the real
-prerequisite for genuine multi-machine/cloud execution (item 10): a distributed
+prerequisite for genuine multi-machine/cloud execution (item 8): a distributed
 worker can't write to a purely local SQLite file + local objects dir. The
 `RUBEDO_HOME` root (shipped) is a natural stepping stone since it already
 isolates where these paths resolve. Acceptance: a run whose `store`/`db` point
 at Postgres + a bucket produces identical ledger/reuse behavior to the local
 default.
 
-## 10. Pluggable distributed execution backend (Dask / Ray)  **[depends on item 9]**
+## 8. Pluggable distributed execution backend (Dask / Ray)  **[depends on item 7]**
 
 Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
 `_execute_step`'s `call()` already treats "the pool" as anything satisfying
@@ -121,15 +138,15 @@ Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
 `executor="dask"`/`"ray"` value is a small change to *that call site*. The real
 cost is architectural, not mechanical: it needs a running scheduler/cluster —
 which cuts against the "zero-daemon" positioning (`notes/framework_analysis.md`)
-— and it **depends on item 9** (a distributed worker can't reach a local
+— and it **depends on item 7** (a distributed worker can't reach a local
 SQLite + objects dir). **Owner design session before building:** add it as a
 third `executor=` value alongside `"process"`, or *replace* `"process"` (a
 Dask/Ray `LocalCluster` subsumes the local-multi-process case; `loky` already
 solved the picklability pain far more cheaply). Acceptance: an
 `executor="dask"` step runs on a `LocalCluster` and reuses across runs via the
-cloud store (item 9).
+cloud store (item 7).
 
-## 11. Non-topological (lane-pipelined) execution
+## 9. Non-topological (lane-pipelined) execution
 
 Today the runner is **staged**: `for step in topo: plan → execute all lanes →
 commit` (`src/rubedo/runner.py`), so every step waits for *all* lanes of the
@@ -153,7 +170,7 @@ Design-first.
 # Tier 4 · Deferred / careful
 ══════════════════════════════════════════════════════════════════════
 
-## 12. Storage sprawl management + garbage collection  **[⚠️ DANGEROUS]**
+## 10. Storage sprawl management + garbage collection  **[⚠️ DANGEROUS]**
 
 Content-addressed stores keep everything; without cleanup the `.rubedo`
 directory balloons. Useful *safe* features first: disk-usage warnings, storage
@@ -175,7 +192,7 @@ buggy pass against a bucket is catastrophic. Gate any real GC behind dry-run +
 a ref-count audit + object-versioned buckets before it *ever* points at remote
 storage.
 
-## 13. `expand` child views (dedup storage) — post-launch optimization
+## 11. `expand` child views (dedup storage) — post-launch optimization
 
 Today `shape="expand"` uses option (a) from `notes/producer-model.md` — the
 step stores its full yielded list as a cache anchor *and* extracts each item
@@ -189,7 +206,7 @@ handling; downstream per-item caching stays keyed on the item's content hash.
 Correctness is identical to (a) — purely a storage optimization, so only worth
 it once double-storage actually bites.
 
-## 14. Lane tooling — following & invalidation
+## 12. Lane tooling — following & invalidation
 
 Two utilities that ride on machinery that already exists (`MaterializationEdge`
 lineage, `MaterializationIndexEntry` labels); now that lanes can go
@@ -216,7 +233,11 @@ content-addressed/minted, they're the load-bearing navigation surface.
 
 ## Done (compressed changelog — context for the above)
 
+Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
+group (only the `graphify` example used it; core install no longer pulls it) ·
 Pipeline Run Search & Step Inspection UI (RunInspector, deep value search) ·
+Live run view backend + wiring (SSE `GET /api/runs/{id}/stream` + `RunDetail`
+`EventSource`; animation polish still open, item 2) ·
 `PipelineBuilder` helper · data quality assertions (`assertions=[]`) ·
 Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·
 type checking pass (mypy configured, py.typed shipped, public API typed) ·
