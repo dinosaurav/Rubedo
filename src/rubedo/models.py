@@ -338,3 +338,10 @@ class RunSummary(BaseModel):
     failed_count: int = 0
     blocked_count: int = 0
     filtered_count: int = 0
+
+    def failures(self) -> list[Dict[str, Any]]:
+        """Retrieve the failed coordinates and errors for this run."""
+        from .db import get_session
+        from .queries import get_run_failures
+        with get_session() as session:
+            return get_run_failures(session, self.run_id)

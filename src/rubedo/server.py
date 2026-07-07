@@ -65,53 +65,20 @@ def _to_dict(obj):
 @app.get("/api/runs", response_model=List[RunListItem])
 def get_runs():
     """List all pipeline runs, ordered by most recent."""
+    from .queries import get_recent_runs
     with get_session() as session:
-        runs = session.query(Run).order_by(Run.started_at.desc()).all()
-        results = []
-        for run in runs:
-            d = _to_dict(run)
-            summary = {}
-            if run.summary_json:
-                try:
-                    summary = json.loads(run.summary_json)  # type: ignore
-                except Exception:
-                    pass
-            d["created_count"] = summary.get("created", 0)
-            d["reused_count"] = summary.get("reused", 0)
-            d["failed_count"] = summary.get("failed", 0)
-            d["blocked_count"] = summary.get("blocked", 0)
-            d["filtered_count"] = summary.get("filtered", 0)
-            results.append(d)
-        return results
+        return get_recent_runs(session)
 
 
 @app.get("/api/runs/{run_id}", response_model=RunDetailOut)
 def get_run(run_id: str):
     """Get detailed information for a specific run."""
+    from .queries import get_run_summary
     with get_session() as session:
-        run = session.query(Run).filter_by(id=run_id).first()
-        if not run:
+        run_detail = get_run_summary(session, run_id)
+        if not run_detail:
             raise HTTPException(404, "Run not found")
-
-        d = _to_dict(run)
-        summary = {}
-        if run.summary_json:
-            try:
-                summary = json.loads(run.summary_json)  # type: ignore
-            except Exception:
-                pass
-        d["created_count"] = summary.get("created", 0)
-        d["reused_count"] = summary.get("reused", 0)
-        d["failed_count"] = summary.get("failed", 0)
-        d["blocked_count"] = summary.get("blocked", 0)
-        d["filtered_count"] = summary.get("filtered", 0)
-        d["by_step"] = summary.get("by_step")
-        if run.definition_json:
-            try:
-                d["definition"] = json.loads(run.definition_json)  # type: ignore
-            except Exception:
-                pass
-        return d
+        return run_detail
 
 
 @app.get("/api/runs/{run_id}/stream")
