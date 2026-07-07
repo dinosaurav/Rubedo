@@ -349,7 +349,7 @@ The pipelines page should act as a richer entry point into a pipeline's state.
 
 Improve how materializations and outputs are displayed across the UI. Go beyond simple metadata and raw JSON/text previews to show more useful information, such as the actual calculated content for a step in a cleaner, more readable format.
 
-## 13. Terminal progress feedback on `run()`
+## 13. Terminal progress feedback on `run()` [DONE]
 
 Long LLM/scrape steps run for minutes with zero feedback unless the web UI
 is open — terminal users get nothing between "run started" and the summary.
@@ -360,7 +360,7 @@ directly. Deliberately minimal: a callback, not a logging framework — the
 ledger already records everything durably; this is only about liveness at
 the terminal.
 
-## 14. Pipeline-level `params_model`
+## 14. Pipeline-level `params_model` [DONE]
 
 Entry validation uses `pipeline.steps[0]`'s model (`runner.py:84`) — an
 arbitrary choice that silently skips validation when a later step declares
