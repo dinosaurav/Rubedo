@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Tuple
 import loky
 
 
-from .hashing import hash_json
+from .hashing import hash_json, hash_bytes
 from .models import Filtered, ProcessResult
 from .planning import (
     EphemeralRef,
@@ -254,7 +254,10 @@ def _execute_step(
         children: List[tuple] = []  # (child_hash, value)
         for value in values:
             _validate_output(step, value)
-            child_hash = hash_json(value)
+            if isinstance(value, bytes):
+                child_hash = "b:" + hash_bytes(value)
+            else:
+                child_hash = hash_json(value)
             if child_hash in seen:
                 continue  # identical payload — one lane
             seen.add(child_hash)
