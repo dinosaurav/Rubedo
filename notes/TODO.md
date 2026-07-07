@@ -14,9 +14,9 @@ The **producer model is done** (content-addressed lanes → `expand` →
 
 - **Tier 1 · Launch polish** — the producer model is a natural "feature
   complete" moment; before a `pip install rubedo` push, make the public API
-  trustworthy and custom sources pleasant: **1** mypy/`py.typed`/packaging.
-- **Tier 2 · DX & observability** — make it delightful to watch and drive:
-  **4** CLI + terminal UI (bumped up due to web UI invalidation removal) · **5** live run view (SSE) · **6** continue/resume · **7** incremental scan (unblocked by removal tracking deletion).
+  trustworthy and custom sources pleasant. *(All initial polish tasks complete)*
+- **Tier 2 · DX, Observability & UI** — make it delightful to watch and drive:
+  **4** live run view (SSE) + animations · **5** pipeline run search & inspection · **6** CLI + terminal UI.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **8** cloud sources → **9** cloud ledger+store → **10** distributed execution; **11** lane-pipelined execution
   (independent).
@@ -27,45 +27,14 @@ The **producer model is done** (content-addressed lanes → `expand` →
 # Tier 1 · Launch polish
 ══════════════════════════════════════════════════════════════════════
 
-## 1. Type checking (mypy) + `py.typed` + packaging
-
-No static type checking today — `ruff` covers lint, not types. Add `mypy` (dev
-dependency group + a `[tool.mypy]` block in `pyproject.toml`) and run it in CI
-once the workflow triggers automatically. Ship a `py.typed` marker so the
-public API is type-checkable downstream. Worth doing before the `pip install
-rubedo` push — a clean `mypy` pass + `py.typed` is part of what makes the
-public surface trustworthy. Acceptance: `uv run mypy src/rubedo` is clean (or
-has an explicit, documented ignore list) and `py.typed` ships in the wheel.
-Gotcha: `store.py`/`ledger.py` have deliberate `Any`s (heterogeneous step
-return values) — don't force false precision there; a narrow `# type: ignore`
-with a reason beats a dishonest type.
-
-
 
 
 
 ══════════════════════════════════════════════════════════════════════
-# Tier 2 · DX & observability
+# Tier 2 · DX, Observability & UI
 ══════════════════════════════════════════════════════════════════════
 
-## 4. CLI & terminal UI (`rich`)
-
-Local-first developers love the terminal. Add a `rubedo` console entry point
-(`[project.scripts]` in `pyproject.toml`) with: `rubedo run
-<module:factory>` / `rubedo plan <…>` (import the user module, find the
-`PipelineSpec`, run/dry-run it), `rubedo ls` / `rubedo show <run>` (browse
-runs, materializations, current outputs straight from the ledger — the
-terminal twin of the web UI), and `rubedo invalidate <selection>` (this is especially important now that the web UI invalidation feature was removed). Use `rich`
-for a live DAG: per-step progress bars and created/reused/failed counts ticking
-as lanes complete. **Gotcha:** `rubedo run` is the one CLI path that *does*
-import user code (the runner already does) — the read-only `ls`/`show` commands
-must stay ledger-only, never importing pipelines, exactly like `server.py`.
-Shares its live-render logic with item 5 (same event stream, terminal vs
-browser). Acceptance: `rubedo run examples.count_lines.count_lines:make_pipeline`
-runs with a live progress display; `rubedo ls` lists past runs with no user
-imports.
-
-## 5. Live run view (streaming progress)
+## 4. Live run view (streaming progress) with animations
 
 A run already writes `run_events` and `run_coordinate_statuses` as it goes, and
 `server.py` is read-only and ledger-derived. Add a streaming endpoint so the
@@ -75,39 +44,30 @@ created/reused/failed/blocked counts ticking. **Mechanism:** prefer **SSE**
 needs), plain HTTP, no new deps; the server tails new ledger rows for a
 `run_id` and pushes them. **Tailing constraint:** SQLite has no
 `LISTEN/NOTIFY`, so cross-process (run in one process, server in another) means
-polling the ledger on a short interval; an in-process event bus is only
-possible if run and server share a process. Stays consistent with "server never
-imports user code." Pairs with the `rich` CLI live-DAG (item 4). Acceptance: a
-long run streams per-step counts to a connected browser within ~1s of each
-commit.
+polling the ledger on a short interval.
+**Animations:** The UI should animate transitions and node states (e.g., pulsating
+running states, smooth counter increments) to make watching a run a dynamic, visually
+engaging experience.
 
-## 6. Continue / resume an interrupted run
+## 5. Pipeline Run Search & Step Inspection
 
-Crash-safety is already implicit: a died run's committed materializations
-persist and the *next* run reuses them by address (invariant 3). What's missing
-is an explicit affordance to **continue a specific interrupted run** — re-plan
-only its pending/failed/blocked lanes and keep the run identity for reporting —
-so a long, expensive LLM run that dies at lane 900/1000 resumes without reading
-as a conceptually fresh run. Largely a UX/reporting layer over the existing
-content-addressed reconcile, so keep it thin. **Open:** same `run_id` vs a new
-run linked to the old; re-scan vs reuse the prior manifest; interaction with
-selection-scoped/partial runs. Design-first.
+The UI currently shows run details and the DAG, but navigating the actual data flowing
+through a run is difficult. Add a new view (or expand the run detail view) that lets
+a user search for a specific value across a pipeline's run.
+- Ability to search globally within a run.
+- Ability to drill down and look at the outputs/values of a particular step.
+- Requires new API endpoints to search `MaterializationIndexEntry` and
+  `RunCoordinateStatus` by value for a given run.
 
-## 7. Incremental source scanning (high watermarks)
+## 6. CLI & terminal UI (`rich`)
 
-Sources scan their whole domain every run today (relying on cache identity to
-skip *work*, but still enumerating everything). For massive tables/buckets,
-let a source skip *scanning* untouched coordinates via a watermark
-(`updated_at > last_run`), cutting planning cost. Persist the watermark per
-`source_id` (small ledger table); pass the last watermark
-into `scan()`, which returns only new/changed coordinates + the new watermark.
-**Blocker resolved:** Previously, a delta scan couldn't detect *removals* by
-absence. With the recent core engine change dropping "removed" tracking entirely,
-delta scanning perfectly aligns with the current architecture (it's purely
-creations/changes now).
-Pairs with item 8 (ETag/mtime change tokens are the watermark signal).
-Acceptance: a `TableSource` given an `updated_at` column re-scans only changed
-rows across runs, with unchanged rows never re-enumerated.
+Local-first developers love the terminal. Add a `rubedo` console entry point
+(`[project.scripts]` in `pyproject.toml`) with: `rubedo run
+<module:factory>` / `rubedo plan <…>`, `rubedo ls` / `rubedo show <run>`,
+and `rubedo invalidate <selection>`. Use `rich` for a live DAG: per-step progress
+bars and created/reused/failed counts ticking as lanes complete.
+
+
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -254,6 +214,7 @@ content-addressed/minted, they're the load-bearing navigation surface.
 ## Done (compressed changelog — context for the above)
 
 Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·
+type checking pass (mypy configured, py.typed shipped, public API typed) ·
 content-addressed store + generations (supersede/restore/refresh) ·
 append-only lifecycle ledger with ORM immutability guards · params/code in
 cache identity (`code="auto"|"warn"` drift warnings) · single
