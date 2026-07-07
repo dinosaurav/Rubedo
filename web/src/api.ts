@@ -83,3 +83,13 @@ export async function fetchPipelines() {
   return res.json();
 }
 
+export async function searchRun(runId: string, query: string) {
+  const res = await fetchJson(`${API_URL}/runs/${runId}/search?query=${encodeURIComponent(query)}`);
+  return res.json();
+}
+
+export async function fetchStepOutputs(runId: string, stepName: string, limit = 50, offset = 0) {
+  const res = await fetchJson(`${API_URL}/runs/${runId}/steps/${encodeURIComponent(stepName)}/outputs?limit=${limit}&offset=${offset}`);
+  return res.json();
+}
+

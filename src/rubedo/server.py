@@ -5,8 +5,9 @@ import os
 import json
 from contextlib import asynccontextmanager
 from typing import List
+import asyncio
 from fastapi import FastAPI, HTTPException, Request, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 
@@ -17,6 +18,7 @@ from .models import (
     Materialization,
     MaterializationIndexEntry,
     MaterializationLifecycle,
+    MaterializationEdge,
     RunCoordinateStatus,
 )
 from .selection import Selection
@@ -110,6 +112,54 @@ def get_run(run_id: str):
             except Exception:
                 pass
         return d
+
+
+@app.get("/api/runs/{run_id}/stream")
+async def stream_run(run_id: str):
+    """Stream live progress of a run via Server-Sent Events (SSE)."""
+    async def event_generator():
+        while True:
+            with get_session() as session:
+                run = session.query(Run).filter_by(id=run_id).first()
+                if not run:
+                    yield "event: error\ndata: Run not found\n\n"
+                    break
+                
+                # Compute live counts from run_coordinate_statuses
+                rows = (
+                    session.query(
+                        RunCoordinateStatus.step_name,
+                        RunCoordinateStatus.status,
+                        func.count(RunCoordinateStatus.id)
+                    )
+                    .filter_by(run_id=run_id)
+                    .group_by(RunCoordinateStatus.step_name, RunCoordinateStatus.status)
+                    .all()
+                )
+                
+                by_step = {}
+                totals = {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
+                for step_name, status, count in rows:
+                    if step_name not in by_step:
+                        by_step[step_name] = {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
+                    if status in by_step[step_name]:
+                        by_step[step_name][status] = count
+                        totals[status] += count
+                
+                data = {
+                    "status": run.status,
+                    "totals": totals,
+                    "by_step": by_step,
+                }
+                
+                yield f"data: {json.dumps(data)}\n\n"
+                
+                if run.status != "running":
+                    break
+                    
+            await asyncio.sleep(1.0)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])
@@ -221,6 +271,110 @@ def get_current_outputs():
                 }
             )
         return results
+
+
+@app.get("/api/runs/{run_id}/search")
+def search_run(run_id: str, query: str = Query(..., min_length=1)):
+    """Search for a value in a run and return the full lineage trace."""
+    with get_session() as session:
+        # 1. Find matching materialization IDs for this run
+        matching_mat_ids = set()
+
+        coords_match = session.query(RunCoordinateStatus.materialization_id).filter(
+            RunCoordinateStatus.run_id == run_id,
+            RunCoordinateStatus.materialization_id.isnot(None),
+            RunCoordinateStatus.coordinate.contains(query)
+        ).all()
+        for (m_id,) in coords_match:
+            matching_mat_ids.add(m_id)
+
+        index_match = session.query(RunCoordinateStatus.materialization_id).join(
+            MaterializationIndexEntry,
+            RunCoordinateStatus.materialization_id == MaterializationIndexEntry.materialization_id
+        ).filter(
+            RunCoordinateStatus.run_id == run_id,
+            MaterializationIndexEntry.value.contains(query)
+        ).all()
+        for (m_id,) in index_match:
+            matching_mat_ids.add(m_id)
+
+        if not matching_mat_ids:
+            return {"trace": []}
+
+        # 2. Get all materializations used in this run
+        run_mat_ids = {m_id for (m_id,) in session.query(RunCoordinateStatus.materialization_id).filter(
+            RunCoordinateStatus.run_id == run_id,
+            RunCoordinateStatus.materialization_id.isnot(None)
+        ).all()}
+
+        # 3. Get all edges within this run's materializations
+        all_edges = session.query(MaterializationEdge).filter(
+            (MaterializationEdge.parent_id.in_(run_mat_ids)) | (MaterializationEdge.child_id.in_(run_mat_ids))
+        ).all()
+
+        parents = {m: [] for m in run_mat_ids}
+        children = {m: [] for m in run_mat_ids}
+        for e in all_edges:
+            if e.child_id in run_mat_ids and e.parent_id in run_mat_ids:
+                parents[e.child_id].append(e.parent_id)
+                children[e.parent_id].append(e.child_id)
+
+        # 4. BFS to find all related materializations
+        queue = list(matching_mat_ids)
+        visited = set(matching_mat_ids)
+
+        while queue:
+            curr = queue.pop(0)
+            for p in parents.get(curr, []):
+                if p not in visited:
+                    visited.add(p)
+                    queue.append(p)
+            for c in children.get(curr, []):
+                if c not in visited:
+                    visited.add(c)
+                    queue.append(c)
+
+        # 5. Fetch details for the trace
+        results = session.query(RunCoordinateStatus, Materialization).join(
+            Materialization, RunCoordinateStatus.materialization_id == Materialization.id
+        ).filter(
+            RunCoordinateStatus.run_id == run_id,
+            RunCoordinateStatus.materialization_id.in_(visited)
+        ).all()
+
+        trace = []
+        for rc, mat in results:
+            trace.append({
+                "step_name": rc.step_name,
+                "coordinate": rc.coordinate,
+                "status": rc.status,
+                "output_address": rc.output_address,
+                "materialization_id": mat.id,
+                "is_match": mat.id in matching_mat_ids,
+                "created_at": mat.created_at
+            })
+            
+        return {"trace": trace}
+
+
+@app.get("/api/runs/{run_id}/steps/{step_name}/outputs")
+def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset: int = Query(0)):
+    """Get all outputs for a specific step in a run."""
+    with get_session() as session:
+        base_query = session.query(RunCoordinateStatus).filter_by(run_id=run_id, step_name=step_name)
+        total = base_query.count()
+        rows = base_query.order_by(RunCoordinateStatus.id).limit(limit).offset(offset).all()
+        
+        items = []
+        for rc in rows:
+            items.append({
+                "coordinate": rc.coordinate,
+                "status": rc.status,
+                "output_address": rc.output_address,
+                "materialization_id": rc.materialization_id,
+                "error_message": rc.error_message
+            })
+        return {"total": total, "items": items}
 
 
 def _resolve_materialization(session, output_address: str):

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { fetchRun, fetchRunCoordinates, fetchRunEvents } from '../api';
 import { DataTable, TruncatedText, HashCell } from '../components/DataTable';
 import DagView from '../components/DagView';
+import RunInspector from '../components/RunInspector';
 import { fmtTime, fmtDuration, durationMs, runStatusClass, coordStatusClass } from '../format';
 import type { ColumnDef } from '@tanstack/react-table';
 
@@ -25,6 +26,40 @@ export default function RunDetail() {
       ]).catch(e => setError(String(e))).finally(() => setLoading(false));
     }
   }, [runId]);
+
+  // Live streaming progress
+  useEffect(() => {
+    if (run && run.status === 'running') {
+      const source = new EventSource(`http://localhost:8000/api/runs/${run.id}/stream`);
+      
+      source.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        setRun((prev: any) => ({
+          ...prev,
+          status: data.status,
+          created_count: data.totals.created,
+          reused_count: data.totals.reused,
+          failed_count: data.totals.failed,
+          blocked_count: data.totals.blocked,
+          filtered_count: data.totals.filtered,
+          by_step: data.by_step
+        }));
+        
+        if (data.status !== 'running') {
+          source.close();
+          // Refresh coordinates and events when run completes
+          fetchRunCoordinates(run.id).then(setCoords);
+          fetchRunEvents(run.id).then(setEvents);
+        }
+      };
+      
+      source.onerror = () => {
+        source.close();
+      };
+      
+      return () => source.close();
+    }
+  }, [run?.status, run?.id]);
 
   if (loading) return <div>Loading...</div>;
   if (error) return <div>API unreachable: {error}</div>;
@@ -110,6 +145,8 @@ export default function RunDetail() {
           <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} />
         </div>
       )}
+
+      <RunInspector runId={run.id} />
 
       <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem' }}>
         <button className={`btn ${tab === 'coords' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('coords')}>Coordinates</button>

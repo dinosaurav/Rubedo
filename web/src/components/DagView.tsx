@@ -130,7 +130,8 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
                     fill="var(--bg-tertiary)"
                     stroke={s.skip_cache ? 'var(--text-muted)' : (s.shape === 'reduce' ? 'var(--status-warning)' : 'var(--accent-primary)')}
                     strokeWidth={s.shape === 'reduce' ? 2 : 1.5}
-                    strokeDasharray={s.skip_cache ? '5 4' : undefined} />
+                    strokeDasharray={s.skip_cache ? '5 4' : undefined}
+                    style={{ transition: 'height 0.3s ease, fill 0.3s ease, stroke 0.3s ease' }} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
                     fontSize={13} fontWeight={600} fontFamily="ui-monospace, monospace">
                 {s.name}
@@ -144,9 +145,9 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
                 </text>
               )}
               {stepCounts && (
-                <text x={p.x + 12} y={p.y + NODE_H + 8} fontSize={10}>
+                <text x={p.x + 12} y={p.y + NODE_H + 8} fontSize={10} style={{ transition: 'all 0.3s ease' }}>
                   {countsLine(stepCounts[s.name]).map((c, i) => (
-                    <tspan key={c.label} dx={i === 0 ? 0 : 8} fill={c.color}>
+                    <tspan key={c.label} dx={i === 0 ? 0 : 8} fill={c.color} style={{ transition: 'fill 0.3s ease' }}>
                       {c.label}
                     </tspan>
                   ))}

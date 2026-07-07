@@ -20,7 +20,7 @@ export function fmtDuration(ms: number | null): string {
 export function runStatusClass(status: string): string {
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
-  if (status === 'running') return 'info';
+  if (status === 'running') return 'info badge-running';
   return 'warning';
 }
 
