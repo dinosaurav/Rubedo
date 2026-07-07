@@ -15,16 +15,13 @@ never collides with those numbers.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-- **Tier 0 · Bugs & hardening** (2026-07-07 code review, suite green at 171)
-  — correctness first: **B1** disjoint-parents crash (confirmed, repro'd) ·
-  **B2** `httpx2` dep typo · **B3** `invalidate()` partial commit. Then
-  **B4** selection dupes/N+1 (prerequisite for item 2) · **B5**
-  skip_cache×join/group_key crash · **B6** expand can't yield bytes · **B7**
-  minor cleanups. Hardening: **H1** `_RunMemo` global lock (a real perf bug
-  for skip_cache under `workers=`) early; **H2** batch planning queries
-  before any Tier 3 work; **H3** mypy core overrides, **H4** SSE event-loop
-  blocking, **H5** CORS, **H7** DRY — opportunistic; **H6** packaging rides
-  with item 1. Each is a small independent commit.
+- **Tier 0 · Bugs & hardening** (2026-07-07 code review) — **status:
+  B1–B7, H1–H3 landed** (commits 8071aab..7511491 + regression tests in
+  `tests/test_tier0_fixes.py`). B2 was a **false positive** and is reverted
+  — see its section. Still open: **H4** SSE event-loop blocking · **H5**
+  CORS · **H7** DRY leftovers — opportunistic; **H6** packaging rides with
+  item 1. Follow-up debt from the fixes, in the item sections: H2's
+  missing-anchor-bytes fallback, H3's `type: ignore` count.
 - **Tier 1 · Product shape & packaging** — the producer model is a natural
   "feature complete" moment; before a `pip install rubedo` push, keep the
   public surface trustworthy and the install lean: **1** dependency & packaging
@@ -86,14 +83,15 @@ implicit join). Acceptance: the repro produces that message; a diamond (two
 parents derived from the same source) still runs; the pending/blocked
 propagation tests stay green.
 
-## B2. `httpx2` dev dependency is a typo (and masks a fragile test dep)
+## B2. ~~`httpx2` dev dependency is a typo~~  **[FALSE POSITIVE — fix reverted]**
 
-`pyproject.toml`'s dev group pins `httpx2>=2.5.0` — an unrelated third-party
-PyPI republish; nothing in the repo imports it. The FastAPI `TestClient`
-tests (`tests/test_api.py`, `tests/test_pipelines.py`) need real `httpx`,
-which currently arrives only *transitively via litellm* — drop litellm from
-dev and the API tests break. Replace `httpx2` with `httpx` and re-lock.
-Mild supply-chain smell too; remove regardless.
+The review got this one wrong: `httpx2` is the continuation package that
+Starlette's `TestClient` now prefers (`starlette/testclient.py` does
+`import httpx2 as httpx`, falling back to plain `httpx` with a
+`StarletteDeprecationWarning`). The original pin was intentional. The
+review-driven swap to `httpx` introduced that deprecation warning into the
+suite and was reverted; `httpx2>=2.5.0` is the correct dev dependency.
+Recorded so nobody "fixes" it again.
 
 ## B3. `invalidate()` commits partial flips on failure
 
@@ -196,6 +194,13 @@ steps. Keep `_plan_step` read-only. Acceptance: full suite green with zero
 test edits; a quick benchmark script (1k-row CSV) shows plan queries
 dropping from O(lanes) to O(steps).
 
+**Status: landed** (commit 7f01030), reviewed faithful. One follow-up:
+the batched expand path treats an anchor whose object bytes are *missing
+from the store* as an empty expansion (`read_materialization_output` →
+`None` → falsy → zero children planned) where the old code crashed loudly.
+Store corruption should fall back to re-running the expansion (the
+incomplete-cache path), not silently plan nothing.
+
 ## H3. mypy exempts the core modules
 
 `pyproject.toml` sets `ignore_errors` for `rubedo.models`, `planning`,
@@ -205,6 +210,12 @@ Burn the overrides down module by module. Caution: annotate, don't
 restructure — `coord_step_mats` is genuinely heterogeneous (MatRef |
 EphemeralRef | status-string sentinels); give it an honest union type
 rather than "cleaning up" the sentinel design to satisfy the checker.
+
+**Status: landed** (commit 7511491) — the overrides are gone and mypy is
+clean, but largely via ~60 `type: ignore` comments (23 in `planning.py`
+alone). Follow-up debt: replace the ignores with real types where a
+union/`TypeAlias` would do; each ignore is a spot the checker is switched
+off.
 
 ## H4. `stream_run` blocks the event loop
 
