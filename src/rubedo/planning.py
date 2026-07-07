@@ -173,67 +173,6 @@ def expand_child_identity(
     )
 
 
-def _plan_expand_reuse(
-    session: Session,
-    step: StepSpec,
-    parent_mats: Dict[str, Any],
-    params_hash: str,
-    force: bool,
-    accepts_params: bool,
-) -> Optional[List[StepDecision]]:
-    """Cached expansion → child reuse decisions (skip the fn); else None.
-
-    A hit needs the anchor live (and fresh) *and* every child it lists still
-    present — a partial cache falls back to re-running the whole expansion.
-    """
-    if force:
-        return None
-    parent_hash = parent_mats[step.depends_on[0]].output_content_hash
-    anchor = (
-        session.query(Materialization)
-        .filter_by(
-            output_address=expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params
-            ),
-            is_live=True,
-        )
-        .first()
-    )
-    if anchor is None:
-        return None
-    if step.stale_after is not None:
-        freshness = anchor.refreshed_at or anchor.created_at
-        if iso_age_seconds(freshness) > step.stale_after:
-            return None
-
-    out: List[StepDecision] = []
-    for child_hash in read_materialization_output(anchor):  # list of content hashes
-        input_hash, child_addr = expand_child_identity(
-            step, child_hash, params_hash, accepts_params
-        )
-        child = (
-            session.query(Materialization)
-            .filter_by(output_address=child_addr, is_live=True)
-            .first()
-        )
-        if child is None:
-            return None  # incomplete cache — re-run the expansion
-        out.append(
-            StepDecision(
-                coordinate=expand_child_coord(child_hash),
-                action="reuse",
-                input_hash=input_hash,
-                output_address=child_addr,
-                existing=MatRef(
-                    child.id,
-                    child.output_address,
-                    child.output_content_hash,
-                    child.content_type,
-                    filtered=child.filtered,
-                ),
-            )
-        )
-    return out
 
 
 def _step_accepts_params(step: StepSpec) -> bool:
@@ -268,23 +207,37 @@ def _group_reduce_lanes(
     lane with several values (a list-valued index) joins each group; a lane
     with none raises, since you cannot group by a field it never indexed.
     """
-    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    mat_ids = []
+    coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
         for coord, ref in coord_refs.items():
-            values = [
-                e.value
-                for e in session.query(MaterializationIndexEntry)
-                .filter_by(materialization_id=ref.id, field=step.group_key)
-                .all()
-            ]
-            if not values:
-                raise ValueError(
-                    f"reduce step '{step.name}': group_key '{step.group_key}' "
-                    f"has no indexed value for lane '{coord}' (parent '{dep}'). "
-                    f"Add index=['{step.group_key}'] to that step."
-                )
-            for v in values:
-                groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
+            mat_ids.append(ref.id)
+            coord_ref_map.append((dep, coord, ref))
+
+    vals_by_mat = {}
+    if mat_ids:
+        rows = (
+            session.query(MaterializationIndexEntry)
+            .filter(
+                MaterializationIndexEntry.materialization_id.in_(mat_ids),
+                MaterializationIndexEntry.field == step.group_key,
+            )
+            .all()
+        )
+        for row in rows:
+            vals_by_mat.setdefault(row.materialization_id, []).append(row.value)
+
+    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for dep, coord, ref in coord_ref_map:
+        values = vals_by_mat.get(ref.id)
+        if not values:
+            raise ValueError(
+                f"reduce step '{step.name}': group_key '{step.group_key}' "
+                f"has no indexed value for lane '{coord}' (parent '{dep}'). "
+                f"Add index=['{step.group_key}'] to that step."
+            )
+        for v in values:
+            groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
     return groups
 
 
@@ -359,63 +312,7 @@ def _reduce_group_decision(
     )
 
 
-def _join_pair_decision(
-    session: Session,
-    step: StepSpec,
-    pair_coord: str,
-    parent_mats: Dict[str, Any],
-    params_hash: str,
-    force: bool,
-    accepts_params: bool,
-) -> StepDecision:
-    """Reuse/execute decision for one matched join tuple (identity = its
-    members' content hashes, exactly like a multi-parent map)."""
-    input_hash = _compute_step_input_hash(step, pair_coord, "", parent_mats)
-    output_address = compute_output_address(
-        step.name,
-        step.version,
-        input_hash,
-        params_hash=params_hash if accepts_params else None,
-        code_hash=step.code_hash if step.code_mode == "auto" else None,
-    )
-    existing_mat = (
-        session.query(Materialization)
-        .filter_by(output_address=output_address, is_live=True)
-        .first()
-    )
-    expired = False
-    if existing_mat and step.stale_after is not None:
-        freshness = existing_mat.refreshed_at or existing_mat.created_at
-        expired = iso_age_seconds(freshness) > step.stale_after
 
-    if existing_mat and not force and not expired:
-        return StepDecision(
-            coordinate=pair_coord,
-            action="reuse",
-            input_hash=input_hash,
-            output_address=output_address,
-            existing=MatRef(
-                existing_mat.id,
-                existing_mat.output_address,
-                existing_mat.output_content_hash,
-                existing_mat.content_type,
-                filtered=existing_mat.filtered,
-            ),
-            code_drift=(
-                step.code_mode == "warn"
-                and step.code_hash is not None
-                and existing_mat.code_hash is not None
-                and step.code_hash != existing_mat.code_hash
-            ),
-        )
-    return StepDecision(
-        coordinate=pair_coord,
-        action="execute",
-        input_hash=input_hash,
-        output_address=output_address,
-        parent_mats=parent_mats,
-        stale=expired,
-    )
 
 
 def _plan_join(
@@ -441,6 +338,9 @@ def _plan_join(
     blocked_parents: List[str] = []
     pending = False
 
+    mat_ids_by_dep = {dep: [] for dep in deps}
+    coord_ref_map = {dep: [] for dep in deps}
+
     for (coord, d), ref in coord_step_mats.items():
         if d not in buckets:
             continue
@@ -453,21 +353,8 @@ def _plan_join(
         elif ref == "filtered" or getattr(ref, "filtered", False):
             pass
         elif ref is not None:
-            field = step.join_on[d]
-            values = [
-                e.value
-                for e in session.query(MaterializationIndexEntry)
-                .filter_by(materialization_id=ref.id, field=field)
-                .all()
-            ]
-            if not values:
-                raise ValueError(
-                    f"join step '{step.name}': side '{d}' has no indexed value "
-                    f"for join field '{field}' at lane '{coord}'. Add "
-                    f"index=['{field}'] to that step."
-                )
-            for v in values:
-                buckets[d].setdefault(v, []).append((coord, ref))
+            mat_ids_by_dep[d].append(ref.id)
+            coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
         return [
@@ -481,21 +368,105 @@ def _plan_join(
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
+    vals_by_mat_by_dep = {dep: {} for dep in deps}
+    for d in deps:
+        if not mat_ids_by_dep[d]:
+            continue
+        rows = (
+            session.query(MaterializationIndexEntry)
+            .filter(
+                MaterializationIndexEntry.materialization_id.in_(mat_ids_by_dep[d]),
+                MaterializationIndexEntry.field == step.join_on[d],
+            )
+            .all()
+        )
+        for row in rows:
+            vals_by_mat_by_dep[d].setdefault(row.materialization_id, []).append(row.value)
+
+    for d in deps:
+        field = step.join_on[d]
+        for coord, ref in coord_ref_map[d]:
+            values = vals_by_mat_by_dep[d].get(ref.id)
+            if not values:
+                raise ValueError(
+                    f"join step '{step.name}': side '{d}' has no indexed value "
+                    f"for join field '{field}' at lane '{coord}'. Add "
+                    f"index=['{field}'] to that step."
+                )
+            for v in values:
+                buckets[d].setdefault(v, []).append((coord, ref))
+
     common = set(buckets[deps[0]])
     for dep in deps[1:]:
         common &= set(buckets[dep])
 
-    decisions: List[StepDecision] = []
+    combo_list = []
     for value in sorted(common):
         for combo in itertools.product(*[buckets[dep][value] for dep in deps]):
             pair_coord = "|".join(coord for coord, _ in combo)
             parent_mats = {dep: ref for dep, (coord, ref) in zip(deps, combo)}
+            input_hash = _compute_step_input_hash(step, pair_coord, "", parent_mats)
+            output_address = compute_output_address(
+                step.name,
+                step.version,
+                input_hash,
+                params_hash=params_hash if accepts_params else None,
+                code_hash=step.code_hash if step.code_mode == "auto" else None,
+            )
+            combo_list.append((pair_coord, parent_mats, input_hash, output_address))
+
+    addrs = [out_addr for _, _, _, out_addr in combo_list]
+    mats_by_addr = {}
+    if addrs:
+        mats = (
+            session.query(Materialization)
+            .filter(Materialization.output_address.in_(addrs), Materialization.is_live == True)
+            .all()
+        )
+        mats_by_addr = {m.output_address: m for m in mats}
+
+    decisions: List[StepDecision] = []
+    for pair_coord, parent_mats, input_hash, output_address in combo_list:
+        existing_mat = mats_by_addr.get(output_address)
+        expired = False
+        if existing_mat and step.stale_after is not None:
+            freshness = existing_mat.refreshed_at or existing_mat.created_at
+            expired = iso_age_seconds(freshness) > step.stale_after
+
+        if existing_mat and not force and not expired:
             decisions.append(
-                _join_pair_decision(
-                    session, step, pair_coord, parent_mats,
-                    params_hash, force, accepts_params,
+                StepDecision(
+                    coordinate=pair_coord,
+                    action="reuse",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    existing=MatRef(
+                        existing_mat.id,
+                        existing_mat.output_address,
+                        existing_mat.output_content_hash,
+                        existing_mat.content_type,
+                        filtered=existing_mat.filtered,
+                    ),
+                    code_drift=(
+                        step.code_mode == "warn"
+                        and step.code_hash is not None
+                        and existing_mat.code_hash is not None
+                        and step.code_hash != existing_mat.code_hash
+                    ),
                 )
             )
+        else:
+            decisions.append(
+                StepDecision(
+                    coordinate=pair_coord,
+                    action="execute",
+                    input_hash=input_hash,
+                    output_address=output_address,
+                    parent_mats=parent_mats,
+                    stale=expired,
+                )
+            )
+
     return decisions
 
 
@@ -587,6 +558,10 @@ def _plan_step(
                 it = SourceItem(coordinate=c, content_hash="", metadata={})
             targets.append((c, it, it.content_hash))
 
+    resolved_targets = []
+    map_addrs = []
+    anchor_addrs = []
+
     for coord, it, sf_content_hash in targets:
         parent_mats: Dict[str, MatRef] = {}
         failed_parents: List[str] = []
@@ -610,9 +585,6 @@ def _plan_step(
                 parent_mats[dep] = parent_mat
 
         if step.skip_cache:
-            # Inline util: no decision, no ledger row. Its identity becomes
-            # part of every consumer's cache key; its value is computed
-            # lazily (memoized) only if a consumer executes.
             if failed_parents or blocked_parents:
                 coord_step_mats[(coord, step.name)] = "blocked"
             elif filtered_parents:
@@ -670,15 +642,72 @@ def _plan_step(
             continue
 
         if step.shape == "expand":
-            # Cached expansion (anchor + all children live) replays the child
-            # lanes without running the fn; otherwise one execute decision per
-            # parent lane mints the children (execution writes the anchor).
-            reuse = _plan_expand_reuse(
-                session, step, parent_mats, params_hash, force, accepts_params
+            parent_hash = parent_mats[step.depends_on[0]].output_content_hash
+            anchor_address = expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
             )
-            if reuse is not None:
-                decisions.extend(reuse)
+            anchor_addrs.append(anchor_address)
+            resolved_targets.append(("expand", coord, it, parent_mats, anchor_address, parent_hash))
+        else:
+            input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)
+            output_address = compute_output_address(
+                step.name,
+                step.version,
+                input_hash,
+                params_hash=params_hash if accepts_params else None,
+                code_hash=step.code_hash if step.code_mode == "auto" else None,
+            )
+            map_addrs.append(output_address)
+            resolved_targets.append(("map", coord, it, parent_mats, input_hash, output_address))
+
+    all_addrs = set(map_addrs + anchor_addrs)
+    mats_by_addr = {}
+    if all_addrs:
+        mats = session.query(Materialization).filter(
+            Materialization.output_address.in_(all_addrs), Materialization.is_live == True
+        ).all()
+        mats_by_addr = {m.output_address: m for m in mats}
+
+    child_identities_by_target = {}
+    all_child_addrs = []
+
+    for kind, *args in resolved_targets:
+        if kind == "expand":
+            coord, it, parent_mats, anchor_address, parent_hash = args
+            if force:
+                continue
+            anchor = mats_by_addr.get(anchor_address)
+            if not anchor:
+                continue
+            if step.stale_after is not None:
+                freshness = anchor.refreshed_at or anchor.created_at
+                if iso_age_seconds(freshness) > step.stale_after:
+                    continue
+            children_hashes = read_materialization_output(anchor)
+            if children_hashes:
+                identities = []
+                for child_hash in children_hashes:
+                    input_hash, child_addr = expand_child_identity(
+                        step, child_hash, params_hash, accepts_params
+                    )
+                    identities.append((child_hash, input_hash, child_addr))
+                    all_child_addrs.append(child_addr)
+                child_identities_by_target[coord] = identities
             else:
+                child_identities_by_target[coord] = []
+
+    child_mats_by_addr = {}
+    if all_child_addrs:
+        child_mats = session.query(Materialization).filter(
+            Materialization.output_address.in_(all_child_addrs), Materialization.is_live == True
+        ).all()
+        child_mats_by_addr = {m.output_address: m for m in child_mats}
+
+    for kind, *args in resolved_targets:
+        if kind == "expand":
+            coord, it, parent_mats, anchor_address, parent_hash = args
+            identities = child_identities_by_target.get(coord)
+            if identities is None:
                 decisions.append(
                     StepDecision(
                         coordinate=coord,
@@ -687,66 +716,85 @@ def _plan_step(
                         parent_mats=parent_mats,
                     )
                 )
-            continue
-
-        input_hash = _compute_step_input_hash(step, coord, sf_content_hash, parent_mats)
-        output_address = compute_output_address(
-            step.name,
-            step.version,
-            input_hash,
-            # Params are part of a step's cache identity only if the step
-            # consumes them; downstream steps pick up param changes through
-            # the content-hash chain
-            params_hash=params_hash if accepts_params else None,
-            # code='auto': source edits change identity; code='warn': they
-            # don't, but reuse of outdated outputs is flagged
-            code_hash=step.code_hash if step.code_mode == "auto" else None,
-        )
-
-        existing_mat = (
-            session.query(Materialization)
-            .filter_by(output_address=output_address, is_live=True)
-            .first()
-        )
-
-        expired = False
-        if existing_mat and step.stale_after is not None:
-            freshness = existing_mat.refreshed_at or existing_mat.created_at
-            expired = iso_age_seconds(freshness) > step.stale_after
-
-        if existing_mat and not force and not expired:
-            decisions.append(
-                StepDecision(
-                    coordinate=coord,
-                    action="reuse",
-                    item=it,
-                    input_hash=input_hash,
-                    output_address=output_address,
-                    existing=MatRef(
-                        existing_mat.id,
-                        existing_mat.output_address,
-                        existing_mat.output_content_hash,
-                        existing_mat.content_type,
-                        filtered=existing_mat.filtered,
-                    ),
-                    code_drift=(
-                        step.code_mode == "warn"
-                        and step.code_hash is not None
-                        and existing_mat.code_hash is not None
-                        and step.code_hash != existing_mat.code_hash
-                    ),
+                continue
+            
+            incomplete = False
+            out = []
+            for child_hash, input_hash, child_addr in identities:
+                child = child_mats_by_addr.get(child_addr)
+                if child is None:
+                    incomplete = True
+                    break
+                out.append(
+                    StepDecision(
+                        coordinate=expand_child_coord(child_hash),
+                        action="reuse",
+                        input_hash=input_hash,
+                        output_address=child_addr,
+                        existing=MatRef(
+                            child.id,
+                            child.output_address,
+                            child.output_content_hash,
+                            child.content_type,
+                            filtered=child.filtered,
+                        ),
+                    )
                 )
-            )
+            
+            if incomplete:
+                decisions.append(
+                    StepDecision(
+                        coordinate=coord,
+                        action="execute",
+                        item=it,
+                        parent_mats=parent_mats,
+                    )
+                )
+            else:
+                decisions.extend(out)
+
         else:
-            decisions.append(
-                StepDecision(
-                    coordinate=coord,
-                    action="execute",
-                    item=it,
-                    input_hash=input_hash,
-                    output_address=output_address,
-                    parent_mats=parent_mats,
-                    stale=expired,
+            coord, it, parent_mats, input_hash, output_address = args
+            existing_mat = mats_by_addr.get(output_address)
+
+            expired = False
+            if existing_mat and step.stale_after is not None:
+                freshness = existing_mat.refreshed_at or existing_mat.created_at
+                expired = iso_age_seconds(freshness) > step.stale_after
+
+            if existing_mat and not force and not expired:
+                decisions.append(
+                    StepDecision(
+                        coordinate=coord,
+                        action="reuse",
+                        item=it,
+                        input_hash=input_hash,
+                        output_address=output_address,
+                        existing=MatRef(
+                            existing_mat.id,
+                            existing_mat.output_address,
+                            existing_mat.output_content_hash,
+                            existing_mat.content_type,
+                            filtered=existing_mat.filtered,
+                        ),
+                        code_drift=(
+                            step.code_mode == "warn"
+                            and step.code_hash is not None
+                            and existing_mat.code_hash is not None
+                            and step.code_hash != existing_mat.code_hash
+                        ),
+                    )
                 )
-            )
+            else:
+                decisions.append(
+                    StepDecision(
+                        coordinate=coord,
+                        action="execute",
+                        item=it,
+                        input_hash=input_hash,
+                        output_address=output_address,
+                        parent_mats=parent_mats,
+                        stale=expired,
+                    )
+                )
     return decisions
