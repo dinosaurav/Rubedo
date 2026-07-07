@@ -5,8 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rubedo"
 version = "0.1.0"
+description = "Local-first batch engine: DAG pipelines over keyed collections"
+readme = "README.md"
+authors = [
+    { name = "Saurav Das" }
+]
 requires-python = ">=3.11"
 license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "sqlalchemy",
     "pydantic",
@@ -15,6 +27,12 @@ dependencies = [
     "cloudpickle>=3.1.2",
     "rich>=13.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/SauravDas/Rubedo"
+Repository = "https://github.com/SauravDas/Rubedo.git"
+Documentation = "https://rubedo.dev/docs/"
+"Bug Tracker" = "https://github.com/SauravDas/Rubedo/issues"
 
 [project.scripts]
 rubedo = "rubedo.cli:main"
