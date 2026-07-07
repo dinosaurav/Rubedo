@@ -30,6 +30,16 @@ print(summary.created_count, summary.reused_count)
 
 There is no registry and no magic module: the engine never imports your code — you import the engine. Each run snapshots the pipeline's definition (steps, edges, policies) into the ledger, so the UI can show the DAG of anything that has run.
 
+Alternatively, use `PipelineBuilder` to construct a pipeline fluently:
+
+```python
+from rubedo import PipelineBuilder
+p = PipelineBuilder(id="count-lines", name="Count Lines", folder="input")
+
+@p.step(name="read_lines", version="read-v1")
+def read_lines(path: str): ...
+```
+
 Then inspect it in the web UI — a purely read-only dashboard over runs, materializations, lineage, and current outputs:
 
 ```bash
@@ -37,7 +47,7 @@ uv run uvicorn rubedo.server:app --reload   # API on :8000
 cd web && npm run dev                            # UI on :5173
 ```
 
-Running, recomputing, and invalidation always happen from library code; the UI is entirely read-only.
+Running, recomputing, and invalidation always happen from library code; the UI is entirely read-only. However, the UI does include **run inspection and search** to easily drill down into specific values or errors across the pipeline.
 
 ## Sources
 
@@ -60,13 +70,16 @@ Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse
 Steps carry their own execution policies — built for flaky work like LLM calls and scraping:
 
 ```python
+def check_price_positive(val: dict):
+    if val["price"] < 0: raise ValueError("Negative price")
+
 @step(name="enrich", version="1.0.0",
       retries=3, retry_on=(TimeoutError, ConnectionError), retry_delay=1, retry_backoff=2,
-      rate_limit="30/min", stale_after="24h")
+      rate_limit="30/min", stale_after="24h", assertions=[check_price_positive])
 def enrich(row: dict): ...
 ```
 
-Retries apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost); every attempt is recorded in the run event log, and the final status notes the attempt count. `rate_limit` paces the step evenly across all its workers, retries included. `stale_after` expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh its clock.
+Retries apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost); every attempt is recorded in the run event log, and the final status notes the attempt count. `rate_limit` paces the step evenly across all its workers, retries included. `stale_after` expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh its clock. `assertions` runs a list of callables against the output value; if any raise, the step fails and the data isn't propagated downstream.
 
 A step can **decline a coordinate** by returning `Filtered(reason=...)`: downstream steps skip it with status `filtered` instead of executing, and the verdict itself is cached like any output — an expensive LLM-based filter runs once per input, not once per run. When the input changes, the decision is made fresh.
 

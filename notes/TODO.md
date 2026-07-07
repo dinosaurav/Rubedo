@@ -16,7 +16,7 @@ The **producer model is done** (content-addressed lanes → `expand` →
   complete" moment; before a `pip install rubedo` push, make the public API
   trustworthy and custom sources pleasant. *(All initial polish tasks complete)*
 - **Tier 2 · DX, Observability & UI** — make it delightful to watch and drive:
-  **4** live run view (SSE) + animations · **5** pipeline run search & inspection · **6** CLI + terminal UI.
+  **4** live run view (SSE) + animations · **6** CLI + terminal UI.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **8** cloud sources → **9** cloud ledger+store → **10** distributed execution; **11** lane-pipelined execution
   (independent).
@@ -49,15 +49,7 @@ polling the ledger on a short interval.
 running states, smooth counter increments) to make watching a run a dynamic, visually
 engaging experience.
 
-## 5. Pipeline Run Search & Step Inspection
 
-The UI currently shows run details and the DAG, but navigating the actual data flowing
-through a run is difficult. Add a new view (or expand the run detail view) that lets
-a user search for a specific value across a pipeline's run.
-- Ability to search globally within a run.
-- Ability to drill down and look at the outputs/values of a particular step.
-- Requires new API endpoints to search `MaterializationIndexEntry` and
-  `RunCoordinateStatus` by value for a given run.
 
 ## 6. CLI & terminal UI (`rich`)
 
@@ -213,6 +205,8 @@ content-addressed/minted, they're the load-bearing navigation surface.
 
 ## Done (compressed changelog — context for the above)
 
+Pipeline Run Search & Step Inspection UI (RunInspector, deep value search) ·
+`PipelineBuilder` helper · data quality assertions (`assertions=[]`) ·
 Source protocol (Folder/Csv, lane-key semantics, duplicate handling) ·
 type checking pass (mypy configured, py.typed shipped, public API typed) ·
 content-addressed store + generations (supersede/restore/refresh) ·

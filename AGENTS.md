@@ -33,7 +33,7 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 ## Architecture map
 
-- `src/rubedo/spec.py` — `@step` / `pipeline()` build plain
+- `src/rubedo/spec.py` — `@step` / `pipeline()` (and `PipelineBuilder`) build plain
   `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
   user code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
   parent's surviving lanes; `group_key` partitions into one output per
@@ -67,7 +67,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   per matched tuple (`_plan_join`). `group_key`/`join_on` read `index` rows at
   plan time, so planning stays value-free.
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
-  (per `step.executor`), retry loop, rate limiter, per-run memo for
+  (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
   events, and `_commit_materialization` (the generations protocol:
