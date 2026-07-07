@@ -1,6 +1,7 @@
 """
 Utility functions for time and date handling in the Rubedo engine.
 """
+import os
 from datetime import datetime, timezone
 
 
@@ -14,7 +15,6 @@ def iso_age_seconds(iso: str) -> float:
     then = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return (datetime.now(timezone.utc) - then).total_seconds()
 
-import os
 
 def _ensure_gitignore(directory: str):
     """

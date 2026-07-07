@@ -4,7 +4,6 @@ FastAPI server for the read-only web UI and invalidation API.
 import os
 import json
 import time
-import asyncio
 from contextlib import asynccontextmanager
 from typing import List
 from fastapi import FastAPI, HTTPException, Request, Query, Response
