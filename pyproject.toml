@@ -30,7 +30,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.5.0",
+    "httpx>=0.25.0",
     "litellm>=1.91.0",
     "mypy>=2.1.0",
     "networkx>=3.6.1",
