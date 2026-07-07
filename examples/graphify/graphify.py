@@ -37,16 +37,22 @@ p = PipelineBuilder(
     source=FolderSource(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")),
 )
 
-@p.step(name="extract_code_nodes", version="v2")
+import tree_sitter_python as tspython
+from tree_sitter import Language, Parser
+
+PY_LANGUAGE = Language(tspython.language())
+
+@p.step(name="extract_code_nodes", version="v3")
 def extract_code_nodes(path: str) -> ProcessResult:
-    """Extract classes, functions, and import edges using the built-in ast module."""
+    """Extract classes, functions, and import edges using Tree-sitter."""
     if not path.endswith(".py"):
         return ProcessResult(value={"nodes": [], "edges": []})
 
     try:
         with open(path, "r", encoding="utf-8") as f:
             code = f.read()
-        tree = ast.parse(code)
+        parser = Parser(PY_LANGUAGE)
+        tree = parser.parse(bytes(code, "utf8"))
     except Exception:
         return ProcessResult(value={"nodes": [], "edges": []})
 
@@ -54,24 +60,38 @@ def extract_code_nodes(path: str) -> ProcessResult:
     nodes = [{"id": file_id, "type": "file", "name": os.path.basename(path)}]
     edges = []
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            class_id = f"{file_id}::{node.name}"
-            nodes.append({"id": class_id, "type": "class", "name": node.name, "file": file_id})
-            edges.append({"source": file_id, "target": class_id, "type": "contains"})
-        elif isinstance(node, ast.FunctionDef):
-            func_id = f"{file_id}::{node.name}"
-            nodes.append({"id": func_id, "type": "function", "name": node.name, "file": file_id})
-            edges.append({"source": file_id, "target": func_id, "type": "contains"})
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                edges.append({"source": file_id, "target": alias.name, "type": "imports", "is_import": True})
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                module_name = node.module
-                if node.level and node.level > 0:
-                    module_name = "." * node.level + module_name
-                edges.append({"source": file_id, "target": module_name, "type": "imports", "is_import": True})
+    def walk(node):
+        if node.type == "class_definition":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = name_node.text.decode("utf8")
+                class_id = f"{file_id}::{name}"
+                nodes.append({"id": class_id, "type": "class", "name": name, "file": file_id})
+                edges.append({"source": file_id, "target": class_id, "type": "contains"})
+        elif node.type == "function_definition":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = name_node.text.decode("utf8")
+                func_id = f"{file_id}::{name}"
+                nodes.append({"id": func_id, "type": "function", "name": name, "file": file_id})
+                edges.append({"source": file_id, "target": func_id, "type": "contains"})
+        elif node.type == "import_statement":
+            for child in node.children:
+                if child.type == "dotted_name":
+                    edges.append({"source": file_id, "target": child.text.decode("utf8"), "type": "imports", "is_import": True})
+                elif child.type == "aliased_import":
+                    for c in child.children:
+                        if c.type == "dotted_name":
+                            edges.append({"source": file_id, "target": c.text.decode("utf8"), "type": "imports", "is_import": True})
+        elif node.type == "import_from_statement":
+            mod_node = node.child_by_field_name("module_name")
+            if mod_node:
+                edges.append({"source": file_id, "target": mod_node.text.decode("utf8"), "type": "imports", "is_import": True})
+        
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
 
     return ProcessResult(value={"nodes": nodes, "edges": edges, "file_id": file_id})
 
@@ -109,7 +129,7 @@ def extract_semantic_nodes(path: str) -> ProcessResult:
 
     return ProcessResult(value={"file_id": file_id, "summary": summary})
 
-@p.step(name="build_networkx_graph", version="v3", depends_on=["extract_code_nodes", "extract_semantic_nodes"], shape="reduce")
+@p.step(name="build_networkx_graph", version="v4", depends_on=["extract_code_nodes", "extract_semantic_nodes"], shape="reduce")
 def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict) -> ProcessResult:
     """Fan-in all the nodes and edges, merging semantic summaries into the Graph."""
     G = nx.DiGraph()
@@ -163,7 +183,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
     # Rubedo serializes outputs to JSON, so we must return node_link_data, not the DiGraph object.
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="detect_communities", version="v3", depends_on=["build_networkx_graph"])
+@p.step(name="detect_communities", version="v4", depends_on=["build_networkx_graph"])
 def detect_communities(build_networkx_graph) -> ProcessResult:
     """Run Louvain clustering to find architectural boundaries."""
     data = build_networkx_graph.value if isinstance(build_networkx_graph, ProcessResult) else build_networkx_graph
@@ -181,7 +201,7 @@ def detect_communities(build_networkx_graph) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="find_god_nodes", version="v6", depends_on=["detect_communities"])
+@p.step(name="find_god_nodes", version="v7", depends_on=["detect_communities"])
 def find_god_nodes(detect_communities) -> ProcessResult:
     """Find central 'God nodes' using PageRank, excluding external libraries."""
     data = detect_communities.value if isinstance(detect_communities, ProcessResult) else detect_communities
@@ -203,7 +223,7 @@ def find_god_nodes(detect_communities) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="export_graph", version="v6", depends_on=["find_god_nodes"])
+@p.step(name="export_graph", version="v7", depends_on=["find_god_nodes"])
 def export_graph(find_god_nodes) -> ProcessResult:
     """Export the fully enriched graph to JSON."""
     data = find_god_nodes.value if isinstance(find_god_nodes, ProcessResult) else find_god_nodes

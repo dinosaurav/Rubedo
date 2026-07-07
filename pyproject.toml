@@ -33,8 +33,12 @@ testpaths = ["tests"]
 dev = [
     "httpx2>=2.5.0",
     "mypy>=2.1.0",
+    "networkx>=3.6.1",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
+    "scipy>=1.17.1",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-python>=0.25.0",
 ]
 
 [tool.mypy]
