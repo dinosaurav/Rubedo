@@ -2018,7 +2018,6 @@ source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
     { name = "fastapi" },
-    { name = "litellm" },
     { name = "loky" },
     { name = "packaging" },
     { name = "pydantic" },
@@ -2029,6 +2028,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx2" },
+    { name = "litellm" },
     { name = "mypy" },
     { name = "networkx" },
     { name = "pytest" },
@@ -2043,7 +2043,6 @@ dev = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "fastapi" },
-    { name = "litellm", specifier = ">=1.91.0" },
     { name = "loky", specifier = ">=3.5.6" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "pydantic" },
@@ -2054,6 +2053,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx2", specifier = ">=2.5.0" },
+    { name = "litellm", specifier = ">=1.91.0" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "networkx", specifier = ">=3.6.1" },
     { name = "pytest", specifier = ">=9.1.1" },
