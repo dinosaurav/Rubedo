@@ -601,7 +601,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         final_run = session.query(Run).filter_by(id=ctx.run_id).first()
         if ctx.totals["failed"] == 0 and ctx.totals["blocked"] == 0:
             final_run.status = "completed"
-        elif ctx.totals["created"] == 0 and ctx.totals["reused"] == 0:
+        elif ctx.totals["created"] == 0 and ctx.totals["reused"] == 0 and ctx.totals["filtered"] == 0:
             final_run.status = "failed"
         else:
             final_run.status = "completed_with_failures"

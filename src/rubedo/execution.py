@@ -346,15 +346,7 @@ def _execute_step(
                     time.sleep(delay)
                 delay *= step.retry_backoff
 
-        return [
-            ExecutionOutcome(
-                decision,
-                False,
-                error_trace="Retries exhausted.",
-                attempts=step.retries + 1,
-                attempt_errors=attempt_errors,
-            )
-        ]
+
 
     # Never spin up more workers (or subprocesses) than there is work.
     pool_size = min(workers or step.workers, len(decisions))

@@ -514,7 +514,6 @@ async def preview_selection(request: Request):
         )
         items = []
         for m in mats:
-            _to_dict(m)
             items.append(
                 {
                     "materialization_id": m.id,
