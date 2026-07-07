@@ -1,0 +1,65 @@
+site_name: Rubedo
+site_description: Local-first batch engine - DAG pipelines over keyed collections
+site_url: https://rubedo.dev/docs/
+site_dir: marketing/dist/docs
+
+repo_url: https://github.com/SauravDas/Rubedo
+repo_name: SauravDas/Rubedo
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.magiclink
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - def_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Core Concepts:
+    - Producer Model: notes/producer-model.md
+    - Architecture & Invariants: notes/invariants.md
+    - Unification Plan: notes/unification-plan.md
