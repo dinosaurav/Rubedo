@@ -86,6 +86,7 @@ def invalidate(selection: Selection, reason: str) -> dict:
                 "materialization_ids": mat_ids,
             }
         except Exception as e:
+            session.rollback()
             run.status = "failed"
             run.error_message = str(e)
             run.finished_at = utcnow_iso()
