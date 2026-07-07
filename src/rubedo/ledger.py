@@ -150,6 +150,24 @@ def _record_planned(
             # A cached filter verdict reads as "filtered" in the ledger:
             # "reused" is reserved for coordinates with a usable output
             status = "filtered" if d.existing.filtered else "reused"  # type: ignore
+            
+            meta = {}
+            if d.failed_parents:
+                meta["failed_parents"] = d.failed_parents
+            if d.blocked_parents:
+                meta["blocked_parents"] = d.blocked_parents
+                
+            if meta:
+                _emit(
+                    session,
+                    ctx,
+                    "warning",
+                    "partial_fan_in",
+                    step_name=step.name,
+                    coordinate=d.coordinate,
+                    message=f"Proceeding with dropped lanes ({len(d.failed_parents or [])} failed, {len(d.blocked_parents or [])} blocked)",
+                )
+                
             session.add(
                 _new_status(
                     ctx,
@@ -159,6 +177,7 @@ def _record_planned(
                     input_hash=d.input_hash,
                     output_address=d.output_address,
                     materialization_id=d.existing.id,  # type: ignore
+                    metadata_json=json.dumps(meta) if meta else None,
                 )
             )
             _emit(
@@ -537,6 +556,28 @@ def _commit_execution_result(
                 status = "reused"
             else:
                 status = "created"
+                
+            status_meta = {}
+            if is_filtered:
+                status_meta["reason"] = result["reason"]
+            if attempts_meta:
+                status_meta.update(json.loads(attempts_meta))
+            if getattr(decision, "failed_parents", None):
+                status_meta["failed_parents"] = decision.failed_parents
+            if getattr(decision, "blocked_parents", None):
+                status_meta["blocked_parents"] = decision.blocked_parents
+                
+            if getattr(decision, "failed_parents", None) or getattr(decision, "blocked_parents", None):
+                _emit(
+                    session,
+                    ctx,
+                    "warning",
+                    "partial_fan_in",
+                    step_name=step.name,
+                    coordinate=decision.coordinate,
+                    message=f"Proceeding with dropped lanes ({len(getattr(decision, 'failed_parents', []) or [])} failed, {len(getattr(decision, 'blocked_parents', []) or [])} blocked)",
+                )
+
             session.add(
                 _new_status(
                     ctx,
@@ -546,7 +587,7 @@ def _commit_execution_result(
                     input_hash=decision.input_hash,
                     output_address=decision.output_address,
                     materialization_id=mat.id,
-                    metadata_json=metadata_json if is_filtered else attempts_meta,
+                    metadata_json=json.dumps(status_meta) if status_meta else None,
                 )
             )
             _emit(

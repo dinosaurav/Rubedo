@@ -2,7 +2,7 @@
 Pipeline and step specification definitions.
 """
 import re
-from typing import Callable, Optional, Dict, Any, Tuple, Type, List
+from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal
 from pydantic import BaseModel
 from dataclasses import dataclass
 
@@ -68,6 +68,7 @@ class StepSpec:
     join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
+    on_failed: Literal["use_passed", "block"] = "use_passed"
 
 
 DEFAULT_SOURCE = "__source__"
@@ -142,6 +143,7 @@ def step(
     join_on: Optional[Dict[str, str]] = None,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
+    on_failed: Literal["use_passed", "block"] = "use_passed",
 ):
     """Declare a step.
 
@@ -248,6 +250,10 @@ def step(
             f"Step '{name}': index is meaningless with skip_cache — "
             "nothing is stored to search"
         )
+    if on_failed not in ("use_passed", "block"):
+        raise ValueError(
+            f"Step '{name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
+        )
     if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
         retry_on = (retry_on,)
     parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
@@ -291,6 +297,7 @@ def step(
             join_on=join_on,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,
+            on_failed=on_failed,
         )
 
     return decorator

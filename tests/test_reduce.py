@@ -186,7 +186,7 @@ def test_reduce_failed_parent_lane():
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", version="1", depends_on=["parse"], shape="reduce", on_failed="block")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -199,6 +199,35 @@ def test_reduce_failed_parent_lane():
     with get_session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "blocked"
+        meta = json.loads(status.metadata_json)
+        assert "parse:b.txt" in meta["failed_parents"]
+
+def test_reduce_failed_parent_lane_use_passed():
+    create_file("a.txt", "10")
+    create_file("b.txt", "fail")
+    create_file("c.txt", "20")
+
+    @step(name="parse", version="1")
+    def parse(path):
+        text = open(path).read().strip()
+        if text == "fail":
+            raise ValueError("bad data")
+        return int(text)
+
+    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    def sum_values(parse):
+        return sum(parse.values())
+
+    pipe = pipeline(id="reduce4_use_passed", name="reduce4_use_passed", folder=TEST_FOLDER, steps=[parse, sum_values])
+    s1 = run(pipe, workers=1)
+    
+    assert s1.failed_count == 1
+    assert s1.blocked_count == 0
+    assert s1.created_count == 3  # 2 parse successes + 1 sum
+    
+    with get_session() as session:
+        status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
+        assert status.status == "created"
         meta = json.loads(status.metadata_json)
         assert "parse:b.txt" in meta["failed_parents"]
 

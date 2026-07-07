@@ -178,6 +178,78 @@ def test_four_way_star_join():
     # one merged lane per shared uid (u1, u2)
     assert sorted(outs.values()) == ["a1b1c1d1", "a2b2c2d2"]
 
+def test_join_failed_parent_lane():
+    write_csv("a.csv", "id,val\n1,A\n2,B\n3,fail\n")
+    write_csv("b.csv", "id,val\n1,X\n2,Y\n3,Z\n")
+
+    @step(name="a", version="1", source="a", index=["id"])
+    def load_a(row):
+        if row["val"] == "fail":
+            raise ValueError("bad data")
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(name="b", version="1", source="b", index=["id"])
+    def load_b(row):
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(
+        name="merge", version="1", shape="join",
+        depends_on=["a", "b"], join_on={"a": "id", "b": "id"},
+        on_failed="block"
+    )
+    def merge(a, b):
+        return a["v"] + b["v"]
+
+    pipe = pipeline(
+        id="join_fail", name="join_fail",
+        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
+        steps=[load_a, load_b, merge],
+    )
+    s1 = run(pipe, workers=1)
+    
+    assert s1.failed_count == 1
+    assert s1.blocked_count == 1
+    
+    with get_session() as session:
+        status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="merge").one()
+        assert status.status == "blocked"
+        assert "a:row-" in status.metadata_json
+
+def test_join_failed_parent_lane_use_passed():
+    write_csv("a.csv", "id,val\n1,A\n2,B\n3,fail\n")
+    write_csv("b.csv", "id,val\n1,X\n2,Y\n3,Z\n")
+
+    @step(name="a", version="1", source="a", index=["id"])
+    def load_a(row):
+        if row["val"] == "fail":
+            raise ValueError("bad data")
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(name="b", version="1", source="b", index=["id"])
+    def load_b(row):
+        return {"id": row["id"], "v": row["val"]}
+
+    @step(
+        name="merge", version="1", shape="join",
+        depends_on=["a", "b"], join_on={"a": "id", "b": "id"}
+    )
+    def merge(a, b):
+        return a["v"] + b["v"]
+
+    pipe = pipeline(
+        id="join_fail_pass", name="join_fail_pass",
+        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
+        steps=[load_a, load_b, merge],
+    )
+    s1 = run(pipe, workers=1)
+    
+    assert s1.failed_count == 1
+    assert s1.blocked_count == 0
+    assert s1.created_count == 7 # 2 a + 3 b + 2 merge
+    
+    outs = _outputs("merge")
+    assert sorted(outs.values()) == ["AX", "BY"]
+
 
 def test_join_requires_join_on():
     with pytest.raises(ValueError, match="requires join_on"):

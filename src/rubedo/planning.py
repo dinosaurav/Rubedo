@@ -249,6 +249,8 @@ def _reduce_group_decision(
     params_hash: str,
     force: bool,
     accepts_params: bool,
+    failed_parents: Optional[List[str]] = None,
+    blocked_parents: Optional[List[str]] = None,
 ) -> StepDecision:
     """Reuse/execute decision for one reduce group (or the sole '@all')."""
     hash_data = {}
@@ -301,6 +303,8 @@ def _reduce_group_decision(
                 and existing_mat.code_hash is not None
                 and step.code_hash != existing_mat.code_hash
             ),
+            failed_parents=failed_parents or [],
+            blocked_parents=blocked_parents or [],
         )
     return StepDecision(
         coordinate=group_coord,
@@ -309,6 +313,8 @@ def _reduce_group_decision(
         output_address=output_address,
         parent_mats=group_mats,
         stale=expired,
+        failed_parents=failed_parents or [],
+        blocked_parents=blocked_parents or [],
     )
 
 
@@ -357,14 +363,16 @@ def _plan_join(
             coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
-        return [
-            StepDecision(
-                coordinate="@join",
-                action="blocked",
-                failed_parents=failed_parents,
-                blocked_parents=blocked_parents,
-            )
-        ]
+        if step.on_failed == "block":
+            return [
+                StepDecision(
+                    coordinate="@join",
+                    action="blocked",
+                    failed_parents=failed_parents,
+                    blocked_parents=blocked_parents,
+                )
+            ]
+        # use_passed: fall through, computing permutations of surviving lanes
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
@@ -415,6 +423,16 @@ def _plan_join(
             )
             combo_list.append((pair_coord, parent_mats, input_hash, output_address))
 
+    if not combo_list:
+        return [
+            StepDecision(
+                coordinate="@join",
+                action="blocked",
+                failed_parents=failed_parents,
+                blocked_parents=blocked_parents,
+            )
+        ]
+
     addrs = [out_addr for _, _, _, out_addr in combo_list]
     mats_by_addr = {}
     if addrs:
@@ -453,6 +471,8 @@ def _plan_join(
                         and existing_mat.code_hash is not None
                         and step.code_hash != existing_mat.code_hash
                     ),
+                    failed_parents=failed_parents,
+                    blocked_parents=blocked_parents,
                 )
             )
         else:
@@ -464,6 +484,8 @@ def _plan_join(
                     output_address=output_address,
                     parent_mats=parent_mats,
                     stale=expired,
+                    failed_parents=failed_parents,
+                    blocked_parents=blocked_parents,
                 )
             )
 
@@ -503,6 +525,21 @@ def _plan_step(
                 parent_mats[d][coord] = ref
 
         if failed_parents or blocked_parents:
+            if step.on_failed == "block":
+                return [
+                    StepDecision(
+                        coordinate="@all",
+                        action="blocked",
+                        failed_parents=failed_parents,
+                        blocked_parents=blocked_parents,
+                    )
+                ]
+            # use_passed: fall through, dropping failed/blocked lanes
+            
+        if pending:
+            return [StepDecision(coordinate="@all", action="pending")]
+
+        if not any(parent_mats[d] for d in step.depends_on):
             return [
                 StepDecision(
                     coordinate="@all",
@@ -511,8 +548,6 @@ def _plan_step(
                     blocked_parents=blocked_parents,
                 )
             ]
-        if pending:
-            return [StepDecision(coordinate="@all", action="pending")]
 
         # One group ("@all") unless group_key partitions the lanes by an
         # indexed field of the parent output.
@@ -523,7 +558,8 @@ def _plan_step(
 
         return [
             _reduce_group_decision(
-                session, step, gcoord, gmats, params_hash, force, accepts_params
+                session, step, gcoord, gmats, params_hash, force, accepts_params,
+                failed_parents=failed_parents, blocked_parents=blocked_parents
             )
             for gcoord, gmats in sorted(groups.items())
         ]
