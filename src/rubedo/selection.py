@@ -18,6 +18,7 @@ class Selection(BaseModel):
     version_range: Optional[str] = None
     output_address: Optional[str] = None
     invalidated: Optional[bool] = None
+    pipeline_id: Optional[str] = None
     # Indexed value fields (@step(index=[...])): all pairs must match
     index: Optional[Dict[str, str]] = None
 
@@ -51,6 +52,8 @@ class Selection(BaseModel):
                 fields["coordinate_glob"] = value
             elif key == "step":
                 fields["step"] = value
+            elif key == "pipeline":
+                fields["pipeline_id"] = value
             elif key == "version":
                 if value.startswith(("<", ">", "=", "!")):
                     fields["version_range"] = value
@@ -74,10 +77,12 @@ def get_selection_materialization_ids(
     session: Session, selection: Selection
 ) -> List[int]:
     """Retrieve materialization IDs that match the given selection criteria."""
-    query = session.query(Materialization)
+    query = session.query(Materialization).distinct()
 
     if selection.step:
         query = query.filter(Materialization.step_name == selection.step)
+    if selection.pipeline_id:
+        query = query.filter(Materialization.pipeline_id == selection.pipeline_id)
     if selection.code_version:
         query = query.filter(Materialization.code_version == selection.code_version)
     if selection.output_address:
@@ -106,21 +111,28 @@ def get_selection_materialization_ids(
 
     mats = query.all()
 
+    # Batch fetch the latest coordinate for all matching materializations
+    latest_coords = {}
+    if selection.coordinate_glob and mats:
+        mat_ids = [m.id for m in mats]
+        # Order by asc, so the last one inserted into the dict is the latest
+        rows = (
+            session.query(RunCoordinateStatus.materialization_id, RunCoordinateStatus.coordinate)
+            .filter(RunCoordinateStatus.materialization_id.in_(mat_ids))
+            .order_by(RunCoordinateStatus.id.asc())
+            .all()
+        )
+        for mat_id, coord in rows:
+            latest_coords[mat_id] = coord
+
     # Coordinate-glob and version-range filtering happen in Python (glob
     # matching and PEP 440 specifiers don't map cleanly to SQL).
     result_ids = []
     for m in mats:
         # Coordinate glob check
         if selection.coordinate_glob:
-            # We need the coordinate for this materialization. We joined above if glob was present.
-            # Easiest way is to fetch current output for it
-            co = (
-                session.query(RunCoordinateStatus)
-                .filter_by(materialization_id=m.id)
-                .order_by(RunCoordinateStatus.id.desc())
-                .first()
-            )
-            if not co or not fnmatch.fnmatch(str(co.coordinate), str(selection.coordinate_glob)):
+            coord = latest_coords.get(m.id)
+            if not coord or not fnmatch.fnmatch(str(coord), str(selection.coordinate_glob)):
                 continue
                 
         # Version range check
