@@ -20,7 +20,8 @@ import json
 import urllib.parse
 import urllib.request
 
-from rubedo import Filtered, describe, pipeline, run, step
+import os
+from rubedo import Filtered, describe, PipelineBuilder, run, CsvSource
 
 GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST = "https://api.open-meteo.com/v1/forecast"
@@ -32,7 +33,14 @@ def _get(url: str, params: dict):
         return json.load(r)
 
 
-@step(name="geocode", version="1", retries=3, retry_delay=1, rate_limit="60/min")
+p = PipelineBuilder(
+    id="weather-advisory",
+    name="Weather Advisory",
+    source=CsvSource(os.path.join(os.path.dirname(__file__), "cities.csv")),
+)
+
+
+@p.step(name="geocode", version="1", retries=3, retry_delay=1, rate_limit="60/min")
 def geocode(row: dict) -> dict:
     """City name -> coordinates. Unknown cities decline the lane."""
     hits = _get(GEOCODE, {"name": row["city"], "count": 1}).get("results")
@@ -43,7 +51,7 @@ def geocode(row: dict) -> dict:
             "lat": h["latitude"], "lon": h["longitude"]}
 
 
-@step(
+@p.step(
     name="forecast",
     version="1",
     depends_on=["geocode"],
@@ -67,7 +75,7 @@ def forecast(geocode: dict) -> dict:
     }
 
 
-@step(name="advice", version="1", depends_on=["forecast"], index=["outlook"])
+@p.step(name="advice", version="1", depends_on=["forecast"], index=["outlook"])
 def advice(forecast: dict) -> dict:
     """Turn the numbers into a one-word outlook and a suggestion."""
     if forecast["precip"] >= 1:
@@ -81,7 +89,7 @@ def advice(forecast: dict) -> dict:
     return {**forecast, "outlook": outlook, "tip": tip}
 
 
-@step(name="briefing", version="1", depends_on=["advice"], shape="reduce")
+@p.step(name="briefing", version="1", depends_on=["advice"], shape="reduce")
 def briefing(advice: dict) -> str:
     """Fan every city's advice into one morning briefing."""
     rows = sorted(advice.values(), key=lambda a: a["tmax"], reverse=True)
@@ -93,20 +101,8 @@ def briefing(advice: dict) -> str:
     return "Morning weather briefing:\n" + "\n".join(lines)
 
 
-def make_pipeline():
-    from rubedo import CsvSource
-    import os
-
-    return pipeline(
-        id="weather-advisory",
-        name="Weather Advisory",
-        source=CsvSource(os.path.join(os.path.dirname(__file__), "cities.csv")),
-        steps=[geocode, forecast, advice, briefing],
-    )
-
-
 def main():
-    pipe = make_pipeline()
+    pipe = p.build()
     print(describe(pipe))
     print()
     summary = run(pipe)

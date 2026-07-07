@@ -26,7 +26,7 @@ import csv
 import os
 import tempfile
 
-from rubedo import CsvSource, describe, pipeline, run, step
+from rubedo import CsvSource, describe, PipelineBuilder, run
 from rubedo.db import get_session
 from rubedo.models import Materialization, RunCoordinateStatus
 from rubedo.store import read_materialization_output
@@ -49,17 +49,23 @@ def write_csv(path, header, rows):
         w.writerows(rows)
 
 
-@step(name="feed", version="1", source="feeds", index=["publisher"])
+p = PipelineBuilder(
+    id="newsroom",
+    name="Newsroom",
+)
+
+
+@p.step(name="feed", version="1", source="feeds", index=["publisher"])
 def feed(row: dict) -> dict:
     return {"feed_id": row["feed_id"], "publisher": row["publisher"]}
 
 
-@step(name="publisher", version="1", source="publishers", index=["publisher"])
+@p.step(name="publisher", version="1", source="publishers", index=["publisher"])
 def publisher(row: dict) -> dict:
     return {"publisher": row["publisher"], "region": row["region"]}
 
 
-@step(
+@p.step(
     name="feed_meta", version="1", shape="join",
     depends_on=["feed", "publisher"],
     join_on={"feed": "publisher", "publisher": "publisher"},
@@ -69,7 +75,7 @@ def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
 
 
-@step(
+@p.step(
     name="articles", version="1", depends_on=["feed_meta"],
     shape="expand", index=["region"],
 )
@@ -80,7 +86,7 @@ def articles(feed_meta: dict):
         yield {"title": title, "region": feed_meta["region"]}  # yield payloads
 
 
-@step(
+@p.step(
     name="digest", version="1", depends_on=["articles"],
     shape="reduce", group_key="region",
 )
@@ -92,14 +98,11 @@ def digest(articles: dict) -> dict:
 def make_pipeline(folder):
     write_csv(os.path.join(folder, "feeds.csv"), ["feed_id", "publisher"], FEEDS)
     write_csv(os.path.join(folder, "publishers.csv"), ["publisher", "region"], PUBLISHERS)
-    return pipeline(
-        id="newsroom",
-        name="Newsroom",
+    return p.build(
         sources={
             "feeds": CsvSource(os.path.join(folder, "feeds.csv")),
             "publishers": CsvSource(os.path.join(folder, "publishers.csv")),
-        },
-        steps=[feed, publisher, feed_meta, articles, digest],
+        }
     )
 
 

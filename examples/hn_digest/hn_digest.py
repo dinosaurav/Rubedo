@@ -27,7 +27,7 @@ import urllib.request
 
 from pydantic import BaseModel
 
-from rubedo import Filtered, Source, SourceItem, describe, pipeline, run, step
+from rubedo import Filtered, Source, SourceItem, describe, PipelineBuilder, run
 
 HN = "https://hacker-news.firebaseio.com/v0"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
@@ -114,7 +114,14 @@ class Screen(BaseModel):
     min_score: int = 100
 
 
-@step(name="screen", version="1", params_model=Screen)
+p = PipelineBuilder(
+    id="hn-digest",
+    name="Hacker News Digest",
+    source=HackerNewsTop(limit=15),
+)
+
+
+@p.step(name="screen", version="1", params_model=Screen)
 def screen(story: dict, params: Screen) -> dict:
     """Drop low-signal stories before we spend any tokens on them."""
     if not story.get("title"):
@@ -124,7 +131,7 @@ def screen(story: dict, params: Screen) -> dict:
     return {"title": story["title"], "url": story.get("url", ""), "score": story["score"]}
 
 
-@step(
+@p.step(
     name="classify",
     version="1",
     depends_on=["screen"],
@@ -151,7 +158,7 @@ def classify(screen: dict) -> dict:
     }
 
 
-@step(name="digest", version="1", depends_on=["classify"], shape="reduce")
+@p.step(name="digest", version="1", depends_on=["classify"], shape="reduce")
 def digest(classify: dict) -> str:
     """Fan in every classified story and let the LLM write the editor's note."""
     stories = sorted(classify.values(), key=lambda s: s["score"], reverse=True)
@@ -164,17 +171,8 @@ def digest(classify: dict) -> str:
     return note.strip() + "\n\n" + "\n".join(headlines)
 
 
-def make_pipeline():
-    return pipeline(
-        id="hn-digest",
-        name="Hacker News Digest",
-        source=HackerNewsTop(limit=15),
-        steps=[screen, classify, digest],
-    )
-
-
 def main():
-    pipe = make_pipeline()
+    pipe = p.build()
     print(describe(pipe))
     print()
     summary = run(pipe, params={"min_score": 100})

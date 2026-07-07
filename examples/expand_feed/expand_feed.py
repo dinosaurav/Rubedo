@@ -17,7 +17,7 @@ import json
 import os
 import tempfile
 
-from rubedo import FolderSource, describe, pipeline, run, step
+from rubedo import FolderSource, describe, PipelineBuilder, run
 
 
 def make_feed(folder):
@@ -30,19 +30,22 @@ def make_feed(folder):
         json.dump(articles, f)
 
 
-@step(name="fetch", version="1")
+p = PipelineBuilder(id="expand-feed", name="Expand Feed")
+
+
+@p.step(name="fetch", version="1")
 def fetch(path: str) -> list:
     print(f"  fetching {os.path.basename(path)} ...")  # runs once, then cached
     return json.load(open(path))
 
 
-@step(name="articles", version="1", depends_on=["fetch"], shape="expand")
+@p.step(name="articles", version="1", depends_on=["fetch"], shape="expand")
 def articles(fetch: list):
     for art in fetch:  # 1:N — yield a payload per article; content-addressed lanes
         yield art
 
 
-@step(name="headline", version="1", depends_on=["articles"])
+@p.step(name="headline", version="1", depends_on=["articles"])
 def headline(articles: dict) -> str:
     return articles["title"].upper()
 
@@ -52,12 +55,7 @@ def main():
     os.makedirs(folder, exist_ok=True)
     make_feed(folder)
 
-    pipe = pipeline(
-        id="expand-feed",
-        name="Expand Feed",
-        source=FolderSource(folder),
-        steps=[fetch, articles, headline],
-    )
+    pipe = p.build(source=FolderSource(folder))
     print(describe(pipe))
     print()
 

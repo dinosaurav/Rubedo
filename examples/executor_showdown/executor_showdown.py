@@ -57,7 +57,7 @@ import sys
 import time
 import urllib.request
 
-from rubedo import Source, SourceItem, describe, pipeline, run, step
+from rubedo import Source, SourceItem, describe, PipelineBuilder, run
 from rubedo.db import get_session
 from rubedo.models import Materialization, RunCoordinateStatus
 from rubedo.store import read_materialization_output
@@ -182,26 +182,27 @@ def build_pipeline(executor: str):
     """executor is 'thread' or 'process' — also used to suffix step names
     so the two variants never share a cached materialization (see module
     docstring)."""
-    analyze = step(
+    p = PipelineBuilder(
+        id=f"executor-showdown-{executor}",
+        name=f"Executor Showdown ({executor})",
+        source=ChunkedWordlist(),
+    )
+
+    p.step(
         name=f"analyze_{executor}",
         version="1",
         executor=executor,
         workers=NUM_CHUNKS,
     )(analyze_chunk)
 
-    combine = step(
+    p.step(
         name=f"combine_{executor}",
         version="1",
         depends_on=[f"analyze_{executor}"],
         shape="reduce",
     )(combine_chunks)
 
-    return pipeline(
-        id=f"executor-showdown-{executor}",
-        name=f"Executor Showdown ({executor})",
-        source=ChunkedWordlist(),
-        steps=[analyze, combine],
-    )
+    return p.build()
 
 
 def _fetch_result(run_id: str, combine_step_name: str):

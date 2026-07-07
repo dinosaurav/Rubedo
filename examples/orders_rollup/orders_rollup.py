@@ -22,7 +22,7 @@ import tempfile
 
 from sqlalchemy import create_engine, text
 
-from rubedo import ProcessResult, describe, pipeline, run, step
+from rubedo import ProcessResult, describe, PipelineBuilder, run
 from rubedo.sources import TableSource
 
 DB_PATH = os.path.join(tempfile.gettempdir(), "rubedo_demo_orders.db")
@@ -50,7 +50,13 @@ def seed_db():
     engine.dispose()
 
 
-@step(name="classify", version="1", index=["tier"])
+p = PipelineBuilder(
+    id="orders-rollup",
+    name="Orders Rollup",
+)
+
+
+@p.step(name="classify", version="1", index=["tier"])
 def classify(row: dict) -> ProcessResult:
     """Bucket each order by size."""
     amount = row["amount"]
@@ -61,7 +67,7 @@ def classify(row: dict) -> ProcessResult:
     )
 
 
-@step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
+@p.step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
     totals: dict[str, list] = {}
@@ -76,19 +82,10 @@ def rollup(classify: dict) -> str:
     return "Revenue by tier:\n" + "\n".join(lines)
 
 
-def make_pipeline():
-    return pipeline(
-        id="orders-rollup",
-        name="Orders Rollup",
-        # batch_size=100 => streaming/lazy mode (see TableSource docstring)
-        source=TableSource(DB_URL, table="orders", key="id", batch_size=100),
-        steps=[classify, rollup],
-    )
-
-
 def main():
     seed_db()
-    pipe = make_pipeline()
+    # batch_size=100 => streaming/lazy mode (see TableSource docstring)
+    pipe = p.build(source=TableSource(DB_URL, table="orders", key="id", batch_size=100))
     print(describe(pipe))
     print()
     summary = run(pipe)

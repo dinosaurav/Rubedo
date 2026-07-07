@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from rubedo import CsvSource, ProcessResult, describe, pipeline, run, step
+from rubedo import CsvSource, ProcessResult, describe, PipelineBuilder, run
 
 API = "https://api.github.com"
 
@@ -38,7 +38,14 @@ def _get(path: str):
         return json.load(r)
 
 
-@step(name="fetch_repo", version="1", retries=3, retry_delay=2, rate_limit="20/min")
+p = PipelineBuilder(
+    id="repo-health",
+    name="Repo Health",
+    source=CsvSource(os.path.join(os.path.dirname(__file__), "repos.csv")),
+)
+
+
+@p.step(name="fetch_repo", version="1", retries=3, retry_delay=2, rate_limit="20/min")
 def fetch_repo(row: dict) -> dict:
     """Repo metadata. row['repo'] is 'owner/name' from repos.csv."""
     r = _get(f"/repos/{row['repo']}")
@@ -50,7 +57,7 @@ def fetch_repo(row: dict) -> dict:
     }
 
 
-@step(name="activity", version="1", depends_on=["fetch_repo"], retries=3, rate_limit="20/min")
+@p.step(name="activity", version="1", depends_on=["fetch_repo"], retries=3, rate_limit="20/min")
 def activity(fetch_repo: dict) -> dict:
     """Commits in the last 30 days — a cheap liveness signal."""
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -58,7 +65,7 @@ def activity(fetch_repo: dict) -> dict:
     return {"commits_30d": len(commits)}
 
 
-@step(name="score", version="1", depends_on=["fetch_repo", "activity"], index=["language"])
+@p.step(name="score", version="1", depends_on=["fetch_repo", "activity"], index=["language"])
 def score(fetch_repo: dict, activity: dict) -> ProcessResult:
     """A naive health score: reward stars and recent commits, penalize open issues."""
     health = (
@@ -76,7 +83,7 @@ def score(fetch_repo: dict, activity: dict) -> ProcessResult:
     )
 
 
-@step(name="report", version="1", depends_on=["score"], shape="reduce")
+@p.step(name="report", version="1", depends_on=["score"], shape="reduce")
 def report(score: dict) -> str:
     """Fan in every repo's score into one ranked table."""
     rows = sorted(score.values(), key=lambda s: s["health"], reverse=True)
@@ -88,17 +95,8 @@ def report(score: dict) -> str:
     return "Repo health (best first):\n" + "\n".join(lines)
 
 
-def make_pipeline():
-    return pipeline(
-        id="repo-health",
-        name="Repo Health",
-        source=CsvSource(os.path.join(os.path.dirname(__file__), "repos.csv")),
-        steps=[fetch_repo, activity, score, report],
-    )
-
-
 def main():
-    pipe = make_pipeline()
+    pipe = p.build()
     print(describe(pipe))
     print()
     try:
