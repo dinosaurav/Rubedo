@@ -65,7 +65,16 @@ superseded / refreshed rows) is the truth about every liveness and freshness
 transition. Every `is_live`/`refreshed_at` change must be accompanied by a
 lifecycle row for the same materialization in the same transaction — a session
 guard enforces this at commit (see invariant 8). Similarly, Run's status
-columns are a projection of the `run_events` log.
+columns are a projection of the `run_events` log — and they are
+**terminal-only** (`completed` / `completed_with_failures` / `failed`; NULL
+while in flight). "running" is never stored: it is a present-tense claim no
+durable row can keep truthfully (a killed process would leave it lying
+forever). Readers derive `running`/`interrupted` from `last_heartbeat_at`, an
+ephemeral presence signal the run process bumps from a timer thread
+(`effective_run_status()` in models.py). The heartbeat is exempt from event
+pairing — presence is about *now*, not history, and nothing durable is ever
+derived from it. A machine that sleeps and wakes resumes beating, so an
+"interrupted" run flips back to "running" on its own.
 
 ## Core Invariants
 

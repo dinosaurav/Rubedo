@@ -15,6 +15,7 @@ from .db import get_session, init_db
 from .models import (
     Run,
     RunEvent,
+    effective_run_status,
     Materialization,
     MaterializationIndexEntry,
     MaterializationLifecycle,
@@ -113,15 +114,16 @@ async def stream_run(run_id: str):
                         by_step[step_name][status] = count
                         totals[status] += count
                 
+                status = effective_run_status(run)
                 data = {
-                    "status": run.status,
+                    "status": status,
                     "totals": totals,
                     "by_step": by_step,
                 }
-                
+
                 yield f"data: {json.dumps(data)}\n\n"
-                
-                if run.status != "running":
+
+                if status != "running":
                     break
                     
             time.sleep(1.0)
@@ -557,7 +559,7 @@ def get_pipelines_api():
                     source_id=getattr(run, 'source_id', ''),
                     run_count=run_count,
                     last_run_id=getattr(run, 'id', ''),
-                    last_run_status=getattr(run, 'status', ''),
+                    last_run_status=effective_run_status(run),
                     last_run_at=getattr(run, 'started_at', ''),
                     last_run_finished_at=getattr(run, 'finished_at', ''),
                     definition=json.loads(getattr(run, 'definition_json', '{}')) if getattr(run, 'definition_json', None) else None,

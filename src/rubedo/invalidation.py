@@ -28,12 +28,13 @@ def invalidate(selection: Selection, reason: str) -> dict:
 
     with get_session() as session:
         # Create invalidate run
+        now = utcnow_iso()
         run = Run(
             id=run_id,
             kind="invalidate",
-            status="running",
             selection_json=selection.model_dump_json(),
-            started_at=utcnow_iso(),
+            started_at=now,
+            last_heartbeat_at=now,
         )
         session.add(run)
 

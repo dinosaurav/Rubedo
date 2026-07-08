@@ -17,19 +17,28 @@ from sqlalchemy import (
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, DeclarativeBase
 
+from .util import iso_age_seconds
+
 class Base(DeclarativeBase):
     pass
 
 
 class Run(Base):
     """One execution attempt. Identity columns are written once at creation;
-    the lifecycle columns (status, finished_at, error_message, summary_json)
-    are a projection of the run_events log and are the only legal updates."""
+    the lifecycle columns (status, finished_at, error_message, summary_json,
+    last_heartbeat_at) are the only legal updates.
+
+    status is terminal-only: NULL while the run is in flight, set exactly
+    once at the end (completed | completed_with_failures | failed) as a
+    projection of the run_events log. "running" is never stored — it is a
+    present-tense claim no durable row can keep truthfully (a killed process
+    would leave it lying forever). Readers derive running/interrupted from
+    last_heartbeat_at via effective_run_status()."""
 
     __tablename__ = "runs"
     id = Column(String, primary_key=True)
     kind = Column(String, nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(String)  # NULL until terminal
     source_id = Column(String)
     params_json = Column(String)
     selection_json = Column(String)
@@ -41,6 +50,33 @@ class Run(Base):
     error_message = Column(String)
     summary_json = Column(String)
     pipeline_id = Column(String, index=True)
+    # Ephemeral presence signal: set at creation and bumped periodically by
+    # the run process. Exempt from event pairing — presence is about *now*,
+    # not history, and nothing durable is ever derived from it.
+    last_heartbeat_at = Column(String)
+
+
+RUN_HEARTBEAT_INTERVAL_SECONDS = 60.0
+"""How often a live run process bumps Run.last_heartbeat_at."""
+
+RUN_HEARTBEAT_STALE_SECONDS = 180.0
+"""An unfinished run whose heartbeat is older than this reads as interrupted."""
+
+
+def effective_run_status(run: "Run") -> str:
+    """The status a reader should display for a run.
+
+    Stored status is terminal-only; an unfinished run is "running" while its
+    heartbeat is fresh and "interrupted" once it goes stale (process died, or
+    the machine slept — a resumed process starts beating again and the run
+    flips back to "running" on its own).
+    """
+    if run.status is not None:
+        return str(run.status)
+    beat = run.last_heartbeat_at or run.started_at
+    if iso_age_seconds(str(beat)) < RUN_HEARTBEAT_STALE_SECONDS:
+        return "running"
+    return "interrupted"
 
 
 class RunEvent(Base):
@@ -193,7 +229,9 @@ _APPEND_ONLY = (
 )
 
 _PROJECTION_COLUMNS = {
-    Run: frozenset({"status", "finished_at", "error_message", "summary_json"}),
+    Run: frozenset(
+        {"status", "finished_at", "error_message", "summary_json", "last_heartbeat_at"}
+    ),
     Materialization: frozenset({"is_live", "refreshed_at"}),
 }
 
@@ -359,10 +397,10 @@ class RunSummary(BaseModel):
                 .filter_by(run_id=self.run_id, step_name=step_name)
                 .all()
             )
-            result = {}
+            result: dict[str, Any] = {}
             for s in statuses:
                 if s.status in ("ok", "filtered", "reused") and s.materialization_id:
                     mat = session.get(Materialization, s.materialization_id)
                     if mat:
-                        result[s.coordinate] = read_materialization_output(mat)
+                        result[str(s.coordinate)] = read_materialization_output(mat)  # type: ignore[arg-type]
             return result

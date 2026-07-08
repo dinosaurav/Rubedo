@@ -7,6 +7,7 @@ and this module wires them together.
 
 import json
 import os
+import threading
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ from .ledger import (
     _record_planned,
     _RunContext,
 )
-from .models import Run, RunSummary
+from .models import RUN_HEARTBEAT_INTERVAL_SECONDS, Run, RunSummary
 from .planning import (
     EphemeralRef,  # noqa: F401  (re-exported: part of the runner's public surface)
     MatRef,  # noqa: F401
@@ -48,6 +49,40 @@ def _init_home(home: str):
     """
     init_db(db_path=os.path.join(home, "rubedo.sqlite"))
     init_store(home=home)
+
+
+@contextlib.contextmanager
+def _run_heartbeat(run_id: str):
+    """Bump the run's last_heartbeat_at every RUN_HEARTBEAT_INTERVAL_SECONDS
+    from a daemon thread, for as long as the run is executing.
+
+    A timer thread rather than bump-on-commit: a single long step (one slow
+    LLM call) can go minutes without a ledger write, and the run must not
+    read as interrupted while it is merely busy. Beats are best-effort — a
+    missed one is harmless, so presence-keeping never kills the work.
+    """
+    stop = threading.Event()
+
+    def beat():
+        while not stop.wait(RUN_HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                with get_session() as session:
+                    hb_run = session.query(Run).filter_by(id=run_id).first()
+                    if hb_run is None:
+                        return
+                    hb_run.last_heartbeat_at = utcnow_iso()  # type: ignore
+                    session.commit()
+            except Exception:
+                pass
+
+    thread = threading.Thread(
+        target=beat, name=f"rubedo-heartbeat-{run_id}", daemon=True
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
 
 
 def _resolve_sources(pipeline: PipelineSpec, source) -> Dict[str, Source]:
@@ -254,14 +289,8 @@ def run_pipeline(
         _init_home(home)
 
     from .progress import TerminalProgress
-    
-    cm = TerminalProgress() if progress else contextlib.nullcontext()
-    
-    with cm as prog:
-        if progress and prog:
-            progress_cb = prog.update
 
-        sources = _resolve_sources(pipeline, source)
+    sources = _resolve_sources(pipeline, source)
     topo_steps = topological_sort(pipeline)
     step_sources = {
         s.name: sources[_source_name_for(pipeline, sources, s)]
@@ -281,16 +310,17 @@ def run_pipeline(
     )
 
     with get_session() as session:
+        now = utcnow_iso()
         session.add(
             Run(
                 id=ctx.run_id,
                 kind="process",
-                status="running",
                 pipeline_id=ctx.pipeline_id,
                 source_id=ctx.source_id,
                 params_json=json.dumps(params or {}, sort_keys=True),
                 definition_json=json.dumps(definition(pipeline)),
-                started_at=utcnow_iso(),
+                started_at=now,
+                last_heartbeat_at=now,
             )
         )
         _emit_event(
@@ -303,64 +333,69 @@ def run_pipeline(
         )
         session.commit()
 
-        try:
-            items_by_source = {name: src.scan() for name, src in sources.items()}
+        progress_cm = TerminalProgress() if progress else contextlib.nullcontext()
+        with progress_cm as prog, _run_heartbeat(ctx.run_id):
+            if prog is not None:
+                progress_cb = prog.update
 
-            params_hash = hash_json(params or {})
-            memo = _RunMemo()
+            try:
+                items_by_source = {name: src.scan() for name, src in sources.items()}
 
-            for step in topo_steps:
-                accepts_params = _step_accepts_params(step)
-                sname = _source_name_for(pipeline, sources, step)
+                params_hash = hash_json(params or {})
+                memo = _RunMemo()
 
-                decisions = _plan_step(
-                    session,
-                    step,
-                    items_by_source[sname] if sname else [],
-                    ctx.coord_step_mats,
-                    params_hash,
-                    force,
-                    accepts_params,
-                )
-                _record_planned(session, ctx, step, decisions)
-                session.commit()
-                if progress_cb:
-                    for d in decisions:
-                        if d.action != "execute":
-                            progress_cb(step.name, d.coordinate, d.action)
+                for step in topo_steps:
+                    accepts_params = _step_accepts_params(step)
+                    sname = _source_name_for(pipeline, sources, step)
 
-                to_execute = [d for d in decisions if d.action == "execute"]
-                for outcome in _execute_step(
-                    step, to_execute, step_sources, params, accepts_params, workers, memo
-                ):
-                    status = "failed"
-                    if outcome.success:
-                        from .models import Filtered
-                        if isinstance(outcome.result, Filtered):
-                            status = "filtered"
-                        else:
-                            status = "created"
-                    
-                    _commit_execution_result(ctx, step, outcome)
-                    if progress_cb:
-                        progress_cb(step.name, outcome.decision.coordinate, status)
-
-            return _finish_run(ctx)
-
-        except Exception as e:
-            with get_session() as err_session:
-                err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
-                if err_run:
-                    err_run.status = "failed"  # type: ignore
-                    err_run.error_message = traceback.format_exc()  # type: ignore
-                    err_run.finished_at = utcnow_iso()  # type: ignore
-                    _emit_event(
-                        err_session,
-                        ctx.run_id,
-                        "error",
-                        "run_failed",
-                        pipeline_id=ctx.pipeline_id,
-                        message=str(e),
+                    decisions = _plan_step(
+                        session,
+                        step,
+                        items_by_source[sname] if sname else [],
+                        ctx.coord_step_mats,
+                        params_hash,
+                        force,
+                        accepts_params,
                     )
-                    err_session.commit()
-            raise
+                    _record_planned(session, ctx, step, decisions)
+                    session.commit()
+                    if progress_cb:
+                        for d in decisions:
+                            if d.action != "execute":
+                                progress_cb(step.name, d.coordinate, d.action)
+
+                    to_execute = [d for d in decisions if d.action == "execute"]
+                    for outcome in _execute_step(
+                        step, to_execute, step_sources, params, accepts_params, workers, memo
+                    ):
+                        status = "failed"
+                        if outcome.success:
+                            from .models import Filtered
+                            if isinstance(outcome.result, Filtered):
+                                status = "filtered"
+                            else:
+                                status = "created"
+
+                        _commit_execution_result(ctx, step, outcome)
+                        if progress_cb:
+                            progress_cb(step.name, outcome.decision.coordinate, status)
+
+                return _finish_run(ctx)
+
+            except Exception as e:
+                with get_session() as err_session:
+                    err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
+                    if err_run:
+                        err_run.status = "failed"  # type: ignore
+                        err_run.error_message = traceback.format_exc()  # type: ignore
+                        err_run.finished_at = utcnow_iso()  # type: ignore
+                        _emit_event(
+                            err_session,
+                            ctx.run_id,
+                            "error",
+                            "run_failed",
+                            pipeline_id=ctx.pipeline_id,
+                            message=str(e),
+                        )
+                        err_session.commit()
+                raise

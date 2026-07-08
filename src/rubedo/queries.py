@@ -8,7 +8,7 @@ import json
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
-from .models import Run, RunCoordinateStatus
+from .models import Run, RunCoordinateStatus, effective_run_status
 from .schemas import RunListItem, RunDetailOut
 
 
@@ -25,6 +25,7 @@ def get_recent_runs(session: Session, limit: int = 50) -> List[RunListItem]:
     results = []
     for run in runs:
         d = _to_dict(run)
+        d["status"] = effective_run_status(run)
         summary = {}
         if run.summary_json:
             try:
@@ -47,6 +48,7 @@ def get_run_summary(session: Session, run_id: str) -> Optional[RunDetailOut]:
         return None
 
     d = _to_dict(run)
+    d["status"] = effective_run_status(run)
     summary = {}
     if run.summary_json:
         try:

@@ -16,12 +16,13 @@ export function fmtDuration(ms: number | null): string {
   return `${m}m ${Math.round(s % 60)}s`;
 }
 
-// completed | completed_with_failures | failed | running
+// Stored (terminal): completed | completed_with_failures | failed.
+// Derived, never stored: running | interrupted (from heartbeat freshness).
 export function runStatusClass(status: string): string {
   if (status === 'completed') return 'success';
   if (status === 'failed') return 'error';
   if (status === 'running') return 'info badge-running';
-  return 'warning';
+  return 'warning'; // completed_with_failures | interrupted
 }
 
 // created | reused | failed | blocked | filtered | pending
