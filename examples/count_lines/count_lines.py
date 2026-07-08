@@ -25,10 +25,12 @@ p = PipelineBuilder(
 
 
 @p.step(name="read_lines", version="read-v1")
-def read_lines(path: str, params: CountLinesParams):
+def read_lines(path: str, params: dict):
+    # params arrive as the params_model-validated dict (the same form that
+    # is hashed into the cache key), not as a model instance.
     text = open(path).read()
     lines = text.splitlines()
-    return {"lines": lines, "params": params.model_dump()}
+    return {"lines": lines, "params": params}
 
 
 @p.step(name="count_lines", version="count-v1", depends_on=["read_lines"])
