@@ -2,11 +2,19 @@
 
 Each example is a self-contained folder: one runnable script plus any data it
 needs. They talk to **real** services (no mocks) using only the Python standard
-library — nothing extra to install. Run any of them from the repo root:
+library — nothing extra to install.
+
+Run them **from the repo root**, not from inside the example's folder:
 
 ```bash
+cd <repo root>
 uv run python examples/<name>/<name>.py
 ```
+
+Rubedo's state directory (`.rubedo/`) is created relative to wherever you run
+from. Run from the repo root and every example shares the root store — the one
+`rubedo ls` and the dashboard read. Run from inside an example's folder and you
+silently fork a second, stray `.rubedo/` there that the dashboard never sees.
 
 Re-run any example and watch it reuse everything — the whole point of Rubedo is
 that the second run recomputes only what actually changed.

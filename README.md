@@ -19,7 +19,9 @@ If you've ever processed a thousand rows through an LLM and then needed to fix t
 - **Orchestrators are the wrong tool.** Airflow/Prefect/Dagster schedule and monitor services; they don't give you row-level, content-addressed incrementality inside a local script. dbt does — but only for SQL.
 - **Make/Snakemake track files.** Rubedo tracks *content*, at row granularity, with a queryable history of every run.
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + content-addressed object store) next to your project, created on first run and gitignored automatically.
+Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + content-addressed object store), created on first run and gitignored automatically.
+
+> **Note:** `.rubedo/` resolves **relative to the current working directory** — pipelines, the CLI, and the server must all run from the same directory (typically your project root) to see the same state. Running from somewhere else silently creates a fresh, empty store there. To run from anywhere, pin the location with the `RUBEDO_HOME` (or `RUBEDO_DB_PATH`) environment variable.
 
 ## Install
 
