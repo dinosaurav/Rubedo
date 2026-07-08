@@ -10,18 +10,13 @@ The **producer model is done** (content-addressed lanes → `expand` →
 `group_key` → multi-source → N-way `join`); see the Done changelog and
 `notes/producer-model.md`. What's left is grouped into the tiers below, and
 items are numbered sequentially (1..12) across tiers so cross-references stay
-stable. Tier 0 (bugs from the 2026-07-07 code review) uses B-letters so it
-never collides with those numbers.
+stable.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-- **Tier 0 · Bugs & hardening** (2026-07-07 code review) — **status:
-  B1–B7, H1–H3 landed** (commits 8071aab..7511491 + regression tests in
-  `tests/test_tier0_fixes.py`). B2 was a **false positive** and is reverted
-  — see its section. Still open: **H4** SSE event-loop blocking · **H5**
+- **Tier 0 · Open Bugs & Hardening** — **H4** SSE event-loop blocking · **H5**
   CORS · **H7** DRY leftovers — opportunistic; **H6** packaging rides with
-  item 1. Follow-up debt from the fixes, in the item sections: H2's
-  missing-anchor-bytes fallback, H3's `type: ignore` count.
+  item 1. Follow-up debt from earlier fixes: batched plan missing-anchor-bytes fallback, mypy `type: ignore` count.
 - **Tier 1 · Product shape & packaging** — the producer model is a natural
   "feature complete" moment; before a `pip install rubedo` push, keep the
   public surface trustworthy and the install lean: **1** dependency & packaging
@@ -30,185 +25,16 @@ never collides with those numbers.
   ledger state is the fastest way to eyeball the output of everything else
   while building it; do **B4** and the new `pipeline:` selection term first,
   and ship failure introspection with it — see the item-2 spec).
-- **Tier 2 · DX, Observability & UI** — **status: fully landed** (items 3, 4, 5, 13, 14, 15 complete).
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real, and only after **H2** (batched planning — no point
-  distributing an N+1 planner): **6** cloud sources → **7** cloud
+  demand is real, and only after batched planning lands: **6** cloud sources → **7** cloud
   ledger+store → **8** distributed execution; **9** lane-pipelined execution
   (independent).
 - **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous**) · **11**
   `expand` child-views (storage optimization) · **12** lane tooling.
 
 ══════════════════════════════════════════════════════════════════════
-# Tier 0 · Bugs & hardening (code-review findings, 2026-07-07)
+# Tier 0 · Open Bugs & Hardening
 ══════════════════════════════════════════════════════════════════════
-
-Findings from a full read-through of `src/rubedo/` (tests green, 171
-passing). Bugs are lettered B1..B7, hardening H1..H7, so the numbered items
-1..12 keep their cross-references. Each bug is a small independent commit;
-B1–B3 are the priority.
-
-Items tagged **[⚠️ subtle]** touch cache identity, concurrency, or the
-plan/execute interleave — read `notes/invariants.md` and the item's trap
-paragraph before coding, and do not "simplify" the guarded behavior away.
-Untagged items are safe, well-bounded changes.
-
-## B1. Crash: multi-parent map step over parents with disjoint lanes  **[confirmed, repro'd]**
-
-`_plan_step` builds a dependent map step's coordinate set as the *union* of
-all parents' coordinates (`planning.py:577-588`). A coordinate missing from
-one parent makes `coord_step_mats.get((coord, dep))` return `None`, which
-falls through every status check (`"blocked"`/`"failed"`/`"pending"`/
-`getattr(ref, "filtered", False)`) and lands in `parent_mats` as `None`;
-`_compute_step_input_hash` then dies with `AttributeError: 'NoneType' object
-has no attribute 'output_content_hash'` (`planning.py:131`) — an unhandled
-exception that fails the *whole run*, not just the lane. Repro: two root
-`expand` steps yielding different payloads + one map step with
-`depends_on=["a", "b"]` — a realistic user mistake whose correct tool is
-`join`, and the engine should say so. Fix in `_plan_step`: when a dep has no
-entry for a coordinate, raise a clear "parents produce disjoint lane sets —
-a multi-parent map step requires aligned coordinates; use shape='join'".
-**Trap:** a `None` lookup is *not* the same as a `"pending"`/`"filtered"`/
-`"blocked"` parent — those must keep their existing per-lane propagation;
-only a truly absent `(coord, dep)` key is the error. Do not "fix" it by
-silently skipping unmatched coordinates (that changes semantics into an
-implicit join). Acceptance: the repro produces that message; a diamond (two
-parents derived from the same source) still runs; the pending/blocked
-propagation tests stay green.
-
-## B2. ~~`httpx2` dev dependency is a typo~~  **[FALSE POSITIVE — fix reverted]**
-
-The review got this one wrong: `httpx2` is the continuation package that
-Starlette's `TestClient` now prefers (`starlette/testclient.py` does
-`import httpx2 as httpx`, falling back to plain `httpx` with a
-`StarletteDeprecationWarning`). The original pin was intentional. The
-review-driven swap to `httpx` introduced that deprecation warning into the
-suite and was reverted; `httpx2>=2.5.0` is the correct dev dependency.
-Recorded so nobody "fixes" it again.
-
-## B3. `invalidate()` commits partial flips on failure
-
-`invalidation.py`: if the flip loop raises midway, the `except` block sets
-`run.status = "failed"` and calls `session.commit()` *without rolling back*
-— committing whatever `is_live` flips (with their lifecycle rows) were
-already pending, under a run recorded as failed. Add `session.rollback()`
-at the top of the except before writing the failure status. Acceptance: a
-test forcing a mid-loop exception observes zero flipped materializations.
-
-## B4. Selection query: duplicate IDs + N+1 coordinate lookups
-
-`get_selection_materialization_ids` (`selection.py:96-124`): joining
-`RunCoordinateStatus` (for `source:`/`coord:`) multiplies rows, so the
-returned id list can contain duplicates — harmless inside `invalidate()`
-(the `is_live` check dedupes) but it leaks into the API response's
-`materialization_ids`. The coordinate-glob path then runs one extra query
-per materialization, matching against an arbitrary "latest status row".
-Fix: `.distinct()` on the join; batch the coordinate lookup. Do this
-*before* item 2 — the CLI builds directly on this function.
-
-## B5. skip_cache parents of `join`/`group_key` crash with AttributeError
-
-`_plan_join` and `_group_reduce_lanes` read index entries via `ref.id`
-(`planning.py:276,459`), but a skip_cache parent leaves an `EphemeralRef`
-(no `.id`) in `coord_step_mats`. Since skip_cache steps can't declare
-`index=` anyway, the combination can never work — reject it in `pipeline()`
-validation (`spec.py`): a `join_on` side or a `group_key` reduce parent may
-not be skip_cache. Acceptance: build-time ValueError, no plan-time crash.
-
-## B6. `expand` can't yield bytes  **[⚠️ subtle]**
-
-Expand children are hashed with `hash_json(value)` (`execution.py:257`, and
-the planning-side identity in `expand_child_identity`), which raises
-TypeError on `bytes` — yet `_serialize` (`store.py`) happily stores bytes
-for every other shape. Either hash the serialized form (`_serialize` →
-`hash_bytes`) so payload support matches the rest of the engine, or
-document the JSON-payload constraint in the `@step` docstring and raise a
-clear error at yield time. **Trap:** the child hash IS the child lane's
-cache identity (coordinate, input_hash, and output_address all derive from
-it — `expand_child_identity`), so switching the hash function for
-already-JSON-able payloads silently changes every existing expand child's
-address and orphans the whole cache. Dev-stage rules allow a cache reset
-(say so in the commit and follow the DB-reset ritual in CLAUDE.md), but the
-*cheap* fix — keep `hash_json` for JSON values, add a labeled bytes branch
-(e.g. `hash_bytes` prefixed so bytes/JSON can't collide) — preserves
-identity for existing pipelines. Prefer that unless the owner says
-otherwise. Acceptance: expand yielding bytes round-trips (run twice →
-Reused), and a pre-existing JSON expand cache still reuses.
-
-## B7. Minor correctness cleanups
-
-- Unreachable code: the post-loop "Retries exhausted." return in
-  `execution.py:346-354` can never run — the final attempt always returns
-  inside the loop (`retryable` is False once `attempt > step.retries`).
-  Delete it.
-- `_finish_run` (`ledger.py:602-607`) marks a run "failed" when
-  `created == reused == 0` even if lanes were successfully `filtered` — a
-  filter-heavy run with one failure misreports. Count filtered as success
-  in the status decision.
-- Dead `_to_dict(m)` call in `preview_selection` (`server.py:517`).
-
-## H1. `_RunMemo` serializes all skip_cache execution  **[⚠️ subtle]**
-
-`compute()` (`execution.py:83`) holds a single RLock *while running the
-producer*, so every ephemeral computation across all worker threads runs
-one-at-a-time — quietly defeating `workers=` for any consumer of a
-skip_cache util. Move to per-key locking. **Traps:** (1) chained skip_cache
-utils resolve *recursively on the same thread* (`_compute_ephemeral` →
-`_resolve_parent_value` → `_compute_ephemeral`), which the current RLock
-permits — a naive per-key non-reentrant lock must only ever be held for a
-*different* key when recursing (true today: dependencies form a DAG, so
-recursion never re-enters the same key; verify, don't assume). (2) The
-"compute at most once + memoize exceptions" contract must survive: use the
-once-per-key primitive pattern (a per-key `threading.Event`/future stored
-under a short-lived dict lock, producer runs *outside* the dict lock) —
-never double-checked locking on a bare dict. (3) Exceptions stay memoized
-so every consumer of a failed util sees the same failure. Acceptance: a
-test with two lanes consuming two *different* ephemeral coords observes
-overlapping execution (e.g. via a barrier), `tests/test_skip_cache.py`
-stays green.
-
-## H2. Planning is N+1 on the ledger  **[⚠️ subtle]**
-
-One live-materialization query per lane per step (`_plan_step`), one per
-child in `_plan_expand_reuse`, one per lane per field in group/join
-planning. Fine at 15 lanes; painful at 50k CSV rows. Addresses are
-computable up front, so a batched `output_address IN (...)` per step (and
-one index query per step for group/join) is a straightforward win — and far
-cheaper than any Tier-3 scaling work. Do before Tier 3. **Traps:** this is
-a pure query-batching refactor — decision *semantics* must not move an
-inch: staleness (`stale_after` reads `refreshed_at or created_at`),
-code-drift flags, force, filtered-reuse, and the expand anchor→children
-sequence (the anchor must be read first; its child list *then* determines
-which addresses to look up — that lookup can batch, the anchor read can't
-fold into the same query) all stay byte-identical. Planning is interleaved
-with execution per step (`runner.py` loop) and `coord_step_mats` mutates
-between steps, so batch *within* one `_plan_step` call only — never across
-steps. Keep `_plan_step` read-only. Acceptance: full suite green with zero
-test edits; a quick benchmark script (1k-row CSV) shows plan queries
-dropping from O(lanes) to O(steps).
-
-**Status: landed** (commit 7f01030), reviewed faithful. One follow-up:
-the batched expand path treats an anchor whose object bytes are *missing
-from the store* as an empty expansion (`read_materialization_output` →
-`None` → falsy → zero children planned) where the old code crashed loudly.
-Store corruption should fall back to re-running the expansion (the
-incomplete-cache path), not silently plan nothing.
-
-## H3. mypy exempts the core modules
-
-`pyproject.toml` sets `ignore_errors` for `rubedo.models`, `planning`,
-`invalidation`, `server`, `ledger`, `runner` — the "typing pass" in the
-Done changelog covers everything *except* the modules that matter most.
-Burn the overrides down module by module. Caution: annotate, don't
-restructure — `coord_step_mats` is genuinely heterogeneous (MatRef |
-EphemeralRef | status-string sentinels); give it an honest union type
-rather than "cleaning up" the sentinel design to satisfy the checker.
-
-**Status: landed** (commit 7511491) — the overrides are gone and mypy is
-clean, but largely via ~60 `type: ignore` comments (23 in `planning.py`
-alone). Follow-up debt: replace the ignores with real types where a
-union/`TypeAlias` would do; each ignore is a spot the checker is switched
-off.
 
 ## H4. `stream_run` blocks the event loop
 
@@ -310,7 +136,7 @@ path that itself calls `run()` — never a discovery mechanism, and never the
 recommended way to run a pipeline. Design-first if even the sugar is wanted.
 
 ══════════════════════════════════════════════════════════════════════
-# Tier 2 · DX, Observability & UI
+# Tier 3 · Scale & cloud
 ══════════════════════════════════════════════════════════════════════
 
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)
@@ -453,7 +279,7 @@ content-addressed/minted, they're the load-bearing navigation surface.
 
 ## Done (compressed changelog — context for the above)
 
-UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
+Bugfixes from 2026-07-07 code review (B1-B7, H1-H3): fixed multi-parent map crash, invalidation partial commits on failure, duplicate IDs in selection query, skip_cache crash on join/reduce, hash bytes in expand, batch ledger planning (H2), remove mypy ignore overrides (H3), per-key locking for `_RunMemo` skip_cache utils (H1) · UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
 Pipeline Run Search & Step Inspection UI (RunInspector, deep value search) ·
 Live run view backend + wiring (SSE `GET /api/runs/{id}/stream` + `RunDetail`
