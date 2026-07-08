@@ -30,14 +30,7 @@ never collides with those numbers.
   ledger state is the fastest way to eyeball the output of everything else
   while building it; do **B4** and the new `pipeline:` selection term first,
   and ship failure introspection with it — see the item-2 spec).
-- **Tier 2 · DX, Observability & UI** — make it delightful to watch and drive:
-  **15** partial fan-in policy for reduce/join (`on_failed`, new default =
-  use what passed; owner-decided semantics, ⚠️ subtle) · **13** terminal
-  progress callback (natural to build alongside the item-2 CLI, its first
-  consumer) · **3** live run view animations (backend + wiring already
-  shipped) · **4** pipelines-page enhancements · **5** rich output
-  visualization · **14** pipeline-level `params_model` (small API honesty
-  fix, anytime).
+- **Tier 2 · DX, Observability & UI** — **status: fully landed** (items 3, 4, 5, 13, 14, 15 complete).
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real, and only after **H2** (batched planning — no point
   distributing an N+1 planner): **6** cloud sources → **7** cloud
@@ -320,102 +313,6 @@ recommended way to run a pipeline. Design-first if even the sugar is wanted.
 # Tier 2 · DX, Observability & UI
 ══════════════════════════════════════════════════════════════════════
 
-## 3. Live run view (streaming progress) — animation polish
-
-**Backend and wiring already shipped** (commit "feat(ui): Live run view and
-lineage search"): `server.py` exposes `GET /api/runs/{run_id}/stream` as an SSE
-endpoint that polls `run_coordinate_statuses` on a 1s interval and pushes
-per-step + total created/reused/failed/blocked/filtered counts; `RunDetail.tsx`
-consumes it via `EventSource`, updating counts live and closing the stream when
-the run leaves `running`. The polling design is correct — SQLite has no
-`LISTEN/NOTIFY`, so cross-process (run in one process, server in another) means
-tailing the ledger on a short interval.
-
-**What's actually left is the visual layer:** the DAG should *light up* as a
-run executes — animate node state transitions (e.g. pulsating running states),
-smooth counter increments rather than snapping, per-step created/reused/failed
-badges ticking. Make watching a run feel dynamic. **Also fix here:**
-`RunDetail.tsx` hardcodes `http://localhost:8000` in the `EventSource` URL —
-route it through the same base-URL helper the rest of `api.ts` uses.
-
-## 4. Pipelines Page Enhancements
-
-The pipelines page should act as a richer entry point into a pipeline's state.
-- **Last Run Details:** Surface more comprehensive information about the most recent run for each pipeline (status, duration, coordinate counts).
-- **Step Drill-Down:** Allow clicking on a specific step from the pipeline page to get deeper information about that step.
-- **Direct Materialization View:** Provide a way to view and browse the latest materializations specifically produced by that selected step.
-
-## 5. Rich Output Visualization
-
-Improve how materializations and outputs are displayed across the UI. Go beyond simple metadata and raw JSON/text previews to show more useful information, such as the actual calculated content for a step in a cleaner, more readable format.
-
-## 13. Terminal progress feedback on `run()` [DONE]
-
-Long LLM/scrape steps run for minutes with zero feedback unless the web UI
-is open — terminal users get nothing between "run started" and the summary.
-Add a lightweight progress callback hook on `run()` (per-outcome: step,
-coordinate, status), default no-op. The item-2 CLI (`rich`) becomes its
-first consumer (live per-step counters), and pipeline scripts can hook it
-directly. Deliberately minimal: a callback, not a logging framework — the
-ledger already records everything durably; this is only about liveness at
-the terminal.
-
-## 14. Pipeline-level `params_model` [DONE]
-
-Entry validation uses `pipeline.steps[0]`'s model (`runner.py:84`) — an
-arbitrary choice that silently skips validation when a later step declares
-a model and the first doesn't. Add `pipeline(params_model=...)` as the
-honest home for run-level param validation; per-step `params_model` stays
-for building the step's `params` kwarg. Decide whether steps[0] fallback
-survives (probably: deprecate quietly, validate against the pipeline model
-when present).
-
-## [DONE] 15. Partial fan-in policy for `reduce`/`join`  **[⚠️ subtle]**
-
-Today a collective step blocks entirely when *any* upstream lane failed or
-was blocked: the reduce branch of `_plan_step` and `_plan_join` both emit a
-single `@all`/`@join` "blocked" decision on the first failed/blocked parent
-lane (`planning.py`). Owner decision: that all-or-nothing behavior should be
-the *opt-in*, not the default — a scrape pipeline where 2 of 500 lanes
-failed should still produce the digest from the 498 that passed.
-
-Add a step policy on the collective shapes (`reduce` and `join`; map stays
-per-lane), e.g. `on_failed="use_passed" | "block"`:
-
-- **`"use_passed"` (the new default):** failed/blocked upstream lanes are
-  simply absent from the fan-in — the reduce folds the surviving lanes, the
-  join buckets only surviving sides — exactly how `filtered` lanes are
-  treated today. If *zero* lanes survive, still block (an empty fan-in is
-  meaningless). Record the dropped lanes: put `failed_parents`/
-  `blocked_parents` in the decision's status `metadata_json` and emit a
-  warning-level run event, so a digest quietly built from 498/500 is loud
-  in the ledger.
-- **`"block"`:** today's behavior, verbatim — any failed/blocked parent
-  lane blocks the whole collective.
-
-Cache identity needs **no new machinery** — a reduce/join's input_hash is
-built from the surviving lanes' content hashes, so a partial fan-in gets a
-different address than the full one, and the run where the failed lane
-recovers recomputes automatically. State the accepted consequence: under
-`use_passed`, transient upstream failures cause collective churn (each
-different survivor-set is its own cached fact). **Traps:** (1) do not
-conflate `failed`/`blocked` with `filtered` in the ledger — filtered is a
-*cached verdict*, failure is transient; only the fan-in *membership*
-treatment becomes similar, statuses stay distinct. (2) `group_key` reduces:
-drop failed lanes *before* grouping, so only groups that lost a member
-change address — groups untouched by the failure must still reuse. (3)
-`pending` parents are neither failed nor passed — pending propagation stays
-exactly as is. (4) Changing the default flips existing behavior: update the
-blocked-propagation expectations in `tests/test_reduce.py`/`test_join.py`
-deliberately and say so in the commit (dev stage, no back-compat).
-Acceptance: a reduce over 3 lanes with 1 failed produces an output from 2
-under the default, with the dropped lane recorded; `on_failed="block"`
-reproduces today's blocked decision; group untouched by a failure reuses.
-
-══════════════════════════════════════════════════════════════════════
-# Tier 3 · Scale & cloud
-══════════════════════════════════════════════════════════════════════
-
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)
 
 Local folders and SQL are great starts, but modern data lives in buckets. Add
@@ -556,7 +453,7 @@ content-addressed/minted, they're the load-bearing navigation surface.
 
 ## Done (compressed changelog — context for the above)
 
-Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
+UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
 Pipeline Run Search & Step Inspection UI (RunInspector, deep value search) ·
 Live run view backend + wiring (SSE `GET /api/runs/{id}/stream` + `RunDetail`
