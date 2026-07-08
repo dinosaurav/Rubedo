@@ -55,7 +55,17 @@ function policyBadges(s: StepDef): string[] {
   return badges;
 }
 
-export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepCounts?: StepCounts }) {
+export default function DagView({
+  steps,
+  stepCounts,
+  isLive,
+  onStepClick,
+}: {
+  steps: StepDef[];
+  stepCounts?: StepCounts;
+  isLive?: boolean;
+  onStepClick?: (stepName: string) => void;
+}) {
   if (!steps?.length) return null;
   const nodeH = stepCounts ? NODE_H + COUNTS_H : NODE_H;
 
@@ -101,6 +111,12 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
                   markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--text-muted)" />
           </marker>
+          {isLive && (
+            <marker id="dag-arrow-live" viewBox="0 0 8 8" refX="7" refY="4"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--accent-primary)" />
+            </marker>
+          )}
         </defs>
 
         {steps.flatMap(s =>
@@ -115,8 +131,9 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
             return (
               <path key={`${dep}->${s.name}`}
                     d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2 - 3} ${y2}`}
-                    fill="none" stroke="var(--text-muted)" strokeWidth={1.5}
-                    markerEnd="url(#dag-arrow)" />
+                    fill="none" stroke={isLive ? "var(--accent-primary)" : "var(--text-muted)"} strokeWidth={isLive ? 2 : 1.5}
+                    markerEnd={isLive ? "url(#dag-arrow-live)" : "url(#dag-arrow)"}
+                    style={isLive ? { animation: 'pulse-stroke 2s infinite', opacity: 0.7 } : undefined} />
             );
           })
         )}
@@ -124,13 +141,20 @@ export default function DagView({ steps, stepCounts }: { steps: StepDef[]; stepC
         {steps.map(s => {
           const p = pos[s.name];
           const badges = policyBadges(s);
+          const isNodeRunning = isLive;
+          const nodeClasses = `dag-node ${onStepClick ? 'clickable' : ''} ${isNodeRunning ? 'running' : ''}`;
+          
           return (
-            <g key={s.name}>
+            <g key={s.name} 
+               onClick={() => onStepClick && onStepClick(s.name)}
+               className={nodeClasses}
+               style={{ cursor: onStepClick ? 'pointer' : 'default' }}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
                     stroke={s.skip_cache ? 'var(--text-muted)' : (s.shape === 'reduce' ? 'var(--status-warning)' : 'var(--accent-primary)')}
                     strokeWidth={s.shape === 'reduce' ? 2 : 1.5}
                     strokeDasharray={s.skip_cache ? '5 4' : undefined}
+                    className={isNodeRunning ? 'pulse-border' : ''}
                     style={{ transition: 'height 0.3s ease, fill 0.3s ease, stroke 0.3s ease' }} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
                     fontSize={13} fontWeight={600} fontFamily="ui-monospace, monospace">

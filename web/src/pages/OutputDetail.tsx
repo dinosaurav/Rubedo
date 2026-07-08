@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchObject } from '../api';
+import JSONViewer from '../components/JSONViewer';
 
 export default function OutputDetail() {
   const { address } = useParams();
@@ -56,7 +57,9 @@ export default function OutputDetail() {
       <div className="card">
         <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Preview</h2>
         {obj.preview_json ? (
-          <pre className="pre-block">{JSON.stringify(obj.preview_json, null, 2)}</pre>
+          <div className="pre-block" style={{ padding: '1rem', fontFamily: 'ui-monospace, monospace', fontSize: '0.9rem' }}>
+            <JSONViewer data={obj.preview_json} />
+          </div>
         ) : obj.preview_text ? (
           <pre className="pre-block">{obj.preview_text}</pre>
         ) : obj.preview_kind === 'binary' ? (

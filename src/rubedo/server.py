@@ -556,7 +556,10 @@ def get_pipelines_api():
                     id=run.pipeline_id,
                     source_id=getattr(run, 'source_id', ''),
                     run_count=run_count,
+                    last_run_id=getattr(run, 'id', ''),
+                    last_run_status=getattr(run, 'status', ''),
                     last_run_at=getattr(run, 'started_at', ''),
+                    last_run_finished_at=getattr(run, 'finished_at', ''),
                     definition=json.loads(getattr(run, 'definition_json', '{}')) if getattr(run, 'definition_json', None) else None,
                 )
             )

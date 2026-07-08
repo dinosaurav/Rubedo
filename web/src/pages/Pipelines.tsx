@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { fmtDuration, durationMs, runStatusClass } from '../format';
 import { fetchPipelines } from '../api';
 import DagView from '../components/DagView';
 
 export default function Pipelines() {
+  const navigate = useNavigate();
   const [pipelines, setPipelines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,6 +19,10 @@ export default function Pipelines() {
 
   if (loading) return <div>Loading pipelines...</div>;
   if (error) return <div className="page-container">API unreachable: {error}</div>;
+
+  const handleStepClick = (pipelineId: string, stepName: string) => {
+    navigate(`/materializations?pipeline_id=${pipelineId}&step_name=${stepName}`);
+  };
 
   return (
     <div className="page-container">
@@ -41,13 +48,23 @@ export default function Pipelines() {
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               <code>{p.source_id}</code>
               {' · '}{p.run_count} run{p.run_count === 1 ? '' : 's'}
-              {p.last_run_at && <>{' · last '}{new Date(p.last_run_at).toLocaleString()}</>}
+              {p.last_run_at && (
+                <>
+                  {' · latest: '}
+                  <a href={`/runs/${p.last_run_id}`} className={`badge badge-${runStatusClass(p.last_run_status)}`} style={{ textDecoration: 'none' }}>
+                    {p.last_run_status}
+                  </a>
+                  {' '}
+                  {new Date(p.last_run_at).toLocaleString()}
+                  {p.last_run_finished_at && ` (${fmtDuration(durationMs(p.last_run_at, p.last_run_finished_at))})`}
+                </>
+              )}
             </div>
           </div>
 
           {p.definition?.steps?.length ? (
             <div style={{ marginTop: '1rem' }}>
-              <DagView steps={p.definition.steps} />
+              <DagView steps={p.definition.steps} onStepClick={(stepName) => handleStepClick(p.id, stepName)} />
             </div>
           ) : (
             <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>

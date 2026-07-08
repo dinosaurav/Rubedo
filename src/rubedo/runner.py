@@ -333,18 +333,17 @@ def run_pipeline(
                 for outcome in _execute_step(
                     step, to_execute, step_sources, params, accepts_params, workers, memo
                 ):
-                    status = outcome.get("status")
-                    if status is None:
-                        if "error" in outcome:
-                            status = "failed"
-                        elif "filtered" in outcome and outcome.get("filtered"):
+                    status = "failed"
+                    if outcome.success:
+                        from .models import Filtered
+                        if isinstance(outcome.result, Filtered):
                             status = "filtered"
                         else:
                             status = "created"
                     
                     _commit_execution_result(ctx, step, outcome)
                     if progress_cb:
-                        progress_cb(step.name, outcome["coordinate"], status)
+                        progress_cb(step.name, outcome.decision.coordinate, status)
 
             return _finish_run(ctx)
 

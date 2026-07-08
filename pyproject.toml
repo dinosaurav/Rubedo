@@ -15,7 +15,6 @@ license = "MIT"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
@@ -52,7 +51,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.5.0",
+    "httpx>=0.25.0",
     "litellm>=1.91.0",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.6",

@@ -115,7 +115,10 @@ class PipelineOut(BaseModel):
     id: str
     source_id: Optional[str] = None
     run_count: int
+    last_run_id: Optional[str] = None
+    last_run_status: Optional[str] = None
     last_run_at: Optional[str] = None
+    last_run_finished_at: Optional[str] = None
     # DAG snapshot recorded by the most recent run (steps, edges, policies)
     definition: Optional[Dict[str, Any]] = None
 

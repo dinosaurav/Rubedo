@@ -367,3 +367,19 @@ tr:hover td { background-color: rgba(255, 0, 51, 0.035); }
 }
 .table-popover-item:hover { background-color: var(--bg-tertiary); }
 .table-popover-item.active { background-color: rgba(255, 0, 51, 0.08); color: var(--accent-primary); }
+
+@keyframes pulse-stroke {
+  0% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.3; }
+  100% { stroke-opacity: 1; }
+}
+
+@keyframes pulse-border {
+  0% { stroke: var(--accent-primary); stroke-width: 2px; }
+  50% { stroke: var(--accent-hover); stroke-width: 1px; }
+  100% { stroke: var(--accent-primary); stroke-width: 2px; }
+}
+
+.pulse-border {
+  animation: pulse-border 2s infinite ease-in-out;
+}

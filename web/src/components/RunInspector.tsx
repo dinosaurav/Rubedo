@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { searchRun, fetchObject } from '../api';
 import { coordStatusClass } from '../format';
+import JSONViewer from './JSONViewer';
 
 interface TraceItem {
   step_name: string;
@@ -128,7 +129,9 @@ export default function RunInspector({ runId }: { runId: string }) {
                                   </a>
                                 </div>
                                 {outputData.preview_json ? (
-                                  <pre className="pre-block" style={{ maxHeight: '300px' }}>{JSON.stringify(outputData.preview_json, null, 2)}</pre>
+                                  <div style={{ maxHeight: '300px', overflowY: 'auto', background: 'var(--bg-tertiary)', padding: '1rem', borderRadius: 8, fontFamily: 'ui-monospace, monospace', fontSize: '0.85rem' }}>
+                                    <JSONViewer data={outputData.preview_json} />
+                                  </div>
                                 ) : outputData.preview_text ? (
                                   <pre className="pre-block" style={{ maxHeight: '300px' }}>{outputData.preview_text}</pre>
                                 ) : outputData.preview_kind === 'binary' ? (

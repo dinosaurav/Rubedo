@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { fetchRun, fetchRunCoordinates, fetchRunEvents } from '../api';
+import { fetchRun, fetchRunCoordinates, fetchRunEvents, API_URL } from '../api';
 import { DataTable, TruncatedText, HashCell } from '../components/DataTable';
 import DagView from '../components/DagView';
 import RunInspector from '../components/RunInspector';
@@ -30,7 +30,7 @@ export default function RunDetail() {
   // Live streaming progress
   useEffect(() => {
     if (run && run.status === 'running') {
-      const source = new EventSource(`http://localhost:8000/api/runs/${run.id}/stream`);
+      const source = new EventSource(`${API_URL}/runs/${run.id}/stream`);
       
       source.onmessage = (e) => {
         const data = JSON.parse(e.data);
@@ -142,7 +142,7 @@ export default function RunDetail() {
       {run.definition?.steps?.length > 0 && (
         <div className="card" style={{ marginBottom: '1rem' }}>
           <div className="stat-label" style={{ marginBottom: '0.5rem' }}>Pipeline DAG (as run)</div>
-          <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} />
+          <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={run.status === 'running'} />
         </div>
       )}
 
