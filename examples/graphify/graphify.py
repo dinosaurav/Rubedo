@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 import networkx as nx
+import tree_sitter_python as tspython
+from tree_sitter import Language, Parser
 from networkx.algorithms import community
 
 from rubedo import ProcessResult, describe, run, PipelineBuilder
@@ -36,8 +38,6 @@ p = PipelineBuilder(
     source=FolderSource(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")),
 )
 
-import tree_sitter_python as tspython
-from tree_sitter import Language, Parser
 
 PY_LANGUAGE = Language(tspython.language())
 
@@ -57,7 +57,8 @@ def extract_code_nodes(path: str) -> ProcessResult:
 
     file_id = os.path.relpath(path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     nodes = [{"id": file_id, "type": "file", "name": os.path.basename(path)}]
-    edges = []
+    import typing
+    edges: list[dict[str, typing.Any]] = []
 
     def walk(node):
         if node.type == "class_definition":

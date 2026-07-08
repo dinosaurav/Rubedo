@@ -58,9 +58,6 @@ import time
 import urllib.request
 
 from rubedo import Source, SourceItem, describe, PipelineBuilder, run
-from rubedo.db import get_session
-from rubedo.models import Materialization, RunCoordinateStatus
-from rubedo.store import read_materialization_output
 
 WORDLIST_URL = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
 CACHE_PATH = os.path.join(os.path.dirname(__file__), ".wordlist_cache.txt")
@@ -125,8 +122,8 @@ def analyze_chunk(words: list) -> dict:
     chosen to be intensive enough that the thread-vs-process difference is
     visible on ordinary hardware, not lost in noise.
     """
-    anagram_groups = {}
-    rotation_groups = {}
+    anagram_groups: dict[str, list[str]] = {}
+    rotation_groups: dict[str, list[str]] = {}
     letter_freq = [0] * 26
     for w in words:
         sig = "".join(sorted(w))
@@ -153,8 +150,8 @@ def combine_chunks(**parent_outputs) -> dict:
     There's exactly one dependency, so we just take whichever key shows up.
     """
     analyze = next(iter(parent_outputs.values()))
-    anagram_groups = {}
-    rotation_groups = {}
+    anagram_groups: dict[str, list[str]] = {}
+    rotation_groups: dict[str, list[str]] = {}
     letter_totals = [0] * 26
     total_words = 0
     for chunk_result in analyze.values():

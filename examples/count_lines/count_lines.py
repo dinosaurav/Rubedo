@@ -36,7 +36,7 @@ def count_lines(read_lines: dict) -> ProcessResult:
     lines = read_lines["lines"]
     params = CountLinesParams(**read_lines["params"])
 
-    metadata = {
+    metadata: dict = {
         "line_count": len(lines),
         "empty": len(lines) == 0,
         "ok": len(lines) >= params.min_lines,

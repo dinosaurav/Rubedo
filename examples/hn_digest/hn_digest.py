@@ -122,7 +122,7 @@ p = PipelineBuilder(
 
 
 @p.step(name="screen", version="1", params_model=Screen)
-def screen(story: dict, params: Screen) -> dict:
+def screen(story: dict, params: Screen) -> dict | Filtered:
     """Drop low-signal stories before we spend any tokens on them."""
     if not story.get("title"):
         return Filtered("no title (probably a job post or deleted item)")
@@ -176,7 +176,13 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe, params={"min_score": 100})
-    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\} " \n        f"filtered=\{summary.filtered_count\}"\n    \)\n    print("\n--- Final Output (top_story_summary) ---")\n    import json\n    print(json.dumps(summary.output_for("top_story_summary"), indent=2, default=str))
+    print(
+        f"created={summary.created_count} reused={summary.reused_count} "
+        f"filtered={summary.filtered_count}"
+    )
+    print("\n--- Final Output (top_story_summary) ---")
+    import json
+    print(json.dumps(summary.output_for("top_story_summary"), indent=2, default=str))
     print(
         "\nRun it again — classifications are cached, so nothing is re-classified. "
         "(The digest may re-run if HN's front page shifted; its inputs changed.)"

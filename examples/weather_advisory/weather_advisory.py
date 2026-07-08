@@ -41,7 +41,7 @@ p = PipelineBuilder(
 
 
 @p.step(name="geocode", version="1", retries=3, retry_delay=1, rate_limit="60/min")
-def geocode(row: dict) -> dict:
+def geocode(row: dict) -> dict | Filtered:
     """City name -> coordinates. Unknown cities decline the lane."""
     hits = _get(GEOCODE, {"name": row["city"], "count": 1}).get("results")
     if not hits:
@@ -106,7 +106,13 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe)
-    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\} \n          f"filtered=\{summary.filtered_count\}"\)\n    print("\n--- Final Output (max_wind_digest) ---")\n    import json\n    print(json.dumps(summary.output_for("max_wind_digest"), indent=2, default=str))
+    print(
+        f"created={summary.created_count} reused={summary.reused_count} "
+        f"filtered={summary.filtered_count}"
+    )
+    print("\n--- Final Output (max_wind_digest) ---")
+    import json
+    print(json.dumps(summary.output_for("max_wind_digest"), indent=2, default=str))
 
 
 if __name__ == "__main__":

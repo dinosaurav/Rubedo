@@ -98,10 +98,12 @@ def find_path(source: str, target: str) -> str:
     # Naive search if exact match fails
     if not G.has_node(source):
         matches = [n for n in G.nodes if n.endswith(source)]
-        if matches: source = matches[0]
+        if matches:
+            source = matches[0]
     if not G.has_node(target):
         matches = [n for n in G.nodes if n.endswith(target)]
-        if matches: target = matches[0]
+        if matches:
+            target = matches[0]
         
     if not G.has_node(source) or not G.has_node(target):
         return "Source or target not found."

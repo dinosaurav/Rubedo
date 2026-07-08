@@ -70,7 +70,7 @@ def classify(row: dict) -> ProcessResult:
 @p.step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
-    totals: dict[str, list] = {}
+    totals: dict[str, tuple[int, float]] = {}
     for o in classify.values():
         count, revenue = totals.get(o["tier"], (0, 0.0))
         totals[o["tier"]] = (count + 1, revenue + o["amount"])
@@ -89,7 +89,10 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe)
-    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\}"\)\n    print("\n--- Final Output (combine_summaries) ---")\n    import json\n    print(json.dumps(summary.output_for("combine_summaries"), indent=2, default=str))
+    print(f"created={summary.created_count} reused={summary.reused_count}")
+    print("\n--- Final Output (combine_summaries) ---")
+    import json
+    print(json.dumps(summary.output_for("combine_summaries"), indent=2, default=str))
 
 
 if __name__ == "__main__":
