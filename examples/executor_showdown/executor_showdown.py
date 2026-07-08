@@ -205,20 +205,6 @@ def build_pipeline(executor: str):
     return p.build()
 
 
-def _fetch_result(run_id: str, combine_step_name: str):
-    """Read back what the reduce step actually produced, for this run."""
-    with get_session() as session:
-        rc = (
-            session.query(RunCoordinateStatus)
-            .filter_by(run_id=run_id, step_name=combine_step_name, coordinate="@all")
-            .first()
-        )
-        if not rc or not rc.materialization_id:
-            return None
-        mat = session.query(Materialization).filter_by(id=rc.materialization_id).first()
-        return read_materialization_output(mat)
-
-
 def run_variant(executor: str, force: bool) -> float:
     pipe = build_pipeline(executor)
     print(describe(pipe))
@@ -247,7 +233,10 @@ def run_variant(executor: str, force: bool) -> float:
                 "cost and see the executor difference)"
             )
 
-    result = _fetch_result(summary.run_id, f"combine_{executor}")
+    # We no longer need _fetch_result, we can use output_for directly
+    result_dict = summary.output_for(f"combine_{executor}")
+    result = result_dict.get("@all") if result_dict else None
+    
     if result:
         print(f"total words analyzed: {result['total_words']}")
         print(

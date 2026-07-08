@@ -98,7 +98,7 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe)
-    print(f"created={summary.created_count} reused={summary.reused_count}")
+    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\}"\)\n    print("\n--- Final Output (analyze_author) ---")\n    import json\n    print(json.dumps(summary.output_for("analyze_author"), indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -27,9 +27,6 @@ import os
 import tempfile
 
 from rubedo import CsvSource, describe, PipelineBuilder, run
-from rubedo.db import get_session
-from rubedo.models import Materialization, RunCoordinateStatus
-from rubedo.store import read_materialization_output
 
 FEEDS = [("f1", "TechCorp"), ("f2", "BizWire"), ("f3", "TechCorp")]
 PUBLISHERS = [("TechCorp", "US"), ("BizWire", "EU")]
@@ -106,18 +103,7 @@ def make_pipeline(folder):
     )
 
 
-def print_digests():
-    with get_session() as session:
-        for st in (
-            session.query(RunCoordinateStatus)
-            .filter_by(step_name="digest")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
-            .all()
-        ):
-            mat = session.get(Materialization, st.materialization_id)
-            if mat and mat.is_live:
-                out = read_materialization_output(mat)
-                print(f"  [{st.coordinate}] {out['count']} articles: {out['headlines']}")
+
 
 
 def main():
@@ -130,10 +116,14 @@ def main():
 
     s1 = run(pipe)
     print(f"\nrun 1: created={s1.created_count} reused={s1.reused_count}")
-    print_digests()
+
 
     s2 = run(pipe)
     print(f"\nrun 2: created={s2.created_count} reused={s2.reused_count}  (no feed re-scraped)")
+    
+    print("\n--- Final Output (digest) ---")
+    import json
+    print(json.dumps(s2.output_for("digest"), indent=2, default=str))
 
 
 if __name__ == "__main__":

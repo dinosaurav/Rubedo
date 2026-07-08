@@ -244,6 +244,9 @@ def main():
     summary = run(pipe)
     print(f"Run ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
+    
+    print("\n--- Final Output (export_graph) ---")
+    print(json.dumps(summary.output_for("export_graph"), indent=2, default=str))
 
 if __name__ == "__main__":
     main()

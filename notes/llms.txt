@@ -59,7 +59,8 @@ def summarize(enrich: dict) -> dict:
 
 source = CsvSource("input.csv")
 p = pipeline(id="enrichment", name="Enrich", source=source, steps=[screen, enrich, summarize])
-run(p, params={"enrich": {"prompt_mode": "detailed"}})
+summary = run(p, params={"enrich": {"prompt_mode": "detailed"}})
+print(summary.output_for("summarize"))
 ```
 
 ## Join + Expand Example (multi-source)
@@ -87,7 +88,8 @@ p = pipeline(id="orders", name="Orders",
              sources={"orders": CsvSource("orders.csv"),
                       "customers": CsvSource("customers.csv")},
              steps=[order, customer, enrich, lines])
-run(p)
+summary = run(p)
+print(summary.output_for("lines"))
 ```
 
 ## Common Mistakes

@@ -106,8 +106,7 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe)
-    print(f"created={summary.created_count} reused={summary.reused_count} "
-          f"filtered={summary.filtered_count}")
+    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\} \n          f"filtered=\{summary.filtered_count\}"\)\n    print("\n--- Final Output (max_wind_digest) ---")\n    import json\n    print(json.dumps(summary.output_for("max_wind_digest"), indent=2, default=str))
 
 
 if __name__ == "__main__":

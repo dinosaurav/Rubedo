@@ -107,6 +107,10 @@ def main():
             return
         raise
     print(f"created={summary.created_count} reused={summary.reused_count}")
+    
+    print("\n--- Final Output (health_digest) ---")
+    import json
+    print(json.dumps(summary.output_for("health_digest"), indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -71,3 +71,7 @@ if __name__ == "__main__":
     )
     print(f"\nRun ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
+    
+    print("\n--- Final Output (total_lines) ---")
+    import json
+    print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))

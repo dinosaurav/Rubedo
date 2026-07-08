@@ -345,3 +345,24 @@ class RunSummary(BaseModel):
         from .queries import get_run_failures
         with get_session() as session:
             return get_run_failures(session, self.run_id)
+
+    def output_for(self, step_name: str) -> dict[str, Any]:
+        """Fetch the output values for a specific step from this run.
+        
+        Returns a dict mapping coordinates to their materialization payload.
+        """
+        from .db import get_session
+        from .store import read_materialization_output
+        with get_session() as session:
+            statuses = (
+                session.query(RunCoordinateStatus)
+                .filter_by(run_id=self.run_id, step_name=step_name)
+                .all()
+            )
+            result = {}
+            for s in statuses:
+                if s.status in ("ok", "filtered", "reused") and s.materialization_id:
+                    mat = session.get(Materialization, s.materialization_id)
+                    if mat:
+                        result[s.coordinate] = read_materialization_output(mat)
+            return result

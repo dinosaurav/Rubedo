@@ -176,10 +176,7 @@ def main():
     print(describe(pipe))
     print()
     summary = run(pipe, params={"min_score": 100})
-    print(
-        f"created={summary.created_count} reused={summary.reused_count} "
-        f"filtered={summary.filtered_count}"
-    )
+    print\(f"created=\{summary.created_count\} reused=\{summary.reused_count\} " \n        f"filtered=\{summary.filtered_count\}"\n    \)\n    print("\n--- Final Output (top_story_summary) ---")\n    import json\n    print(json.dumps(summary.output_for("top_story_summary"), indent=2, default=str))
     print(
         "\nRun it again — classifications are cached, so nothing is re-classified. "
         "(The digest may re-run if HN's front page shifted; its inputs changed.)"

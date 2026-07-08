@@ -63,6 +63,10 @@ def main():
     print(f"run 1: created={s1.created_count} reused={s1.reused_count}")
     s2 = run(pipe)
     print(f"run 2: created={s2.created_count} reused={s2.reused_count}  (fetch was cached)")
+    
+    print("\n--- Final Output (read_item) ---")
+    import json
+    print(json.dumps(s2.output_for("read_item"), indent=2, default=str))
 
 
 if __name__ == "__main__":
