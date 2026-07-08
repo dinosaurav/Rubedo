@@ -8,132 +8,27 @@ a few) commits.
 
 The **producer model is done** (content-addressed lanes → `expand` →
 `group_key` → multi-source → N-way `join`); see the Done changelog and
-`notes/producer-model.md`. What's left is grouped into the tiers below, and
-items are numbered sequentially (1..12) across tiers so cross-references stay
-stable.
+`notes/producer-model.md`. **Tier 0 and Tier 1 are also done** — the only open
+work is Tier 3/4, all design-first. Items keep their original sequential
+numbers (1..12) across tiers so cross-references stay stable, so open items
+below start at 6.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-- **Tier 0 · Open Bugs & Hardening** — **H4** SSE event-loop blocking · **H5**
-  CORS · **H7** DRY leftovers — opportunistic; **H6** packaging rides with
-  item 1. Follow-up debt from earlier fixes: batched plan missing-anchor-bytes fallback, mypy `type: ignore` count.
-- **Tier 1 · Product shape & packaging** — the producer model is a natural
-  "feature complete" moment; before a `pip install rubedo` push, keep the
-  public surface trustworthy and the install lean: **1** dependency & packaging
-  hygiene (now includes **H6**: `rubedo[server]` extra, find-directive
-  packaging) · **2** read-only ops CLI (build early — a terminal view of
-  ledger state is the fastest way to eyeball the output of everything else
-  while building it; do **B4** and the new `pipeline:` selection term first,
-  and ship failure introspection with it — see the item-2 spec).
+**Tier 0 (bugs/hardening H4–H7), Tier 1 (items 1–2: packaging hygiene +
+read-only ops CLI) are DONE** — see the Done changelog. What remains is all
+**design-first** and gated on real demand:
+
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real, and only after batched planning lands: **6** cloud sources → **7** cloud
+  demand is real: **6** cloud sources → **7** cloud
   ledger+store → **8** distributed execution; **9** lane-pipelined execution
-  (independent).
+  (independent). Items 8 and 9 are explicitly design-first (owner session).
 - **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous**) · **11**
-  `expand` child-views (storage optimization) · **12** lane tooling.
+  `expand` child-views (storage optimization) · **12** lane tooling. All
+  design-first: 10 is hazardous (see its four traps), 12 is design-first.
 
-══════════════════════════════════════════════════════════════════════
-# Tier 0 · Open Bugs & Hardening
-══════════════════════════════════════════════════════════════════════
-
-## H4. `stream_run` blocks the event loop
-
-The SSE generator (`server.py:120`) runs synchronous SQLAlchemy queries
-inside `async def`, freezing all other requests for the duration of each
-poll. Make it a sync generator (Starlette threads those) or push the
-queries through `run_in_executor`.
-
-## H5. CORS config is invalid and permissive
-
-`server.py:48-55`: `allow_origins=["*"]` with `allow_credentials=True` is
-rejected by browsers per the CORS spec, and the state-changing invalidate
-endpoint sits behind it. Pin to the Vite dev origin; drop credentials.
-
-## H6. Packaging leanness (extends item 1)
-
-`fastapi`/`uvicorn` are core dependencies but only `server.py` imports them
-— move to a `rubedo[server]` extra (same pattern item 1 plans for cloud
-extras). Also `packages = ["rubedo"]` won't include future subpackages;
-switch to the setuptools find directive.
-
-## H7. Small DRY / N+1 leftovers
-
-`_ensure_gitignore` is duplicated in `db.py` and `store.py`;
-`get_pipelines_api` (`server.py:557`) re-queries the latest run per
-pipeline instead of one grouped query.
-
-══════════════════════════════════════════════════════════════════════
-# Tier 1 · Product shape & packaging
-══════════════════════════════════════════════════════════════════════
-
-## 1. Dependency & packaging hygiene
-
-Keep `pip install rubedo` lean and honest about what the engine actually needs.
-
-- **Done:** `litellm` moved out of core `dependencies` into the `dev`
-  dependency-group — it was never imported under `src/`, only by the
-  `graphify` example (alongside its `networkx`/`tree-sitter`, already in `dev`).
-  Core install no longer drags in litellm's dependency tree.
-- **Remaining:** a smoke-install check (build the wheel, install it into a
-  clean venv, `import rubedo` + run a trivial pipeline) so the packaged
-  artifact — not just the editable checkout — is known-good. When cloud sources
-  land (items 6–7), give them **optional extras** (`rubedo[s3]`, `rubedo[gcs]`,
-  `rubedo[postgres]`) rather than core deps, same pattern. `py.typed` already
-  ships. Acceptance: a clean-venv wheel install runs `examples/count_lines`
-  end-to-end with only core deps present.
-
-## 2. Read-only ops CLI (`rich`)
-
-A terminal window into ledger state — the fastest way to inspect what a run
-produced while building the rest of the roadmap (it's a dev tool for verifying
-other commands' output as much as a user feature). Add a `rubedo` console entry
-point (`[project.scripts]` in `pyproject.toml`). **Scope is deliberately the
-read/ops surface only** — the terminal twin of the read-only web dashboard:
-
-- `rubedo ls` — recent runs (id, pipeline, status, created/reused/failed
-  counts, timing).
-- `rubedo show <run>` — one run's steps, per-step counts, coordinate statuses,
-  events; `--json` for scripting.
-- `rubedo invalidate <selection>` — surgical invalidation from the terminal
-  (the invalidation UI was removed from the dashboard, so the CLI + code are
-  now the home for this; see item 12).
-
-**Reuse, don't duplicate — this is the point of doing it now:**
-- `invalidate` is already a standalone public API (`invalidation.invalidate`)
-  taking a `Selection`; `Selection.parse()` builds one from a query string. The
-  CLI command is a thin wrapper over `invalidate(Selection.parse(arg))` — zero
-  new query logic.
-- `ls`/`show` read the same ledger the server does, but those queries are
-  currently **inlined** in `server.py`'s FastAPI handlers (`get_runs`,
-  `get_run`, and the summary-JSON unpacking). Factor them into a shared
-  read-query layer (plain functions returning dicts/dataclasses, no FastAPI
-  types) that **both** `server.py` and the CLI call — so the HTTP API and the
-  CLI can never drift. `rich` renders the tables. Reads `RUBEDO_HOME` like
-  everything else; imports **zero** user pipeline code.
-
-**Additions from the 2026-07-07 review (they ride the same read-query
-layer, so build them here):**
-- **`pipeline:` selection term.** `Selection` has no pipeline filter, so
-  `invalidate(step:extract)` cross-hits every pipeline sharing a step name.
-  The column already exists on `Materialization`; add a `pipeline_id` field
-  to `Selection`, a `pipeline:` prefix to `Selection.parse()`, and the
-  filter in `get_selection_materialization_ids`. Load-bearing before the
-  CLI's `invalidate` ships. Fix B4 first (same function).
-- **Failure introspection.** `RunSummary` carries counts only — finding
-  *which* coordinates failed and why takes raw SQL or the web UI today. Add
-  a `failures(run_id)` read-query (coordinate, step, error_type, message)
-  to the shared layer, surfaced as `rubedo show <run> --failed` and as a
-  `RunSummary.failures()` accessor so script-driven retry loops are natural.
-
-**Explicitly out of scope: `rubedo run` / `rubedo plan` as first-class
-commands.** Pipelines are Python and already have a natural entry point
-(`python my_pipeline.py` calling `run(pipe)`); a `module:factory` string would
-reintroduce exactly the registry/discovery indirection the engine deliberately
-rejects ("no registry; the engine never imports user code"), while being weaker
-than the code path it replaces (stringly-typed, no args, no type-checking). If
-a `rubedo run` ever appears it is at most **syntactic sugar** — e.g. exec a file
-path that itself calls `run()` — never a discovery mechanism, and never the
-recommended way to run a pipeline. Design-first if even the sugar is wanted.
+Nothing below is a well-bounded single commit ready to pick up cold — each
+needs an owner design session before building.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -278,6 +173,21 @@ content-addressed/minted, they're the load-bearing navigation surface.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above)
+
+**Tier 0 — Open Bugs & Hardening (H4–H7):** H4 `stream_run` no longer blocks
+the event loop (SSE is a sync generator Starlette threads) · H5 CORS pinned to
+the Vite dev origins with `allow_credentials=False` · H6 packaging leanness
+(`fastapi`/`uvicorn` moved to a `rubedo[server]` extra; setuptools find
+directive replaces the hardcoded package list) · H7 DRY/N+1 leftovers
+(`_ensure_gitignore` deduped into `util.py`; `get_pipelines_api` uses one
+grouped query). **Tier 1 — item 1 (packaging hygiene):** `litellm` out of core
+deps; `scripts/smoke_test.sh` builds the wheel, installs into a clean venv, and
+runs `examples/count_lines` end-to-end with only core deps. **Tier 1 — item 2
+(read-only ops CLI):** `rubedo` console entry point (`ls`/`show`/`invalidate`,
+`--json`, `--failed`) over a shared read-query layer (`queries.py`) both the CLI
+and `server.py` call so they can't drift; `pipeline:` selection term (+ B4 fix
+in the same selection query); failure introspection (`get_run_failures`
+read-query + `RunSummary.failures()` accessor). ·
 
 Bugfixes from 2026-07-07 code review (B1-B7, H1-H3): fixed multi-parent map crash, invalidation partial commits on failure, duplicate IDs in selection query, skip_cache crash on join/reduce, hash bytes in expand, batch ledger planning (H2), remove mypy ignore overrides (H3), per-key locking for `_RunMemo` skip_cache utils (H1) · UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
