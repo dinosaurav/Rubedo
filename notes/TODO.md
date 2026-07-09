@@ -15,16 +15,22 @@ below start at 6.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-Everything still open is **design-first** and gated on real demand — nothing
-below is a well-bounded single commit ready to pick up cold; each needs an
-owner design session before building:
+Everything still open is **design-first**, and most of it is gated on real
+demand — but two half-items serve today's single-machine user and are worth
+building ahead of any demand signal:
 
+- **Ready ahead of demand** — **12** lane-following (the lineage-BFS half
+  only; best value-per-risk on the list, pure read-only queries) · **10a**
+  storage observability (`rubedo du` + ref-count audit as a dry-run report).
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
-  distributed execution; **9** lane-pipelined execution (independent).
-- **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous** — four
-  traps) · **11** `expand` child-views (storage optimization) · **12** lane
-  tooling.
+  distributed execution; **9** lane-pipelined execution (independent — and
+  really a single-machine *latency* feature, so it's the likeliest to earn
+  organic demand first).
+- **Tier 4 · Deferred / careful** — **10b** byte-deleting GC (**dangerous** —
+  four traps; build on 10a only) · **11** `expand` child-views (storage
+  optimization) · **12** lane-level invalidation (the second half of lane
+  tooling).
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -101,17 +107,39 @@ plan→execute and `coord_step_mats` both assume whole-step staging; a
 lane-pipelined engine needs a scheduler over `(lane, step)` tasks with
 dependency edges that stops a lane at the next barrier and synchronizes there.
 Interacts with the `expand` cache anchor (per-parent) and reduce/join barriers.
-Design-first.
+Design-first. **Candidate for the design session (not a settled decision):**
+since barriers are only `reduce`/`join`, consider *fusing chains of
+consecutive per-lane steps into one per-lane task* instead of a general
+`(lane, step)` scheduler — most of the latency win for a fraction of the
+rework, and it may sidestep the `coord_step_mats` staging assumption
+entirely. Note also that although this item is filed under scale, the payoff
+is single-machine latency (LLM pipelines stalling at stage boundaries), so
+expect demand to arrive from ordinary local users, not cluster users.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 4 · Deferred / careful
 ══════════════════════════════════════════════════════════════════════
 
-## 10. Storage sprawl management + garbage collection  **[⚠️ DANGEROUS]**
+## 10a. Storage observability (the safe half — promoted, demand-independent)
 
-Content-addressed stores keep everything; without cleanup the `.rubedo`
-directory balloons. Useful *safe* features first: disk-usage warnings, storage
-limits, age-out policies. Actual byte-deleting GC is genuinely hazardous and
+Content-addressed stores keep everything; without visibility the `.rubedo`
+directory balloons silently, and "why is `.rubedo` 2 GB?" is the first
+question every real user asks. Ship the *read-only* half first: a
+`rubedo du` CLI report — total store size, a per-pipeline/per-step
+breakdown, and a **ref-count audit as a dry-run report** ("N objects /
+M bytes would be reclaimable"), computed by walking the ledger (never the
+store) and ref-counting physical objects against *all* live
+materializations. Deliberately no deletes and no enforcement: this
+answers the user question today *and* exercises the exact ref-count logic
+10b would depend on, in production, long before any delete exists. Rides
+the ops-CLI machinery (item 2). Acceptance: `rubedo du` on a populated
+store reports sizes + reclaimable estimate, and the audit agrees with a
+hand-count on a small fixture.
+
+## 10b. Byte-deleting garbage collection  **[⚠️ DANGEROUS — build on 10a only]**
+
+Storage limits and age-out policies imply enforcement, and enforcement means
+deleting bytes. Actual byte-deleting GC is genuinely hazardous and
 must not be built casually — the orphan-retention decision
 (`producer-model.md` Q2) is *keep orphans* for good reasons, and any GC that
 deletes bytes fights that and can corrupt live state. **Four traps:**
@@ -147,9 +175,13 @@ it once double-storage actually bites.
 
 Two utilities that ride on machinery that already exists (`MaterializationEdge`
 lineage, `MaterializationIndexEntry` labels); now that lanes can go
-content-addressed/minted, they're the load-bearing navigation surface.
+content-addressed/minted, they're the load-bearing navigation surface. The
+two halves are **separably shippable**: lane-following is promoted (ready
+ahead of demand — read-only, no invariants at risk, and it's the debugging
+story that sells the ledger: "this output is wrong, show me everything it
+touched"); lane-level invalidation stays deferred.
 
-- **Lane-following (lineage queries).** "Find the results connected to a label
+- **Lane-following (lineage queries) — promoted.** "Find the results connected to a label
   at a certain step": index-lookup (`MaterializationIndexEntry`) to seed
   materializations carrying the label, then BFS up/down `MaterializationEdge`
   to reach connected outputs at other steps. Pure query over existing tables —
@@ -158,7 +190,7 @@ content-addressed/minted, they're the load-bearing navigation surface.
   path of a lane" utility that replaces a legible coordinate once lanes are
   opaque. Root-of-lineage → source row is answered by indexing source metadata
   at the root (decide: always index it).
-- **Lane-level invalidation.** Today `invalidate(selection)` flips `is_live` on
+- **Lane-level invalidation — deferred.** Today `invalidate(selection)` flips `is_live` on
   the selected materializations only, and the settled core semantics are
   lazy-via-recompute (invalidate a specific bad case, let the next run
   recompute — no eager descendant cascade; `producer-model.md` Q1). The
@@ -184,6 +216,24 @@ runs `examples/count_lines` end-to-end with only core deps. **Tier 1 — item 2
 and `server.py` call so they can't drift; `pipeline:` selection term (+ B4 fix
 in the same selection query); failure introspection (`get_run_failures`
 read-query + `RunSummary.failures()` accessor).
+
+**2026-07-08 — heartbeat-derived run liveness:** stored `Run.status` is now
+terminal-only (`completed`/`completed_with_failures`/`failed`; NULL while in
+flight) — "running" is never stored, because a durable row can't truthfully
+make a present-tense claim (a killed process left it lying forever, animating
+the live view and holding its SSE stream open). A daemon thread bumps
+`Run.last_heartbeat_at` every 60s (timer, not bump-on-commit: one slow LLM
+call can go minutes without a ledger write) and readers derive
+`running`/`interrupted` via `effective_run_status()` (applied in `queries.py`
+for CLI + API and in the SSE stop condition). No reaper, no reconcile:
+sleep/wake self-heals — a resumed process starts beating again and the run
+flips back to "running" on its own. `last_heartbeat_at` is a Run projection
+column but an *ephemeral presence signal* exempt from event pairing
+(invariants.md updated; `tests/test_run_liveness.py`). Same restructure fixed
+`run(progress=True)`'s `TerminalProgress` scoping (it exited before execution
+began) · `count_lines` example fixed for pipeline-level `params_model`
+(steps receive the validated dict, not a model instance — it had been failing
+every lane on a fresh store since 829dc3e).
 
 Bugfixes from 2026-07-07 code review (B1-B7, H1-H3): fixed multi-parent map crash, invalidation partial commits on failure, duplicate IDs in selection query, skip_cache crash on join/reduce, hash bytes in expand, batch ledger planning (H2), remove mypy ignore overrides (H3), per-key locking for `_RunMemo` skip_cache utils (H1) · UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
