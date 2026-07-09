@@ -15,20 +15,16 @@ below start at 6.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-**Tier 0 (bugs/hardening H4–H7), Tier 1 (items 1–2: packaging hygiene +
-read-only ops CLI) are DONE** — see the Done changelog. What remains is all
-**design-first** and gated on real demand:
+Everything still open is **design-first** and gated on real demand — nothing
+below is a well-bounded single commit ready to pick up cold; each needs an
+owner design session before building:
 
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real: **6** cloud sources → **7** cloud
-  ledger+store → **8** distributed execution; **9** lane-pipelined execution
-  (independent). Items 8 and 9 are explicitly design-first (owner session).
-- **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous**) · **11**
-  `expand` child-views (storage optimization) · **12** lane tooling. All
-  design-first: 10 is hazardous (see its four traps), 12 is design-first.
-
-Nothing below is a well-bounded single commit ready to pick up cold — each
-needs an owner design session before building.
+  demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
+  distributed execution; **9** lane-pipelined execution (independent).
+- **Tier 4 · Deferred / careful** — **10** storage GC (**dangerous** — four
+  traps) · **11** `expand` child-views (storage optimization) · **12** lane
+  tooling.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -187,7 +183,7 @@ runs `examples/count_lines` end-to-end with only core deps. **Tier 1 — item 2
 `--json`, `--failed`) over a shared read-query layer (`queries.py`) both the CLI
 and `server.py` call so they can't drift; `pipeline:` selection term (+ B4 fix
 in the same selection query); failure introspection (`get_run_failures`
-read-query + `RunSummary.failures()` accessor). ·
+read-query + `RunSummary.failures()` accessor).
 
 Bugfixes from 2026-07-07 code review (B1-B7, H1-H3): fixed multi-parent map crash, invalidation partial commits on failure, duplicate IDs in selection query, skip_cache crash on join/reduce, hash bytes in expand, batch ledger planning (H2), remove mypy ignore overrides (H3), per-key locking for `_RunMemo` skip_cache utils (H1) · UI enhancements (live run view animations, pipelines page drill-down and last-run details, rich JSON viewer for materialization payloads) · Terminal progress feedback (`run(progress=True)`) · pipeline-level `params_model` validation · partial fan-in policy (`on_failed="use_passed"|"block"`) · Dependency hygiene: `litellm` moved from core `dependencies` to the `dev`
 group (only the `graphify` example used it; core install no longer pulls it) ·
