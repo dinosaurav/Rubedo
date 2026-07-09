@@ -117,6 +117,38 @@ def cmd_invalidate(args):
     console.print(f"New Run ID recorded for invalidation: [cyan]{result['run_id']}[/cyan]")
 
 
+def cmd_trace(args):
+    from dataclasses import asdict
+
+    from .trace import trace
+
+    try:
+        selection = Selection.parse(args.selection)
+    except Exception as e:
+        console.print(f"[red]Error parsing selection:[/red] {e}")
+        sys.exit(1)
+
+    result = trace(selection, include_superseded=args.all)
+
+    if args.json:
+        print(
+            json.dumps(
+                {"nodes": [asdict(n) for n in result.nodes], "edges": result.edges},
+                indent=2,
+                default=str,
+            )
+        )
+        return
+
+    if not result.nodes:
+        console.print(
+            "No live materializations match that selection."
+            + ("" if args.all else " (try --all to include superseded ones)")
+        )
+        return
+    console.print(str(result))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rubedo Read-Only Ops CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -135,6 +167,18 @@ def main():
     parser_inv.add_argument("selection", help="Selection query (e.g., 'pipeline:my-pipe step:extract')")
     parser_inv.add_argument("--reason", required=True, help="Reason for invalidation")
     parser_inv.set_defaults(func=cmd_invalidate)
+
+    parser_trace = subparsers.add_parser(
+        "trace", help="Follow lineage up/downstream from a selection"
+    )
+    parser_trace.add_argument(
+        "selection", help="Selection query (e.g., 'company:acme step:extract')"
+    )
+    parser_trace.add_argument(
+        "--all", action="store_true", help="Seed superseded/invalidated generations too"
+    )
+    parser_trace.add_argument("--json", action="store_true", help="Output as JSON")
+    parser_trace.set_defaults(func=cmd_trace)
     
     args = parser.parse_args()
     args.func(args)

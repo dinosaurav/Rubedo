@@ -19,9 +19,13 @@ from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate
 from .runner import plan, run, RunPlan
 from .progress import TerminalProgress
+from .trace import trace, TraceNode, TraceResult
 
 __all__ = [
     "invalidate",
+    "trace",
+    "TraceNode",
+    "TraceResult",
     "Filtered",
     "ProcessResult",
     "RunSummary",

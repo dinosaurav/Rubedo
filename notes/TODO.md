@@ -19,9 +19,9 @@ Everything still open is **design-first**, and most of it is gated on real
 demand — but two half-items serve today's single-machine user and are worth
 building ahead of any demand signal:
 
-- **Ready ahead of demand** — **12** lane-following (the lineage-BFS half
-  only; best value-per-risk on the list, pure read-only queries) · **10a**
-  storage observability (`rubedo du` + ref-count audit as a dry-run report).
+- **Ready ahead of demand** — **10a** storage observability (`rubedo du` +
+  ref-count audit as a dry-run report). (**12**'s lane-following half shipped
+  2026-07-09 as `trace()` / `rubedo trace` — see Done.)
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
   distributed execution; **9** lane-pipelined execution (independent — and
@@ -181,7 +181,15 @@ ahead of demand — read-only, no invariants at risk, and it's the debugging
 story that sells the ledger: "this output is wrong, show me everything it
 touched"); lane-level invalidation stays deferred.
 
-- **Lane-following (lineage queries) — promoted.** "Find the results connected to a label
+- **Lane-following (lineage queries) — [DONE 2026-07-09].** Shipped as
+  `trace(selection)` / `rubedo trace "<query>"` (`src/rubedo/trace.py`):
+  selection-seeded BFS over `MaterializationEdge` both directions, live-only
+  seeding by default (`include_superseded=True`/`--all` widens), traversal
+  follows real edges regardless of liveness (marked, never hidden), and
+  lineage roots resolve their stored payload at display time — the
+  "always index source metadata" option was **decided against** (owner call
+  2026-07-09): reading the object at display deletes the bookkeeping concept.
+  Original spec, for context: "Find the results connected to a label
   at a certain step": index-lookup (`MaterializationIndexEntry`) to seed
   materializations carrying the label, then BFS up/down `MaterializationEdge`
   to reach connected outputs at other steps. Pure query over existing tables —
@@ -216,6 +224,16 @@ runs `examples/count_lines` end-to-end with only core deps. **Tier 1 — item 2
 and `server.py` call so they can't drift; `pipeline:` selection term (+ B4 fix
 in the same selection query); failure introspection (`get_run_failures`
 read-query + `RunSummary.failures()` accessor).
+
+**2026-07-09 — lane-following (item 12, first half):** `trace(selection)` +
+`rubedo trace "<query>" [--all] [--json]` — lineage BFS over
+`MaterializationEdge` from any selection's materializations, upstream and
+downstream, with root payload resolution at display time (no auto-indexing —
+owner decision), live-only seeding by default, and superseded nodes marked
+rather than hidden. Verified against newsroom's join-minted pair lanes and
+expand-minted children (`tests/test_trace.py`). Also: v0.1.0 published to
+PyPI via trusted publishing; CI on push/PR; `RunSummary.output_for` fixed to
+include freshly created lanes.
 
 **2026-07-08 — heartbeat-derived run liveness:** stored `Run.status` is now
 terminal-only (`completed`/`completed_with_failures`/`failed`; NULL while in

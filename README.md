@@ -174,6 +174,15 @@ Two independent axes on `@step`:
 
 `plan()` is a read-only dry-run: it tells you what `run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
 
+`trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
+
+```python
+from rubedo import Selection, trace
+print(trace(Selection.parse("company:acme")))    # or: rubedo trace "company:acme"
+```
+
+By default only live outputs seed a trace; `include_superseded=True` (CLI `--all`) seeds history too. Traversal always follows the real derivation edges either way — superseded generations are marked, never hidden.
+
 The **CLI** browses and invalidates against the local ledger:
 
 ```bash
