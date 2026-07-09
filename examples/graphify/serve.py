@@ -71,15 +71,14 @@ Here is a summary of the most central files in the codebase (by PageRank):
 {graph_context}
 
 Answer the user's question about the codebase. Be concise.
-IMPORTANT: You must return your response in EXACTLY this JSON format:
-{{
-  "reply": "Your textual answer here",
-  "highlight_nodes": ["src/rubedo/store.py", "src/rubedo/db.py"]
-}}
-Provide node IDs in highlight_nodes if your answer mentions them, so the UI can highlight them. If none, pass an empty array.
-Do not output markdown code blocks around the JSON. ONLY output the raw JSON object.
+IMPORTANT: You must structure your response EXACTLY as follows:
+First, use <thinking>...</thinking> tags to reason about the user's question step-by-step.
+Then, provide your final answer to the user.
+Finally, if your answer mentions specific files or nodes from the architecture graph, list them inside <nodes>...</nodes> separated by commas (e.g. <nodes>src/rubedo/store.py, src/rubedo/db.py</nodes>). If none are mentioned, omit the <nodes> block.
+Do not use JSON or markdown code blocks for the output format.
 """
 
+            headers_sent = False
             try:
                 response = litellm.completion(
                     model="openrouter/anthropic/claude-sonnet-5",
@@ -87,28 +86,39 @@ Do not output markdown code blocks around the JSON. ONLY output the raw JSON obj
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_msg}
                     ],
-                    # Force JSON output if possible, but the prompt should handle it
+                    stream=True
                 )
-                raw_content = response.choices[0].message.content
-                
-                # Strip markdown code blocks if the model included them
-                if raw_content.startswith("```json"):
-                    raw_content = raw_content[7:-3].strip()
-                elif raw_content.startswith("```"):
-                    raw_content = raw_content[3:-3].strip()
-                    
-                parsed_res = json.loads(raw_content)
                 
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Type', 'text/event-stream')
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Connection', 'keep-alive')
                 self.end_headers()
-                self.wfile.write(json.dumps(parsed_res).encode('utf-8'))
+                headers_sent = True
                 
+                for chunk in response:
+                    content = chunk.choices[0].delta.content or ""
+                    if content:
+                        msg = json.dumps({"text": content})
+                        self.wfile.write(f"data: {msg}\n\n".encode('utf-8'))
+                        self.wfile.flush()
+                        
             except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                if not headers_sent:
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+                else:
+                    # Stream already open: try to report the error as an SSE
+                    # frame, but the client may have disconnected (which is
+                    # what raised in the first place), so writing can fail too.
+                    try:
+                        msg = json.dumps({"error": str(e)})
+                        self.wfile.write(f"data: {msg}\n\n".encode('utf-8'))
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
             return
 
         self.send_response(404)

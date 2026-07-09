@@ -276,7 +276,10 @@ document.addEventListener('DOMContentLoaded', () => {
     appendMessage('user', text);
     chatInput.value = '';
     
-    const loadingId = appendMessage('system', 'Thinking...');
+    const msgId = appendMessage('system', 'Thinking...');
+    const msgDiv = document.getElementById(msgId);
+    
+    let rawContent = "";
     
     try {
       const res = await fetch('/api/chat', {
@@ -284,30 +287,97 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text })
       });
-      const data = await res.json();
-      
-      document.getElementById(loadingId).remove();
-      
-      if (data.error) {
-        appendMessage('system', 'Error: ' + data.error);
+
+      // Errors that happen before the stream starts come back as a plain
+      // JSON body (not SSE), so surface them instead of parsing as a stream.
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const errData = await res.json();
+          if (errData.error) detail = errData.error;
+        } catch (e) { /* non-JSON error body */ }
+        msgDiv.textContent = 'Error: ' + detail;
         return;
       }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
       
-      appendMessage('system', data.reply);
+      let buffer = "";
+      msgDiv.textContent = "";
       
-      if (data.highlight_nodes && data.highlight_nodes.length > 0) {
-        highlightedNodes = new Set(data.highlight_nodes);
-        if (data.highlight_nodes[0]) {
-          const firstNode = filteredData.nodes.find(n => n.id === data.highlight_nodes[0]);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.substring(6);
+            if (!dataStr) continue;
+            try {
+              const data = JSON.parse(dataStr);
+              if (data.error) {
+                msgDiv.textContent = 'Error: ' + data.error;
+                return;
+              }
+              rawContent += data.text;
+              
+              let displayHtml = "";
+              
+              const thinkingMatch = rawContent.match(/<thinking>([\s\S]*?)(?:<\/thinking>|$)/);
+              if (thinkingMatch) {
+                const isComplete = rawContent.includes("</thinking>");
+                // simple escape for basic safety (optional, but good practice if model outputs code in thinking)
+                const text = thinkingMatch[1].replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                displayHtml += `<div class="thinking-block ${isComplete ? '' : 'pulsing'}">${text}</div>`;
+              }
+              
+              let replyText = rawContent
+                .replace(/<thinking>[\s\S]*?(?:<\/thinking>|$)/g, '')
+                .replace(/<nodes>[\s\S]*?(?:<\/nodes>|$)/g, '')
+                .trim();
+                
+              if (replyText) {
+                const text = replyText.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                displayHtml += `<div>${text}</div>`;
+              }
+              
+              if (!displayHtml) {
+                  displayHtml = `<div class="thinking-block pulsing">...</div>`;
+              }
+              
+              msgDiv.innerHTML = displayHtml;
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+              
+            } catch (e) {
+              console.error("Parse error:", e);
+            }
+          }
+        }
+      }
+      
+      const nodesMatch = rawContent.match(/<nodes>([\s\S]*?)(?:<\/nodes>|$)/);
+      if (nodesMatch) {
+        const nodeStr = nodesMatch[1];
+        const nodesList = nodeStr.split(',').map(s => s.trim()).filter(s => s);
+        highlightedNodes = new Set(nodesList);
+        if (nodesList[0]) {
+          const firstNode = filteredData.nodes.find(n => n.id === nodesList[0]);
           if (firstNode) focusNode(firstNode);
         }
       } else {
         highlightedNodes.clear();
       }
       
+      Graph.nodeColor(Graph.nodeColor()); // force re-render
+      
     } catch (err) {
-      document.getElementById(loadingId).remove();
-      appendMessage('system', 'Network error reaching LLM endpoint.');
+      msgDiv.textContent = 'Network error reaching LLM endpoint.';
     }
   }
 

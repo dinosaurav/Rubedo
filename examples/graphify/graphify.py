@@ -24,8 +24,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 import networkx as nx
-import tree_sitter_python as tspython
-from tree_sitter import Language, Parser
 from networkx.algorithms import community
 
 from rubedo import ProcessResult, describe, run, PipelineBuilder
@@ -39,13 +37,18 @@ p = PipelineBuilder(
 )
 
 
-PY_LANGUAGE = Language(tspython.language())
 
-@p.step(name="extract_code_nodes", version="v3")
+
+@p.step(name="extract_code_nodes", version="v4")
 def extract_code_nodes(path: str) -> ProcessResult:
     """Extract classes, functions, and import edges using Tree-sitter."""
     if not path.endswith(".py"):
         return ProcessResult(value={"nodes": [], "edges": []})
+        
+    import tree_sitter_python as tspython
+    from tree_sitter import Language, Parser
+    
+    PY_LANGUAGE = Language(tspython.language())
 
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -95,7 +98,7 @@ def extract_code_nodes(path: str) -> ProcessResult:
 
     return ProcessResult(value={"nodes": nodes, "edges": edges, "file_id": file_id})
 
-@p.step(name="extract_semantic_nodes", version="v3", retries=2, rate_limit="20/min")
+@p.step(name="extract_semantic_nodes", version="v4", retries=2, rate_limit="1000/min")
 def extract_semantic_nodes(path: str) -> ProcessResult:
     """Use an LLM to generate a semantic summary of the file."""
     if not path.endswith(".py") and not path.endswith(".md"):
