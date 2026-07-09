@@ -1,9 +1,9 @@
-# PROVISIONAL: not yet wired to run automatically on push/PR. Triggered
-# manually (workflow_dispatch) until the checklist below is trusted enough
-# to gate merges. Flip `on:` to `[push, pull_request]` when ready.
 name: CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -26,6 +26,9 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -q
+
+      - name: Mypy
+        run: uv run mypy src/rubedo
 
       - name: Web typecheck
         run: |

@@ -5,18 +5,31 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rubedo"
 version = "0.1.0"
-description = "Local-first batch engine: DAG pipelines over keyed collections"
+description = "Content-addressed caching and run history for Python batch pipelines — built for steps you can't afford to re-run"
 readme = "README.md"
 authors = [
     { name = "Saurav Das" }
 ]
 requires-python = ">=3.11"
 license = "MIT"
+keywords = [
+    "pipeline",
+    "dag",
+    "caching",
+    "batch",
+    "incremental",
+    "llm",
+    "data-engineering",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
     "sqlalchemy",
@@ -28,10 +41,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SauravDas/Rubedo"
-Repository = "https://github.com/SauravDas/Rubedo.git"
-Documentation = "https://rubedo.dev/docs/"
-"Bug Tracker" = "https://github.com/SauravDas/Rubedo/issues"
+Homepage = "https://github.com/dinosaurav/Rubedo"
+Repository = "https://github.com/dinosaurav/Rubedo"
+Issues = "https://github.com/dinosaurav/Rubedo/issues"
+Changelog = "https://github.com/dinosaurav/Rubedo/blob/main/CHANGELOG.md"
 
 [project.scripts]
 rubedo = "rubedo.cli:main"
@@ -53,6 +66,7 @@ testpaths = ["tests"]
 dev = [
     "httpx>=0.25.0",
     "litellm>=1.91.0",
+    "mcp>=1.28.1",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.6",
     "mypy>=2.1.0",
