@@ -2469,6 +2469,7 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "litellm" },
     { name = "mcp" },
@@ -2482,6 +2483,7 @@ dev = [
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tree-sitter" },
     { name = "tree-sitter-python" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -2499,6 +2501,7 @@ provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "fastapi" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "litellm", specifier = ">=1.91.0" },
     { name = "mcp", specifier = ">=1.28.1" },
@@ -2511,6 +2514,7 @@ dev = [
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "tree-sitter", specifier = ">=0.26.0" },
     { name = "tree-sitter-python", specifier = ">=0.25.0" },
+    { name = "uvicorn" },
 ]
 
 [[package]]
