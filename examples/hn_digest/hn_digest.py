@@ -1,7 +1,8 @@
 """Hacker News digest — a real fan-out/fan-in pipeline over two live APIs.
 
-    top stories ─▶ screen ─▶ classify ─▶ digest (reduce)
-                   (filter)   (LLM)        (LLM)
+    top_story ─▶ screen ─▶ classify ─▶ digest (reduce)
+    (source)     (fetch+    (LLM)        (LLM)
+                  filter)
 
 Real APIs, no mocks:
   - Hacker News Firebase API (public, no key)
@@ -19,6 +20,13 @@ The point of doing this in Rubedo: classifying a story with an LLM is
 expensive and non-idempotent. Each classification is cached by the story's
 content, so a second run reclassifies nothing and makes *zero* LLM calls —
 and a story that gets filtered out is decided once, not once per run.
+
+The `@p.source` root only yields a story's id — a stable coordinate that
+never changes. `screen` (its only consumer) does the actual HN item fetch,
+so it only ever runs once per story: later runs reuse its cached output
+without refetching, which means a story's score drifting after that first
+fetch is *never* revisited. That's deliberate — it's what keeps `classify`
+(the expensive LLM call) from re-running just because a score ticked up.
 """
 
 import json
@@ -27,7 +35,7 @@ import urllib.request
 
 from pydantic import BaseModel
 
-from rubedo import Filtered, Source, SourceItem, describe, PipelineBuilder, run
+from rubedo import Filtered, describe, PipelineBuilder, run
 
 HN = "https://hacker-news.firebaseio.com/v0"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
@@ -87,43 +95,28 @@ def _first_json(text: str) -> dict:
         return {}
 
 
-class HackerNewsTop(Source):
-    """Top HN stories. Each story id is a coordinate; the payload is the story.
-
-    content_hash is the id, so a story is classified once and reused forever —
-    we deliberately don't re-fetch when its score drifts. Swap in a hash of the
-    story body if you'd rather re-run when the content actually changes.
-    """
-
-    def __init__(self, limit: int = 15):
-        self.limit = limit
-
-    @property
-    def id(self) -> str:
-        return f"hn:top:{self.limit}"
-
-    def scan(self):
-        ids = _get(f"{HN}/topstories.json")[: self.limit]
-        return [SourceItem(coordinate=str(i), content_hash=str(i), ref=i) for i in ids]
-
-    def load(self, item: SourceItem) -> dict:
-        return _get(f"{HN}/item/{item.ref}.json") or {}
+TOP_LIMIT = 15
 
 
 class Screen(BaseModel):
     min_score: int = 100
 
 
-p = PipelineBuilder(
-    id="hn-digest",
-    name="Hacker News Digest",
-    source=HackerNewsTop(limit=15),
-)
+p = PipelineBuilder(id="hn-digest", name="Hacker News Digest")
 
 
-@p.step(name="screen", version="1", params_model=Screen)
-def screen(story: dict, params: Screen) -> dict | Filtered:
-    """Drop low-signal stories before we spend any tokens on them."""
+@p.source(name="top_story", version="1")
+def top_story():
+    """Root: today's top story ids. Just the id — a stable, score-independent
+    coordinate — so `screen` (the actual fetch) runs at most once per story."""
+    for story_id in _get(f"{HN}/topstories.json")[:TOP_LIMIT]:
+        yield {"id": story_id}
+
+
+@p.step(name="screen", version="1", depends_on=["top_story"], params_model=Screen)
+def screen(top_story: dict, params: Screen) -> dict | Filtered:
+    """Fetch the story and drop low-signal ones before spending any tokens."""
+    story = _get(f"{HN}/item/{top_story['id']}.json") or {}
     if not story.get("title"):
         return Filtered("no title (probably a job post or deleted item)")
     if story.get("score", 0) < params.min_score:
@@ -180,9 +173,9 @@ def main():
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
     )
-    print("\n--- Final Output (top_story_summary) ---")
+    print("\n--- Final Output (digest) ---")
     import json
-    print(json.dumps(summary.output_for("top_story_summary"), indent=2, default=str))
+    print(json.dumps(summary.output_for("digest"), indent=2, default=str))
     print(
         "\nRun it again — classifications are cached, so nothing is re-classified. "
         "(The digest may re-run if HN's front page shifted; its inputs changed.)"
