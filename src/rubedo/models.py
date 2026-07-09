@@ -399,7 +399,7 @@ class RunSummary(BaseModel):
             )
             result: dict[str, Any] = {}
             for s in statuses:
-                if s.status in ("ok", "filtered", "reused") and s.materialization_id:
+                if s.status in ("created", "filtered", "reused") and s.materialization_id:
                     mat = session.get(Materialization, s.materialization_id)
                     if mat:
                         result[str(s.coordinate)] = read_materialization_output(mat)  # type: ignore[arg-type]
