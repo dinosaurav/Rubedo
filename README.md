@@ -25,14 +25,11 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 
 ## Install
 
-Rubedo is not on PyPI yet. Install from source:
-
 ```bash
-git clone https://github.com/dinosaurav/Rubedo && cd Rubedo
-uv sync                      # or: pip install -e ".[server]"
+pip install rubedo           # or: pip install "rubedo[server]"
 ```
 
-Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for the web dashboard.
+Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for the web dashboard. To hack on Rubedo itself (or run the bundled examples), clone the repo and `uv sync`.
 
 ## Quickstart
 
