@@ -76,7 +76,7 @@ def _chat(prompt: str, max_tokens: int = 400, json_mode: bool = False) -> str:
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)["choices"][0]["message"]["content"]
+        return json.load(r)["choices"][0]["message"]["content"] or ""
 
 
 def _first_json(text: str) -> dict:
