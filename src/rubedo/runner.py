@@ -40,6 +40,7 @@ from .ledger import (
 )
 from .models import RUN_HEARTBEAT_INTERVAL_SECONDS, Filtered, Run, RunSummary
 from .planning import (
+    ROOT_LANE,
     EphemeralRef,  # noqa: F401  (re-exported: part of the runner's public surface)
     MatRef,  # noqa: F401
     StepDecision,  # noqa: F401
@@ -48,7 +49,7 @@ from .planning import (
     topological_sort,
 )
 from .spec import PipelineSpec, StepSpec, definition
-from .sources import Source, coerce_source
+from .sources import Source, SourceItem, coerce_source
 from .store import init_store
 from .util import utcnow_iso
 
@@ -120,11 +121,31 @@ def _run_source_id(sources: Dict[str, Source]) -> str:
 def _source_name_for(pipeline: PipelineSpec, sources: Dict[str, Source], step):
     """The source name a step reads, or None if it reads none.
 
-    Dependent steps and root *expand* steps (themselves sources) read nothing.
+    Dependent steps, root *expand* steps (themselves sources), and *source-less*
+    root maps (which mint their own single lane) read nothing.
     """
     if step.depends_on or step.shape == "expand":
         return None
+    if not sources:
+        return None
     return step.source if step.source is not None else next(iter(sources))
+
+
+def _scanned_for(
+    step: StepSpec, sname: Optional[str], items_by_source: Dict[str, list]
+) -> list:
+    """The items feeding one step's plan.
+
+    A source-backed step gets its source's scan; a source-less non-expand root
+    mints a single synthetic ROOT_LANE item (its input is a constant, so it
+    runs once and then reuses); everything else (dependent steps, root expands)
+    gets nothing.
+    """
+    if sname:
+        return items_by_source[sname]
+    if not step.depends_on and step.shape != "expand":
+        return [SourceItem(coordinate=ROOT_LANE, content_hash=ROOT_LANE)]
+    return []
 
 
 def _resolve_invocation(pipeline: PipelineSpec, source, params):
@@ -262,7 +283,7 @@ def _run_segment(
         decisions = _plan_step(
             session,
             step,
-            items_by_source[sname] if sname else [],
+            _scanned_for(step, sname, items_by_source),
             ctx.coord_step_mats,
             params_hash,
             force,
@@ -401,7 +422,7 @@ def plan(
             decisions = _plan_step(
                 session,
                 step,
-                items_by_source[sname] if sname else [],
+                _scanned_for(step, sname, items_by_source),
                 coord_step_mats,
                 params_hash,
                 force,

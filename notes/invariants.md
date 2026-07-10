@@ -47,6 +47,17 @@ step picks one with `@step(source="name")`. Conceptually a source is the root
 **producer** — the same lane-minting primitive as `expand`/`join` (see
 `producer-model.md`).
 
+**Root (head of a pipeline):**
+Any step with no `depends_on` originates lanes, and its `shape` sets how many:
+an `expand` root yields N (a source that re-runs every run); a `map` root over
+a declared source mints one lane per scanned coordinate; a `map` root with **no
+source** mints a single `@root` lane whose input is its params (or a constant
+when it takes none). The source-less map root is addressed by
+`hash(step, version, @root, params)`, so identical params reuse the cached
+output and changed params make a new generation — a lane fed *into* the head
+rather than scanned for. A pipeline with no source is legal as long as some
+root originates lanes.
+
 **Run-coordinate status:**
 Relationship between a run and a coordinate: created, reused, failed, blocked,
 filtered. "Filtered" means a step declined the coordinate — a cached,

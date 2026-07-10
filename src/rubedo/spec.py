@@ -102,10 +102,14 @@ class PipelineSpec:
         """The Source a step reads, or None if it reads none.
 
         Dependent steps and root *expand* steps (which are themselves sources)
-        read nothing; a root non-expand step reads a named/sole source.
+        read nothing; a *source-less* root map reads nothing either (it mints
+        a single lane from its params/a constant); a root non-expand step over
+        a declared source reads a named/sole source.
         """
         if step.depends_on or step.shape == "expand":
             return None
+        if not self.sources:
+            return None  # source-less root map: mints its own single lane
         if step.source is not None:
             return self.sources[step.source]
         return next(iter(self.sources.values()))  # single-source default
@@ -349,8 +353,10 @@ def pipeline(
     """Construct a pipeline from its steps (and optional source sugar).
 
     Pass at most one of `folder=` (FolderSource sugar), `source=` (one Source),
-    or `sources={name: Source}` (multiple). Or pass none: then a root
-    `shape="expand"` step *is* the source (it yields the initial lanes).
+    or `sources={name: Source}` (multiple). Or pass none: then the roots *are*
+    the source — a `shape="expand"` root yields the initial lanes, and a
+    `shape="map"` root mints a single lane whose input is its params (or a
+    constant when it takes none). Same params reuse; changed params recompute.
     """
     given = [x for x in (folder, source, sources) if x is not None]
     if len(given) > 1:
@@ -369,10 +375,9 @@ def pipeline(
     steps = steps or []
     single = len(sources) == 1
     roots = [s for s in steps if not s.depends_on]
-    if not sources and not any(s.shape == "expand" for s in roots):
+    if not sources and not roots:
         raise ValueError(
-            "pipeline has no source — a root step must be shape='expand' "
-            "(a source that yields the initial lanes)"
+            "pipeline has no source and no root step to originate lanes"
         )
     for s in steps:
         if s.source is not None and s.source not in sources:
@@ -380,12 +385,12 @@ def pipeline(
                 f"Step '{s.name}' reads source '{s.source}', which is not in "
                 f"sources={sorted(sources)}"
             )
-        # a root non-expand step reads a source; a root expand reads none
-        if not s.depends_on and s.shape != "expand":
-            if not sources:
-                raise ValueError(
-                    f"Root step '{s.name}' needs a source, or must be shape='expand'"
-                )
+        # Every root mints lanes: an expand root fans out N, a map root mints
+        # one. A source-backed map root reads that source; a source-less map
+        # root mints a single '@root' lane (input = its params, or a
+        # constant). The only rule left is disambiguating which source a root
+        # reads when a pipeline declares several.
+        if not s.depends_on and s.shape != "expand" and sources:
             if s.source is None and not single:
                 raise ValueError(
                     f"Root step '{s.name}' must declare source= (pipeline has "

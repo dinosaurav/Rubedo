@@ -76,6 +76,13 @@ class StepDecision:
     stale: bool = False
 
 
+# The single lane a source-less root map step mints. Its content is a fixed
+# constant, so the output address reduces to hash(step, version, ROOT_LANE,
+# params): same params reuse the cached output, changed params make a new
+# generation (exactly like a stable-coordinate source lane whose bytes change).
+ROOT_LANE = "@root"
+
+
 def topological_sort(pipeline: PipelineSpec) -> List[StepSpec]:
     """Sort the pipeline steps in topological order based on dependencies."""
     # Validate and sort

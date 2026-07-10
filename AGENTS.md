@@ -50,6 +50,10 @@ accurate and load-bearing; keep them updated when behavior changes.
   `depends_on` = a root = a source** that yields the initial lanes and re-runs
   every run, so `pipeline(steps=[...])` needs no `source=`) / `join` (N-way
   equijoin on `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes).
+  A **source-less `map` root** (no `depends_on`, no source) mints a single
+  `@root` lane whose input is its params (or a constant) — so a pipeline can
+  begin with a plain step fed a value instead of scanning for one; same params
+  reuse, changed params recompute (`ROOT_LANE` in `planning.py`).
   `pipeline(sources={name: Source})` declares multiple roots and a root step
   picks one with `@step(source="name")` (`source=`/`folder=` stay
   single-source). `executor` is `"thread"` (default) or `"process"` (a `loky`

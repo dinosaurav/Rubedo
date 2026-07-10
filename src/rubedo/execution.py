@@ -161,7 +161,11 @@ def _compute_ephemeral(
     def produce():
         step = ref.step
         if not step.depends_on:
-            args = [step_sources[step.name].load(ref.item)]
+            args = (
+                [step_sources[step.name].load(ref.item)]
+                if step.name in step_sources
+                else []
+            )
             kwargs = {}
         else:
             args = []
@@ -239,7 +243,10 @@ def _process_decision(
         # get parent outputs by parameter name. Either kind may declare
         # `params`. A *root expand* is itself a source — it reads no payload.
         if not step.depends_on:
-            if step.shape == "expand":
+            # A root expand (itself a source) and a source-less root map both
+            # read no payload — they receive only params. A source-backed root
+            # map loads its scanned payload positionally.
+            if step.shape == "expand" or step.name not in step_sources:
                 args = []
             else:
                 assert decision.item is not None

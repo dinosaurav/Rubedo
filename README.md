@@ -151,6 +151,17 @@ p = pipeline(id="enrich", name="Enrich",
 
 Multiple sources are declared with `sources={name: Source}` (single `source=`/`folder=` are the one-source sugar), and each root step names its source with `@step(source="name")`. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
 
+A pipeline doesn't need a source at all. A `map` step with no `depends_on` and no source is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `run(pipe, params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
+
+```python
+@step(name="load_pdf", version="1")          # no depends_on, no source
+def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
+
+pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])   # no source= needed
+```
+
+See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → reduce → two summaries.
+
 ## Search and surgical invalidation
 
 Outputs are **searchable by their content**: `@step(index=["company", "meta.region"])` extracts those value fields into an index at commit time, so you can select by what a step *computed*, regardless of file names or row keys:
