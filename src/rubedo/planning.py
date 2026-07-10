@@ -143,7 +143,7 @@ def _compute_step_input_hash(
 def expand_anchor_address(
     step: StepSpec, parent_hash: str, params_hash: str, accepts_params: bool
 ) -> str:
-    """Address of an expand step's cache anchor (the full yielded list).
+    """Address of an expand step's cache anchor (the child content hashes).
 
     Keyed on the *parent* content, so it is predictable from the parent alone
     — the entry point that lets a re-run skip the fn.

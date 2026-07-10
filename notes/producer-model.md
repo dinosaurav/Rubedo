@@ -264,11 +264,15 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    orphan (Q1/Q2). Verified: `tests/test_expand.py` (8) + full suite (154)
    green, ruff clean, and a live non-deterministic "scrape" runs exactly once
    across two runs (3 article lanes cached→reused).
-   **Known cost:** this is option **(a)** — the anchor stores the full list
-   *and* each child is extracted into its own materialization, so scraped data
-   is stored twice. Option **(b)** (children as views into the anchor, no
-   duplication) is deferred to `TODO.md` as a post-launch optimization. The
-   behavior-preserving `Producer` refactor stays **dropped** as premature.
+   **Known cost — since resolved:** as shipped this was option **(a)** — the
+   anchor stored the full yielded list *and* each child was extracted into its
+   own materialization, so scraped data was stored twice; option **(b)**
+   (children as views into the anchor) was deferred to `TODO.md` item 11. The
+   unification Phase 1 (`2850e74`, 2026-07-06) then slimmed the anchor to the
+   child *content hashes*, which ended the double storage as a side effect —
+   payloads live once in the child materializations, the anchor is a tiny hash
+   list, and item 11 is retired. The behavior-preserving `Producer` refactor
+   stays **dropped** as premature.
 2. **Per-producer census** — ❌ **dropped from the critical path (owner call).**
    `removed` is only a *report* (a status row + event + `removed_count`); it
    never deletes or unlives anything (`ledger.py:635-663`). Minted lanes

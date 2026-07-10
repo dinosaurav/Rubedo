@@ -126,9 +126,9 @@ class ExecutionOutcome:
     error_trace: Optional[str] = None
     attempts: int = 1
     attempt_errors: List[str] = field(default_factory=list)
-    # An expand step's cache anchor (the full yielded list, addressed by the
-    # parent): stored so a re-run can skip the fn, but it is not a lane — no
-    # status, count, edge, or coord_step_mats entry.
+    # An expand step's cache anchor (the child content hashes, addressed by
+    # the parent): stored so a re-run can skip the fn, but it is not a lane —
+    # no status, count, edge, or coord_step_mats entry.
     is_anchor: bool = False
 
 

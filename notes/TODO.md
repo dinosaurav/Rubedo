@@ -28,8 +28,9 @@ building ahead of any demand signal:
   distributed execution. (**9** lane-pipelined execution shipped 2026-07-10
   as `schedule="deep"` — v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
-  five traps; design session settled 2026-07-10, spec below is buildable) ·
-  **11** `expand` child-views (storage optimization). (**12** lane-level
+  five traps; design session settled 2026-07-10, spec below is buildable).
+  (**11** `expand` child-views turned out already resolved — the `2850e74`
+  hash-list anchor ended the double storage; see the item. **12** lane-level
   invalidation shipped 2026-07-09 — item 12 is now fully done; see the Done
   changelog.)
 
@@ -245,19 +246,26 @@ distinguishes reclaimed from missing. Update `notes/invariants.md`
 (pruned/reclaimed vocabulary; note under invariant 7 that retention
 deletes *bytes*, never facts) and the README (retention + gc docs).
 
-## 11. `expand` child views (dedup storage) — post-launch optimization
+## 11. `expand` child views (dedup storage) — [RESOLVED 2026-07-10: already fixed by `2850e74`]
 
-Today `shape="expand"` uses option (a) from `notes/producer-model.md` — the
-step stores its full yielded list as a cache anchor *and* extracts each item
-into its own child materialization, so scraped data is stored twice. Option
-(b): make each child lane a lightweight **view** into the anchor
-(`(anchor-address, subkey)` + the item's content hash) instead of a separate
-materialization, so downstream resolves the item out of the anchor and nothing
-is duplicated. Wins most for large scraped payloads. Needs a new view-ref type
-in `coord_step_mats` + resolution in `_resolve_parent_value` + edge/`input_hash`
-handling; downstream per-item caching stays keyed on the item's content hash.
-Correctness is identical to (a) — purely a storage optimization, so only worth
-it once double-storage actually bites.
+Retired without building anything: the premise died on 2026-07-06.
+The original spec targeted option (a) from `notes/producer-model.md` —
+"the step stores its full yielded list as a cache anchor *and* extracts
+each item into its own child materialization, so scraped data is stored
+twice" — and proposed option (b), children as lightweight views into the
+anchor. But the source≡root-expand unification Phase 1 (`2850e74`,
+`notes/unification-plan.md`) changed the anchor to store the child
+**content hashes only** (`execution._expand_outcomes`,
+`_plan_expand_reuse` replays hashes), which ended the double storage as a
+side effect: payloads live once in the child materializations, the anchor
+is a tiny JSON hash list, and the store's global content-addressing
+already collapses identical payloads everywhere else. Verified live
+2026-07-10: 3×100 KB expand children → store holds exactly three
+100 KB objects + a 202 B anchor, full reuse on re-run. Option (b)'s
+view-ref machinery would now *add* a concept to save ~0 bytes — the
+ruthless-simplification answer is to not build it. (The stale "full
+yielded list" comments in `planning.py`/`execution.py` and
+`producer-model.md`'s "Known cost" note were fixed in the same pass.)
 
 ## 12. Lane tooling — following & invalidation
 
