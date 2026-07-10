@@ -27,10 +27,11 @@ building ahead of any demand signal:
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
   distributed execution. (**9** lane-pipelined execution shipped 2026-07-10
   as `schedule="deep"` — v1; see Done.)
-- **Tier 4 · Deferred / careful** — **10b** byte-deleting GC (**dangerous** —
-  four traps; build on 10a only) · **11** `expand` child-views (storage
-  optimization). (**12** lane-level invalidation shipped 2026-07-09 — item 12
-  is now fully done; see the Done changelog.)
+- **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
+  five traps; design session settled 2026-07-10, spec below is buildable) ·
+  **11** `expand` child-views (storage optimization). (**12** lane-level
+  invalidation shipped 2026-07-09 — item 12 is now fully done; see the Done
+  changelog.)
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -129,26 +130,120 @@ the ops-CLI machinery (item 2). Acceptance: `rubedo du` on a populated
 store reports sizes + reclaimable estimate, and the audit agrees with a
 hand-count on a small fixture.
 
-## 10b. Byte-deleting garbage collection  **[⚠️ DANGEROUS — build on 10a only]**
+## 10b. Retention GC (byte-deleting)  **[⚠️ subtle — DANGEROUS; design settled 2026-07-10]**
 
-Storage limits and age-out policies imply enforcement, and enforcement means
-deleting bytes. Actual byte-deleting GC is genuinely hazardous and
-must not be built casually — the orphan-retention decision
-(`producer-model.md` Q2) is *keep orphans* for good reasons, and any GC that
-deletes bytes fights that and can corrupt live state. **Four traps:**
-**(1) Shared objects** — the store dedupes identical bytes
-(`hash[:2]/hash[2:4]/hash`), so one physical object can back *many*
-materializations across different addresses; "this materialization is orphaned"
-does **not** mean "its bytes are unreferenced." A sweep MUST ref-count physical
-objects against *all* live materializations before deleting a byte, or it
-silently guts live outputs (violates invariants 1 & 3). **(2) Direction of
-truth** — sweep by walking the ledger and ref-counting; **never** the store;
-never delete ledger rows (append-only). **(3) Concurrency** — a commit on
-another machine can *restore* (re-reference) bytes a sweep is mid-delete on.
-**(4) Cloud irreversibility** — S3/GCS deletes are permanent (no trash); a
-buggy pass against a bucket is catastrophic. Gate any real GC behind dry-run +
-a ref-count audit + object-versioned buckets before it *ever* points at remote
-storage.
+Owner design session 2026-07-10 reframed this from mark-and-sweep to
+**retention**. In steady state nearly everything is live (current
+generations are live; orphans stay live by `producer-model.md` Q2), so
+10a's reclaimable set ("every reference non-live") is tiny and sweeping it
+buys little. The real storage hog is **old runs**: superseded generations
+and orphaned-live materializations that only historical runs reference.
+GC v1 therefore prunes by run recency, never touching what recent runs
+used.
+
+**Settled decisions (do not re-litigate):**
+
+- **Two policies ship, no others:** per-pipeline **keep-last-N-runs** and
+  a **global byte budget**. No age-based knob. Per-pipeline *byte* budgets
+  were explicitly rejected as ill-defined — the store dedupes identical
+  bytes across pipelines (`du.py`'s "per-pipeline bytes can sum to more
+  than total"), so bytes are only globally meaningful; run count is the
+  crisp per-pipeline unit.
+- **Setting home:** `pipeline(..., retention=N)` (`None` default = keep
+  everything; validate `N >= 1`). It rides the `definition()` snapshot
+  each run records, and the ops path reads each pipeline's policy from its
+  **latest run's `definition_json`** — `rubedo gc` never imports user code
+  (same rule as `server.py`). No engine config file (rejected: new
+  concept).
+- **Triggers:** (a) end of a successful `run()` auto-prunes *that
+  pipeline* when its `retention=` is set — set-and-forget is the point of
+  a persisted setting; it **skips with a note** (never errors) if another
+  run is in flight. (b) `gc(delete=False, max_bytes=None, home=None)` /
+  `rubedo gc [--max-bytes SIZE] [--delete]` applies every recorded
+  retention policy, then if the store still exceeds `max_bytes` prunes
+  oldest-first across pipelines until it fits. **Dry-run is the default**
+  for `gc()`/CLI: print exactly what would be demoted/deleted (riding
+  `storage_report` machinery in `src/rubedo/du.py`), touch nothing without
+  `delete=True` / `--delete`.
+- **Default when unconfigured: keep everything**, plus a **warn-only
+  threshold**: at end of run, if the store exceeds a constant (~1 GiB) and
+  the pipeline has no `retention=`, print one line pointing at
+  `retention=` / `rubedo gc`. Keep the check cheap — don't pay a full
+  per-object `getsize` walk on every run of a huge store (e.g. reuse the
+  sizes the run already touched, or sample/cache; implementer's choice,
+  but the acceptance is "no O(store) stat storm per run").
+- **Q2 softening, accepted with eyes open:** pruning demotes orphaned-live
+  materializations outside the keep-set, so if pruned data *reappears* (a
+  file comes back, a row's content reverts) the step **recomputes** —
+  non-idempotent cost re-paid. The ledger heals lazily and safely:
+  `stage_and_commit` re-writes the missing bytes (its exists-check fails
+  post-delete) and the pruned row restores. Q2's keep-orphans default
+  stands whenever `retention` is unset.
+
+**Mechanics — two phases, both on existing machinery
+(new module `src/rubedo/gc.py`, CLI verb in `src/rubedo/cli.py`):**
+
+1. **Demote.** Keep-set = materializations referenced by the pipeline's
+   last N *terminal* runs via `RunCoordinateStatus.materialization_id`
+   (the latest terminal run always survives). Flip every still-live
+   materialization of that pipeline outside the keep-set to
+   `is_live=False` with a paired lifecycle row, `action="pruned"` — the
+   pairing guard (invariant 8) enforces the pairing for free. Ledger rows
+   are never deleted.
+2. **Sweep.** Delete object files where **every** referencing
+   materialization across **all** pipelines is now non-live — exactly
+   `du.py`'s reclaimable rule — and append one row per deleted object to a
+   new append-only **`object_reclamations`** table (`content_hash`,
+   `bytes`, `created_at`, trigger/run id). New table ⇒ `create_all`
+   handles it, no store reset. `rubedo du` must then report *reclaimed*
+   separately from *missing* (deliberate deletion ≠ corruption).
+3. **Global budget** (`max_bytes`): candidates = live materializations
+   ordered by their most recent referencing run, oldest first, excluding
+   anything referenced by a pipeline's latest terminal run; demote until
+   the projected reclaimable bytes (computed under the shared-object rule)
+   bring the store under budget, then sweep once.
+
+**Trap (part of the spec):** **(1) Shared objects** — one physical object
+(`hash[:2]/hash[2:4]/hash`) can back many materializations across
+addresses, steps, and pipelines; "this materialization is prunable" does
+**not** mean "its bytes are unreferenced." The sweep MUST ref-count
+against *all* materializations before deleting a byte (one live reference
+anywhere keeps it), or it silently guts live outputs (invariants 1 & 3).
+`tests/test_du.py` already pins the one-live-one-dead shape. **(2)
+Direction of truth** — demote and sweep by walking the ledger; **never**
+enumerate the store; never delete ledger rows. **(3) The restore race** —
+`stage_and_commit` early-returns without writing when the object file
+already exists (`store.py:86`), and the ledger commit happens later in
+the main thread: a concurrent run can pass the exists-check, GC deletes
+the file, the run commits a **live** materialization pointing at nothing.
+Guard: sweeping refuses while any run's `effective_run_status()` says
+"running" (heartbeat machinery, shipped 2026-07-08); the end-of-run
+auto-prune *skips* instead of erroring. **(4) Cloud irreversibility** —
+the store is local-only today; when item 7 lands, `gc` must hard-refuse
+non-local stores until dry-run + ref-count audit + object-versioned
+buckets gate it. **(5) Expand anchors** — expand reuse hangs off a
+parent-addressed cache-anchor materialization (`_plan_expand_reuse` in
+`planning.py`); verify the keep-set query actually reaches anchors (they
+may not appear in `RunCoordinateStatus.materialization_id`) and widen it
+if not (e.g. `MaterializationEdge` closure from kept materializations).
+Pruning a live anchor silently re-runs the scrape/LLM next run — the
+exact cost this engine exists to prevent.
+
+Acceptance: `retention=2` over three input generations → the next run (or
+`rubedo gc --delete`) demotes exactly the generation only run 1
+referenced, with paired `pruned` lifecycle rows, the freed object deleted
+from disk and logged in `object_reclamations`, and the latest outputs
+byte-identical; a shared object with one live reference in another
+pipeline survives a prune that demotes its other referents; a pruned lane
+whose input reappears recomputes and restores (lazy heal); `gc` and the
+auto-prune refuse/skip while another run's heartbeat is live; dry-run
+output lists exactly what a subsequent `--delete` does and deletes
+nothing; an expand chain keeps its anchor through a prune and still
+reuses; a store over `--max-bytes` prunes oldest runs first, never a
+pipeline's latest terminal run, until under budget; `rubedo du`
+distinguishes reclaimed from missing. Update `notes/invariants.md`
+(pruned/reclaimed vocabulary; note under invariant 7 that retention
+deletes *bytes*, never facts) and the README (retention + gc docs).
 
 ## 11. `expand` child views (dedup storage) — post-launch optimization
 
