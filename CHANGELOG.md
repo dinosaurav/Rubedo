@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-09
+
+### Added
+- `trace()` / `rubedo trace` — lane-following lineage queries: seed on any
+  selection and walk the recorded derivation edges upstream (what an output
+  was derived from) and downstream (everything it contaminated), read-only;
+  superseded generations are marked, never hidden.
+- `storage_report()` / `rubedo du` — read-only storage observability:
+  object-store size and live/reclaimable breakdown per pipeline and step,
+  computed from the ledger, with a `--json` output for scripting.
+
 ## [0.1.0] - 2026-07-08
 
 Initial public release.
