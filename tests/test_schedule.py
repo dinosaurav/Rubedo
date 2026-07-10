@@ -337,6 +337,76 @@ def test_deep_reduce_barrier_receives_all_lanes():
         assert read_materialization_output(mat) == {"n": 3, "total": 12}
 
 
+# (h) The rate limiter is one instance per step per run, shared across every
+# lane deep dispatches. Regression guard for the limiter hoist: if a future
+# refactor mints a limiter per (lane) call again, all lanes start at once and
+# the gaps collapse to ~0 — silently hammering whatever the limit protected.
+def test_deep_shared_rate_limiter_paces_across_lanes():
+    create_file("a.txt", "1")
+    create_file("b.txt", "2")
+    create_file("c.txt", "3")
+    starts: list = []  # appended post-acquire, at step-fn entry
+
+    @step(name="fetch", version="1", workers=4)
+    def fetch(path):
+        return open(path).read()
+
+    # 2/s → min_interval 0.5s between permitted starts.
+    @step(name="enrich", version="1", depends_on=["fetch"], rate_limit="2/s", workers=4)
+    def enrich(fetch):
+        starts.append(time.monotonic())
+        return fetch * 2
+
+    pipe = pipeline(id="paced", name="paced", folder=TEST_FOLDER, steps=[fetch, enrich])
+    summary = run(pipe, schedule="deep")
+
+    assert summary.status == "completed"
+    assert len(starts) == 3
+    gaps = [b - a for a, b in zip(sorted(starts), sorted(starts)[1:])]
+    # Nominal spacing is 0.5s; allow scheduling jitter but catch the failure
+    # mode (unshared limiters ⇒ gaps ≈ 0) with a wide margin.
+    assert all(g >= 0.4 for g in gaps), f"lanes not paced by a shared limiter: {gaps}"
+
+
+# (h) Deep hides other work inside a rate-limited stage's dead time: a lane
+# that has passed the limiter proceeds through its downstream cells while
+# later lanes are still waiting for permits — so some `post` starts before
+# the LAST `mid` starts. The limiter makes this deterministic: mid starts
+# are ≥0.5s apart, and a lane's post follows its own mid within
+# milliseconds. (Broad's counterpart — no overlap, ever — is
+# test_broad_stages_whole_steps above.)
+def test_deep_overlaps_downstream_with_rate_limited_stage():
+    create_file("a.txt", "1")
+    create_file("b.txt", "2")
+    create_file("c.txt", "3")
+    mid_starts, post_starts = [], []
+
+    @step(name="src", version="1", workers=4)
+    def src(path):
+        return open(path).read()
+
+    @step(name="mid", version="1", depends_on=["src"], rate_limit="2/s", workers=4)
+    def mid(src):
+        mid_starts.append(time.monotonic())
+        return src * 2
+
+    @step(name="post", version="1", depends_on=["mid"], workers=4)
+    def post(mid):
+        post_starts.append(time.monotonic())
+        return mid + "!"
+
+    pipe = pipeline(id="overlap", name="overlap", folder=TEST_FOLDER, steps=[src, mid, post])
+    summary = run(pipe, schedule="deep")
+
+    assert summary.status == "completed"
+    assert len(mid_starts) == len(post_starts) == 3
+    # The overlap: at least one post ran while the limiter still had lanes
+    # queued (before the last mid start, which is ≥1s after the first).
+    assert min(post_starts) < max(mid_starts), (
+        "deep never overlapped downstream work with the rate-limited stage"
+    )
+
+
 # (g) Anything but broad/deep is rejected loudly.
 def test_invalid_schedule_raises():
     create_file("a.txt", "x")
