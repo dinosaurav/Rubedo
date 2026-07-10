@@ -149,6 +149,66 @@ def cmd_trace(args):
     console.print(str(result))
 
 
+def cmd_du(args):
+    from .du import _human_bytes, storage_report
+
+    report = storage_report()
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+        return
+
+    console.print(
+        f"[bold]Object store:[/bold] {report.total_objects} objects, "
+        f"{_human_bytes(report.total_bytes)} "
+        f"({report.total_materializations} materializations, "
+        f"{report.live_materializations} live)"
+    )
+    if report.missing_objects:
+        console.print(
+            f"[yellow]{report.missing_objects} object(s) named by the ledger "
+            f"are missing from disk.[/yellow]"
+        )
+
+    if report.pipelines:
+        table = Table(title="Storage by pipeline / step", show_header=True)
+        table.add_column("Pipeline")
+        table.add_column("Step")
+        table.add_column("Size", justify="right")
+        table.add_column("Objects", justify="right")
+        table.add_column("Materializations", justify="right")
+        table.add_column("Live", justify="right")
+        for p in report.pipelines:
+            table.add_row(
+                f"[bold]{p.pipeline_id}[/bold]",
+                "(all steps)",
+                _human_bytes(p.bytes),
+                str(p.objects),
+                str(p.materializations),
+                str(p.live_materializations),
+            )
+            for s in p.steps:
+                table.add_row(
+                    "",
+                    s.step_name,
+                    _human_bytes(s.bytes),
+                    str(s.objects),
+                    str(s.materializations),
+                    str(s.live_materializations),
+                )
+        console.print(table)
+        console.print(
+            "[dim]Objects are shared (content-addressed), so per-scope sizes "
+            "can sum to more than the total.[/dim]"
+        )
+
+    console.print(
+        f"[bold]Reclaimable (dry-run — nothing is deleted):[/bold] "
+        f"{report.reclaimable_objects} objects / "
+        f"{_human_bytes(report.reclaimable_bytes)} have zero live references"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rubedo Read-Only Ops CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -179,7 +239,14 @@ def main():
     )
     parser_trace.add_argument("--json", action="store_true", help="Output as JSON")
     parser_trace.set_defaults(func=cmd_trace)
-    
+
+    parser_du = subparsers.add_parser(
+        "du", help="Report object-store usage and a reclaimable dry-run audit"
+    )
+    parser_du.add_argument("--json", action="store_true", help="Output as JSON")
+    parser_du.set_defaults(func=cmd_du)
+
+
     args = parser.parse_args()
     args.func(args)
 

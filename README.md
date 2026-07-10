@@ -183,6 +183,8 @@ print(trace(Selection.parse("company:acme")))    # or: rubedo trace "company:acm
 
 By default only live outputs seed a trace; `include_superseded=True` (CLI `--all`) seeds history too. Traversal always follows the real derivation edges either way — superseded generations are marked, never hidden.
 
+`rubedo du` (or `storage_report()` from `rubedo.du`) answers "why is `.rubedo` this big?": total object-store size, a per-pipeline/per-step breakdown, and a reclaimable estimate — a dry-run ref-count audit computed from the ledger. Objects are content-addressed and shared, so an object counts as reclaimable only when *no* live output references it. Purely a report: nothing is ever deleted. `--json` for scripts.
+
 The **CLI** browses and invalidates against the local ledger:
 
 ```bash

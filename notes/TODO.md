@@ -19,9 +19,10 @@ Everything still open is **design-first**, and most of it is gated on real
 demand — but two half-items serve today's single-machine user and are worth
 building ahead of any demand signal:
 
-- **Ready ahead of demand** — **10a** storage observability (`rubedo du` +
-  ref-count audit as a dry-run report). (**12**'s lane-following half shipped
-  2026-07-09 as `trace()` / `rubedo trace` — see Done.)
+- **Ready ahead of demand** — both halves shipped 2026-07-09: **10a** storage
+  observability as `storage_report()` / `rubedo du`, and **12**'s
+  lane-following half as `trace()` / `rubedo trace` — see Done. Nothing else
+  is worth building ahead of a demand signal.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
   distributed execution; **9** lane-pipelined execution (independent — and
@@ -120,7 +121,10 @@ expect demand to arrive from ordinary local users, not cluster users.
 # Tier 4 · Deferred / careful
 ══════════════════════════════════════════════════════════════════════
 
-## 10a. Storage observability (the safe half — promoted, demand-independent)
+## 10a. Storage observability (the safe half) — [DONE 2026-07-09]
+
+Shipped as `storage_report()` / `rubedo du [--json]` (`src/rubedo/du.py`);
+see the Done changelog entry. Original spec, for context:
 
 Content-addressed stores keep everything; without visibility the `.rubedo`
 directory balloons silently, and "why is `.rubedo` 2 GB?" is the first
@@ -224,6 +228,22 @@ runs `examples/count_lines` end-to-end with only core deps. **Tier 1 — item 2
 and `server.py` call so they can't drift; `pipeline:` selection term (+ B4 fix
 in the same selection query); failure introspection (`get_run_failures`
 read-query + `RunSummary.failures()` accessor).
+
+**2026-07-09 — storage observability (item 10a):** `storage_report()` +
+`rubedo du [--json]` (`src/rubedo/du.py`) — total object-store size and
+object count, a per-pipeline/per-step breakdown (bytes, materialization
+counts, live vs not), and the **ref-count audit as a dry-run report**
+("N objects / M bytes have zero live references"), computed by walking the
+ledger and grouping physical objects by `output_content_hash` across *all*
+materializations — never by enumerating the store directory. An object is
+reclaimable only when every referencing materialization is non-live; one
+live reference anywhere keeps it. Objects the ledger names but disk lacks
+are counted as missing (never a crash) and excluded from the reclaimable
+estimate. Nothing deletes — this is exactly the audit 10b would build on.
+One finding for 10b: cache identity is coordinate-free, so identical input
+bytes collapse to a single materialization; real object sharing arises from
+*different* inputs whose outputs normalize to identical bytes
+(`tests/test_du.py` covers the one-live-one-dead shared-object trap).
 
 **2026-07-09 — lane-following (item 12, first half):** `trace(selection)` +
 `rubedo trace "<query>" [--all] [--json]` — lineage BFS over
