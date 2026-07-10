@@ -81,8 +81,13 @@ accurate and load-bearing; keep them updated when behavior changes.
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
   transition appends a `materialization_lifecycle` row).
-- `src/rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run,
-  writes nothing), `run_pipeline()`.
+- `src/rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run, writes
+  nothing), `run_pipeline()`. One scheduler over (lane, step) cells: the topo
+  order is partitioned into segments and `_run_segment` drives each (all
+  ledger writes in the main thread). `schedule="broad"` (default) =
+  singleton segments, stage-at-a-time; `"deep"` pipelines lanes through
+  consecutive ≤1-parent map steps; reduce/join/expand/multi-parent maps are
+  barrier segments. Order only — ledger rows identical either way.
 - `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,

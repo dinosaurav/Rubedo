@@ -25,9 +25,8 @@ building ahead of any demand signal:
   is worth building ahead of a demand signal.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
-  distributed execution; **9** lane-pipelined execution (independent — and
-  really a single-machine *latency* feature, so it's the likeliest to earn
-  organic demand first).
+  distributed execution. (**9** lane-pipelined execution shipped 2026-07-10
+  as `schedule="deep"` — v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** byte-deleting GC (**dangerous** —
   four traps; build on 10a only) · **11** `expand` child-views (storage
   optimization). (**12** lane-level invalidation shipped 2026-07-09 — item 12
@@ -90,32 +89,22 @@ solved the picklability pain far more cheaply). Acceptance: an
 `executor="dask"` step runs on a `LocalCluster` and reuses across runs via the
 cloud store (item 7).
 
-## 9. Non-topological (lane-pipelined) execution
+## 9. Non-topological (lane-pipelined) execution — [DONE 2026-07-10 — v1]
 
-Today the runner is **staged**: `for step in topo: plan → execute all lanes →
-commit` (`src/rubedo/runner.py`), so every step waits for *all* lanes of the
-previous step before any lane advances — max parallelism within a step, zero
-pipelining across steps. A lane can't race ahead through `scrape → parse →
-classify` while a sibling is still scraping. Goal: let a lane flow through
-consecutive **per-lane** steps (`map`/`filter`/`expand`) as far as it can,
-independent of its siblings. Wins: first results land far sooner (latency),
-long-running/streaming pipelines make continuous progress, workers don't stall
-at stage boundaries. **Not** for the collective steps — `reduce`/`join` are
-true barriers (they need the whole input set), so pipelining applies only to
-the per-lane runs *between* barriers (the owner flagged this is about the
-non-join-heavy cases). Cost is a real execution-model rework: the interleaved
-plan→execute and `coord_step_mats` both assume whole-step staging; a
-lane-pipelined engine needs a scheduler over `(lane, step)` tasks with
-dependency edges that stops a lane at the next barrier and synchronizes there.
-Interacts with the `expand` cache anchor (per-parent) and reduce/join barriers.
-Design-first. **Candidate for the design session (not a settled decision):**
-since barriers are only `reduce`/`join`, consider *fusing chains of
-consecutive per-lane steps into one per-lane task* instead of a general
-`(lane, step)` scheduler — most of the latency win for a fraction of the
-rework, and it may sidestep the `coord_step_mats` staging assumption
-entirely. Note also that although this item is filed under scale, the payoff
-is single-machine latency (LLM pipelines stalling at stage boundaries), so
-expect demand to arrive from ordinary local users, not cluster users.
+Shipped as `run(pipe, schedule="broad"|"deep")`; see the Done changelog
+entry. Settled decisions from the design session: **one scheduler + barrier
+policy, not two code paths** — the run is (lane, step) cells, the topo order
+is partitioned into segments, and one segment executor
+(`_run_segment` in `src/rubedo/runner.py`) drives every segment; **broad is
+the default** (each step a singleton segment, degenerating to the classic
+staged loop — the old loop is deleted, not flag-guarded); the knob is
+**run-level** (`run()`/`run_pipeline()`, ValueError otherwise; `plan()`
+untouched). Deep-eligible = `map` with ≤1 parent (skip_cache fusion
+preserved); reduce/join are barriers by definition. **Unlocked later:**
+expand interiors and multi-parent maps are barriers in v1 — both could join
+deep segments with per-parent anchor / readiness handling. Scheduling
+changes order only: statuses, addresses, and lifecycle rows are
+byte-identical across modes (`tests/test_schedule.py`).
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 4 · Deferred / careful
@@ -218,6 +207,27 @@ two halves were separably shippable, and **both have now shipped**
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above)
+
+**2026-07-10 — lane-pipelined execution (item 9, v1):**
+`run(pipe, schedule="broad"|"deep")` — one scheduler, barrier policy. The
+runner partitions the topo order into segments and drives every segment
+through one segment executor (`_run_segment`): segment heads are planned
+whole, executes go to per-step pools (thread, or loky process per
+`executor=`), and every completion is committed in the main thread
+(execution stays DB-free), immediately planning the lane's in-segment
+consumers. Broad (default): every step a singleton segment — the executor
+degenerates to plan-all → execute-all → commit-each, the old staged loop
+(now deleted). Deep: maximal runs of consecutive `map`-with-≤1-parent steps
+share a segment, so a lane races ahead through the chain the moment its own
+inputs commit; reduce/join/expand/multi-parent maps are singleton barriers
+(expand interiors + multi-parent maps unlockable later). Rate limiter is one
+instance per step per run shared across all task submissions;
+retries/assertions/_RunMemo semantics unchanged; failure and Filtered
+cascades flow per lane. Scheduling changes order only — statuses,
+addresses, content hashes, and lifecycle rows are identical across modes,
+and either mode fully reuses a store the other wrote
+(`tests/test_schedule.py`; per-lane planning via `_plan_step(..., lanes=)`,
+per-cell execution via `execution._process_decision`).
 
 **2026-07-09 — lane-level invalidation (item 12, second half — item 12 fully
 done):** `invalidate(selection, reason, downstream=True)` / `rubedo invalidate
