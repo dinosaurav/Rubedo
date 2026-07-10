@@ -1,17 +1,18 @@
 """Execute phase: running step functions.
 
 No database access — inputs come in as refs, results go out as
-ExecutionOutcome values for the ledger to persist.
+ExecutionOutcome values for the ledger to persist. The unit of execution
+is one (step, lane) call — _process_decision — which the runner's segment
+executor dispatches onto pools; per-step machinery that must be shared
+across a run's calls (the rate limiter, the _RunMemo) is created by the
+runner and passed in.
 """
 
-import concurrent.futures
 import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
-
-import loky
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 from .hashing import hash_json, hash_bytes
@@ -207,24 +208,31 @@ def _validate_output(step: StepSpec, value: Any) -> None:
             assertion(value)
 
 
-def _execute_step(
+def _process_decision(
     step: StepSpec,
-    decisions: List[StepDecision],
+    decision: StepDecision,
     step_sources: Dict[str, Source],
     params: Optional[dict],
     accepts_params: bool,
-    workers: Optional[int],
+    params_hash: str,
     memo: _RunMemo,
-) -> Iterator[ExecutionOutcome]:
-    """Run the step function for each execute decision; yield as completed.
+    limiter: Optional[_RateLimiter],
+    process_pool: Optional[Any] = None,
+) -> List[ExecutionOutcome]:
+    """Run the step function for one execute decision — the (step, lane) unit.
 
-    Honors the step's rate limit (shared across workers, retries included)
-    and retry policy (only exceptions matching retry_on are retried).
-    `step_sources` maps a step name to the Source it reads (root/skip_cache
-    roots), so each root loads from its own source in a multi-source pipeline.
+    Honors the step's rate limit (`limiter` is one instance per step per
+    run, shared across every call the runner dispatches for that step,
+    retries included) and retry policy (only exceptions matching retry_on
+    are retried). `step_sources` maps a step name to the Source it reads
+    (root/skip_cache roots), so each root loads from its own source in a
+    multi-source pipeline. `process_pool`, when the step declares
+    executor="process", is where the step body runs — retries and rate
+    limiting stay in the calling (thread) layer.
+
+    Returns a list because an expand fans one parent lane into an anchor
+    plus N children; every other shape returns exactly one outcome.
     """
-    limiter = _RateLimiter(*step.rate_limit) if step.rate_limit else None
-    params_hash = hash_json(params or {})
 
     def call(decision: StepDecision, pool: Optional[Any] = None):
         # Root steps get the source payload positionally; dependent steps
@@ -370,28 +378,4 @@ def _execute_step(
                     time.sleep(delay)
                 delay *= step.retry_backoff
 
-
-
-    # Never spin up more workers (or subprocesses) than there is work.
-    pool_size = min(workers or step.workers, len(decisions))
-    if pool_size < 1:
-        return
-
-    # Two layers, on purpose. The thread pool is the orchestrator: it drives
-    # the retry loop and the parent-shared rate limiter for every lane. A
-    # process pool, when requested, is only where the CPU-bound step body
-    # runs — retries and rate limiting must stay in the parent, so process
-    # steps still need the thread layer to feed them.
-    process_pool = (
-        loky.ProcessPoolExecutor(max_workers=pool_size)
-        if step.executor == "process"
-        else None
-    )
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
-            futures = [executor.submit(process, d, process_pool) for d in decisions]
-            for future in concurrent.futures.as_completed(futures):
-                yield from future.result()
-    finally:
-        if process_pool is not None:
-            process_pool.shutdown()
+    return process(decision, process_pool)

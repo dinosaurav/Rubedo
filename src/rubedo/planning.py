@@ -502,8 +502,22 @@ def _plan_step(
     params_hash: str,
     force: bool,
     accepts_params: bool,
+    lanes: Optional[List[str]] = None,
 ) -> List[StepDecision]:
-    """Decide the fate of every coordinate for one step. Read-only."""
+    """Decide the fate of every coordinate for one step. Read-only.
+
+    `lanes`, when given, restricts planning to that subset of coordinates —
+    the deep scheduler's per-lane advance uses it so a lane can be planned
+    the moment its own parent commits, without re-deciding siblings. Only
+    map-shaped steps support a subset (collective shapes consume whole lane
+    sets); the decisions are byte-identical to what whole-step planning
+    would produce for those coordinates at the same ledger state.
+    """
+    if lanes is not None and step.shape != "map":
+        raise ValueError(
+            f"lane-subset planning requires shape='map' (step '{step.name}' "
+            f"is shape='{step.shape}')"
+        )
     if step.shape == "reduce":
         parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
@@ -580,13 +594,25 @@ def _plan_step(
     
     if not step.depends_on:
         targets = [(it.coordinate, it, it.content_hash) for it in scanned_items]
+        if lanes is not None:
+            wanted = set(lanes)
+            targets = [t for t in targets if t[0] in wanted]
     else:
-        coords = set()
-        for dep in step.depends_on:
-            for (c, d) in coord_step_mats.keys():
-                if d == dep:
-                    coords.add(c)
-        
+        if lanes is not None:
+            # Per-lane advance: the caller knows exactly which coordinates
+            # just resolved, so don't rescan every cell.
+            coords = {
+                c
+                for c in lanes
+                if any((c, dep) in coord_step_mats for dep in step.depends_on)
+            }
+        else:
+            coords = set()
+            for dep in step.depends_on:
+                for (c, d) in coord_step_mats.keys():
+                    if d == dep:
+                        coords.add(c)
+
         coord_to_item = {it.coordinate: it for it in scanned_items}
         targets = []
         for c in sorted(coords):

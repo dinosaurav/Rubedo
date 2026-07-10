@@ -3,8 +3,20 @@
 The phases live in their own modules — planning.py (decide what to do),
 execution.py (run step functions), ledger.py (persist what happened) —
 and this module wires them together.
+
+A run is a set of (lane, step) cells driven segment by segment: the topo
+order is partitioned into segments (_partition_segments) and every segment
+goes through the one segment executor (_run_segment). Under
+schedule="broad" (the default) each step is its own segment, so the
+executor degenerates to plan-all → execute-all → commit-each — the classic
+staged loop. Under schedule="deep", consecutive 1:1 steps share a segment
+and each lane advances through them the moment its own inputs commit;
+reduce/join/expand and multi-parent maps stay singleton barrier segments.
+All ledger writes happen in the main thread — workers only run step
+functions.
 """
 
+import concurrent.futures
 import json
 import os
 import threading
@@ -14,8 +26,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 import contextlib
 
+import loky
+
 from .db import get_session, init_db
-from .execution import _execute_step, _RunMemo
+from .execution import _process_decision, _RateLimiter, _RunMemo
 from .hashing import hash_json
 from .ledger import (
     _commit_execution_result,
@@ -24,7 +38,7 @@ from .ledger import (
     _record_planned,
     _RunContext,
 )
-from .models import RUN_HEARTBEAT_INTERVAL_SECONDS, Run, RunSummary
+from .models import RUN_HEARTBEAT_INTERVAL_SECONDS, Filtered, Run, RunSummary
 from .planning import (
     EphemeralRef,  # noqa: F401  (re-exported: part of the runner's public surface)
     MatRef,  # noqa: F401
@@ -33,10 +47,12 @@ from .planning import (
     _step_accepts_params,
     topological_sort,
 )
-from .spec import PipelineSpec, definition
+from .spec import PipelineSpec, StepSpec, definition
 from .sources import Source, coerce_source
 from .store import init_store
 from .util import utcnow_iso
+
+SCHEDULES = ("broad", "deep")
 
 
 def _init_home(home: str):
@@ -121,6 +137,198 @@ def _resolve_invocation(pipeline: PipelineSpec, source, params):
             mode="json"
         )
     return pipeline, source, params
+
+
+def _deep_eligible(step: StepSpec) -> bool:
+    """Can a lane flow through this step without waiting for its siblings?
+
+    v1: only 1:1 steps — shape="map" with at most one parent (root maps and
+    skip_cache utils included; a skip_cache step never executes eagerly
+    anyway, its fusion semantics are untouched). reduce/join consume whole
+    lane sets (true barriers); expand and multi-parent maps are treated as
+    barriers for now (unlockable later).
+    """
+    return step.shape == "map" and len(step.depends_on) <= 1
+
+
+def _partition_segments(
+    topo_steps: List[StepSpec], schedule: str
+) -> List[List[StepSpec]]:
+    """Partition the topo order into the segments _run_segment drives.
+
+    broad: every step is a singleton segment — stage-at-a-time, exactly the
+    classic staged loop. deep: maximal runs of consecutive deep-eligible
+    steps share a segment (lanes advance through them independently);
+    barrier steps stay singletons and wait for the whole previous segment.
+    """
+    if schedule == "broad":
+        return [[s] for s in topo_steps]
+    segments: List[List[StepSpec]] = []
+    current: List[StepSpec] = []
+    for s in topo_steps:
+        if _deep_eligible(s):
+            current.append(s)
+        else:
+            if current:
+                segments.append(current)
+                current = []
+            segments.append([s])
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _run_segment(
+    session,
+    ctx: _RunContext,
+    seg_steps: List[StepSpec],
+    pipeline: PipelineSpec,
+    sources: Dict[str, Source],
+    items_by_source: Dict[str, list],
+    step_sources: Dict[str, Source],
+    params: Optional[dict],
+    params_hash: str,
+    force: bool,
+    workers: Optional[int],
+    memo: _RunMemo,
+    progress_cb: Optional[Callable[[str, str, str], None]],
+) -> None:
+    """Drive one segment of the DAG to completion — the one scheduler.
+
+    Head steps (no parent inside the segment) are planned whole, exactly as
+    the staged loop did; execute decisions go to per-step pools; every
+    completion is committed here in the main thread (execution stays
+    DB-free), and committing or plan-resolving a cell immediately plans the
+    lane's in-segment consumers — so on a singleton segment this degenerates
+    to plan-all → execute-all → commit-each, and on a multi-step (deep)
+    segment each lane races ahead through the chain independently.
+
+    Scheduling changes order only: addresses, statuses, and lifecycle rows
+    are computed by the same planning/ledger code either way.
+    """
+    in_segment = {s.name for s in seg_steps}
+    consumers: Dict[str, List[StepSpec]] = {}
+    for s in seg_steps:
+        for dep in s.depends_on:
+            if dep in in_segment:
+                consumers.setdefault(dep, []).append(s)
+
+    accepts = {s.name: _step_accepts_params(s) for s in seg_steps}
+    # Per-step machinery at run scope: one rate limiter per step, shared by
+    # every task submission for that step (retries included).
+    limiters = {
+        s.name: _RateLimiter(*s.rate_limit) if s.rate_limit else None
+        for s in seg_steps
+    }
+    thread_pools: Dict[str, concurrent.futures.ThreadPoolExecutor] = {}
+    process_pools: Dict[str, Any] = {}
+    in_flight: Dict[concurrent.futures.Future, StepSpec] = {}
+
+    def dispatch(step: StepSpec, decision: StepDecision) -> None:
+        # Two layers, on purpose: the thread pool orchestrates the retry
+        # loop and the shared rate limiter for every lane; a loky process
+        # pool, when the step asks for one, is only where the CPU-bound
+        # step body runs. Pools are per step (created on first use) so
+        # steps with different executor= use their respective pools.
+        tp = thread_pools.get(step.name)
+        if tp is None:
+            tp = concurrent.futures.ThreadPoolExecutor(
+                max_workers=workers or step.workers
+            )
+            thread_pools[step.name] = tp
+        pp = None
+        if step.executor == "process":
+            pp = process_pools.get(step.name)
+            if pp is None:
+                pp = loky.ProcessPoolExecutor(max_workers=workers or step.workers)
+                process_pools[step.name] = pp
+        fut = tp.submit(
+            _process_decision,
+            step,
+            decision,
+            step_sources,
+            params,
+            accepts[step.name],
+            params_hash,
+            memo,
+            limiters[step.name],
+            pp,
+        )
+        in_flight[fut] = step
+
+    def plan_cells(step: StepSpec, lanes: Optional[List[str]]) -> None:
+        """Plan a step (whole, or one lane's cell) and act on the decisions."""
+        sname = _source_name_for(pipeline, sources, step)
+        decisions = _plan_step(
+            session,
+            step,
+            items_by_source[sname] if sname else [],
+            ctx.coord_step_mats,
+            params_hash,
+            force,
+            accepts[step.name],
+            lanes=lanes,
+        )
+        _record_planned(session, ctx, step, decisions)
+        session.commit()
+        if progress_cb:
+            for d in decisions:
+                if d.action != "execute":
+                    progress_cb(step.name, d.coordinate, d.action)
+        for d in decisions:
+            if d.action == "execute":
+                dispatch(step, d)
+        if consumers.get(step.name):
+            # Cells that resolved without executing (reuse/blocked/filtered
+            # markers from _record_planned, EphemeralRefs a skip_cache plan
+            # installed) unblock their consumers right away.
+            if lanes is None:
+                resolved = [
+                    c for (c, s) in list(ctx.coord_step_mats) if s == step.name
+                ]
+            else:
+                resolved = [c for c in lanes if (c, step.name) in ctx.coord_step_mats]
+            for c in resolved:
+                advance(step, c)
+
+    def advance(step: StepSpec, coord: str) -> None:
+        """(coord, step) resolved: plan the lane's in-segment consumers."""
+        for child in consumers.get(step.name, []):
+            plan_cells(child, [coord])
+
+    try:
+        # Segment heads: no parent inside the segment, so their inputs are
+        # complete (previous segments finished) — plan them whole.
+        for s in seg_steps:
+            if not any(dep in in_segment for dep in s.depends_on):
+                plan_cells(s, None)
+
+        # Completion loop: all ledger writes stay here in the main thread.
+        while in_flight:
+            done, _ = concurrent.futures.wait(
+                in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for fut in done:
+                step = in_flight.pop(fut)
+                outcomes = fut.result()
+                for outcome in outcomes:
+                    status = "failed"
+                    if outcome.success:
+                        if isinstance(outcome.result, Filtered):
+                            status = "filtered"
+                        else:
+                            status = "created"
+                    _commit_execution_result(ctx, step, outcome)
+                    if progress_cb:
+                        progress_cb(step.name, outcome.decision.coordinate, status)
+                for outcome in outcomes:
+                    if not outcome.is_anchor:
+                        advance(step, outcome.decision.coordinate)
+    finally:
+        for tp in thread_pools.values():
+            tp.shutdown(wait=True)
+        for pp in process_pools.values():
+            pp.shutdown()
 
 
 @dataclass
@@ -239,6 +447,7 @@ def run(
     home: Optional[str] = None,
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
+    schedule: str = "broad",
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
@@ -246,6 +455,13 @@ def run(
     one is declared. home, if given, points the ledger/object store at a
     custom root instead of the default `.rubedo`/RUBEDO_HOME (see
     notes/TODO.md item 1).
+
+    schedule picks the execution order (never the results — cache identity
+    is order-independent): "broad" (default) completes each step across all
+    lanes before the next one starts; "deep" lets each lane race ahead
+    through consecutive 1:1 steps as soon as its own inputs commit, while
+    reduce/join (and, for now, expand and multi-parent maps) still
+    synchronize on all lanes.
     """
     pipeline, source, params = _resolve_invocation(pipeline, source, params)
     return run_pipeline(
@@ -257,6 +473,7 @@ def run(
         home=home,
         progress=progress,
         progress_cb=progress_cb,
+        schedule=schedule,
     )
 
 
@@ -269,6 +486,7 @@ def run_pipeline(
     home: Optional[str] = None,
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
+    schedule: str = "broad",
 ) -> RunSummary:
     """
     Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
@@ -281,10 +499,17 @@ def run_pipeline(
         params (Optional[dict]): Run-level parameters.
         home (Optional[str]): Custom ledger/object-store root, overriding
             the default `.rubedo`/RUBEDO_HOME for this run.
+        schedule (str): "broad" (default) stages step by step; "deep"
+            pipelines lanes through consecutive 1:1 steps. Order only —
+            results and ledger rows are identical either way.
 
     Returns:
         RunSummary: A summary of the executed run.
     """
+    if schedule not in SCHEDULES:
+        raise ValueError(
+            f"schedule must be one of {SCHEDULES}, got {schedule!r}"
+        )
     if home is not None:
         _init_home(home)
 
@@ -344,41 +569,22 @@ def run_pipeline(
                 params_hash = hash_json(params or {})
                 memo = _RunMemo()
 
-                for step in topo_steps:
-                    accepts_params = _step_accepts_params(step)
-                    sname = _source_name_for(pipeline, sources, step)
-
-                    decisions = _plan_step(
+                for seg_steps in _partition_segments(topo_steps, schedule):
+                    _run_segment(
                         session,
-                        step,
-                        items_by_source[sname] if sname else [],
-                        ctx.coord_step_mats,
+                        ctx,
+                        seg_steps,
+                        pipeline,
+                        sources,
+                        items_by_source,
+                        step_sources,
+                        params,
                         params_hash,
                         force,
-                        accepts_params,
+                        workers,
+                        memo,
+                        progress_cb,
                     )
-                    _record_planned(session, ctx, step, decisions)
-                    session.commit()
-                    if progress_cb:
-                        for d in decisions:
-                            if d.action != "execute":
-                                progress_cb(step.name, d.coordinate, d.action)
-
-                    to_execute = [d for d in decisions if d.action == "execute"]
-                    for outcome in _execute_step(
-                        step, to_execute, step_sources, params, accepts_params, workers, memo
-                    ):
-                        status = "failed"
-                        if outcome.success:
-                            from .models import Filtered
-                            if isinstance(outcome.result, Filtered):
-                                status = "filtered"
-                            else:
-                                status = "created"
-
-                        _commit_execution_result(ctx, step, outcome)
-                        if progress_cb:
-                            progress_cb(step.name, outcome.decision.coordinate, status)
 
                 return _finish_run(ctx)
 
