@@ -112,8 +112,14 @@ def cmd_invalidate(args):
         console.print(f"[red]Error parsing selection:[/red] {e}")
         sys.exit(1)
         
-    result = invalidate(selection, args.reason)
-    console.print(f"Invalidated [bold green]{result['invalidated_count']}[/bold green] materializations.")
+    result = invalidate(selection, args.reason, downstream=args.downstream)
+    if args.downstream:
+        console.print(
+            f"Invalidated [bold green]{result['invalidated_count']}[/bold green] materializations "
+            f"({result['seed_count']} seeds + {result['downstream_count']} downstream)."
+        )
+    else:
+        console.print(f"Invalidated [bold green]{result['invalidated_count']}[/bold green] materializations.")
     console.print(f"New Run ID recorded for invalidation: [cyan]{result['run_id']}[/cyan]")
 
 
@@ -226,6 +232,12 @@ def main():
     parser_inv = subparsers.add_parser("invalidate", help="Invalidate materializations by selection query")
     parser_inv.add_argument("selection", help="Selection query (e.g., 'pipeline:my-pipe step:extract')")
     parser_inv.add_argument("--reason", required=True, help="Reason for invalidation")
+    parser_inv.add_argument(
+        "--downstream",
+        action="store_true",
+        help="Also invalidate everything derived from the matches "
+        "(preview the blast radius first with: rubedo trace \"<same query>\")",
+    )
     parser_inv.set_defaults(func=cmd_invalidate)
 
     parser_trace = subparsers.add_parser(

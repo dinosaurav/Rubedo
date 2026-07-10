@@ -163,6 +163,8 @@ Selection.parse("step:extract company:acme live:true")     # query-string form (
 
 Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches an indexed field. A label is just data you chose to index — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
 
+`downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that a reduce or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
+
 ## Code changes and caching
 
 Two independent axes on `@step`:

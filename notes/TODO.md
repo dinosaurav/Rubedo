@@ -30,8 +30,8 @@ building ahead of any demand signal:
   organic demand first).
 - **Tier 4 · Deferred / careful** — **10b** byte-deleting GC (**dangerous** —
   four traps; build on 10a only) · **11** `expand` child-views (storage
-  optimization) · **12** lane-level invalidation (the second half of lane
-  tooling).
+  optimization). (**12** lane-level invalidation shipped 2026-07-09 — item 12
+  is now fully done; see the Done changelog.)
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 3 · Scale & cloud
@@ -180,10 +180,9 @@ it once double-storage actually bites.
 Two utilities that ride on machinery that already exists (`MaterializationEdge`
 lineage, `MaterializationIndexEntry` labels); now that lanes can go
 content-addressed/minted, they're the load-bearing navigation surface. The
-two halves are **separably shippable**: lane-following is promoted (ready
-ahead of demand — read-only, no invariants at risk, and it's the debugging
-story that sells the ledger: "this output is wrong, show me everything it
-touched"); lane-level invalidation stays deferred.
+two halves were separably shippable, and **both have now shipped**
+(2026-07-09): lane-following as `trace()`, lane-level invalidation as
+`invalidate(..., downstream=True)`.
 
 - **Lane-following (lineage queries) — [DONE 2026-07-09].** Shipped as
   `trace(selection)` / `rubedo trace "<query>"` (`src/rubedo/trace.py`):
@@ -202,17 +201,35 @@ touched"); lane-level invalidation stays deferred.
   path of a lane" utility that replaces a legible coordinate once lanes are
   opaque. Root-of-lineage → source row is answered by indexing source metadata
   at the root (decide: always index it).
-- **Lane-level invalidation — deferred.** Today `invalidate(selection)` flips `is_live` on
+- **Lane-level invalidation — [DONE 2026-07-09].** Shipped as a flag on the
+  existing verb: `invalidate(selection, reason, downstream=True)` /
+  `rubedo invalidate "<query>" --downstream` — seeds on the selection's live
+  matches, walks trace's `_bfs` downstream, flips every live materialization
+  in the closure (paired lifecycle rows; non-live nodes passed through, never
+  re-flipped; upstream untouched; lazy heal on next run). Settled decisions:
+  flag-on-invalidate (no new function, no selection-language change);
+  **trace-as-preview** (same seeding rule + same BFS, correspondence
+  guaranteed by test); **no blast-radius guardrail** — loud docs instead.
+  Original context: today `invalidate(selection)` flips `is_live` on
   the selected materializations only, and the settled core semantics are
   lazy-via-recompute (invalidate a specific bad case, let the next run
-  recompute — no eager descendant cascade; `producer-model.md` Q1). The
-  deferred tooling is broader selection-driven invalidation over a *lane* (e.g.
-  "invalidate everything this label touched, all steps"), built on the same
-  lineage traversal above. Note: since the invalidation UI was removed from the web dashboard, this invalidation tooling must be robust for CLI and code-first use cases. Design-first; the core stays minimal.
+  recompute — no eager descendant cascade; `producer-model.md` Q1). Note: since the invalidation UI was removed from the web dashboard, this invalidation tooling must be robust for CLI and code-first use cases.
 
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above)
+
+**2026-07-09 — lane-level invalidation (item 12, second half — item 12 fully
+done):** `invalidate(selection, reason, downstream=True)` / `rubedo invalidate
+"<query>" --downstream` flips the selection's live matches plus their full
+downstream closure (trace's `_bfs` over `MaterializationEdge`; live-only
+seeding mirrors trace, so `rubedo trace` *is* the preview of the blast
+radius — correspondence pinned by test). Every flip pairs a lifecycle row
+(invariant 8); non-live nodes pass through untraversed-but-unflipped;
+upstream never touched; no eager recompute — the next run heals exactly the
+invalidated set. Run records `params_json={"downstream": true}`; result adds
+`seed_count`/`downstream_count`. No guardrail on blast radius — loud docs
+instead (`tests/test_invalidate_downstream.py`).
 
 **Tier 0 — Open Bugs & Hardening (H4–H7):** H4 `stream_run` no longer blocks
 the event loop (SSE is a sync generator Starlette threads) · H5 CORS pinned to
