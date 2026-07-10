@@ -24,9 +24,10 @@ building ahead of any demand signal:
   lane-following half as `trace()` / `rubedo trace` — see Done. Nothing else
   is worth building ahead of a demand signal.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real: **6** cloud sources → **7** cloud ledger+store → **8**
-  distributed execution. (**9** lane-pipelined execution shipped 2026-07-10
-  as `schedule="deep"` — v1; see Done.)
+  demand is real: **6** cloud sources (design settled 2026-07-10, spec is
+  buildable) → **7** cloud ledger+store → **8** distributed execution.
+  (**9** lane-pipelined execution shipped 2026-07-10 as `schedule="deep"` —
+  v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
   five traps; design session settled 2026-07-10, spec below is buildable).
   (**11** `expand` child-views turned out already resolved — the `2850e74`
@@ -38,23 +39,71 @@ building ahead of any demand signal:
 # Tier 3 · Scale & cloud
 ══════════════════════════════════════════════════════════════════════
 
-## 6. Cloud object storage sources (`S3Source` / `GCSSource`)
+## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10]**
 
 Local folders and SQL are great starts, but modern data lives in buckets. Add
-`Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`): `scan()`
-lists objects under a prefix → coordinates = keys relative to the prefix;
-`load()` downloads the object bytes; `source_id` = `s3://bucket/prefix` (no
-credentials — use the ambient boto3 / google-cloud-storage client). **The load-
-bearing gotcha:** hashing an object means *downloading* it, so `scan()` must
-**not** content-hash eagerly. Use the object's **ETag/size/mtime as the change
-token** instead of a true content hash (S3 ETag is the MD5 for single-part
-uploads but not for multipart — fall back to size+mtime or a stored checksum
-there). This is exactly the producer-model insight that "scan produces a
-content hash eagerly" is the *folder* assumption; cloud sources need a change
-token that isn't the content hash. Ship boto3/gcs as optional extras
-(`rubedo[s3]`, `rubedo[gcs]`; see item 1). Acceptance: scan a bucket prefix →
-coordinates; a step reads object bytes; a re-run reuses untouched objects
-without re-downloading to hash them.
+`Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`). **The
+load-bearing gotcha:** hashing an object means *downloading* it, so `scan()`
+must **not** content-hash eagerly — it makes LIST calls only, zero
+GetObject. This is exactly the producer-model insight that "scan produces a
+content hash eagerly" is the *folder* assumption; cloud sources use a change
+token that isn't the content hash. Note the containment property that makes
+a cheap token safe: `SourceItem.content_hash` feeds only the *root step's*
+`input_hash` (`planning.py:723`); consumers key on the root's output bytes,
+so a token that churns without a real content change costs one re-download +
+root re-run per object and nothing downstream.
+
+**Settled decisions (owner design session 2026-07-10 — do not re-litigate):**
+
+- **Change token = `hash(etag, size)`, always** — one token shape, no
+  multipart sniffing, **never mtime**. ETag is a stable, content-derived
+  change token for single-part *and* multipart uploads (it changes when
+  content changes; identical re-uploads keep it — always for single-part,
+  for multipart when the part size matches); mtime is strictly worse (bumps
+  on identical re-upload). GCS: `hash(md5Hash or crc32c, size)` — GCS always
+  supplies a real hash. The "fall back to size+mtime for multipart" idea
+  from the original spec is dead.
+- **`load()` returns the object bytes.** No local download cache (which
+  would invent a directory whose lifecycle 10b would have to learn). This
+  knowingly diverges from `FolderSource`'s hand-a-path idiom; a
+  streaming/large-object story waits for demand. No `mode=` knob.
+- **Client hook = `client_factory=`**, an optional zero-arg callable
+  returning a client; default factory = the ambient session
+  (`boto3.client("s3")` / `storage.Client()`). A factory (closure)
+  cloudpickles cleanly under `executor="process"`; the live client is
+  created lazily per process and dropped from pickling (`__getstate__`).
+  **Never a live `client=` kwarg** — boto3 clients don't pickle. The
+  factory also covers MinIO/localstack endpoints and test fakes.
+- **Sequencing: two commits.** `S3Source` first (moto-tested, proves the
+  token/payload/factory shape), `GCSSource` second with the identical
+  shape (no moto equivalent — tests inject a fake via `client_factory`).
+
+**Mechanics:** `S3Source(bucket, prefix="", client_factory=None)`.
+`id` = `s3://bucket/prefix` — credential-free **and endpoint-free** (an
+injected MinIO endpoint must not leak into `source_id`; same rule as
+`TableSource`). `scan()` = paginated ListObjectsV2 → coordinate = key
+relative to the prefix (forward slashes, mirroring `FolderSource`),
+`content_hash` = the token above, `ref` = the full key, `metadata` =
+size/mtime for display. `load()` = GetObject → bytes. Ship boto3/gcs as
+optional extras (`rubedo[s3]`, `rubedo[gcs]`); moto goes in the dev group;
+core install stays boto3-free (`scripts/smoke_test.sh` must stay green).
+
+**Trap (part of the spec):** (1) scan must stay LIST-only — any per-object
+GetObject/HEAD at scan time reintroduces the download-to-hash cost the
+token exists to avoid; (2) S3 returns `ETag` wrapped in literal double
+quotes — strip before hashing or the token silently differs between code
+paths; (3) paginate ListObjectsV2 (>1000 keys) from day one; (4) verify
+`executor="process"` end-to-end — the Source travels to the loky worker,
+and a lazily-created client must survive the trip.
+
+Acceptance: scan a moto bucket prefix → coordinates; a root step receives
+the object bytes; a re-run reuses untouched objects with **zero GetObject
+calls** (assert by counting calls on the fake/moto client); an object
+overwritten with identical bytes (single-part) stays reused; a changed
+object recomputes exactly its lane; the same pipeline runs under
+`executor="process"` with a `client_factory`; tests follow the standard
+fixture shape (`tests/test_index.py`); `rubedo[s3]` extra installs boto3,
+core install does not.
 
 ## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)
 
