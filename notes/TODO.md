@@ -28,8 +28,9 @@ mostly on real demand:
   sources → **7** cloud ledger+store (**7b** PG test coverage follows it) ·
   **8** pluggable execution pools (no longer gated on 7 — workers never
   touch the ledger/store, so it's independently buildable; 7 remains its
-  throughput story). (**9** lane-pipelined execution shipped 2026-07-10 as
-  `schedule="deep"` — v1; see Done.)
+  throughput story) → **13** pass-by-reference payloads (workers talk to
+  the store directly; needs 7+8). (**9** lane-pipelined execution shipped
+  2026-07-10 as `schedule="deep"` — v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
   five traps; design session settled 2026-07-10, spec below is buildable).
   (**11** `expand` child-views turned out already resolved — the `2850e74`
@@ -267,6 +268,84 @@ expand interiors and multi-parent maps are barriers in v1 — both could join
 deep segments with per-parent anchor / readiness handling. Scheduling
 changes order only: statuses, addresses, and lifecycle rows are
 byte-identical across modes (`tests/test_schedule.py`).
+
+## 13. Pass-by-reference payloads (workers talk to the store directly)  **[depends on items 7 + 8; design settled 2026-07-11]**
+
+With a cloud store and an out-of-process pool, the runner is a *byte hub*:
+GET parent from the bucket → ship to the worker → full result back → PUT to
+the bucket — four network transits per step hop, and reduce fan-in routes
+all N parent payloads through one process. Refs make bytes flow
+worker↔store directly; the runner handles only hashes and metadata.
+
+**Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
+
+- **Activation is automatic — no per-step knob.** Refs engage when the
+  store is non-local AND the step's executor crosses a process boundary
+  (`"process"` *or* an item-8 factory pool — a local loky worker with a
+  cloud store benefits too; `"thread"` shares the runner's memory and
+  gains nothing). One escape hatch: `run(payload_refs=False)` forces hub
+  routing for the whole run.
+- **Credential-less workers degrade, never fail.** Before the first ref
+  submission per (pool, run), the runner submits a cheap probe task (the
+  shim attempts a store access check worker-side). On failure: warn once
+  (run event + `UserWarning`: grant workers store access, or silence with
+  `payload_refs=False`) and route that pool by value for the rest of the
+  run. Don't probe per lane; don't cache across runs (credentials
+  change).
+- **Mechanism = a shim wrapping the fn.** The engine submits
+  `_ref_call(store_config, refs, fn, …)` instead of `fn`; worker-side the
+  shim GETs and deserializes inputs, calls `fn`, serializes + hashes +
+  conditional-PUTs the result, and returns only
+  `(content_hash, content_type, size_bytes, …)`. The pool contract stays
+  plain `.submit()` — item 8's seam untouched; store config travels via
+  the picklable `client_factory` pattern from items 6/7.
+- **Both directions in v1** (reads and writes). The **ledger commit stays
+  main-thread**: the runner commits from the returned metadata via a
+  `stage_and_commit` variant that skips byte staging (the object is
+  already in the store) but runs the full `_commit_materialization`
+  generations/pairing machinery unchanged. Invariant 3 survives: a worker
+  dying mid-PUT leaves at most an unreferenced object at a
+  content-addressed key and no ledger row; a retry lands idempotently on
+  the same key (item 7's 412-is-success).
+- **Shapes: `map`/`reduce`/`join`; `expand` stays by-value.** Reduce
+  fan-in is the biggest win (N payloads fetched in parallel by the
+  worker). `expand` is deferred: `_expand_outcomes` mints coordinates and
+  the anchor from child hashes main-side, so ref-ifying it moves
+  coordinate minting into the shim — wait until it demonstrably bites.
+- **Ephemeral parents stay by value.** `EphemeralRef`/skip_cache outputs
+  aren't in the store by definition; refs are per-parent, so a mixed
+  submission (some parents as refs, ephemeral ones by value) is the
+  normal case, not an error.
+
+**Trap (part of the spec):** **(1) The main-side value consumers.** Today
+the runner holds every result value between `call()` and commit, and
+several things quietly depend on that: output validation
+(`_validate_output`), data-quality `assertions`, `Filtered` verdict
+detection, and `@step(index=[...])` extraction at commit. Under refs the
+runner never sees the bytes, so **each of these moves into the shim**
+(index specs and assertion callables travel with the submission; the shim
+returns index entries and verdicts in its metadata) — grep everything
+that touches `result` between call and commit and account for every
+consumer before shipping. **(2) One hasher.** The worker computes the
+content hash the ledger will trust: the shim must call the *same*
+`_serialize`/`hash_bytes` code the runner uses (import, never copy), or
+identical values could land at different addresses and break dedup.
+**(3) Missing objects worker-side** are a normal step failure with a
+clear error ("parent object <hash> not in store"), never a silent
+None payload. **(4) `size_bytes`** (item 7's column) comes from the
+shim's metadata — it must equal what the store reports, since du now
+sums the ledger.
+
+Acceptance: with a moto/MinIO store and the suite's fake factory pool, a
+chained map pipeline completes with **zero payload GET/PUT calls by the
+runner** for ref-routed steps (assert by instrumenting the runner-side
+store client), and its ledger rows, statuses, and addresses are
+byte-identical to the same pipeline run with `payload_refs=False`; a
+credential-less pool warns once and completes correctly by value; a
+reduce over N parents fetches all N worker-side; an indexed, asserted,
+filtering step behaves identically under refs and hub routing; `expand`
+pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
+the re-run heals.
 
 ══════════════════════════════════════════════════════════════════════
 # Tier 4 · Deferred / careful
