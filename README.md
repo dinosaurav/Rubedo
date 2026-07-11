@@ -207,6 +207,28 @@ rubedo show <run_id> --failed      # what broke, per lane (--json for scripts)
 rubedo invalidate "step:enrich company:acme" --reason "bad prompt"
 ```
 
+## Retention and garbage collection
+
+The store keeps every generation forever by default — recompute-avoidance is the whole point, and old outputs are cheap insurance. When they stop being worth their bytes, retention prunes by **run recency**: it never touches what recent runs used, so the safety of caching is preserved.
+
+Set a keep-window per pipeline:
+
+```python
+pipeline(id="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
+```
+
+At the end of each successful run, generations that only older runs referenced are demoted and — once no live output anywhere references the bytes — the object is deleted. It's set-and-forget; a run skips its own prune (never errors) if another run is in flight.
+
+Or reconcile on demand across all pipelines with a global byte budget:
+
+```bash
+rubedo gc                       # dry-run: exactly what --delete would prune, deletes nothing
+rubedo gc --max-bytes 2GiB      # dry-run against a budget (oldest runs first)
+rubedo gc --max-bytes 2GiB --delete   # apply it
+```
+
+Retention deletes **bytes, never facts** (invariant 7): a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove).
+
 The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors:
 
 ```bash

@@ -69,6 +69,25 @@ Collective steps (`reduce` / `join`) default to partial fan-in (`on_failed="use_
 **Invalidation:**
 Removal from current/canonical eligibility, not necessarily physical deletion.
 
+**Pruned (retention GC):**
+A liveness transition, like invalidation, but driven by *run recency* rather
+than a selection: a materialization outside a pipeline's keep-set (its last N
+terminal runs) is demoted `is_live=False` with a paired `pruned`
+lifecycle row. Facts stay; only eligibility changes. The keep-set is widened
+to always include expand cache anchors (structurally, the live
+materializations no `RunCoordinateStatus` references), so pruning never
+silently forces an expand re-run.
+
+**Reclaimed (retention GC):**
+A *physical* object-file deletion, logged in the append-only
+`object_reclamations` table. The sweep deletes an object only when **every**
+materialization referencing it — across all pipelines — is non-live (the
+shared-object rule: one live reference anywhere keeps the bytes). Distinct from
+**missing** (a ledger-named object absent from disk unexpectedly, i.e.
+corruption): a reclaimed object was deleted *on purpose*, and `rubedo du`
+reports the two separately. Recovery is lazy — if a pruned lane's input
+reappears, the next run rewrites the bytes and restores the row.
+
 **Liveness / lifecycle:**
 `Materialization.is_live` and `refreshed_at` are mutable projections; the
 append-only `materialization_lifecycle` table (invalidated / restored /
@@ -95,7 +114,11 @@ derived from it. A machine that sleeps and wakes resumes beating, so an
 4. Skip-if-exists checks materialization existence, not worker memory.
 5. Users enumerate through current views (the latest run's active lanes), never raw object storage.
 6. Run status lives on the run-coordinate edge, not on output bytes.
-7. Invalidation never silently deletes historical facts.
+7. Invalidation never silently deletes historical facts. Retention GC deletes
+   *bytes*, never *facts*: it demotes materializations (a paired `pruned`
+   lifecycle row) and sweeps object files that no live materialization
+   references, but never removes a ledger row — the record of what ran, and of
+   the deletion itself (`object_reclamations`), always survives.
 8. Ledger tables are append-only, enforced by ORM guards; the only legal
    updates anywhere are the projection columns (Run lifecycle,
    Materialization.is_live). Every `is_live`/`refreshed_at` flip must ship a
