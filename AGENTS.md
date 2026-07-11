@@ -32,8 +32,8 @@ accurate and load-bearing; keep them updated when behavior changes.
   shipped items — see the TODO's Done changelog); every open item's design
   is settled and the spec is buildable as written. Most items carry a
   **Trap:** paragraph that is part of the spec — and items tagged
-  **[⚠️ subtle]** or **DANGEROUS** (currently 10b, retention GC) doubly
-  so: read it *and* `notes/invariants.md` before coding, satisfy the
+  **[⚠️ subtle]** or **DANGEROUS** doubly so: read it *and*
+  `notes/invariants.md` before coding, satisfy the
   acceptance line verbatim, and never "simplify" the guarded behavior away
   to make a fix easier.
 - **Ruthless simplification** is a project value: prefer deleting a concept
@@ -102,6 +102,13 @@ accurate and load-bearing; keep them updated when behavior changes.
   the same transaction. It accumulates across flushes (the supersede path
   flushes a demotion before its lifecycle row exists) and skips savepoint
   releases (`in_nested_transaction()`).
+- `src/rubedo/gc.py` — retention GC: demote (paired `pruned` lifecycle
+  rows) then sweep (delete bytes only when *every* referencing
+  materialization across all pipelines is non-live, logged in append-only
+  `object_reclamations`). `pipeline(retention=N)` auto-prunes at end of
+  run; `gc()` / `rubedo gc [--max-bytes] [--delete]` is dry-run by
+  default and refuses while any run's heartbeat is live. Expand anchors
+  (live mats with zero `RunCoordinateStatus` refs) are always kept.
 - `src/rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
   language: lane-key globs, indexed fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
