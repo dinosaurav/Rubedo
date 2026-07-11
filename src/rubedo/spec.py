@@ -88,6 +88,11 @@ class PipelineSpec:
     sources: Dict[str, "Source"]
     steps: List[StepSpec]
     params_model: Optional[Type[BaseModel]] = None
+    # Retention policy (TODO 10b): keep only this pipeline's last N *terminal*
+    # runs' outputs; older, no-longer-referenced generations are pruned. None =
+    # keep everything. Rides the definition() snapshot each run records, so the
+    # ops path (rubedo gc) reads it without importing user code.
+    retention: Optional[int] = None
 
     @property
     def source(self) -> Source:
@@ -349,6 +354,7 @@ def pipeline(
     source: Optional[Source] = None,
     sources: Optional[Dict[str, "Source"]] = None,
     params_model: Optional[Type[BaseModel]] = None,
+    retention: Optional[int] = None,
 ) -> PipelineSpec:
     """Construct a pipeline from its steps (and optional source sugar).
 
@@ -357,7 +363,20 @@ def pipeline(
     the source — a `shape="expand"` root yields the initial lanes, and a
     `shape="map"` root mints a single lane whose input is its params (or a
     constant when it takes none). Same params reuse; changed params recompute.
+
+    retention=N keeps only this pipeline's last N terminal runs' outputs: at the
+    end of a successful run (or on `rubedo gc`), generations that only older runs
+    referenced are pruned — their liveness flipped off and, once no live output
+    anywhere references the bytes, the object deleted. None (default) keeps
+    everything. Set-and-forget storage hygiene for long-lived pipelines.
     """
+    if retention is not None and (
+        isinstance(retention, bool) or not isinstance(retention, int) or retention < 1
+    ):
+        raise ValueError(
+            f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
+            f"got {retention!r}"
+        )
     given = [x for x in (folder, source, sources) if x is not None]
     if len(given) > 1:
         raise ValueError("Pass at most one of folder=, source=, or sources=")
@@ -427,6 +446,7 @@ def pipeline(
         sources=sources,
         steps=steps,
         params_model=params_model,
+        retention=retention,
     )
 
 
@@ -478,12 +498,17 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             ]
         steps.append(entry)
 
-    return {
+    snapshot: Dict[str, Any] = {
         "id": spec.id,
         "name": spec.name,
         "source_id": ",".join(sorted(s.id for s in spec.sources.values())),
         "steps": steps,
     }
+    if spec.retention is not None:
+        # The ops path (rubedo gc / auto-prune) reads each pipeline's policy from
+        # its latest run's definition_json — never by importing user code.
+        snapshot["retention"] = spec.retention
+    return snapshot
 
 
 def describe(spec: PipelineSpec, format: str = "text") -> str:
