@@ -25,9 +25,10 @@ building ahead of any demand signal:
   is worth building ahead of a demand signal.
 - **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
   demand is real: **6** cloud sources (design settled 2026-07-10, spec is
-  buildable) → **7** cloud ledger+store → **8** distributed execution.
-  (**9** lane-pipelined execution shipped 2026-07-10 as `schedule="deep"` —
-  v1; see Done.)
+  buildable) → **7** cloud ledger+store (design settled 2026-07-11, spec is
+  buildable; **7b** PG test coverage follows it) → **8** distributed
+  execution. (**9** lane-pipelined execution shipped 2026-07-10 as
+  `schedule="deep"` — v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
   five traps; design session settled 2026-07-10, spec below is buildable).
   (**11** `expand` child-views turned out already resolved — the `2850e74`
@@ -105,23 +106,95 @@ object recomputes exactly its lane; the same pipeline runs under
 fixture shape (`tests/test_index.py`); `rubedo[s3]` extra installs boto3,
 core install does not.
 
-## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)
+## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[design settled 2026-07-11]**
 
 Distinct from item 6 (input data) — this is the *internal* materialization
-store (`src/rubedo/store.py`) and ledger DB (`src/rubedo/db.py`) that back every
-run. `db.py` is already SQLAlchemy-based, so pointing it at a Postgres URL is
-comparatively mechanical (the WAL/`busy_timeout` pragma hook is SQLite-specific
-and must become conditional). `store.py`'s content-addressed layout
-(`hash[:2]/hash[2:4]/hash`) maps directly onto an S3 key prefix, but every
-`os.path`/`open()`/`os.replace()` in it assumes a local filesystem and needs an
-abstraction swapped in behind the same interface (atomic `replace` becomes a
-conditional-put). This — **not** the execution backend — is the real
-prerequisite for genuine multi-machine/cloud execution (item 8): a distributed
-worker can't write to a purely local SQLite file + local objects dir. The
-`RUBEDO_HOME` root (shipped) is a natural stepping stone since it already
-isolates where these paths resolve. Acceptance: a run whose `store`/`db` point
-at Postgres + a bucket produces identical ledger/reuse behavior to the local
-default.
+store (`src/rubedo/store.py`) and ledger DB (`src/rubedo/db.py`) that back
+every run. This — **not** the execution backend — is the real prerequisite
+for genuine multi-machine/cloud execution (item 8): a distributed worker
+can't write to a purely local SQLite file + local objects dir.
+
+**Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
+
+- **`ObjectStore` protocol** (exists / read / write / delete, write
+  carrying conditional-put semantics) with `LocalStore` + `S3Store`
+  implementations; `store.py`'s module functions become thin delegates to
+  a process-global store instance, so every call site (ledger, planning,
+  execution, du, server) stays untouched. GCS rides the same protocol
+  later. Reuse item 6's `client_factory=` pattern for endpoints/tests
+  (fsspec was rejected: a heavyweight layer for four methods that fights
+  item 6's hand-rolled-boto3 choice).
+- **Staging is a local concept.** `LocalStore` keeps the staging dir +
+  fsync + atomic `os.replace`; `S3Store` uploads directly with a
+  conditional put (`If-None-Match: "*"`; GCS `ifGenerationMatch=0`) —
+  a bucket upload is already atomic, so no staging keys exist and
+  `cleanup_staged` is a cloud no-op.
+- **Config = two URLs, no new concepts.** `RUBEDO_DB_PATH` already takes
+  a URL (fix the mangling first — `db.py:48-51` wraps any non-sqlite
+  string in `sqlite:///`; anything containing `://` must pass through
+  verbatim, and the makedirs/`_ensure_gitignore` logic must skip URL
+  targets). Add `RUBEDO_STORE_URL` (`s3://bucket/prefix`) + a `store=`
+  param on `run()`/`plan()` with the same explicit-param-over-env
+  precedence `home=` has. `home=` itself stays local-only (a real cloud
+  deployment points DB and store at different systems, so one root URL
+  can't express it). WAL/`busy_timeout` pragmas stay SQLite-only
+  (already conditional).
+- **New `size_bytes` column on `Materialization`, recorded at commit**
+  (schema change — dev-stage reset ritual per CLAUDE.md, say so in the
+  commit). `rubedo du` becomes a pure ledger query (delete the
+  per-object `getsize` walk); the server's download endpoint switches
+  `FileResponse` → `StreamingResponse` over `store.read` so it works on
+  both backends; and 10b's warn-threshold gets its cheap size check
+  (one SUM) for free.
+- **Tests: SQLite + moto only for now** (owner call). `S3Store` is
+  moto-tested in the always-run suite; real-Postgres correctness is
+  deferred to **item 7b** — which makes trap (1) below extra
+  load-bearing, because nothing automated exercises it until 7b lands.
+
+**Trap (part of the spec):** **(1) The partial-index dialect trap** —
+one-live-per-address is declared with `sqlite_where=text("is_live")`
+*only* (`models.py:142-146`). Postgres ignores `sqlite_where`, so the
+index silently becomes an **unconditional** unique index and the
+supersede path (`_commit_materialization`'s demote-then-insert) breaks
+the moment a second generation lands. Add `postgresql_where=` alongside
+it in the same `Index`; untested until 7b, so do not "clean it up" away.
+**(2) 412 is success** — a conditional put that fails with
+PreconditionFailed means the object already exists: map it to the same
+idempotent early-return the local exists-check takes, never an error.
+**(3) Missing reads return None** — `read_materialization_output`
+returns `None` for absent objects (du counts them as missing);
+`S3Store.read` must map `NoSuchKey` to `None`, never raise. **(4) Path
+stragglers** — `_get_object_path` leaks local paths to `du.py:141` and
+`server.py:378/458` today; both call sites move behind the protocol
+(du: sizes from the ledger; server: streaming read). Grep for any other
+direct path use before calling it done.
+
+Acceptance: `examples/count_lines` run twice with `RUBEDO_STORE_URL`
+pointed at a moto/MinIO bucket → Created: 15 then Reused: 15, with
+statuses, addresses, and lifecycle rows identical to the local run; a
+Postgres `RUBEDO_DB_PATH` engine-creates cleanly (live behavior verified
+manually until 7b); `rubedo du` against the cloud store makes zero
+per-object API calls; the server payload/download endpoints stream from
+the bucket; the `size_bytes` schema change ships with the store-reset
+ritual in the commit message.
+
+## 7b. Postgres ledger test coverage  **[follows item 7]**
+
+The suite stays SQLite-only through item 7 (owner call, 2026-07-11);
+this item pays that debt. Env-gated live tests: a pytest fixture keyed
+on `RUBEDO_TEST_PG_URL` that cleanly skips when unset (suite stays green
+offline, no docker requirement for local dev), plus a CI job with a
+postgres service container so the gap is covered on every push. Cover
+exactly the dialect-sensitive machinery: the generations protocol
+(create → supersede → restore proving the partial unique index behaves
+under `postgresql_where` — item 7 trap 1); the pairing guard
+(`before_commit` listener) firing identically; the IntegrityError
+retry-once commit-collision path; ORM immutability guards raising on
+update/delete; a `queries.py`/selection smoke pass. Also add the
+verification note to `AGENTS.md`: touching `db.py`/`models.py` ⇒ run the
+PG suite (`docker run postgres` + `RUBEDO_TEST_PG_URL=...`).
+Acceptance: full suite green both with and without `RUBEDO_TEST_PG_URL`
+set; the CI postgres job green on real Postgres.
 
 ## 8. Pluggable distributed execution backend (Dask / Ray)  **[depends on item 7]**
 
