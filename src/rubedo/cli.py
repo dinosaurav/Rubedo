@@ -175,6 +175,12 @@ def cmd_du(args):
             f"[yellow]{report.missing_objects} object(s) named by the ledger "
             f"are missing from disk.[/yellow]"
         )
+    if report.reclaimed_objects:
+        console.print(
+            f"[dim]{report.reclaimed_objects} object(s) / "
+            f"{_human_bytes(report.reclaimed_bytes)} deleted by retention GC "
+            f"(reclaimed, not missing).[/dim]"
+        )
 
     if report.pipelines:
         table = Table(title="Storage by pipeline / step", show_header=True)
@@ -213,6 +219,53 @@ def cmd_du(args):
         f"{report.reclaimable_objects} objects / "
         f"{_human_bytes(report.reclaimable_bytes)} have zero live references"
     )
+
+
+def _parse_size(spec: str) -> int:
+    """'500MB' / '2GiB' / '1048576' -> bytes. Binary units (KiB/MiB/GiB) and
+    their decimal shorthands (KB/MB/GB, treated as binary) both accepted."""
+    import re
+
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*", spec.lower())
+    if not m:
+        raise ValueError(f"Invalid size {spec!r}: expected e.g. '500MB', '2GiB', '1024'")
+    n = float(m.group(1))
+    unit = m.group(2) or "b"
+    factor = {
+        "b": 1,
+        "kb": 1024, "kib": 1024,
+        "mb": 1024**2, "mib": 1024**2,
+        "gb": 1024**3, "gib": 1024**3,
+        "tb": 1024**4, "tib": 1024**4,
+    }[unit]
+    return int(n * factor)
+
+
+def cmd_gc(args):
+    from .du import _human_bytes
+    from .gc import gc
+
+    max_bytes = _parse_size(args.max_bytes) if args.max_bytes else None
+    report = gc(delete=args.delete, max_bytes=max_bytes)
+
+    if report.refused:
+        console.print(f"[yellow]GC refused:[/yellow] {report.refused}")
+        sys.exit(1)
+
+    verb = "Pruned" if report.applied else "Would prune"
+    console.print(
+        f"[bold]{verb}[/bold] {report.demoted_count} materialization(s); "
+        f"{verb.lower()} {len(report.reclaimed)} object(s) / "
+        f"{_human_bytes(report.reclaimed_bytes)}"
+        + ("" if report.applied else "  [dim](dry-run — nothing deleted; "
+           "pass --delete to apply)[/dim]")
+    )
+    if max_bytes is not None:
+        projected = report.total_bytes_before - report.reclaimed_bytes
+        console.print(
+            f"[dim]budget: {_human_bytes(report.total_bytes_before)} before -> "
+            f"~{_human_bytes(projected)} after (max {_human_bytes(max_bytes)})[/dim]"
+        )
 
 
 def main():
@@ -258,6 +311,23 @@ def main():
     parser_du.add_argument("--json", action="store_true", help="Output as JSON")
     parser_du.set_defaults(func=cmd_du)
 
+    parser_gc = subparsers.add_parser(
+        "gc",
+        help="Retention GC: prune old runs' outputs and delete unreferenced "
+        "objects (dry-run unless --delete)",
+    )
+    parser_gc.add_argument(
+        "--max-bytes",
+        help="Global byte budget (e.g. '2GiB', '500MB'): after per-pipeline "
+        "retention, prune oldest runs across pipelines until the store fits",
+    )
+    parser_gc.add_argument(
+        "--delete",
+        action="store_true",
+        help="Actually demote and delete (default is a dry-run that touches "
+        "nothing and prints exactly what --delete would do)",
+    )
+    parser_gc.set_defaults(func=cmd_gc)
 
     args = parser.parse_args()
     args.func(args)

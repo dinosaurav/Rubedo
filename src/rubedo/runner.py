@@ -352,6 +352,85 @@ def _run_segment(
             pp.shutdown()
 
 
+def _post_run_retention(
+    session, pipeline: PipelineSpec, ctx: _RunContext, summary: RunSummary
+) -> None:
+    """End-of-run retention (TODO 10b): auto-prune when retention= is set,
+    else a cheap warn-threshold check. Never raises — storage hygiene must not
+    fail a successful run.
+
+    The auto-prune runs only after a successful run (failed runs may have an
+    incomplete keep-set) and *skips* — never errors — if another run's
+    heartbeat is live (the restore race, trap 3; the current run is excluded).
+    """
+    from .gc import (
+        DEFAULT_WARN_THRESHOLD_BYTES,
+        auto_prune,
+        cheap_store_bytes,
+    )
+
+    try:
+        if pipeline.retention is not None:
+            if summary.status == "failed":
+                return
+            report = auto_prune(
+                session, pipeline.id, ctx.run_id, pipeline.retention
+            )
+            if report is None:
+                _emit_event(
+                    session,
+                    ctx.run_id,
+                    "info",
+                    "retention_skipped",
+                    pipeline_id=ctx.pipeline_id,
+                    message="auto-prune skipped: another run is in flight",
+                )
+                session.commit()
+            elif report.demoted_count or report.reclaimed:
+                _emit_event(
+                    session,
+                    ctx.run_id,
+                    "info",
+                    "retention_pruned",
+                    pipeline_id=ctx.pipeline_id,
+                    message=(
+                        f"retention={pipeline.retention}: pruned "
+                        f"{report.demoted_count} materialization(s), reclaimed "
+                        f"{len(report.reclaimed)} object(s) / "
+                        f"{report.reclaimed_bytes} bytes"
+                    ),
+                    data={
+                        "demoted": report.demoted_count,
+                        "reclaimed_objects": len(report.reclaimed),
+                        "reclaimed_bytes": report.reclaimed_bytes,
+                    },
+                )
+                session.commit()
+            return
+
+        # Unconfigured: warn once (cheaply) if the store is getting large.
+        if cheap_store_bytes() > DEFAULT_WARN_THRESHOLD_BYTES:
+            msg = (
+                f"Object store exceeds "
+                f"{DEFAULT_WARN_THRESHOLD_BYTES // (1024 * 1024)} MiB and "
+                f"'{pipeline.id}' has no retention= set. Consider "
+                f"pipeline(..., retention=N) or `rubedo gc --max-bytes SIZE`."
+            )
+            print(f"[rubedo] {msg}")
+            _emit_event(
+                session,
+                ctx.run_id,
+                "warning",
+                "storage_threshold_exceeded",
+                pipeline_id=ctx.pipeline_id,
+                message=msg,
+            )
+            session.commit()
+    except Exception:
+        # Retention is best-effort hygiene; never let it fail a finished run.
+        pass
+
+
 @dataclass
 class PlannedCoordinate:
     """A projected action for a single coordinate in a specific step."""
@@ -607,7 +686,9 @@ def run_pipeline(
                         progress_cb,
                     )
 
-                return _finish_run(ctx)
+                summary = _finish_run(ctx)
+                _post_run_retention(session, pipeline, ctx, summary)
+                return summary
 
             except Exception as e:
                 with get_session() as err_session:

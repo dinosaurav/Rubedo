@@ -22,13 +22,20 @@ that is the honest reading of shared storage, not a bug.
 A ledger-named path missing from disk is counted and reported as missing,
 never a crash; missing objects contribute zero bytes and are excluded from
 the reclaimable estimate (there are no bytes to reclaim).
+
+Retention GC (10b) deletes objects *deliberately* and logs each in the
+append-only object_reclamations table. So an absent object is disambiguated:
+absent + logged in object_reclamations = **reclaimed** (pruned on purpose);
+absent + not logged = **missing** (corruption). A reclaimed hash that a later
+lazy-heal re-wrote is present again and accounts as a normal live object — the
+old reclamation row is simply ignored once the bytes are back.
 """
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from .db import get_session
-from .models import Materialization
+from .models import Materialization, ObjectReclamation
 from .store import _get_object_path
 
 
@@ -70,6 +77,11 @@ class StorageReport:
     reclaimable_objects: int
     reclaimable_bytes: int
     pipelines: List[PipelineUsage]
+    # Objects deliberately deleted by retention GC (logged in
+    # object_reclamations), distinct from missing (corruption). Excluded from
+    # total_objects/total_bytes — they are no longer part of the store.
+    reclaimed_objects: int = 0
+    reclaimed_bytes: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -83,6 +95,11 @@ class StorageReport:
         ]
         if self.missing_objects:
             lines.append(f"  {self.missing_objects} object(s) missing from disk")
+        if self.reclaimed_objects:
+            lines.append(
+                f"  {self.reclaimed_objects} object(s) / "
+                f"{_human_bytes(self.reclaimed_bytes)} reclaimed by retention GC"
+            )
         for p in self.pipelines:
             lines.append(
                 f"  {p.pipeline_id}: {_human_bytes(p.bytes)} across "
@@ -130,21 +147,42 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
             Materialization.output_content_hash,
             Materialization.is_live,
         ).all()
+        # Bytes logged at deletion for each reclaimed hash (latest row wins, so
+        # a re-reclaimed object reflects its most recent deletion).
+        reclaimed_bytes_of: Dict[str, int] = {}
+        for r in (
+            session.query(ObjectReclamation)
+            .order_by(ObjectReclamation.id.asc())
+            .all()
+        ):
+            reclaimed_bytes_of[str(r.content_hash)] = int(r.bytes)
 
     # Physical objects: group all materializations by content hash.
     size_of: Dict[str, int] = {}
     missing: Set[str] = set()
+    reclaimed: Set[str] = set()
     live_refs: Dict[str, int] = {}
     for _, _, content_hash, is_live in rows:
-        if content_hash not in size_of and content_hash not in missing:
+        if (
+            content_hash not in size_of
+            and content_hash not in missing
+            and content_hash not in reclaimed
+        ):
             try:
                 size_of[content_hash] = os.path.getsize(_get_object_path(content_hash))
             except OSError:
-                missing.add(content_hash)
+                # Absent: a logged deletion is a deliberate reclaim; otherwise
+                # the object is genuinely missing (corruption).
+                if content_hash in reclaimed_bytes_of:
+                    reclaimed.add(content_hash)
+                else:
+                    missing.add(content_hash)
         live_refs[content_hash] = live_refs.get(content_hash, 0) + (1 if is_live else 0)
 
     reclaimable = [
-        h for h, live in live_refs.items() if live == 0 and h not in missing
+        h
+        for h, live in live_refs.items()
+        if live == 0 and h not in missing and h not in reclaimed
     ]
 
     # Per-pipeline / per-step breakdown, objects deduped within each scope.
@@ -182,4 +220,6 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         reclaimable_objects=len(reclaimable),
         reclaimable_bytes=sum(size_of[h] for h in reclaimable),
         pipelines=ordered,
+        reclaimed_objects=len(reclaimed),
+        reclaimed_bytes=sum(reclaimed_bytes_of[h] for h in reclaimed),
     )

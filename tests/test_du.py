@@ -193,4 +193,42 @@ def test_missing_object_file_is_reported_not_crashed():
     # Absent bytes can't be reclaimed; the missing object stays out of the audit.
     assert report.reclaimable_objects == 0
     assert report.reclaimable_bytes == 0
+    assert report.reclaimed_objects == 0  # not a deliberate deletion
     assert "missing" in str(report)
+
+
+def test_reclaimed_object_reported_separately_from_missing():
+    """A retention GC deletion is deliberate: du must call it *reclaimed*, not
+    *missing* (corruption). The distinction is the object_reclamations log."""
+    from rubedo.gc import gc
+
+    # Three generations, no retention -> nothing auto-pruned.
+    for content in ("alpha", "beta", "gamma"):
+        create_file("a.txt", content)
+        run(make_shout_pipeline(), workers=1)
+
+    before = storage_report()
+    assert before.total_objects == 3
+    assert before.missing_objects == 0
+    assert before.reclaimed_objects == 0
+
+    # Budget-driven gc deletes the oldest object deliberately.
+    done = gc(delete=True, max_bytes=before.total_bytes - 1)
+    assert done.applied and len(done.reclaimed) >= 1
+
+    after = storage_report()
+    # The swept object is reclaimed, NOT missing (it was deleted on purpose).
+    assert after.reclaimed_objects == len(done.reclaimed)
+    assert after.reclaimed_bytes == done.reclaimed_bytes
+    assert after.missing_objects == 0
+    assert "reclaimed" in str(after)
+
+    # A genuinely missing object still reads as missing, alongside the reclaimed.
+    with get_session() as session:
+        live = (
+            session.query(Materialization).filter_by(is_live=True).first()
+        )
+        os.remove(_get_object_path(str(live.output_content_hash)))
+    mixed = storage_report()
+    assert mixed.missing_objects == 1
+    assert mixed.reclaimed_objects == len(done.reclaimed)
