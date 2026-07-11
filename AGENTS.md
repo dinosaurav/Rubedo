@@ -28,14 +28,14 @@ accurate and load-bearing; keep them updated when behavior changes.
   them, but do flag genuine contradictions). The producer model —
   content-addressed lanes, `expand`, `group_key`, multi-source, and N-way
   `join` — is designed and built; see `notes/producer-model.md`.
-- **TODO Tier 0** is the current bug/hardening queue (lettered `B*`/`H*` so
-  the numbered items 1..12 keep their cross-references). Items tagged
-  **[⚠️ subtle]** (currently B6, H1, H2 — cache identity, concurrency, the
-  plan/execute interleave) carry a **Trap:** paragraph that is part of the
-  spec: read it *and* `notes/invariants.md` before coding, satisfy the
+- **TODO conventions**: items keep their historical numbers (gaps are
+  shipped items — see the TODO's Done changelog); every open item's design
+  is settled and the spec is buildable as written. Most items carry a
+  **Trap:** paragraph that is part of the spec — and items tagged
+  **[⚠️ subtle]** or **DANGEROUS** (currently 10b, retention GC) doubly
+  so: read it *and* `notes/invariants.md` before coding, satisfy the
   acceptance line verbatim, and never "simplify" the guarded behavior away
-  to make a fix easier. Untagged Tier 0 items are safe, well-bounded
-  single commits.
+  to make a fix easier.
 - **Ruthless simplification** is a project value: prefer deleting a concept
   to adding a knob.
 
