@@ -182,6 +182,25 @@ class MaterializationLifecycle(Base):
     created_at = Column(String, nullable=False)
 
 
+class ObjectReclamation(Base):
+    """Append-only record of an object file deleted by retention GC (10b).
+
+    A swept object is a *deliberate* deletion (retention removed bytes, never
+    facts — the ledger rows that named it stay). This table is how `rubedo du`
+    tells a reclaimed object apart from one that is genuinely missing
+    (corruption): a content hash present here was pruned on purpose. Bytes are
+    recorded at deletion time (the store is content-addressed, so the same hash
+    is only ever deleted once while unreferenced)."""
+
+    __tablename__ = "object_reclamations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content_hash = Column(String, nullable=False, index=True)
+    bytes = Column(Integer, nullable=False)
+    trigger = Column(String)  # gc | auto_prune | budget
+    run_id = Column(String, ForeignKey("runs.id"))
+    created_at = Column(String, nullable=False)
+
+
 class RunCoordinateStatus(Base):
     """The outcome of a specific step for a specific coordinate during a run."""
     __tablename__ = "run_coordinate_statuses"
@@ -226,6 +245,7 @@ _APPEND_ONLY = (
     MaterializationIndexEntry,
     MaterializationLifecycle,
     RunCoordinateStatus,
+    ObjectReclamation,
 )
 
 _PROJECTION_COLUMNS = {
