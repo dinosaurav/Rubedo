@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rubedo"
-version = "0.1.1"
+version = "0.2.0"
 description = "Content-addressed caching and run history for Python batch pipelines — built for steps you can't afford to re-run"
 readme = "README.md"
 authors = [
