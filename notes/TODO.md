@@ -15,19 +15,20 @@ below start at 6.
 
 ## Priority snapshot (recommended order — owner may reshuffle)
 
-Everything still open is **design-first**, and most of it is gated on real
-demand — but two half-items serve today's single-machine user and are worth
-building ahead of any demand signal:
+Every open item's design session is now **settled** (2026-07-10/11) — the
+specs below are buildable as written; what remains gated is the *build*,
+mostly on real demand:
 
 - **Ready ahead of demand** — both halves shipped 2026-07-09: **10a** storage
   observability as `storage_report()` / `rubedo du`, and **12**'s
   lane-following half as `trace()` / `rubedo trace` — see Done. Nothing else
   is worth building ahead of a demand signal.
-- **Tier 3 · Scale & cloud** — a dependency chain, build when multi-machine
-  demand is real: **6** cloud sources (design settled 2026-07-10, spec is
-  buildable) → **7** cloud ledger+store (design settled 2026-07-11, spec is
-  buildable; **7b** PG test coverage follows it) → **8** distributed
-  execution. (**9** lane-pipelined execution shipped 2026-07-10 as
+- **Tier 3 · Scale & cloud** — build when multi-machine demand is real; all
+  designs settled 2026-07-10/11, every spec is buildable: **6** cloud
+  sources → **7** cloud ledger+store (**7b** PG test coverage follows it) ·
+  **8** pluggable execution pools (no longer gated on 7 — workers never
+  touch the ledger/store, so it's independently buildable; 7 remains its
+  throughput story). (**9** lane-pipelined execution shipped 2026-07-10 as
   `schedule="deep"` — v1; see Done.)
 - **Tier 4 · Deferred / careful** — **10b** retention GC (**dangerous** —
   five traps; design session settled 2026-07-10, spec below is buildable).
@@ -196,22 +197,59 @@ PG suite (`docker run postgres` + `RUBEDO_TEST_PG_URL=...`).
 Acceptance: full suite green both with and without `RUBEDO_TEST_PG_URL`
 set; the CI postgres job green on real Postgres.
 
-## 8. Pluggable distributed execution backend (Dask / Ray)  **[depends on item 7]**
+## 8. Pluggable execution pools (bring-your-own cluster)  **[design settled 2026-07-11]**
 
 Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
 `_execute_step`'s `call()` already treats "the pool" as anything satisfying
-`.submit(fn, *args, **kwargs) -> Future-with-.result()` (the same shape
-`dask.distributed.Client` and a thin `ray` wrapper expose), so a third
-`executor="dask"`/`"ray"` value is a small change to *that call site*. The real
-cost is architectural, not mechanical: it needs a running scheduler/cluster —
-which cuts against the "zero-daemon" positioning (`notes/framework_analysis.md`)
-— and it **depends on item 7** (a distributed worker can't reach a local
-SQLite + objects dir). **Owner design session before building:** add it as a
-third `executor=` value alongside `"process"`, or *replace* `"process"` (a
-Dask/Ray `LocalCluster` subsumes the local-multi-process case; `loky` already
-solved the picklability pain far more cheaply). Acceptance: an
-`executor="dask"` step runs on a `LocalCluster` and reuses across runs via the
-cloud store (item 7).
+`.submit(fn, *args, **kwargs) -> Future-with-.result()` (`execution.py:278`) —
+the same shape `dask.distributed` and a thin `ray` wrapper expose.
+
+**Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
+
+- **No named backends.** `executor=` accepts `"thread"` | `"process"` | a
+  **zero-arg factory returning a pool-like** (`.submit(fn, *args, **kwargs)`
+  → Future with `.result()`). The engine never imports dask or ray; no
+  `rubedo[dask]` extra exists; the zero-daemon positioning
+  (`notes/framework_analysis.md`) survives because Rubedo itself never
+  requires a cluster — a user who has one hands over a factory. The
+  original add-vs-replace-`"process"` question dissolves: `"process"`
+  (loky) stays, and no third *named* value is ever added. Documented
+  recipe: `executor=lambda: Client("tcp://…").get_executor()` — dask's
+  `ClientExecutor` already satisfies the shape, including `shutdown()`.
+- **Attach point: per-step `executor=`**, exactly where `"process"` builds
+  its loky pool today (`runner.py:262-265`); a factory-built pool slots
+  into the same per-step `process_pools` dict, so mixed pipelines (LLM
+  steps on threads, CPU steps on the cluster) fall out for free. Update
+  the validation at `spec.py:239-240` to accept callables.
+- **Item-7 dependency softened — buildable now.** Workers never touch the
+  ledger or the store: parent payloads are resolved in the main process,
+  only `fn` + args ship to the pool, results return over the wire, and
+  staging/commit stay in the main thread. v1 is correct against the local
+  SQLite + objects dir; item 7 is the *throughput* story (workers reading
+  a shared store instead of routing payloads through the scheduler) and
+  stays a later optimization, not a prerequisite.
+- **Testing: fake pool in the suite, live dask as an example.** The
+  always-run suite proves the seam with a trivial in-repo `.submit()`
+  fake (statuses/addresses identical to `"thread"`); a self-contained
+  `examples/` script demonstrates a real `dask.distributed.LocalCluster`
+  and serves as the manual acceptance run. Dask never enters the dev
+  deps.
+
+**Mechanics/notes:** pool lifecycle — the engine created it (via the
+factory), so the engine shuts it down where loky pools are shut down today
+(`runner.py:351`): duck-typed `shutdown(wait=True)` if present, else
+`close()`. `step.workers` still bounds in-flight submissions (the per-step
+thread pool wraps `call()`), independent of the external pool's own
+parallelism. Retries/rate-limit/assertions/`_RunMemo` run main-side,
+unchanged. `definition()` must stay JSON: serialize a factory executor as a
+marker (e.g. `"external:<qualname>"`), never the object.
+
+Acceptance: a step with `executor=<fake factory>` runs in the suite with
+statuses, addresses, and lifecycle rows identical to `"thread"`; a bogus
+`executor=` string still raises the `ValueError`; `definition()` of a
+factory-executor pipeline serializes; the dask example runs a step on a
+`LocalCluster` and fully reuses on a second run against the plain local
+store — no item-7 machinery involved.
 
 ## 9. Non-topological (lane-pipelined) execution — [DONE 2026-07-10 — v1]
 
