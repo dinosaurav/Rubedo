@@ -17,10 +17,10 @@ import json
 import os
 import tempfile
 
-
-
-
 from rubedo import describe, PipelineBuilder, run
+
+
+def make_feed(folder):
     articles = [
         {"id": "a1", "title": "gpu prices fall"},
         {"id": "a2", "title": "new language ships"},

@@ -34,17 +34,16 @@ import os
 import urllib.request
 
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
 from rubedo import Filtered, describe, PipelineBuilder, run
+
+load_dotenv()
 
 HN = "https://hacker-news.firebaseio.com/v0"
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 # Cheap + capable; override with OPENROUTER_MODEL to try another.
 MODEL = os.environ.get("OPENROUTER_MODEL", "minimax/minimax-m2.5")
-
-
-from dotenv import load_dotenv
-load_dotenv()
 
 
 def _get(url: str):

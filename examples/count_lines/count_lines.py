@@ -6,6 +6,7 @@ from rubedo import ProcessResult, describe, run, PipelineBuilder
 
 
 class CountLinesParams(BaseModel):
+    min_lines: int = Field(
         default=0,
         ge=0,
         description="Minimum number of lines required for ok=true",
@@ -24,7 +25,6 @@ p = PipelineBuilder(
 
 @p.source(name="input_files", version="1")
 def input_files():
-    import os
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
         path = os.path.join(folder, name)

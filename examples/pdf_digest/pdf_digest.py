@@ -41,8 +41,11 @@ import os
 import urllib.request
 
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 from rubedo import describe, pipeline, run, step
+
+load_dotenv()
 
 OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 # Best value on OpenRouter for document page images: cheap, modern, reliable.
@@ -53,10 +56,6 @@ TEXT_MODEL = os.environ.get("OPENROUTER_TEXT_MODEL", "google/gemini-2.5-flash-li
 # A page with less than this many characters of extractable text is treated as
 # a figure — rasterized and sent to the vision model.
 TEXT_CHUNK_MIN_CHARS = 20
-
-
-from dotenv import load_dotenv
-load_dotenv()
 
 
 def _chat(prompt: str, image_png: bytes | None = None, max_tokens: int = 400) -> str:

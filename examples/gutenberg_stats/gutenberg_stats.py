@@ -28,9 +28,9 @@ import urllib.request
 from rubedo import describe, PipelineBuilder, run
 
 
-
-
 GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
+
+p = PipelineBuilder(
     id="gutenberg-stats",
     name="Gutenberg Stats",
 )

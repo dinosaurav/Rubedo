@@ -30,6 +30,7 @@ from rubedo import describe, PipelineBuilder, run
 
 
 FEEDS = [("f1", "TechCorp"), ("f2", "BizWire"), ("f3", "TechCorp")]
+PUBLISHERS = [("TechCorp", "US"), ("BizWire", "EU")]
 
 # What "scraping" a feed returns — deterministic, keyed by feed id.
 FEED_ARTICLES = {

@@ -22,14 +22,14 @@ import sys
 # Inject the local rubedo package into the isolated script environment
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
-from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
-
 import litellm
 import networkx as nx
 from networkx.algorithms import community
+from dotenv import load_dotenv
 
 from rubedo import ProcessResult, describe, run, PipelineBuilder
+
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
 p = PipelineBuilder(
     id="graphify",
@@ -39,7 +39,6 @@ p = PipelineBuilder(
 @p.source(name="src_files", version="1")
 def src_files():
     folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
-    import os
     for root, _, files in os.walk(folder):
         for name in files:
             yield os.path.join(root, name)

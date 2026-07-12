@@ -51,16 +51,16 @@ inside a step" pattern, because Rubedo's own materialization cache only
 covers step outputs, not Source.scan() itself, and chunking has to happen
 before any step exists to cache anything.
 """
-import hashlib
 import os
 import sys
 import time
 import urllib.request
 
-from rubedo import Source, SourceItem, describe, PipelineBuilder, run
+from rubedo import describe, PipelineBuilder, run
 
 
 WORDLIST_URL = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
+CACHE_PATH = os.path.join(os.path.dirname(__file__), ".wordlist_cache.txt")
 NUM_CHUNKS = 8
 
 
