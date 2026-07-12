@@ -3,8 +3,8 @@ site_description: Local-first batch engine - DAG pipelines over keyed collection
 site_url: https://rubedo.dev/docs/
 site_dir: marketing/dist/docs
 
-repo_url: https://github.com/SauravDas/Rubedo
-repo_name: SauravDas/Rubedo
+repo_url: https://github.com/dinosaurav/Rubedo
+repo_name: dinosaurav/Rubedo
 edit_uri: edit/main/docs/
 
 theme:
@@ -59,7 +59,24 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Core Concepts:
+  - Getting Started:
+    - Installation & Quickstart: getting-started.md
+    - Tutorial: tutorial.md
+    - Examples: examples.md
+  - Concepts:
+    - The Model: concepts/model.md
+    - Shapes: concepts/shapes.md
+    - Sources: concepts/sources.md
+    - Code Changes & Versioning: concepts/versioning.md
+  - Guides:
+    - Execution Policies: guides/execution-policies.md
+    - Search & Invalidation: guides/search-and-invalidation.md
+    - Inspecting Runs: guides/inspecting-runs.md
+    - Retention & GC: guides/retention.md
+  - Reference:
+    - Python API: reference/api.md
+    - CLI: reference/cli.md
+  - Design Notes:
+    - Invariants: notes/invariants.md
     - Producer Model: notes/producer-model.md
-    - Architecture & Invariants: notes/invariants.md
-    - Unification Plan: notes/unification-plan.md
+    - Retention: notes/retention.md

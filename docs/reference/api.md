@@ -1,0 +1,688 @@
+# API Reference
+
+Everything here is importable from the top-level `rubedo` package —
+`from rubedo import step, pipeline, run, ...` — except `gc()` and
+`storage_report()`, which live in their own submodules (`rubedo.gc`,
+`rubedo.du`) and aren't part of `rubedo.__all__`.
+
+This page documents signatures, parameters, and defaults as they exist in
+`src/rubedo/`. If something here and the docstring in source ever disagree,
+the source wins — this pre-1.0 API moves fast (see
+[notes/invariants.md](../notes/invariants.md)).
+
+## `@step`
+
+```python
+def step(
+    name: str,
+    version: str,
+    depends_on: Optional[List[str]] = None,
+    params_model: Optional[Type[BaseModel]] = None,
+    workers: int = 4,
+    code: str = "warn",
+    retries: int = 0,
+    retry_on=Exception,
+    retry_delay: float = 0.0,
+    retry_backoff: float = 1.0,
+    rate_limit: Optional[str] = None,
+    stale_after: Optional[str] = None,
+    skip_cache: bool = False,
+    index: Optional[List[str]] = None,
+    shape: str = "map",
+    executor: str = "thread",
+    group_key: Optional[str] = None,
+    source: Optional[str] = None,
+    join_on: Optional[Dict[str, str]] = None,
+    output_model: Optional[Type[BaseModel]] = None,
+    assertions: Optional[List[Callable[[Any], None]]] = None,
+    on_failed: Literal["use_passed", "block"] = "use_passed",
+)
+```
+
+A decorator that turns a plain function into a `StepSpec`. The engine never
+imports your code — `@step` just builds a data object; nothing runs until
+`run()`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `str` | required | The step's identity within the pipeline; referenced by `depends_on`. |
+| `version` | `str` | required | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
+| `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — it either reads a `Source` or, if the pipeline has none, mints a single source-less `@root` lane from `params`. |
+| `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model overriding the pipeline-level `params_model` for this step's own validation (rare; usually set on `pipeline()` instead). |
+| `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `run(..., workers=N)`. |
+| `code` | `"warn"` \| `"auto"` | `"warn"` | What a source edit means. `"warn"`: edits never recompute, but reusing an output whose code has since changed logs a loud warning (in run output, event log, and `plan()`). `"auto"`: the function's source hash joins the cache identity, so any edit recomputes with no version bump — requires an inspectable function source. |
+| `retries` | `int` | `0` | Extra attempts after a failure, for exceptions matching `retry_on` only. Every attempt is logged as a run event. |
+| `retry_on` | exception type or tuple | `Exception` | Narrow this to transient error types — retrying a deterministic bug on a paid API just multiplies its cost. |
+| `retry_delay` | `float` | `0.0` | Seconds between retry attempts. |
+| `retry_backoff` | `float` | `1.0` | Multiplier applied to `retry_delay` after each attempt. |
+| `rate_limit` | `str` \| `None` | `None` | `"10/min"`, `"2/s"`, `"500/hour"` — paces this step's executions across all its workers, retries included. Parsed by `parse_rate_limit`; raises `ValueError` on a bad format. |
+| `stale_after` | `str` \| `None` | `None` | `"24h"`, `"30min"`, `"7d"` — a cached output older than this re-executes on the next run. Different bytes supersede the old generation (downstream recomputes); identical bytes just refresh the freshness clock. Parsed by `parse_duration`. |
+| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, `stale_after`, and `index`. A `skip_cache` step must have at least one consumer. |
+| `index` | `list[str]` \| `None` | `None` | Dotted-path fields of the output *value* to extract into the search index at commit time (e.g. `["company", "meta.region"]`). List-valued fields index one entry per element. Never affects cache identity — only newly created materializations are indexed under a new declaration. Incompatible with `skip_cache`. |
+| `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` | `"map"` | See [Concepts: shapes](../concepts/shapes.md). |
+| `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
+| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
+| `source` | `str` \| `None` | `None` | For a root step in a multi-source pipeline (`sources={...}`): which named source this step reads. Required when a pipeline declares more than one source and this step is a root. |
+| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys must exactly match `depends_on`. |
+| `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
+| `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
+| `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
+
+```python
+from rubedo import ProcessResult, step
+
+def check_price_positive(val: dict):
+    if val["price"] < 0:
+        raise ValueError("Negative price")
+
+@step(
+    name="enrich",
+    version="1.0.0",
+    retries=3,
+    retry_on=(TimeoutError, ConnectionError),
+    retry_delay=1,
+    retry_backoff=2,
+    rate_limit="30/min",
+    stale_after="24h",
+    assertions=[check_price_positive],
+)
+def enrich(row: dict) -> ProcessResult:
+    ...
+```
+
+Parameter binding: a root step over a `Source` receives the source's
+payload as a single **positional** argument (a source-less root map or a
+root `expand` receives no payload at all — only `params`, if declared); a
+dependent step receives one **keyword** argument per parent, named after
+that parent's step name (a `reduce` step's parent kwarg is a
+`{coordinate: value}` dict instead of a single value); any step may
+additionally declare a `params` argument to receive the run's validated
+params (see [Concepts: model](../concepts/model.md)). A step returns
+either a plain JSON-serializable value, a `ProcessResult` (value +
+metadata), or `Filtered(reason=...)` to decline the lane.
+
+### `@source`
+
+```python
+def source(fn=None, *, name=None, version="1", **step_kwargs)
+```
+
+Sugar for a parentless `@step(shape="expand")` — a root that yields payloads,
+each becoming its own content-addressed lane. `name` defaults to the
+function's name; any other `@step` keyword (`index=`, `retries=`,
+`rate_limit=`, ...) forwards through.
+
+```python
+from rubedo import source
+
+@source
+def hn_top():
+    for sid in fetch_top_ids():
+        yield fetch_story(sid)
+```
+
+Drop it straight into `pipeline(steps=[...])` — no `folder=`/`source=`
+needed, since the decorated function *is* the source.
+
+## `pipeline()`
+
+```python
+def pipeline(
+    name: str,
+    folder: Optional[str] = None,
+    steps: Optional[List[StepSpec]] = None,
+    id: Optional[str] = None,
+    source: Optional[Source] = None,
+    sources: Optional[Dict[str, Source]] = None,
+    params_model: Optional[Type[BaseModel]] = None,
+    retention: Optional[int] = None,
+) -> PipelineSpec
+```
+
+Builds a `PipelineSpec` from a list of steps plus optional source sugar.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | `str` | required | Human-readable pipeline name. |
+| `folder` | `str` \| `None` | `None` | Sugar for `source=FolderSource(folder)`. Mutually exclusive with `source=`/`sources=`. |
+| `steps` | `list[StepSpec]` \| `None` | `None` | The steps built by `@step`/`@source`. |
+| `id` | `str` \| `None` | `name` | Stable pipeline identity recorded on every run; defaults to `name`. |
+| `source` | `Source` \| `None` | `None` | A single `Source` instance (e.g. `CsvSource(...)`). Mutually exclusive with `folder=`/`sources=`. |
+| `sources` | `dict[str, Source]` \| `None` | `None` | Multiple named sources, for pipelines with `shape="join"` — each root step then picks one with `@step(source="name")`. Mutually exclusive with `folder=`/`source=`. |
+| `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `run(pipe, params={...})` validates against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
+| `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set. See [Guide: retention](../guides/retention.md). |
+
+Passing none of `folder=`/`source=`/`sources=` is legal: then some root
+step must originate lanes itself — either a `shape="expand"` root (yields
+N lanes every run) or a source-less `shape="map"` root (mints a single
+`@root` lane from its `params`).
+
+```python
+from rubedo import CsvSource, step, pipeline
+
+@step(name="enrich", version="v1")
+def enrich(row: dict):
+    return {"email": row["email"], "summary": call_llm(row["notes"])}
+
+leads = pipeline(
+    id="enrich-leads", name="Enrich Leads",
+    source=CsvSource("data/leads.csv"),
+    steps=[enrich],
+)
+```
+
+## `PipelineBuilder`
+
+```python
+class PipelineBuilder:
+    def __init__(self, params_model: Optional[Type[BaseModel]] = None, **pipeline_kwargs): ...
+    def step(self, *args, **kwargs): ...      # decorator, same signature as @step
+    def source(self, fn=None, **kwargs): ...  # decorator, same signature as @source
+    def build(self, **kwargs) -> PipelineSpec: ...
+```
+
+A fluent alternative to `pipeline(steps=[...])`: construct it with the same
+keyword arguments `pipeline()` takes (minus `steps`), accumulate steps with
+`@p.step(...)`/`@p.source(...)`, then call `.build()` (optionally with
+overrides merged in) to get the same `PipelineSpec` object `pipeline()`
+would return.
+
+```python
+from rubedo import PipelineBuilder
+
+p = PipelineBuilder(id="count-lines", name="Count Lines", folder="input")
+
+@p.step(name="read_lines", version="read-v1")
+def read_lines(path: str):
+    return {"lines": open(path).read().splitlines()}
+
+count_lines_pipeline = p.build()
+```
+
+## `run()`
+
+```python
+def run(
+    pipeline: PipelineSpec,
+    source: Optional[Source | str] = None,
+    *,
+    params: Optional[dict] = None,
+    workers: Optional[int] = None,
+    force: bool = False,
+    home: Optional[str] = None,
+    progress: bool = False,
+    progress_cb: Optional[Callable[[str, str, str], None]] = None,
+    schedule: str = "broad",
+) -> RunSummary
+```
+
+The single entry point that actually executes a pipeline.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `pipeline` | `PipelineSpec` | required | The pipeline to run. |
+| `source` | `Source \| str \| None` | `None` | Overrides the pipeline's declared source for this run — only valid for single-source pipelines. A `str` is sugar for `FolderSource(str)`. |
+| `params` | `dict \| None` | `None` | Run-level parameters, validated against `pipeline.params_model` if one is declared. |
+| `workers` | `int \| None` | `None` | Overrides every step's `workers=` for this run. |
+| `force` | `bool` | `False` | Re-executes every lane regardless of cache state. |
+| `home` | `str \| None` | `None` | Points the ledger/object store at a custom root instead of the default `.rubedo`/`RUBEDO_HOME` for this call. |
+| `progress` | `bool` | `False` | Prints a live terminal progress display (`TerminalProgress`) while running. |
+| `progress_cb` | `Callable[[str, str, str], None] \| None` | `None` | Called as `(step_name, coordinate, action)` for every resolved cell — a lower-level hook than `progress=True`. |
+| `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* only — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `reduce`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. |
+
+Returns a `RunSummary` (see below).
+
+```python
+from rubedo import run
+
+summary = run(p, params={"min_lines": 5})
+print(f"created={summary.created_count} reused={summary.reused_count}")
+```
+
+## `plan()`
+
+```python
+def plan(
+    pipeline: PipelineSpec,
+    source: Optional[Source | str] = None,
+    *,
+    params: Optional[dict] = None,
+    force: bool = False,
+    home: Optional[str] = None,
+) -> RunPlan
+```
+
+A read-only dry-run: tells you what `run()` would do to every lane, and why
+— `reuse`, `execute`, `blocked`, `filtered`, or `pending` (a dependent lane
+whose address can't be known until an upstream execution actually happens)
+— without writing anything to the ledger or object store. Same parameters
+as `run()`, minus `workers`/`progress`/`schedule` (planning doesn't
+execute).
+
+```python
+from rubedo import plan
+
+print(plan(p))
+```
+
+```text
+Plan for 'count-lines' over folder:input: 4 execute, 4 pending
+  execute  read_lines           file2.txt @ 2db729839948
+  ...
+```
+
+### `RunPlan`
+
+```python
+@dataclass
+class RunPlan:
+    pipeline_id: str
+    source_id: str
+    items: List[PlannedCoordinate]   # coordinate, step_name, action, output_address
+    counts: Dict[str, int]           # action -> count
+    warnings: List[str]              # e.g. code-drift notices
+```
+
+`str(plan_result)` renders the human-readable report shown above;
+`plan_result.counts` gives programmatic access to the action tally.
+
+## `describe()`
+
+```python
+def describe(spec: PipelineSpec, format: str = "text") -> str
+```
+
+Renders a pipeline's DAG before it's ever run — no ledger access at all.
+`format="text"` (default) prints each step in dependency order with its
+policies; `format="mermaid"` emits a Mermaid graph for markdown viewers.
+
+```python
+from rubedo import describe
+
+print(describe(p))
+print(describe(p, format="mermaid"))
+```
+
+## `trace()`
+
+```python
+def trace(
+    selection: Selection,
+    *,
+    include_superseded: bool = False,
+    resolve_roots: bool = True,
+    home: Optional[str] = None,
+) -> TraceResult
+```
+
+Follows recorded lineage (`MaterializationEdge`) up and down from whatever a
+`Selection` matches: upstream to the source items everything came from
+(lineage roots show their stored payload when `resolve_roots=True`),
+downstream to everything derived from it. By default only *live*
+materializations seed the trace; `include_superseded=True` also seeds
+non-live generations (superseded or invalidated) — traversal always follows
+the real edges either way, so a live output's recorded parent may show up
+marked non-live rather than hidden.
+
+```python
+from rubedo import Selection, trace
+
+print(trace(Selection.parse("company:acme")))
+```
+
+```text
+Trace: 2 seed, 3 upstream, 1 downstream
+  ...
+```
+
+### `TraceResult` / `TraceNode`
+
+```python
+@dataclass
+class TraceNode:
+    materialization_id: int
+    step_name: str
+    pipeline_id: str
+    coordinate: Optional[str]
+    output_address: str
+    is_live: bool
+    filtered: bool
+    relation: str   # "seed" | "upstream" | "downstream"
+    depth: int
+    root_value: Any = None
+
+@dataclass
+class TraceResult:
+    nodes: List[TraceNode]
+    edges: List[Tuple[int, int]]   # (parent_materialization_id, child_materialization_id)
+
+    @property
+    def seeds(self) -> List[TraceNode]: ...
+    def by_step(self) -> Dict[str, List[TraceNode]]: ...
+```
+
+## `invalidate()`
+
+```python
+def invalidate(selection: Selection, reason: str, downstream: bool = False) -> dict
+```
+
+Flips matching *live* materializations to `is_live=False`, appending a
+`materialization_lifecycle` row (`action="invalidated"`) for each — a
+logical tombstone, never a delete. `reason` is required and recorded.
+`downstream=True` widens the tombstone to the full downstream closure over
+`MaterializationEdge` (everything *derived* from the selection's live
+matches) — preview the blast radius first with `trace()` on the same
+selection, since a `reduce`/`join` inside that closure honestly carries
+everything after it too.
+
+```python
+from rubedo import Selection, invalidate
+
+invalidate(Selection(index={"company": "acme"}), reason="bad prompt")
+```
+
+Returns a dict: `run_id`, `invalidated_count`, `seed_count`,
+`downstream_count`, `materialization_ids`. The next `run()` recomputes
+exactly the invalidated lanes (plus, if it wasn't already invalidated
+explicitly, anything genuinely downstream of them through the normal
+planning process).
+
+## `Selection` / `Selection.parse()`
+
+```python
+class Selection(BaseModel):
+    source_id: Optional[str] = None
+    coordinate_glob: Optional[str] = None
+    step: Optional[str] = None
+    code_version: Optional[str] = None
+    version_range: Optional[str] = None
+    output_address: Optional[str] = None
+    invalidated: Optional[bool] = None
+    pipeline_id: Optional[str] = None
+    index: Optional[Dict[str, str]] = None
+
+    @classmethod
+    def parse(cls, query: str) -> "Selection": ...
+```
+
+Criteria for selecting materializations, constructed directly or parsed
+from the query-string language shared by Python, the CLI, and the web UI.
+`Selection.parse()` splits on whitespace (`shlex`-aware, so
+`company:"acme corp"` quotes a value with spaces) into `key:value` terms:
+
+| Prefix | Selection field | Example |
+|---|---|---|
+| `source:` | `source_id` | `source:folder:input` |
+| `coord:` / `coordinate:` | `coordinate_glob` | `coord:*.txt` |
+| `step:` | `step` | `step:classify` |
+| `pipeline:` | `pipeline_id` | `pipeline:reviews` |
+| `version:<exact>` | `code_version` | `version:v2` |
+| `version:<range>` (starts with `<`, `>`, `=`, `!`) | `version_range` (PEP 440 `SpecifierSet`) | `version:<2.0` |
+| `address:` | `output_address` | `address:88ca616d68...` |
+| `live:true`\|`false` | `invalidated` (inverted) | `live:false` |
+| anything else | `index[key]` | `company:acme` |
+
+Any term that isn't a reserved prefix matches an indexed output field
+(`@step(index=[...])`) — indexed data is the language's open vocabulary.
+
+```python
+from rubedo import Selection
+
+Selection.parse("step:extract company:acme live:true")
+Selection(index={"company": "acme"})
+```
+
+See [Guide: search and invalidation](../guides/search-and-invalidation.md)
+for the full query language and CLI equivalents.
+
+## `ProcessResult`
+
+```python
+class ProcessResult(BaseModel):
+    value: Any
+    metadata: Optional[Dict[str, Any]] = None
+```
+
+The successful output of a step, carrying the value that downstream steps
+receive plus optional metadata that rides along in the ledger but isn't
+passed to consumers. A step may also return a plain JSON-serializable value
+directly instead of wrapping it — `ProcessResult` is for when you want to
+attach metadata alongside the value.
+
+```python
+from rubedo import ProcessResult
+
+@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
+def count_lines(read_lines: dict) -> ProcessResult:
+    return ProcessResult(
+        value={"line_count": len(read_lines["lines"])},
+        metadata={"source": "count_lines step"},
+    )
+```
+
+## `Filtered`
+
+```python
+class Filtered:
+    def __init__(self, reason: Optional[str] = None): ...
+```
+
+Return this from a step to decline a coordinate. The decision is cached
+like any other output (a filtered materialization), and downstream steps
+skip that coordinate with status `"filtered"` instead of executing — an
+expensive LLM-based filter runs once per input, not once per run.
+
+```python
+from rubedo import Filtered
+
+@step(name="screen", version="v1", depends_on=["top_story"])
+def screen(top_story: dict):
+    if top_story["score"] < 50:
+        return Filtered(reason="score below threshold")
+    return top_story
+```
+
+## `RunSummary`
+
+```python
+class RunSummary(BaseModel):
+    run_id: str
+    status: str
+    created_count: int = 0
+    reused_count: int = 0
+    failed_count: int = 0
+    blocked_count: int = 0
+    filtered_count: int = 0
+
+    def failures(self) -> list[Dict[str, Any]]: ...
+    def output_for(self, step_name: str) -> dict[str, Any]: ...
+```
+
+Returned by `run()`. `failures()` re-queries the ledger for this run's
+failed coordinates and errors. `output_for(step_name)` re-reads every
+materialization this run created, reused, or produced a filtered verdict
+for at that step, keyed by coordinate — the values a step actually saw or
+produced, without needing your own query.
+
+```python
+summary = run(p)
+print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))
+```
+
+## Sources
+
+### `Source`
+
+```python
+class Source(ABC):
+    @property
+    @abstractmethod
+    def id(self) -> str: ...
+    @abstractmethod
+    def scan(self) -> List[SourceItem]: ...
+    @abstractmethod
+    def load(self, item: SourceItem) -> Any: ...
+```
+
+The protocol every source implements: `id` is a stable identity string
+recorded as `source_id` on runs; `scan()` snapshots every current
+coordinate; `load()` hands a root step its payload for one `SourceItem`.
+Write your own by subclassing this for anything not covered by the built-ins
+below (an API listing, a message queue, ...). See
+[Concepts: sources](../concepts/sources.md).
+
+### `SourceItem`
+
+```python
+@dataclass
+class SourceItem:
+    coordinate: str
+    content_hash: str
+    ref: Any = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+```
+
+One coordinate from a `Source` scan. `ref` is an opaque handle the owning
+source uses in `load()` — it never participates in identity, only
+`coordinate` and `content_hash` do.
+
+### `FolderSource`
+
+```python
+class FolderSource(Source):
+    def __init__(self, path: str): ...
+```
+
+Files under `path`. Coordinate = the file's path relative to `path`
+(forward-slash-normalized); payload handed to root steps = the file's
+absolute path. `folder="..."` on `pipeline()` is sugar for this.
+
+```python
+from rubedo import FolderSource
+FolderSource("data/inbox")
+```
+
+### `CsvSource`
+
+```python
+class CsvSource(Source):
+    def __init__(self, path: str): ...
+```
+
+Rows of a CSV file, one lane per row, payload = the row as a `dict`. Lanes
+are **content-addressed** (`row-<hash>`): identical rows collapse to one
+lane, and an edited row reads as removed + created, so incrementality
+survives reordering, dedup, and appends for free. To find or track a row by
+a human field (email, id), `@step(index=[...])` it downstream and query —
+the coordinate is never a human key.
+
+```python
+from rubedo import CsvSource
+CsvSource("data/leads.csv")
+```
+
+### `TableSource`
+
+```python
+class TableSource(Source):
+    def __init__(
+        self,
+        engine_url: str,
+        *,
+        table: str,
+        key=None,
+        columns: Optional[List[str]] = None,
+        batch_size: Optional[int] = None,
+    ): ...
+```
+
+Rows of a SQL table via SQLAlchemy, content-addressed like `CsvSource`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `engine_url` | `str` | required | A SQLAlchemy engine URL. Credentials are stripped when building `.id`, so they never leak into the ledger. |
+| `table` | `str` | required | Table name (interpolated directly — an internal schema declaration from pipeline code, not user input). |
+| `key` | `str \| list[str] \| None` | `None` | Column(s) `load()` re-fetches a streamed row by. **Not** a lane key — it never affects the coordinate. Required only when `batch_size` is set. |
+| `columns` | `list[str] \| None` | `None` | Restrict the `SELECT` to these columns; `None` means `SELECT *`. |
+| `batch_size` | `int \| None` | `None` | `None` (default): the whole table is read once in `scan()`, each row's payload carried along, so `load()` is a passthrough. Set to a positive int for streaming mode: rows are read in server-side chunks of this size, only `(key, content_hash)` kept, and `load()` re-fetches a single row by `key` when its lane actually runs — bounded memory at the cost of one query per lane. Not part of `.id`, so toggling it never invalidates the cache. |
+
+```python
+from rubedo import TableSource
+TableSource("postgresql://host/db", table="orders", key="order_id", batch_size=500)
+```
+
+## `gc()`
+
+```python
+# from rubedo.gc import gc
+def gc(
+    delete: bool = False,
+    max_bytes: Optional[int] = None,
+    home: Optional[str] = None,
+) -> GcReport
+```
+
+Applies every pipeline's `retention=N` policy, then — if `max_bytes` is
+given — prunes oldest-run-first across pipelines until the store fits under
+budget. Dry-run by default (`delete=False`): nothing is written or deleted,
+and the returned report lists exactly what `delete=True` would do. With
+`delete=True`, GC refuses (returns a `GcReport` with `.refused` set, applies
+nothing) while any run's heartbeat is live — a concurrent run could be
+committing an output that points at bytes GC is about to remove. This is
+also what `rubedo gc [--max-bytes] [--delete]` calls. See
+[Guide: retention](../guides/retention.md).
+
+```python
+from rubedo.gc import gc
+
+report = gc(max_bytes=2 * 1024**3)          # dry-run against a 2 GiB budget
+print(report)
+applied = gc(max_bytes=2 * 1024**3, delete=True)
+```
+
+`GcReport` carries `applied`, `demoted_mat_ids`, `reclaimed` (list of
+`(content_hash, bytes)`), `refused`, `max_bytes`, and
+`total_bytes_before`, plus `.reclaimed_bytes`/`.demoted_count` properties
+and a human-readable `__str__`.
+
+## `storage_report()`
+
+```python
+# from rubedo.du import storage_report
+def storage_report(home: Optional[str] = None) -> StorageReport
+```
+
+A read-only accounting of what the object store holds, computed entirely
+from the ledger (never by enumerating `objects/` on disk) — total object
+count and bytes, a per-pipeline/per-step breakdown (objects deduped within
+each scope, since the store is content-addressed and shared), a
+reclaimable estimate (objects with zero live references anywhere), and
+missing-vs-reclaimed accounting for absent files. Nothing is ever deleted —
+this is what `rubedo du [--json]` calls.
+
+```python
+from rubedo.du import storage_report
+
+report = storage_report()
+print(report)                 # human-readable
+print(report.to_dict())       # JSON-safe dict
+```
+
+## See also
+
+- [Concepts: the model](../concepts/model.md) — the vocabulary (lane,
+  coordinate, address, materialization) these signatures assume.
+- [Concepts: shapes](../concepts/shapes.md) — `map`/`reduce`/`expand`/`join`
+  in depth, with worked examples.
+- [Concepts: sources](../concepts/sources.md) — writing a custom `Source`.
+- [Concepts: versioning](../concepts/versioning.md) — `version` vs. `code`.
+- [Guide: execution policies](../guides/execution-policies.md) — retries,
+  rate limits, `stale_after`, assertions, executors, in depth.
+- [Guide: search and invalidation](../guides/search-and-invalidation.md) —
+  the full `Selection` language and CLI equivalents.
+- [Guide: inspecting runs](../guides/inspecting-runs.md) — `plan()`,
+  `trace()`, the CLI, the dashboard.
+- [Guide: retention](../guides/retention.md) — `retention=N`, `rubedo gc`,
+  the demote/sweep model.
+- [CLI reference](cli.md) — every `rubedo` subcommand.
