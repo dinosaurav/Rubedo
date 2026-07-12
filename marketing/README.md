@@ -1,16 +1,43 @@
-# React + Vite
+# marketing/
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The Rubedo landing page (rubedo.dev): a Vite + React app. Content must stay
+in sync with the root [`README.md`](../README.md) — that file is the source
+of truth for what Rubedo does; this page restates it, never invents beyond
+it.
 
-Currently, two official plugins are available:
+## Develop
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev        # dev server with HMR, http://localhost:5173
+npm run lint        # oxlint
+```
 
-## React Compiler
+## Build
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm run build       # vite build only — the landing page
+npm run build:all   # vite build + `uv run mkdocs build` from the repo root
+```
 
-## Expanding the Oxlint configuration
+The MkDocs documentation site (built from [`../docs/`](../docs/) via
+[`../mkdocs.yml`](../mkdocs.yml)) builds **separately** and outputs into
+`dist/docs/` (`site_dir: marketing/dist/docs` in `mkdocs.yml`), so the two
+sites end up served from one `dist/` directory: the landing page at `/` and
+the docs at `/docs/`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+**Important:** Vite's default `emptyOutDir: true` would wipe the entire
+`outDir` — including `dist/docs/` — on every `vite build`. That's disabled
+in [`vite.config.js`](vite.config.js) (`build.emptyOutDir: false`), so a
+plain `npm run build` is safe to run even when `dist/docs/` already exists
+from a previous MkDocs build. The trade-off: `vite build` no longer cleans
+its own stale output. If you need a fully clean rebuild of both sites:
+
+```bash
+rm -rf dist
+npm run build:all
+```
+
+For a full production deploy, run `npm run build:all` (or `npm run build`
+followed by `uv run mkdocs build` from the repo root) so both `dist/` and
+`dist/docs/` are current.

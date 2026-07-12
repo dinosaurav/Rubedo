@@ -92,6 +92,30 @@ code {
   border: 1px solid #e0e0e0;
 }
 
+pre code {
+  background-color: transparent;
+  padding: 0;
+  border: none;
+}
+
+.terminal-output {
+  color: var(--text-primary);
+  opacity: 0.85;
+}
+
+.section-heading {
+  font-size: 1.75rem;
+  margin-bottom: 0.75rem;
+  color: var(--accent-primary);
+}
+
+.section-kicker {
+  font-size: 0.95rem;
+  opacity: 0.85;
+  max-width: 640px;
+  margin-bottom: 2rem;
+}
+
 /* Blueprint Grid Background - Optional paperclip punk detail */
 .blueprint-bg {
   background-image: 
