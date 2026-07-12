@@ -21,7 +21,8 @@ import urllib.parse
 import urllib.request
 
 import os
-from rubedo import Filtered, describe, PipelineBuilder, run, CsvSource
+from rubedo import Filtered, describe, PipelineBuilder, run
+
 
 GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST = "https://api.open-meteo.com/v1/forecast"
@@ -36,13 +37,19 @@ def _get(url: str, params: dict):
 p = PipelineBuilder(
     id="weather-advisory",
     name="Weather Advisory",
-    source=CsvSource(os.path.join(os.path.dirname(__file__), "cities.csv")),
 )
 
+@p.source(name="cities", version="1")
+def cities():
+    import csv
+    with open(os.path.join(os.path.dirname(__file__), "cities.csv")) as f:
+        for row in csv.DictReader(f):
+            yield row
 
-@p.step(name="geocode", version="1", retries=3, retry_delay=1, rate_limit="60/min")
-def geocode(row: dict) -> dict | Filtered:
+@p.step(name="geocode", version="1", depends_on=["cities"], retries=3, retry_delay=1, rate_limit="60/min")
+def geocode(cities: dict) -> dict | Filtered:
     """City name -> coordinates. Unknown cities decline the lane."""
+    row = cities
     hits = _get(GEOCODE, {"name": row["city"], "count": 1}).get("results")
     if not hits:
         return Filtered(f"no such place: {row['city']!r}")
@@ -110,9 +117,9 @@ def main():
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
     )
-    print("\n--- Final Output (max_wind_digest) ---")
+    print("\n--- Final Output (briefing) ---")
     import json
-    print(json.dumps(summary.output_for("max_wind_digest"), indent=2, default=str))
+    print(json.dumps(summary.output_for("briefing"), indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -24,7 +24,10 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from rubedo import CsvSource, ProcessResult, describe, PipelineBuilder, run
+from rubedo import ProcessResult, describe, PipelineBuilder, run
+
+from dotenv import load_dotenv
+load_dotenv()
 
 API = "https://api.github.com"
 
@@ -41,13 +44,19 @@ def _get(path: str):
 p = PipelineBuilder(
     id="repo-health",
     name="Repo Health",
-    source=CsvSource(os.path.join(os.path.dirname(__file__), "repos.csv")),
 )
 
+@p.source(name="repos", version="1")
+def repos():
+    import csv
+    with open(os.path.join(os.path.dirname(__file__), "repos.csv")) as f:
+        for row in csv.DictReader(f):
+            yield row
 
-@p.step(name="fetch_repo", version="1", retries=3, retry_delay=2, rate_limit="20/min")
-def fetch_repo(row: dict) -> dict:
+@p.step(name="fetch_repo", version="1", depends_on=["repos"], retries=3, retry_delay=2, rate_limit="20/min")
+def fetch_repo(repos: dict) -> dict:
     """Repo metadata. row['repo'] is 'owner/name' from repos.csv."""
+    row = repos
     r = _get(f"/repos/{row['repo']}")
     return {
         "repo": r["full_name"],
@@ -108,9 +117,9 @@ def main():
         raise
     print(f"created={summary.created_count} reused={summary.reused_count}")
     
-    print("\n--- Final Output (health_digest) ---")
+    print("\n--- Final Output (report) ---")
     import json
-    print(json.dumps(summary.output_for("health_digest"), indent=2, default=str))
+    print(json.dumps(summary.output_for("report"), indent=2, default=str))
 
 
 if __name__ == "__main__":

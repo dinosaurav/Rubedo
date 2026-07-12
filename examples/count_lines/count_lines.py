@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 from rubedo import ProcessResult, describe, run, PipelineBuilder
 
 
+
 class CountLinesParams(BaseModel):
-    min_lines: int = Field(
         default=0,
         ge=0,
         description="Minimum number of lines required for ok=true",
@@ -19,16 +19,24 @@ class CountLinesParams(BaseModel):
 p = PipelineBuilder(
     id="count-lines",
     name="Count Lines DAG",
-    folder=os.path.join(os.path.dirname(__file__), "input"),
     params_model=CountLinesParams,
 )
 
+@p.source(name="input_files", version="1")
+def input_files():
+    import os
+    folder = os.path.join(os.path.dirname(__file__), "input")
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            yield path
 
-@p.step(name="read_lines", version="read-v1")
-def read_lines(path: str, params: dict):
+
+@p.step(name="read_lines", version="read-v1", depends_on=["input_files"])
+def read_lines(input_files: str, params: dict):
     # params arrive as the params_model-validated dict (the same form that
     # is hashed into the cache key), not as a model instance.
-    text = open(path).read()
+    text = open(input_files).read()
     lines = text.splitlines()
     return {"lines": lines, "params": params}
 

@@ -17,10 +17,10 @@ import json
 import os
 import tempfile
 
-from rubedo import FolderSource, describe, PipelineBuilder, run
 
 
-def make_feed(folder):
+
+from rubedo import describe, PipelineBuilder, run
     articles = [
         {"id": "a1", "title": "gpu prices fall"},
         {"id": "a2", "title": "new language ships"},
@@ -32,11 +32,18 @@ def make_feed(folder):
 
 p = PipelineBuilder(id="expand-feed", name="Expand Feed")
 
+@p.source(name="feed_files", version="1")
+def feed_files():
+    folder = os.path.join(tempfile.gettempdir(), "rubedo_expand_feed")
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            yield path
 
-@p.step(name="fetch", version="1")
-def fetch(path: str) -> list:
-    print(f"  fetching {os.path.basename(path)} ...")  # runs once, then cached
-    return json.load(open(path))
+@p.step(name="fetch", version="1", depends_on=["feed_files"])
+def fetch(feed_files: str) -> list:
+    print(f"  fetching {os.path.basename(feed_files)} ...")  # runs once, then cached
+    return json.load(open(feed_files))
 
 
 @p.step(name="articles", version="1", depends_on=["fetch"], shape="expand")
@@ -55,7 +62,7 @@ def main():
     os.makedirs(folder, exist_ok=True)
     make_feed(folder)
 
-    pipe = p.build(source=FolderSource(folder))
+    pipe = p.build()
     print(describe(pipe))
     print()
 
@@ -64,9 +71,9 @@ def main():
     s2 = run(pipe)
     print(f"run 2: created={s2.created_count} reused={s2.reused_count}  (fetch was cached)")
     
-    print("\n--- Final Output (read_item) ---")
+    print("\n--- Final Output (headline) ---")
     import json
-    print(json.dumps(s2.output_for("read_item"), indent=2, default=str))
+    print(json.dumps(s2.output_for("headline"), indent=2, default=str))
 
 
 if __name__ == "__main__":

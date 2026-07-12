@@ -59,8 +59,8 @@ import urllib.request
 
 from rubedo import Source, SourceItem, describe, PipelineBuilder, run
 
+
 WORDLIST_URL = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
-CACHE_PATH = os.path.join(os.path.dirname(__file__), ".wordlist_cache.txt")
 NUM_CHUNKS = 8
 
 
@@ -76,32 +76,7 @@ def _ensure_wordlist() -> list:
         return [w.strip() for w in f if len(w.strip()) >= 2]
 
 
-class ChunkedWordlist(Source):
-    """The word list split into NUM_CHUNKS lanes, one coordinate per chunk."""
 
-    def __init__(self, num_chunks: int = NUM_CHUNKS):
-        self.num_chunks = num_chunks
-
-    @property
-    def id(self) -> str:
-        return f"wordlist-chunks:{self.num_chunks}"
-
-    def scan(self):
-        words = _ensure_wordlist()
-        chunk_size = -(-len(words) // self.num_chunks)  # ceil div
-        items = []
-        for i in range(self.num_chunks):
-            chunk = words[i * chunk_size : (i + 1) * chunk_size]
-            if not chunk:
-                continue
-            content_hash = hashlib.sha256("\n".join(chunk).encode()).hexdigest()
-            items.append(
-                SourceItem(coordinate=f"chunk_{i:02d}", content_hash=content_hash, ref=chunk)
-            )
-        return items
-
-    def load(self, item: SourceItem) -> list:
-        return item.ref
 
 
 def _rotation_invariant(sig: str) -> str:
@@ -182,12 +157,21 @@ def build_pipeline(executor: str):
     p = PipelineBuilder(
         id=f"executor-showdown-{executor}",
         name=f"Executor Showdown ({executor})",
-        source=ChunkedWordlist(),
     )
+
+    @p.source(name="wordlist_chunks", version="1")
+    def wordlist_chunks():
+        words = _ensure_wordlist()
+        chunk_size = -(-len(words) // NUM_CHUNKS)
+        for i in range(NUM_CHUNKS):
+            chunk = words[i * chunk_size : (i + 1) * chunk_size]
+            if chunk:
+                yield chunk
 
     p.step(
         name=f"analyze_{executor}",
         version="1",
+        depends_on=["wordlist_chunks"],
         executor=executor,
         workers=NUM_CHUNKS,
     )(analyze_chunk)

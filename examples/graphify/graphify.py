@@ -22,26 +22,35 @@ import sys
 # Inject the local rubedo package into the isolated script environment
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
+
 import litellm
 import networkx as nx
 from networkx.algorithms import community
 
 from rubedo import ProcessResult, describe, run, PipelineBuilder
-from rubedo.sources import FolderSource
 
 p = PipelineBuilder(
     id="graphify",
     name="Graphify DAG",
-    # Target our own src folder
-    source=FolderSource(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")),
 )
 
+@p.source(name="src_files", version="1")
+def src_files():
+    folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
+    import os
+    for root, _, files in os.walk(folder):
+        for name in files:
+            yield os.path.join(root, name)
 
 
 
-@p.step(name="extract_code_nodes", version="v4")
-def extract_code_nodes(path: str) -> ProcessResult:
+
+@p.step(name="extract_code_nodes", version="v4", depends_on=["src_files"])
+def extract_code_nodes(src_files: str) -> ProcessResult:
     """Extract classes, functions, and import edges using Tree-sitter."""
+    path = src_files
     if not path.endswith(".py"):
         return ProcessResult(value={"nodes": [], "edges": []})
         
@@ -98,9 +107,10 @@ def extract_code_nodes(path: str) -> ProcessResult:
 
     return ProcessResult(value={"nodes": nodes, "edges": edges, "file_id": file_id})
 
-@p.step(name="extract_semantic_nodes", version="v4", retries=2, rate_limit="1000/min")
-def extract_semantic_nodes(path: str) -> ProcessResult:
+@p.step(name="extract_semantic_nodes", version="v4", depends_on=["src_files"], retries=2, rate_limit="1000/min")
+def extract_semantic_nodes(src_files: str) -> ProcessResult:
     """Use an LLM to generate a semantic summary of the file."""
+    path = src_files
     if not path.endswith(".py") and not path.endswith(".md"):
         return ProcessResult(value={"summary": ""})
 
@@ -118,10 +128,6 @@ def extract_semantic_nodes(path: str) -> ProcessResult:
     )
 
     try:
-        from dotenv import load_dotenv
-        # Load .env from the root of the repo
-        load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
-        
         response = litellm.completion(
             model="openrouter/anthropic/claude-sonnet-5",
             messages=[{"role": "user", "content": prompt}]

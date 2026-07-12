@@ -43,23 +43,8 @@ OPENROUTER = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("OPENROUTER_MODEL", "minimax/minimax-m2.5")
 
 
-def _load_env():
-    """Load KEY=VALUE lines from the nearest .env, without overriding real env vars."""
-    d = os.path.dirname(os.path.abspath(__file__))
-    for _ in range(4):
-        path = os.path.join(d, ".env")
-        if os.path.isfile(path):
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        os.environ.setdefault(k.strip(), v.strip().strip("\"'"))
-            return
-        d = os.path.dirname(d)
-
-
-_load_env()
+from dotenv import load_dotenv
+load_dotenv()
 
 
 def _get(url: str):

@@ -76,6 +76,7 @@ dev = [
     "networkx>=3.6.1",
     "pymupdf>=1.24.0",  # examples/pdf_digest: PDF text + page rasterization
     "pytest>=9.1.1",
+    "python-dotenv>=1.2.2",
     "ruff>=0.15.20",
     "scipy>=1.17.1",
     "tree-sitter>=0.26.0",

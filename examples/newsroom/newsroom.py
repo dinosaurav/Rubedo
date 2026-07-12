@@ -26,10 +26,10 @@ import csv
 import os
 import tempfile
 
-from rubedo import CsvSource, describe, PipelineBuilder, run
+from rubedo import describe, PipelineBuilder, run
+
 
 FEEDS = [("f1", "TechCorp"), ("f2", "BizWire"), ("f3", "TechCorp")]
-PUBLISHERS = [("TechCorp", "US"), ("BizWire", "EU")]
 
 # What "scraping" a feed returns — deterministic, keyed by feed id.
 FEED_ARTICLES = {
@@ -46,20 +46,33 @@ def write_csv(path, header, rows):
         w.writerows(rows)
 
 
+FOLDER = os.path.join(tempfile.gettempdir(), "rubedo_newsroom")
+
 p = PipelineBuilder(
     id="newsroom",
     name="Newsroom",
 )
 
+@p.source(name="feeds", version="1")
+def feeds():
+    with open(os.path.join(FOLDER, "feeds.csv")) as f:
+        for row in csv.DictReader(f):
+            yield row
 
-@p.step(name="feed", version="1", source="feeds", index=["publisher"])
-def feed(row: dict) -> dict:
-    return {"feed_id": row["feed_id"], "publisher": row["publisher"]}
+@p.source(name="publishers", version="1")
+def publishers():
+    with open(os.path.join(FOLDER, "publishers.csv")) as f:
+        for row in csv.DictReader(f):
+            yield row
+
+@p.step(name="feed", version="1", depends_on=["feeds"], index=["publisher"])
+def feed(feeds: dict) -> dict:
+    return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
 
 
-@p.step(name="publisher", version="1", source="publishers", index=["publisher"])
-def publisher(row: dict) -> dict:
-    return {"publisher": row["publisher"], "region": row["region"]}
+@p.step(name="publisher", version="1", depends_on=["publishers"], index=["publisher"])
+def publisher(publishers: dict) -> dict:
+    return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
 
 @p.step(
@@ -95,21 +108,15 @@ def digest(articles: dict) -> dict:
 def make_pipeline(folder):
     write_csv(os.path.join(folder, "feeds.csv"), ["feed_id", "publisher"], FEEDS)
     write_csv(os.path.join(folder, "publishers.csv"), ["publisher", "region"], PUBLISHERS)
-    return p.build(
-        sources={
-            "feeds": CsvSource(os.path.join(folder, "feeds.csv")),
-            "publishers": CsvSource(os.path.join(folder, "publishers.csv")),
-        }
-    )
+    return p.build()
 
 
 
 
 
 def main():
-    folder = os.path.join(tempfile.gettempdir(), "rubedo_newsroom")
-    os.makedirs(folder, exist_ok=True)
-    pipe = make_pipeline(folder)
+    os.makedirs(FOLDER, exist_ok=True)
+    pipe = make_pipeline(FOLDER)
 
     print(describe(pipe))
     print()

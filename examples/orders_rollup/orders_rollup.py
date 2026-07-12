@@ -23,7 +23,7 @@ import tempfile
 from sqlalchemy import create_engine, text
 
 from rubedo import ProcessResult, describe, PipelineBuilder, run
-from rubedo.sources import TableSource
+
 
 DB_PATH = os.path.join(tempfile.gettempdir(), "rubedo_demo_orders.db")
 DB_URL = f"sqlite:///{DB_PATH}"
@@ -55,10 +55,18 @@ p = PipelineBuilder(
     name="Orders Rollup",
 )
 
+@p.source(name="orders", version="1")
+def orders():
+    engine = create_engine(DB_URL)
+    with engine.connect() as conn:
+        res = conn.execute(text("SELECT * FROM orders"))
+        for row in res.mappings():
+            yield dict(row)
 
-@p.step(name="classify", version="1", index=["tier"])
-def classify(row: dict) -> ProcessResult:
+@p.step(name="classify", version="1", depends_on=["orders"], index=["tier"])
+def classify(orders: dict) -> ProcessResult:
     """Bucket each order by size."""
+    row = orders
     amount = row["amount"]
     tier = "whale" if amount >= 1000 else "mid" if amount >= 200 else "small"
     return ProcessResult(
@@ -84,15 +92,14 @@ def rollup(classify: dict) -> str:
 
 def main():
     seed_db()
-    # batch_size=100 => streaming/lazy mode (see TableSource docstring)
-    pipe = p.build(source=TableSource(DB_URL, table="orders", key="id", batch_size=100))
+    pipe = p.build()
     print(describe(pipe))
     print()
     summary = run(pipe)
     print(f"created={summary.created_count} reused={summary.reused_count}")
-    print("\n--- Final Output (combine_summaries) ---")
+    print("\n--- Final Output (rollup) ---")
     import json
-    print(json.dumps(summary.output_for("combine_summaries"), indent=2, default=str))
+    print(json.dumps(summary.output_for("rollup"), indent=2, default=str))
 
 
 if __name__ == "__main__":

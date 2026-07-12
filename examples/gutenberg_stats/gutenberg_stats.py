@@ -25,21 +25,27 @@ import os
 import re
 import urllib.request
 
-from rubedo import CsvSource, describe, PipelineBuilder, run
+from rubedo import describe, PipelineBuilder, run
+
+
+
 
 GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
-
-
-p = PipelineBuilder(
     id="gutenberg-stats",
     name="Gutenberg Stats",
-    source=CsvSource(os.path.join(os.path.dirname(__file__), "books.csv")),
 )
 
+@p.source(name="books", version="1")
+def books():
+    import csv
+    with open(os.path.join(os.path.dirname(__file__), "books.csv")) as f:
+        for row in csv.DictReader(f):
+            yield row
 
-@p.step(name="fetch", version="1", retries=3, retry_delay=2, rate_limit="10/min")
-def fetch(row: dict) -> dict:
+@p.step(name="fetch", version="1", depends_on=["books"], retries=3, retry_delay=2, rate_limit="10/min")
+def fetch(books: dict) -> dict:
     """Download one book. row is {id, title} from books.csv."""
+    row = books
     url = GUTENBERG.format(id=row["id"])
     req = urllib.request.Request(url, headers={"User-Agent": "rubedo-example"})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -99,9 +105,9 @@ def main():
     print()
     summary = run(pipe)
     print(f"created={summary.created_count} reused={summary.reused_count}")
-    print("\n--- Final Output (analyze_author) ---")
+    print("\n--- Final Output (report) ---")
     import json
-    print(json.dumps(summary.output_for("analyze_author"), indent=2, default=str))
+    print(json.dumps(summary.output_for("report"), indent=2, default=str))
 
 
 if __name__ == "__main__":
