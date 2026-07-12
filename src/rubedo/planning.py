@@ -201,7 +201,7 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
     return (
         f"Step '{step.name}' source code changed but version is still "
         f"'{step.version}': reusing {drifted} cached output(s) computed by the "
-        "old code. Bump the version (or use version='auto') to recompute."
+        "old code. Bump the version (or use code='auto') to recompute."
     )
 
 
