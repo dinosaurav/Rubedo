@@ -19,13 +19,13 @@ def rows():
 def double(rows):
     return rows["n"] * 2
 
-pipeline(id="doubler", name="Doubler", steps=[rows, double])
+pipeline(name="doubler", steps=[rows, double])
 ```
 
-A source-shaped step re-runs its generator on every `run()` — there's no
+A source-shaped step re-runs its generator on every `p.run()` — there's no
 enumeration to cache, only the resulting lanes are (see
 [shapes.md](shapes.md#expand-1n-fan-out) for the anchor mechanism that skips
-re-running an *unchanged* expand's function on a re-run). `describe()` and
+re-running an *unchanged* expand's function on a re-run). `p.describe()` and
 the definition snapshot record the step's name, never its code.
 
 **Yield content, not references.** Whatever the generator yields is what
@@ -54,11 +54,11 @@ def scan():
 def process(scan):
     return scan["text"].upper()
 
-pipeline(id="docs", name="Docs", steps=[scan, process])
+pipeline(name="docs", steps=[scan, process])
 ```
 
 `sorted()` keeps scan order deterministic (harmless either way — lanes are
-content-addressed, not positional — but it makes `describe()`/logs
+content-addressed, not positional — but it makes `p.describe()`/logs
 reproducible run to run). Read every file's bytes into the payload, not
 just its path: the payload *is* what gets hashed into the lane's identity.
 
@@ -79,7 +79,7 @@ def leads():
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 
-pipeline(id="enrich-leads", name="Enrich Leads", steps=[leads, enrich])
+pipeline(name="enrich-leads", steps=[leads, enrich])
 ```
 
 ## SQL table
@@ -100,7 +100,7 @@ def orders():
 @step(name="classify", version="1", depends_on=["orders"])
 def classify(orders: dict): ...
 
-pipeline(id="orders-rollup", name="Orders Rollup", steps=[orders, classify])
+pipeline(name="orders-rollup", steps=[orders, classify])
 ```
 
 **Buffering is accepted for v1.** The generator above (and `expand` in
@@ -137,7 +137,7 @@ def fetch(objects: dict) -> bytes:
     client = boto3.client("s3")
     return client.get_object(Bucket="my-bucket", Key=objects["key"])["Body"].read()
 
-pipeline(id="ingest", name="Ingest", steps=[objects, fetch])
+pipeline(name="ingest", steps=[objects, fetch])
 ```
 
 The token (not the bytes) is what mints `objects`'s lane, so an unchanged
@@ -222,7 +222,7 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 
 p = pipeline(
-    id="enrich", name="Enrich",
+    name="enrich",
     steps=[orders_src, customers_src, order, customer, enrich],
 )
 ```

@@ -19,7 +19,7 @@ most hourly, so it never costs a full stat walk on every run).
 ## `pipeline(retention=N)`: keep the last N runs
 
 ```python
-pipeline(id="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
+pipeline(name="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
 ```
 
 This is the set-and-forget policy. It keeps every materialization

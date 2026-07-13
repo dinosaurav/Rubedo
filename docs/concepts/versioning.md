@@ -46,7 +46,7 @@ function's *source text* changes between runs. Two modes:
     - a `UserWarning` raised during the run (`warnings.warn`, visible in
       run output);
     - a `code_drift_detected` row in the run's event log;
-    - a `plan()` dry-run's warnings list, so you can catch it *before*
+    - a `p.plan()` dry-run's warnings list, so you can catch it *before*
       committing to a run.
 
   This is the right default for anything expensive or non-deterministic —
@@ -83,7 +83,7 @@ if `inspect.getsource` can't find it.
 
 `stale_after` puts a wall-clock TTL on an output, independent of both axes
 above: `stale_after="24h"` (also `"30min"`, `"7d"`, …). Past the TTL —
-measured from `refreshed_at` if set, else `created_at` — the next `run()`
+measured from `refreshed_at` if set, else `created_at` — the next `p.run()`
 re-executes the step for that lane even though the cached generation is
 otherwise still address-valid.
 
@@ -172,5 +172,5 @@ into a bigger step just to avoid the ledger noise of one more row per lane.
 - [shapes.md](shapes.md) — `stale_after` on `expand`'s cache anchor, and
   where `skip_cache` can and can't appear per shape.
 - [`../guides/inspecting-runs.md`](../guides/inspecting-runs.md) — reading
-  code-drift warnings and stale/reuse decisions out of `plan()` and run
+  code-drift warnings and stale/reuse decisions out of `p.plan()` and run
   output.

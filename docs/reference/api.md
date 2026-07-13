@@ -1,9 +1,12 @@
 # API Reference
 
 Everything here is importable from the top-level `rubedo` package —
-`from rubedo import step, pipeline, run, ...` — except `gc()` and
+`from rubedo import step, pipeline, ...` — except `gc()` and
 `storage_report()`, which live in their own submodules (`rubedo.gc`,
-`rubedo.du`) and aren't part of `rubedo.__all__`.
+`rubedo.du`) and aren't part of `rubedo.__all__`. There is no free
+`run()`/`plan()`/`describe()` — they're methods on the `Pipeline` object
+`pipeline()` returns (see below); `trace()`/`invalidate()`/`gc()` stay free
+functions since they're store-level, not pipeline-level.
 
 This page documents signatures, parameters, and defaults as they exist in
 `src/rubedo/`. If something here and the docstring in source ever disagree,
@@ -40,7 +43,7 @@ def step(
 
 A decorator that turns a plain function into a `StepSpec`. The engine never
 imports your code — `@step` just builds a data object; nothing runs until
-`run()`.
+`p.run()`.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -48,8 +51,8 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `version` | `str` | required | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
 | `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — `shape="expand"` yields the pipeline's initial lanes (ingestion is just this shape; see [Concepts: sources](../concepts/sources.md)), or a `shape="map"` root mints a single source-less `@root` lane from `params`. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model overriding the pipeline-level `params_model` for this step's own validation (rare; usually set on `pipeline()` instead). |
-| `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `run(..., workers=N)`. |
-| `code` | `"warn"` \| `"auto"` | `"warn"` | What a source edit means. `"warn"`: edits never recompute, but reusing an output whose code has since changed logs a loud warning (in run output, event log, and `plan()`). `"auto"`: the function's source hash joins the cache identity, so any edit recomputes with no version bump — requires an inspectable function source. |
+| `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `p.run(workers=N)`. |
+| `code` | `"warn"` \| `"auto"` | `"warn"` | What a source edit means. `"warn"`: edits never recompute, but reusing an output whose code has since changed logs a loud warning (in run output, event log, and `p.plan()`). `"auto"`: the function's source hash joins the cache identity, so any edit recomputes with no version bump — requires an inspectable function source. |
 | `retries` | `int` | `0` | Extra attempts after a failure, for exceptions matching `retry_on` only. Every attempt is logged as a run event. |
 | `retry_on` | exception type or tuple | `Exception` | Narrow this to transient error types — retrying a deterministic bug on a paid API just multiplies its cost. |
 | `retry_delay` | `float` | `0.0` | Seconds between retry attempts. |
@@ -124,35 +127,40 @@ the decorated function *is* the source. See
 [Concepts: sources](../concepts/sources.md) for the folder/CSV/table/cloud
 recipes.
 
-## `pipeline()`
+## `pipeline()` / `Pipeline`
 
 ```python
 def pipeline(
     name: str,
     steps: Optional[List[StepSpec]] = None,
-    id: Optional[str] = None,
     params_model: Optional[Type[BaseModel]] = None,
     retention: Optional[int] = None,
-) -> PipelineSpec
+    schedule: str = "broad",
+    home: Optional[str] = None,
+) -> Pipeline
 ```
 
-Builds a `PipelineSpec` from a list of steps. There is no separate source
-concept: ingestion is just a parentless `@step(shape="expand")` (see
-[Concepts: sources](../concepts/sources.md)) or a `@source`-decorated one,
-included in `steps=` like any other.
+Constructs a `Pipeline` — the one object steps register on and every verb
+(`.run()`/`.plan()`/`.describe()`/`.definition()`) lives on. There is no
+separate builder class and no free `run()`/`plan()`/`describe()`: `name` is
+the pipeline's sole identity (there is no `id=`), and settings that apply to
+every run of the pipeline — `schedule=`, `home=`, `retention=`,
+`params_model=` — are constructor arguments, not per-call ones.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | `str` | required | Human-readable pipeline name. |
-| `steps` | `list[StepSpec]` \| `None` | `None` | The steps built by `@step`/`@source`. |
-| `id` | `str` \| `None` | `name` | Stable pipeline identity recorded on every run; defaults to `name`. |
-| `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `run(pipe, params={...})` validates against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
-| `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set. See [Guide: retention](../guides/retention.md). |
+| `name` | `str` | required | The pipeline's sole identity — recorded verbatim as the ledger's `pipeline_id` on every run. Renaming a pipeline orphans its history. |
+| `steps` | `list[StepSpec]` \| `None` | `None` | Steps built by `@step`/`@source`, if you already have them as a list. Steps can also be registered afterward via `@p.step(...)`/`@p.source(...)` — both forms compose freely. |
+| `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `p.run(params={...})`/`p.plan(params={...})` validate against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
+| `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set — validated eagerly, at construction. See [Guide: retention](../guides/retention.md). |
+| `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* for every run of this pipeline — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `reduce`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. Validated eagerly. |
+| `home` | `str` \| `None` | `None` | Points this pipeline's ledger/object store at a custom root instead of the default `.rubedo`/`RUBEDO_HOME`, for every `.run()`/`.plan()` call. |
 
-A pipeline needs no explicit source step at all: some root step must
-originate lanes itself — either a `shape="expand"` root (yields N lanes
-every run) or a source-less `shape="map"` root (mints a single `@root`
-lane from its `params`).
+There is no `.build()`: the underlying `PipelineSpec` (at least one root
+step; `skip_cache`/`join`/`group_key` consistency) is constructed and
+validated lazily the first time you call a verb or access `.spec`, and
+cached from then on — so registering more steps after that first call
+invalidates the cache and it rebuilds.
 
 ```python
 import csv
@@ -167,29 +175,14 @@ def leads():
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 
-pipeline(id="enrich-leads", name="Enrich Leads", steps=[leads, enrich])
+pipeline(name="enrich-leads", steps=[leads, enrich])
 ```
 
-## `PipelineBuilder`
+Or register steps with decorators on the same object — no separate builder
+class:
 
 ```python
-class PipelineBuilder:
-    def __init__(self, params_model: Optional[Type[BaseModel]] = None, **pipeline_kwargs): ...
-    def step(self, *args, **kwargs): ...      # decorator, same signature as @step
-    def source(self, fn=None, **kwargs): ...  # decorator, same signature as @source
-    def build(self, **kwargs) -> PipelineSpec: ...
-```
-
-A fluent alternative to `pipeline(steps=[...])`: construct it with the same
-keyword arguments `pipeline()` takes (minus `steps`), accumulate steps with
-`@p.step(...)`/`@p.source(...)`, then call `.build()` (optionally with
-overrides merged in) to get the same `PipelineSpec` object `pipeline()`
-would return.
-
-```python
-from rubedo import PipelineBuilder
-
-p = PipelineBuilder(id="count-lines", name="Count Lines")
+p = pipeline(name="count-lines")
 
 @p.source(name="scan", version="1")
 def scan():
@@ -203,22 +196,25 @@ def scan():
 def read_lines(scan: dict):
     return {"lines": scan["text"].splitlines()}
 
-count_lines_pipeline = p.build()
+count_lines_pipeline = p
 ```
 
-## `run()`
+A pipeline needs no explicit source step at all: some root step must
+originate lanes itself — either a `shape="expand"` root (yields N lanes
+every run) or a source-less `shape="map"` root (mints a single `@root`
+lane from its `params`).
+
+### `Pipeline.run()`
 
 ```python
 def run(
-    pipeline: PipelineSpec,
+    self,
     *,
     params: Optional[dict] = None,
-    workers: Optional[int] = None,
     force: bool = False,
-    home: Optional[str] = None,
     progress: bool = False,
+    workers: Optional[int] = None,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
-    schedule: str = "broad",
 ) -> RunSummary
 ```
 
@@ -226,48 +222,32 @@ The single entry point that actually executes a pipeline.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `pipeline` | `PipelineSpec` | required | The pipeline to run. |
-| `params` | `dict \| None` | `None` | Run-level parameters, validated against `pipeline.params_model` if one is declared. |
-| `workers` | `int \| None` | `None` | Overrides every step's `workers=` for this run. |
+| `params` | `dict \| None` | `None` | Run-level parameters, validated against the pipeline's `params_model` if one is declared. |
 | `force` | `bool` | `False` | Re-executes every lane regardless of cache state. |
-| `home` | `str \| None` | `None` | Points the ledger/object store at a custom root instead of the default `.rubedo`/`RUBEDO_HOME` for this call. |
 | `progress` | `bool` | `False` | Prints a live terminal progress display (`TerminalProgress`) while running. |
+| `workers` | `int \| None` | `None` | Overrides every step's `workers=` for this run. |
 | `progress_cb` | `Callable[[str, str, str], None] \| None` | `None` | Called as `(step_name, coordinate, action)` for every resolved cell — a lower-level hook than `progress=True`. |
-| `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* only — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `reduce`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. |
 
 Returns a `RunSummary` (see below).
 
 ```python
-from rubedo import run
-
-summary = run(p, params={"min_lines": 5})
+summary = p.run(params={"min_lines": 5})
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
-## `plan()`
+### `Pipeline.plan()`
 
 ```python
-def plan(
-    pipeline: PipelineSpec,
-    source: Optional[Source | str] = None,
-    *,
-    params: Optional[dict] = None,
-    force: bool = False,
-    home: Optional[str] = None,
-) -> RunPlan
+def plan(self, *, params: Optional[dict] = None, force: bool = False) -> RunPlan
 ```
 
-A read-only dry-run: tells you what `run()` would do to every lane, and why
-— `reuse`, `execute`, `blocked`, `filtered`, or `pending` (a dependent lane
-whose address can't be known until an upstream execution actually happens)
-— without writing anything to the ledger or object store. Same parameters
-as `run()`, minus `workers`/`progress`/`schedule` (planning doesn't
-execute).
+A read-only dry-run: tells you what `p.run()` would do to every lane, and
+why — `reuse`, `execute`, `blocked`, `filtered`, or `pending` (a dependent
+lane whose address can't be known until an upstream execution actually
+happens) — without writing anything to the ledger or object store.
 
 ```python
-from rubedo import plan
-
-print(plan(p))
+print(p.plan())
 ```
 
 ```text
@@ -291,10 +271,10 @@ class RunPlan:
 `str(plan_result)` renders the human-readable report shown above;
 `plan_result.counts` gives programmatic access to the action tally.
 
-## `describe()`
+### `Pipeline.describe()`
 
 ```python
-def describe(spec: PipelineSpec, format: str = "text") -> str
+def describe(self, format: str = "text") -> str
 ```
 
 Renders a pipeline's DAG before it's ever run — no ledger access at all.
@@ -306,12 +286,20 @@ edges — legible up to ~20 steps, right in a terminal. Not graphviz-quality
 it falls back to `format="text"` for that graph.
 
 ```python
-from rubedo import describe
-
-print(describe(p))
-print(describe(p, format="mermaid"))
-print(describe(p, format="ascii"))
+print(p.describe())
+print(p.describe(format="mermaid"))
+print(p.describe(format="ascii"))
 ```
+
+### `Pipeline.definition()`
+
+```python
+def definition(self) -> Dict[str, Any]
+```
+
+The JSON-safe snapshot of this pipeline's structure and policies — exactly
+what gets recorded on every `Run` row (`Run.definition_json`) and rendered
+by `.describe()`.
 
 ## `trace()`
 
@@ -393,7 +381,7 @@ invalidate(Selection(index={"company": "acme"}), reason="bad prompt")
 ```
 
 Returns a dict: `run_id`, `invalidated_count`, `seed_count`,
-`downstream_count`, `materialization_ids`. The next `run()` recomputes
+`downstream_count`, `materialization_ids`. The next `p.run()` recomputes
 exactly the invalidated lanes (plus, if it wasn't already invalidated
 explicitly, anything genuinely downstream of them through the normal
 planning process).
@@ -509,14 +497,14 @@ class RunSummary(BaseModel):
     def output_for(self, step_name: str) -> dict[str, Any]: ...
 ```
 
-Returned by `run()`. `failures()` re-queries the ledger for this run's
+Returned by `Pipeline.run()`. `failures()` re-queries the ledger for this run's
 failed coordinates and errors. `output_for(step_name)` re-reads every
 materialization this run created, reused, or produced a filtered verdict
 for at that step, keyed by coordinate — the values a step actually saw or
 produced, without needing your own query.
 
 ```python
-summary = run(p)
+summary = p.run()
 print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))
 ```
 
@@ -603,7 +591,7 @@ print(report.to_dict())       # JSON-safe dict
   rate limits, `stale_after`, assertions, executors, in depth.
 - [Guide: search and invalidation](../guides/search-and-invalidation.md) —
   the full `Selection` language and CLI equivalents.
-- [Guide: inspecting runs](../guides/inspecting-runs.md) — `plan()`,
+- [Guide: inspecting runs](../guides/inspecting-runs.md) — `p.plan()`,
   `trace()`, the CLI, the dashboard.
 - [Guide: retention](../guides/retention.md) — `retention=N`, `rubedo gc`,
   the demote/sweep model.

@@ -14,7 +14,7 @@ The default. One input lane in, one output lane out, same coordinate. This
 is almost every step you'll write:
 
 ```python
-from rubedo import ProcessResult, step, pipeline, run
+from rubedo import ProcessResult, step, pipeline
 
 @step(name="scan", version="1", shape="expand")
 def scan():
@@ -28,8 +28,8 @@ def scan():
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
-run(p)
+p = pipeline(name="count-lines", steps=[scan, count_lines])
+p.run()
 ```
 
 Reach for `map` whenever a step's output depends on exactly one thing per
@@ -46,9 +46,9 @@ A root (`no depends_on`) is usually `shape="expand"` — the ingestion shape
 @step(name="load_pdf", version="1")          # no depends_on
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
-pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])
+pipeline_obj = pipeline(name="pdf", steps=[load_pdf, ...])
 
-run(pipeline_obj, params={"pdf": "report.pdf"})
+pipeline_obj.run(params={"pdf": "report.pdf"})
 ```
 
 The lane's coordinate is the fixed constant `@root`, so its address reduces
@@ -190,7 +190,7 @@ def customer(customers_src): return {"cid": customers_src["cid"], "name": custom
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 
-p = pipeline(id="enrich", name="Enrich",
+p = pipeline(name="enrich",
              steps=[orders_src, customers_src, order, customer, enrich])
 ```
 

@@ -327,8 +327,8 @@ and `rubedo gc`), and the bytes-never-facts guarantee.
 !!! note "The CLI has no `--home` flag"
     None of the subcommands above take a store-location flag — the CLI
     only reads `RUBEDO_HOME`/`RUBEDO_DB_PATH` (or the `.rubedo/` default).
-    The **Python API** offers a per-call override instead: `plan(pipe,
-    home=...)`, `trace(sel, home=...)`, `gc(home=...)`, and
-    `storage_report(home=...)` all accept `home=` to point that one call at
-    a custom root, taking precedence over both environment variables for
-    the duration of that call.
+    The **Python API** offers an override instead: `pipeline(name=...,
+    home=...)` points every `.run()`/`.plan()` of that pipeline at a custom
+    root, and `trace(sel, home=...)`, `gc(home=...)`, and
+    `storage_report(home=...)` each accept `home=` to point that one call at
+    a custom root — all taking precedence over both environment variables.

@@ -1,21 +1,20 @@
 # Inspecting Runs
 
 Rubedo gives you three read-only ways to look at what a pipeline did or
-would do, without changing anything: `plan()` (before you run), `trace()`
+would do, without changing anything: `p.plan()` (before you run), `trace()`
 (after you run, follow lineage from any point), and `rubedo du` /
 `storage_report()` (how big the store is and why). All three, plus the run
 event log and the web dashboard, are covered here.
 
-## `plan()`: the dry-run
+## `p.plan()`: the dry-run
 
 ```python
-from rubedo import plan
-print(plan(pipe, params={"min_lines": 0}))
+print(pipe.plan(params={"min_lines": 0}))
 ```
 
-`plan()` runs the planning phase alone and **writes nothing** — no ledger
+`p.plan()` runs the planning phase alone and **writes nothing** — no ledger
 rows, no object-store bytes, nothing. It walks every lane of every step and
-reports what `run()` *would* do and why:
+reports what `p.run()` *would* do and why:
 
 ```text
 Plan for 'count-lines' over : 1 execute, 3 pending
@@ -29,9 +28,9 @@ Each line is one decision: `<action>  <step>  <coordinate>[ @ <address prefix>]`
 The possible actions:
 
 - **`reuse`** — a live materialization already exists at this address;
-  `run()` would skip execution and reuse it.
+  `p.run()` would skip execution and reuse it.
 - **`execute`** — no live materialization exists (or `force=True` was
-  passed); `run()` would call the step function.
+  passed); `p.run()` would call the step function.
 - **`blocked`** — a required parent lane failed or was blocked (and the
   step's `on_failed="block"`, or every parent is unavailable); the step
   cannot run for this lane.
@@ -53,7 +52,7 @@ Two extra flags ride alongside `execute`/`reuse` and show up as warnings:
   create a new generation.
 - **code-drift** — a `reuse` whose step's *source code* has changed since
   the cached output was produced (same `version` string, different
-  function body, under the default `code="warn"`). `plan()` surfaces this
+  function body, under the default `code="warn"`). `p.plan()` surfaces this
   as a top-level warning, e.g.:
 
   ```text
@@ -65,14 +64,15 @@ Two extra flags ride alongside `execute`/`reuse` and show up as warnings:
 
   It's legal — `code="warn"` is opt-in to *not* recompute on every edit —
   but it's exactly the situation that costs you a debugging session if you
-  don't notice it, so `plan()` puts it front and center rather than burying
+  don't notice it, so `p.plan()` puts it front and center rather than burying
   it per-lane. See [`../concepts/versioning.md`](../concepts/versioning.md)
   for the `version` vs `code` distinction.
 
-`plan(pipe, force=True)` reports what a `force=True` run would do (treats
-every address as a cache miss, ignoring existing materializations).
-`plan(pipe, home="/other/path")` points at a different `.rubedo/` root, same
-as `run()`.
+`pipe.plan(force=True)` reports what a `force=True` run would do (treats
+every address as a cache miss, ignoring existing materializations). To
+point at a different `.rubedo/` root, pass `home=` when constructing the
+pipeline (`pipeline(name=..., home="/other/path")`) — it applies to both
+`.plan()` and `.run()` for that pipeline.
 
 ## `trace()`: lineage from any point
 

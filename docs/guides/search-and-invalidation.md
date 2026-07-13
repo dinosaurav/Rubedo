@@ -103,7 +103,7 @@ rubedo invalidate "step:enrich company:acme" --reason "bad prompt"
 and writes a paired `invalidated` lifecycle row — it **never deletes**
 anything. The materialization row, its lineage edges, and its index entries
 all survive; only its eligibility as "the current answer" changes. The next
-`run()` sees no live materialization at that address and recomputes it —
+`p.run()` sees no live materialization at that address and recomputes it —
 recovery from an invalidation is never more than re-running the pipeline.
 
 `reason` is required and is stored on the lifecycle row — it's what shows

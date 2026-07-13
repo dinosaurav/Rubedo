@@ -13,7 +13,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 8. **Generations:** A rerun supersedes old outputs with new ones (byte-identical output = reuse, not a new generation).
 9. **Filtering:** Return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
 10. **Shapes:** `map` (1:1, default); `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across expand roots, matched on indexed fields).
-11. **PipelineBuilder:** You can also build pipelines fluently via `p = PipelineBuilder(...)`, `@p.step(...)`, and `@p.source(...)`.
+11. **One `Pipeline` object, verbs as methods:** `pipeline(name=...)` returns a `Pipeline`; steps register via `steps=[...]` or by decorating with `@p.step(...)`/`@p.source(...)` on the returned object (both compose freely — no separate builder class). Verbs are methods: `p.run(...)`, `p.plan(...)`, `p.describe(...)`. `name` is the pipeline's sole identity (there's no `id=`); settings that apply to every run (`schedule=`, `home=`, `retention=`, `params_model=`) are `pipeline(...)` constructor arguments, not per-call ones.
 
 ## Step Contract
 - A root step (no `depends_on`) receives **no payload argument** — only `params`, if it declares one. A source-shaped (`shape="expand"`) root's body does its own scanning/fetching and `yield`s payloads; a source-less `map` root reads `params` and returns a single value.
@@ -39,7 +39,7 @@ A step's output is cached based on:
 
 ## Complete Worked Example
 ```python
-from rubedo import step, pipeline, run, Filtered
+from rubedo import step, pipeline, Filtered
 import csv
 
 @step(name="rows", version="1", shape="expand")
@@ -62,14 +62,14 @@ def enrich(screen: dict, params: dict) -> dict:
 def summarize(enrich: dict) -> dict:
     return {"total": len(enrich), "data": list(enrich.values())}
 
-p = pipeline(id="enrichment", name="Enrich", steps=[rows, screen, enrich, summarize])
-summary = run(p, params={"prompt_mode": "detailed"})
+p = pipeline(name="enrichment", steps=[rows, screen, enrich, summarize])
+summary = p.run(params={"prompt_mode": "detailed"})
 print(summary.output_for("summarize"))
 ```
 
 ## Join + Expand Example (multiple sources)
 ```python
-from rubedo import step, pipeline, run
+from rubedo import step, pipeline
 import csv
 
 @step(name="orders_src", version="1", shape="expand")
@@ -99,9 +99,9 @@ def lines(enrich):
     for i in range(2):
         yield {"oid": enrich["oid"], "n": i}  # yield payloads; content-addressed lanes
 
-p = pipeline(id="orders", name="Orders",
+p = pipeline(name="orders",
              steps=[orders_src, customers_src, order, customer, enrich, lines])
-summary = run(p)
+summary = p.run()
 print(summary.output_for("lines"))
 ```
 

@@ -18,7 +18,7 @@ Pipelines are plain Python objects — define them wherever your code lives,
 no project scaffolding required:
 
 ```python
-from rubedo import ProcessResult, step, pipeline, run, plan, describe
+from rubedo import ProcessResult, step, pipeline
 
 @step(name="scan", version="1", shape="expand")
 def scan():
@@ -32,21 +32,21 @@ def scan():
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
+p = pipeline(name="count-lines", steps=[scan, count_lines])
 
-print(describe(p))            # the DAG, before ever running (also: format="mermaid")
-print(plan(p))                # dry-run: what would run() do to my data, and why
-summary = run(p)              # execute
+print(p.describe())           # the DAG, before ever running (also: format="mermaid")
+print(p.plan())                # dry-run: what would p.run() do to my data, and why
+summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
 There's no `folder=` kwarg — ingestion is just a step: `scan` is a
 parentless `@step(shape="expand")` that walks `./input` and `yield`s each
 file's own content (not just its path — the yielded payload is what gets
-hashed into the lane's identity). `describe()` renders the DAG before
-anything runs; `plan()` is a read-only dry-run of what `run()` would do to
+hashed into the lane's identity). `p.describe()` renders the DAG before
+anything runs; `p.plan()` is a read-only dry-run of what `p.run()` would do to
 every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
-`run()` actually executes it and returns a `RunSummary`.
+`p.run()` actually executes it and returns a `RunSummary`.
 
 With four input files, that quickstart prints:
 
@@ -62,7 +62,7 @@ enumeration against, so its actual lanes are unknowable until it runs.
 `count_lines` shows `pending`, not `execute`: its output address depends on
 lanes `scan` hasn't minted yet, so the address (and therefore
 reuse-or-execute) is unknowable without actually running `scan` first. Once
-`run()` actually executes it, `created=8` is `scan`'s four file-lanes plus
+`p.run()` actually executes it, `created=8` is `scan`'s four file-lanes plus
 `count_lines`'s four downstream lanes.
 
 ### Run it twice
@@ -75,7 +75,7 @@ created=0 reused=8
 ```
 
 Nothing recomputed — every lane's output is already sitting at its
-content-addressed location, so `run()` reads it back instead of re-executing
+content-addressed location, so `p.run()` reads it back instead of re-executing
 your code. Now edit one input file and run a third time:
 
 ```text
@@ -95,13 +95,13 @@ querying, version bumps, and invalidation.
 
 ## The `.rubedo/` state directory
 
-The first `run()` (or `plan()`, or a CLI command) creates a `.rubedo/`
+The first `p.run()` (or `p.plan()`, or a CLI command) creates a `.rubedo/`
 directory: a SQLite ledger (`rubedo.sqlite`) plus a content-addressed object
 store (`objects/`). It's created automatically and gitignored automatically
 — there's nothing to set up.
 
 !!! warning "`.rubedo/` resolves relative to the current working directory"
-    Every entry point — `run()`, `plan()`, the CLI, and the API server —
+    Every entry point — `p.run()`, `p.plan()`, the CLI, and the API server —
     resolves `.rubedo/` relative to **wherever the process is running from**,
     not relative to the script's location or the pipeline's definition.
     Running the same pipeline from two different directories silently
@@ -119,20 +119,21 @@ store (`objects/`). It's created automatically and gitignored automatically
 
     or the lower-level `RUBEDO_DB_PATH` to point at the SQLite file
     directly. Precedence is `RUBEDO_DB_PATH` > `RUBEDO_HOME`/`rubedo.sqlite`
-    > `.rubedo/rubedo.sqlite` (the CWD-relative default). Library calls also
-    take a `home=` keyword (`run(p, home="/var/lib/myproject/.rubedo")`) that
-    wins over both env vars for that one call.
+    > `.rubedo/rubedo.sqlite` (the CWD-relative default). `pipeline(...)`
+    also takes a `home=` keyword (`pipeline(name=..., home="/var/lib/myproject/.rubedo")`)
+    that wins over both env vars for every run/plan of that pipeline.
 
-## `PipelineBuilder`: the fluent alternative
+## Registering steps with decorators
 
-`pipeline(steps=[...])` takes an explicit list; `PipelineBuilder` lets you
-accumulate steps with a decorator instead, which reads better once a
-pipeline has more than a couple of steps:
+`pipeline(steps=[...])` takes an explicit list; the same `Pipeline` object
+also accumulates steps via decorators, which reads better once a pipeline
+has more than a couple of steps — there's no separate builder class, just
+one object either way:
 
 ```python
-from rubedo import PipelineBuilder
+from rubedo import pipeline
 
-p = PipelineBuilder(id="count-lines", name="Count Lines")
+p = pipeline(name="count-lines")
 
 @p.source(name="scan", version="1")
 def scan():
@@ -145,13 +146,14 @@ def scan():
 @p.step(name="count_lines", version="count-v1", depends_on=["scan"])
 def count_lines(scan: dict): ...
 
-count_lines_pipeline = p.build()
+count_lines_pipeline = p
 ```
 
-`p.build()` returns the same `PipelineSpec` object `pipeline()` would —
-there's no separate builder-specific runtime behavior. `PipelineBuilder`
-also has a `@p.source(...)` decorator, sugar for a parentless
-`shape="expand"` root step (see [Shapes](concepts/shapes.md)), used by
+There's no `.build()` step: the underlying `PipelineSpec` is constructed and
+validated lazily the first time you call a verb (`.run()`/`.plan()`/
+`.describe()`), and cached from then on. `@p.source(...)` is sugar for a
+parentless `shape="expand"` root step (see [Shapes](concepts/shapes.md)),
+used by
 [`examples/count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)
 itself.
 
@@ -171,7 +173,7 @@ itself.
   limits, `stale_after`, assertions, `executor="process"`.
 - [Guide: search and invalidation](guides/search-and-invalidation.md) —
   `Selection`, `invalidate()`, `trace()`.
-- [Guide: inspecting runs](guides/inspecting-runs.md) — `plan()`, `trace()`,
+- [Guide: inspecting runs](guides/inspecting-runs.md) — `p.plan()`, `trace()`,
   the CLI, the dashboard.
 - [Guide: retention](guides/retention.md) — `retention=N` and `rubedo gc`.
 - [Examples](examples.md) — a tour of the runnable example pipelines.

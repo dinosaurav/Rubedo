@@ -36,7 +36,7 @@ Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for
 Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from rubedo import ProcessResult, step, pipeline, run, plan, describe
+from rubedo import ProcessResult, step, pipeline
 
 @step(name="scan", version="1", shape="expand")
 def scan():
@@ -50,11 +50,11 @@ def scan():
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
+p = pipeline(name="count-lines", steps=[scan, count_lines])
 
-print(describe(p))            # the DAG, before ever running (also: format="mermaid", format="ascii")
-print(plan(p))                # dry-run: what would run() do to my data, and why
-summary = run(p)              # execute
+print(p.describe())           # the DAG, before ever running (also: format="mermaid", format="ascii")
+print(p.plan())                # dry-run: what would p.run() do to my data, and why
+summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
@@ -68,21 +68,21 @@ Run it twice and watch the point of the whole project:
 
 Each run also snapshots the pipeline's definition (steps, edges, policies) into the ledger, so history and the dashboard can show the DAG of anything that has ever run — no imports of user code required.
 
-Prefer a fluent style? `PipelineBuilder` builds the same object:
+Prefer a fluent style? Steps register on the same object via decorators, and it's one object either way — no separate builder class:
 
 ```python
-from rubedo import PipelineBuilder
-p = PipelineBuilder(id="count-lines", name="Count Lines")
+p = pipeline(name="count-lines")
 
 @p.source(name="scan", version="1")
 def scan(): ...
 
-count_lines = p.build()
+@p.step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan): ...
 ```
 
 ## Ingestion is a step
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` (a `@source` for short via `PipelineBuilder`) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
+There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` (a `@source` for short) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
 
 ```python
 import csv
@@ -97,7 +97,7 @@ def leads():
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 
-pipeline(id="enrich-leads", name="Enrich Leads", steps=[leads, enrich])
+pipeline(name="enrich-leads", steps=[leads, enrich])
 ```
 
 Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), index it with `@step(index=[...])` and query — the lane key is never a human key.
@@ -123,7 +123,7 @@ def enrich(row: dict): ...
 - **`stale_after`** expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh the clock.
 - **`assertions`** run against the output value before it commits; if any raise, the step fails and bad data never propagates downstream.
 - **`executor="process"`** switches a step from the default thread pool to a process pool (`loky` + `cloudpickle`, so closures are fine) for CPU-bound work.
-- **`run(pipe, schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `reduce`/`join` always synchronize on all lanes either way.
+- **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `reduce`/`join` always synchronize on all lanes either way.
 
 A step can **decline an item** by returning `Filtered(reason=...)`: downstream steps skip it with status `filtered` instead of executing, and the verdict itself is cached like any output — an expensive LLM-based filter runs once per input, not once per run. When the input changes, the decision is made fresh.
 
@@ -160,19 +160,19 @@ def customer(customers_src): return {"cid": customers_src["cid"], "name": custom
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 
-p = pipeline(id="enrich", name="Enrich",
+p = pipeline(name="enrich",
              steps=[orders_src, customers_src, order, customer, enrich])
 ```
 
 Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
 
-A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `run(pipe, params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
+A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `p.run(params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
 
 ```python
 @step(name="load_pdf", version="1")          # no depends_on
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
-pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])
+pipeline(name="pdf", steps=[load_pdf, ...])
 ```
 
 See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → reduce → two summaries.
@@ -197,11 +197,11 @@ Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs
 Two independent axes on `@step`:
 
 - **`version`** is the semantic identity — bump it for deliberate behavior changes (also the escape hatch for edits the engine can't see, like helpers your step calls).
-- **`code`** decides what a *source edit* means. `code="auto"` folds the function's source hash into the cache identity, so any edit recomputes without version bookkeeping (right for cheap, deterministic steps). `code="warn"` (the default) never recomputes on edits, but warns loudly — in the run output, the event log, and `plan()` — whenever it reuses an output whose code has since changed, so recomputing an expensive LLM step stays a deliberate choice.
+- **`code`** decides what a *source edit* means. `code="auto"` folds the function's source hash into the cache identity, so any edit recomputes without version bookkeeping (right for cheap, deterministic steps). `code="warn"` (the default) never recomputes on edits, but warns loudly — in the run output, the event log, and `p.plan()` — whenever it reuses an output whose code has since changed, so recomputing an expensive LLM step stays a deliberate choice.
 
 ## Inspecting runs
 
-`plan()` is a read-only dry-run: it tells you what `run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
+`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
 
 `trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
 
@@ -229,7 +229,7 @@ The store keeps every generation forever by default — recompute-avoidance is t
 Set a keep-window per pipeline:
 
 ```python
-pipeline(id="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
+pipeline(name="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
 ```
 
 At the end of each successful run, generations that only older runs referenced are demoted and — once no live output anywhere references the bytes — the object is deleted. It's set-and-forget; a run skips its own prune (never errors) if another run is in flight.

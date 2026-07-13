@@ -39,7 +39,7 @@ meh
 ## An expand root and a map step over a folder
 
 ```python title="pipeline.py"
-from rubedo import Filtered, ProcessResult, describe, plan, run, step, pipeline
+from rubedo import Filtered, ProcessResult, step, pipeline
 
 POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
@@ -65,14 +65,14 @@ def classify(scan: dict) -> ProcessResult:
     return ProcessResult(value={"rating": rating, "word_count": len(words)})
 
 
-p = pipeline(id="reviews", name="Review Classifier", steps=[scan, classify])
+p = pipeline(name="reviews", steps=[scan, classify])
 
 if __name__ == "__main__":
-    print(describe(p))
+    print(p.describe())
     print()
-    print(plan(p))
+    print(p.plan())
     print()
-    summary = run(p)
+    summary = p.run()
     print(
         f"\ncreated={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
@@ -109,7 +109,7 @@ created=7 reused=0 filtered=1
 `scan` plans as a single `execute` — an `expand` root has no parent to
 cache its enumeration against, so its actual lanes (one per file) are
 unknowable until it runs. `classify` shows `pending`, not `execute`: its
-output address depends on lanes `scan` hasn't minted yet. `run()` resolves
+output address depends on lanes `scan` hasn't minted yet. `p.run()` resolves
 both: 7 materializations get created (4 `scan` file-lanes + 3 `classify`
 lanes) and `review4.txt` — "meh", one word — gets **filtered**: its step
 returned `Filtered(reason=...)` instead of a `ProcessResult`. That verdict
@@ -130,12 +130,12 @@ Plan for 'reviews' over scan: 1 execute, 1 pending
 created=0 reused=7 filtered=1
 ```
 
-`plan()` prints the exact same coarse shape as the first run — an `expand`
+`p.plan()` prints the exact same coarse shape as the first run — an `expand`
 root always plans as `execute` (it never caches its own enumeration to
 preview against) and everything downstream stays `pending`, even
-immediately after a completed run. This is deliberate: `plan()` is a pure
+immediately after a completed run. This is deliberate: `p.plan()` is a pure
 dry-run and can't reach into a hypothetical future execution to say what an
-unexecuted generator would yield. `run()`'s summary is where the real
+unexecuted generator would yield. `p.run()`'s summary is where the real
 story shows: `created=0 reused=7` — every lane, including the filtered
 one, was a cache hit.
 
@@ -190,7 +190,7 @@ Plan for 'reviews' over scan: 1 execute, 1 pending
 created=2 reused=5 filtered=1
 ```
 
-`plan()`'s coarse shape never changes — but `run()`'s summary shows only
+`p.plan()`'s coarse shape never changes — but `p.run()`'s summary shows only
 `review2.txt`'s two lanes recomputed (`created=2`), while the other three
 files' lanes reused (`reused=5`, including the filtered `review4.txt`).
 Rubedo didn't diff the file or track which line changed: `scan` yields the
@@ -271,7 +271,7 @@ print(result)
 
 Invalidation is a logical tombstone: `is_live` flips off, a
 `materialization_lifecycle` row records why, and nothing is deleted. The
-next `run()` sees those two lanes have no live output and recomputes them:
+next `p.run()` sees those two lanes have no live output and recomputes them:
 
 ```bash
 uv run python pipeline.py
@@ -286,7 +286,7 @@ created=2 reused=5 filtered=1
 ```
 
 Exactly the two invalidated lanes recompute (`created=2`); the rest —
-including the neutral and filtered reviews — reuse. `plan()` can't preview
+including the neutral and filtered reviews — reuse. `p.plan()` can't preview
 which two those'll be (it never sees past the `scan` root — see above),
 but `trace()` can, both before invalidating (to see the blast radius) and
 after (to confirm what actually moved): run `trace()` with the same

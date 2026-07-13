@@ -148,8 +148,8 @@ flowchart LR
     Plan -->|reuse decisions| Commit
 ```
 
-`plan()` runs the plan phase alone and writes nothing — a dry-run of what
-`run()` would do and why. `run()` chains all three per step, feeding each
+`p.plan()` runs the plan phase alone and writes nothing — a dry-run of what
+`p.run()` would do and why. `p.run()` chains all three per step, feeding each
 step's committed materializations forward as the next step's parent lookup.
 See [../guides/inspecting-runs.md](../guides/inspecting-runs.md) for reading
 the output of both.

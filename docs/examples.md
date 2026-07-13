@@ -40,9 +40,10 @@ Rubedo is that the second run recomputes only what actually changed.
 **[`count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)**
 — the flagship. A `@p.source` root yields file paths, `read_lines` and
 `count_lines` chain off it, and a `reduce` step (`total_lines`) sums the
-line counts across every file. Uses `PipelineBuilder` and a Pydantic
-`params_model` (`min_lines`, `include_text_preview`) to show params flowing
-into a step and being validated before the run starts.
+line counts across every file. Registers its steps via decorators on a
+`pipeline(...)` object and a Pydantic `params_model` (`min_lines`,
+`include_text_preview`) to show params flowing into a step and being
+validated before the run starts.
 
 **[`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest)**
 — `top_story → screen → classify → digest (reduce)` over the live Hacker

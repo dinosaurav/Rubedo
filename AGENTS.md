@@ -42,40 +42,42 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 ## Architecture map
 
-- `src/rubedo/spec.py` — pure data: `@step` / `pipeline()` (and
-  `PipelineBuilder`) build plain `StepSpec`/`PipelineSpec` objects. No
-  registry: the engine never imports user code. `shape` ∈ `map` (1:1,
-  default) / `reduce` (N:1 fan-in over a parent's surviving lanes;
-  `group_key` partitions into one output per indexed-field value, else a
-  single `"@all"`) / `expand` (1:N — the fn yields payloads, minting
-  content-addressed `row-<hash>` child lanes; **no `depends_on` = a root =
-  a source** that yields the initial lanes and re-runs every run, so
-  `pipeline(steps=[...])` needs no separate ingestion concept — see
-  `@source`) / `join` (N-way equijoin on `join_on={parent: indexed_field}`,
-  minting `a|b|…` pair lanes). A **source-less `map` root** (no
-  `depends_on`) mints a single `@root` lane whose input is its params (or a
-  constant) — so a pipeline can begin with a plain step fed a value instead
-  of scanning for one; same params reuse, changed params recompute
-  (`ROOT_LANE` in `planning.py`). A pipeline may declare several `@source`
-  roots; `join` doesn't care that its parents are roots. `executor` is
-  `"thread"` (default) or `"process"` (a `loky` pool serializing via
-  `cloudpickle`, so closures are fine). `definition()` is the JSON snapshot
-  each run records. `spec.py` never imports `pipeline.py`/`runner.py` —
-  data stays a leaf.
+- `src/rubedo/spec.py` — pure data leaf: `StepSpec`/`PipelineSpec`
+  dataclasses plus `step()`, `source()`, and `definition()` (the JSON
+  snapshot each run records). No registry: the engine never imports user
+  code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
+  parent's surviving lanes; `group_key` partitions into one output per
+  indexed-field value, else a single `"@all"`) / `expand` (1:N — the fn
+  yields payloads, minting content-addressed `row-<hash>` child lanes; **no
+  `depends_on` = a root = a source** that yields the initial lanes and
+  re-runs every run, so `pipeline(steps=[...])` needs no separate ingestion
+  concept — see `@source`) / `join` (N-way equijoin on
+  `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes). A
+  **source-less `map` root** (no `depends_on`) mints a single `@root` lane
+  whose input is its params (or a constant) — so a pipeline can begin with
+  a plain step fed a value instead of scanning for one; same params reuse,
+  changed params recompute (`ROOT_LANE` in `planning.py`). A pipeline may
+  declare several `@source` roots; `join` doesn't care that its parents are
+  roots. `executor` is `"thread"` (default) or `"process"` (a `loky` pool
+  serializing via `cloudpickle`, so closures are fine). **`spec.py` never
+  imports `pipeline.py`/`runner.py`/`scheduler.py`** — the owner considers
+  it a flagship human-readable file; validation and machinery live above it
+  (TODO 15's whole point: rotate the dependency so no lazy imports are
+  needed).
+- `src/rubedo/pipeline.py` — sits *above* the engine (imports `runner.py`):
+  `Pipeline` (steps register via `@p.step`/`@p.source` or `steps=[...]`;
+  verbs are methods — `.run()`/`.plan()`/`.describe()`/`.definition()`) and
+  the `pipeline()` factory that constructs one. `_build_spec` does the
+  validation the old free `pipeline()` builder did (at least one root,
+  skip_cache/join/group_key consistency) — run lazily on first `.spec`/verb
+  access and cached, not at construction (`.build()` is gone). `name` is
+  the pipeline's sole identity (no `id=`); `schedule=`/`home=` join
+  `retention=`/`params_model=` as construction-time settings.
 - `src/rubedo/render.py` — `describe()` (text/Mermaid/ascii DAG rendering)
   and the ascii layout internals (`_AsciiNode`, `_ascii_layers`,
   `_ascii_positions`, `_describe_ascii`). Sits above `spec.py` and
   `planning.py` (both imported at module level — rendering needs
-  topological order).
-- `src/rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
-  payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
-  `batch_size` streaming mode, `source_id` built without leaking
-  credentials). Lanes are **always content-addressed** (`row-<hash>`;
-  identical rows collapse) — no `key=`. `TableSource.key=` is only the
-  streaming (`batch_size`) re-fetch handle, never the coordinate. A
-  coordinate is a **lane key**: engine-facing dataflow/incrementality key,
-  content-addressed. Not identity (that's the output
-  address), not the search handle (that's `index=`).
+  topological order); `Pipeline.describe()` delegates here.
 - `src/rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
@@ -84,7 +86,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   → one execute decision per parent lane, reused without re-running the fn via
   a parent-addressed cache anchor (`_plan_expand_reuse`); join → one decision
   per matched tuple (`_plan_join`). `group_key`/`join_on` read `index` rows at
-  plan time, so planning stays value-free.
+  plan time, so planning stays value-free. Untouched by TODO 15.
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
@@ -92,13 +94,18 @@ accurate and load-bearing; keep them updated when behavior changes.
   events, and `_commit_materialization` (the generations protocol:
   identical bytes reuse/restore, different bytes supersede; every liveness
   transition appends a `materialization_lifecycle` row).
-- `src/rubedo/runner.py` — orchestration: `run()`, `plan()` (dry-run, writes
-  nothing), `run_pipeline()`. One scheduler over (lane, step) cells: the topo
-  order is partitioned into segments and `_run_segment` drives each (all
-  ledger writes in the main thread). `schedule="broad"` (default) =
-  singleton segments, stage-at-a-time; `"deep"` pipelines lanes through
-  consecutive ≤1-parent map steps; reduce/join/expand/multi-parent maps are
-  barrier segments. Order only — ledger rows identical either way.
+- `src/rubedo/scheduler.py` — the segment machinery: `_partition_segments`
+  (topo order → `broad` singleton segments or `deep` runs of consecutive
+  ≤1-parent map steps) and `_run_segment`, the one scheduler over (lane,
+  step) cells (all ledger writes in the main thread — workers only run step
+  functions). reduce/join/expand/multi-parent maps are barrier segments.
+  Order only — ledger rows identical either way.
+- `src/rubedo/runner.py` — orchestration: internal `run()`/`plan()`
+  (`Pipeline.run()`/`Pipeline.plan()` delegate to these — not exported from
+  `rubedo.__init__`, see TODO 15) and `run_pipeline()`, which drives every
+  segment from `scheduler.py` and records the `Run` row/retention. All
+  ledger writes happen in the main thread (restated at the top of this file
+  and of `scheduler.py`).
 - `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,
@@ -131,8 +138,9 @@ Every engine test file uses the same fixture shape (copy from
 `.test_<name>_env` (object store) directories — **never nest the store
 inside the scanned folder** — plus a per-test in-memory shared-cache SQLite
 with StaticPool. Steps are defined inline with `@step`; hold the
-`pipeline(...)` return value and pass it to `run(pipe)` — there are no
-string ids. `.test_*/` is gitignored.
+`pipeline(...)` return value (a `Pipeline`) and call `.run()` on it — there
+are no string ids, and `name` is the pipeline's sole identity (no `id=`
+kwarg — TODO 15). `.test_*/` is gitignored.
 
 Ingestion has no separate concept (TODO 14): there is no `folder=` pipeline
 kwarg. A test folder is scanned by a root `@step(shape="expand")` — the
@@ -152,7 +160,8 @@ def extract(scan: dict):
     text = scan["text"]
     ...
 
-pipeline(id="ix", name="ix", steps=[scan, extract])
+pipe = pipeline(name="ix", steps=[scan, extract])
+pipe.run(workers=1)
 ```
 
 Two consequences worth knowing before writing an assertion: lanes are

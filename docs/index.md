@@ -8,7 +8,7 @@ It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid 
 
 ```python
 import csv
-from rubedo import step, pipeline, run
+from rubedo import step, pipeline
 
 @step(name="leads", version="v1", shape="expand")
 def leads():
@@ -19,8 +19,8 @@ def leads():
 def summarize(leads: dict):
     return {"summary": call_llm(leads["notes"])}   # runs once per distinct row — ever
 
-p = pipeline(id="summarize", name="Summarize", steps=[leads, summarize])
-run(p)   # second run: created=0, reused=everything
+p = pipeline(name="summarize", steps=[leads, summarize])
+p.run()   # second run: created=0, reused=everything
 ```
 
 Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + content-addressed object store).
@@ -42,7 +42,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 
 - **[Execution policies](guides/execution-policies.md)** — retries, rate limits, assertions, process pools, scheduling.
 - **[Search & invalidation](guides/search-and-invalidation.md)** — index outputs by content, invalidate surgically.
-- **[Inspecting runs](guides/inspecting-runs.md)** — `plan()`, `trace()`, `rubedo du`, the dashboard.
+- **[Inspecting runs](guides/inspecting-runs.md)** — `p.plan()`, `trace()`, `rubedo du`, the dashboard.
 - **[Retention & GC](guides/retention.md)** — keep-windows, `rubedo gc`, bytes-never-facts.
 
 ## Reference

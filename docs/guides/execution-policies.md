@@ -5,8 +5,8 @@ keyword arguments — how it retries, how fast it's allowed to run, what it's
 allowed to produce, and which pool runs it. None of these affect cache
 identity (the output address doesn't encode `retries=3` or `rate_limit=`);
 they only govern *how* a step gets from "needs to execute" to "committed."
-This page covers each one, plus the two knobs that govern a whole `run()`:
-`schedule` and `Filtered`.
+This page covers each one, plus the two things that govern a whole
+pipeline's runs: `schedule` and `Filtered`.
 
 ## Retries
 
@@ -116,16 +116,18 @@ and shut down at the end of the segment that runs it — a mixed pipeline
 ## `schedule`: execution order, never results
 
 ```python
-run(pipe, schedule="broad")   # default
-run(pipe, schedule="deep")
+pipeline(name="p", steps=[...], schedule="broad")   # default
+pipeline(name="p", steps=[...], schedule="deep")
 ```
 
-`schedule` picks the *order* work happens in — it never changes what gets
-computed, what the addresses are, or what ends up in the ledger. Because
-addresses and cache identity are order-independent, `"broad"` and `"deep"`
-runs of the same pipeline against the same state always produce
-byte-identical ledger rows; each mode fully reuses whatever the other one
-already computed.
+`schedule` is a pipeline-construction setting (alongside `retention=` and
+`home=`), not a per-run argument — it applies to every `p.run()`/`p.plan()`
+call for that pipeline. It picks the *order* work happens in — it never
+changes what gets computed, what the addresses are, or what ends up in the
+ledger. Because addresses and cache identity are order-independent,
+`"broad"` and `"deep"` runs of the same pipeline against the same state
+always produce byte-identical ledger rows; each mode fully reuses whatever
+the other one already computed.
 
 - **`"broad"` (default)** completes a step across every lane before the
   next step starts — the classic staged loop: plan the whole step, execute
@@ -174,5 +176,5 @@ proceeds with the survivors — unlike a failed or blocked parent, a filtered
 one never triggers `on_failed="block"` (see
 [`../concepts/shapes.md`](../concepts/shapes.md)); a decline is not a
 failure, so it never blocks a fan-in. See
-[`../guides/inspecting-runs.md`](inspecting-runs.md) for how `plan()`
+[`../guides/inspecting-runs.md`](inspecting-runs.md) for how `p.plan()`
 reports a `filtered` decision before you ever run anything.
