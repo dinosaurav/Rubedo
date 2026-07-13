@@ -2,7 +2,7 @@ import os
 import shutil
 import pytest
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db
 
 TEST_FOLDER = ".test_process_data"
@@ -75,15 +75,15 @@ def test_process_executor_basic():
     # Register steps
     step1 = step(name="ok", version="1", executor="process", depends_on=["scan"])(process_ok)
 
-    pipe = pipeline(id="p1", name="p1", steps=[scan, step1])
-    summary = run(pipe, workers=2)
+    pipe = pipeline(name="p1", steps=[scan, step1])
+    summary = pipe.run(workers=2)
 
     # 2 scan lanes + 2 "ok" lanes
     assert summary.created_count == 4
     assert summary.reused_count == 0
 
     # Check that they can be reused
-    summary2 = run(pipe, workers=2)
+    summary2 = pipe.run(workers=2)
     assert summary2.created_count == 0
     assert summary2.reused_count == 4
 
@@ -94,8 +94,8 @@ def test_process_executor_closure_ok():
         return prefix + scan["text"]
 
     step_local = step(name="local", version="1", executor="process", depends_on=["scan"])(my_local_func)
-    pipe = pipeline(id="p4", name="p4", steps=[scan, step_local])
-    summary = run(pipe, workers=2)
+    pipe = pipeline(name="p4", steps=[scan, step_local])
+    summary = pipe.run(workers=2)
     # 2 scan lanes + 2 "local" lanes
     assert summary.created_count == 4
     assert summary.failed_count == 0
@@ -104,8 +104,8 @@ def test_process_executor_retries():
     # Retries happen in the parent thread pool and submit to process pool
     step_fail = step(name="fail", version="1", executor="process", retries=2, depends_on=["scan"])(process_fail)
 
-    pipe = pipeline(id="p2", name="p2", steps=[scan, step_fail])
-    summary = run(pipe, workers=2)
+    pipe = pipeline(name="p2", steps=[scan, step_fail])
+    summary = pipe.run(workers=2)
 
     # 2 scan lanes + 2 "fail" lanes
     assert summary.created_count == 4
@@ -127,9 +127,9 @@ def process_unpicklable(scan):
 def test_process_executor_pickling_error():
     # If the process pool cannot pickle the return value, it should surface as a step failure.
     step_unpicklable = step(name="unpicklable", version="1", executor="process", depends_on=["scan"])(process_unpicklable)
-    pipe = pipeline(id="p3", name="p3", steps=[scan, step_unpicklable])
+    pipe = pipeline(name="p3", steps=[scan, step_unpicklable])
 
-    summary = run(pipe, workers=2)
+    summary = pipe.run(workers=2)
     assert summary.failed_count == 2
     # scan's 2 lanes still materialize fine; only "unpicklable" fails.
     assert summary.created_count == 2

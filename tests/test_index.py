@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline
+from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationIndexEntry
 from rubedo.store import init_store
@@ -90,7 +90,7 @@ def make_pipeline():
             "body": text,
         }
 
-    return pipeline(id="ix", name="ix", steps=[scan, extract])
+    return pipeline(name="ix", steps=[scan, extract])
 
 
 def entries():
@@ -106,7 +106,7 @@ def entries():
 def test_declared_fields_are_extracted():
     create_file("a.txt", "acme,east,bob@x.com,ann@x.com")
     pipe = make_pipeline()
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     assert sorted(entries()) == [
         ("company", "acme"),
@@ -120,7 +120,7 @@ def test_selection_by_indexed_field():
     create_file("a.txt", "acme,east")
     create_file("b.txt", "globex,west")
     pipe = make_pipeline()
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     res = invalidate(Selection(index={"company": "acme"}), reason="redo acme")
     assert res["invalidated_count"] == 1
@@ -139,7 +139,7 @@ def test_selection_index_pairs_are_anded():
     create_file("a.txt", "acme,east")
     create_file("b.txt", "acme,west")
     pipe = make_pipeline()
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     res = invalidate(
         Selection(index={"company": "acme", "meta.region": "west"}), reason="one"
@@ -150,8 +150,8 @@ def test_selection_index_pairs_are_anded():
 def test_reuse_does_not_duplicate_entries():
     create_file("a.txt", "acme,east")
     pipe = make_pipeline()
-    run(pipe, workers=1)
-    run(pipe, workers=1)  # full cache hit
+    pipe.run(workers=1)
+    pipe.run(workers=1)  # full cache hit
 
     assert len(entries()) == 2  # company + meta.region, once
 
@@ -163,8 +163,8 @@ def test_missing_fields_are_skipped():
     def extract(scan: dict):
         return {"company": "acme", "meta": {}}
 
-    pipe = pipeline(id="ix2", name="ix2", steps=[scan, extract])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="ix2", steps=[scan, extract])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 0
     assert entries() == [("company", "acme")]
 
@@ -177,8 +177,8 @@ def test_index_declaration_is_not_cache_identity():
     def extract_v1(scan: dict):
         return {"company": "acme"}
 
-    pipe = pipeline(id="ix3", name="ix3", steps=[scan, extract_v1])
-    run(pipe, workers=1)
+    pipe = pipeline(name="ix3", steps=[scan, extract_v1])
+    pipe.run(workers=1)
 
     # Same step, index added: purely operational, so still a cache hit —
     # and (documented) the existing materialization gains no entries
@@ -186,8 +186,8 @@ def test_index_declaration_is_not_cache_identity():
     def extract_v2(scan: dict):
         return {"company": "acme"}
 
-    pipe = pipeline(id="ix3", name="ix3", steps=[scan, extract_v2])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="ix3", steps=[scan, extract_v2])
+    summary = pipe.run(workers=1)
     assert summary.reused_count == 2  # scan's lane + extract's lane
     assert entries() == []
 
@@ -204,7 +204,7 @@ def test_selection_language_end_to_end():
     create_file("a.txt", "acme,east")
     create_file("b.txt", "globex,west")
     pipe = make_pipeline()
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     res = invalidate(
         Selection.parse("step:extract company:acme live:true"), reason="via query"

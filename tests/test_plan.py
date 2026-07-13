@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, plan, run, step, pipeline
+from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Run, RunEvent
 from rubedo.store import init_store
@@ -89,7 +89,7 @@ def make_pipeline(pipe_id="pl"):
     def upper(read):
         return read.upper()
 
-    return pipeline(id=pipe_id, name=pipe_id, steps=[scan, read, upper])
+    return pipeline(name=pipe_id, steps=[scan, read, upper])
 
 
 def actions(run_plan):
@@ -100,7 +100,7 @@ def test_fresh_state_executes_source_and_pends_downstream():
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
 
-    p = plan(pipe)
+    p = pipe.plan()
     # One execute for the source (@source is a root expand — no parent to
     # cache its enumeration against, so it always executes) and one
     # "pending" per downstream step, not per file: the individual file
@@ -126,9 +126,9 @@ def test_second_plan_still_shows_execute_and_pending_not_reuse():
     pure dry-run, can't reach into a hypothetical future execution."""
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
-    p = plan(pipe)
+    p = pipe.plan()
     assert actions(p) == {
         ("@root", "scan"): "execute",
         ("@root", "read"): "pending",
@@ -140,10 +140,10 @@ def test_second_plan_still_shows_execute_and_pending_not_reuse():
 def test_invalidation_does_not_change_the_coarse_plan_shape():
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     invalidate(Selection(step="read"), reason="redo")
-    p = plan(pipe)
+    p = pipe.plan()
     # Same coarse shape as any fresh/cached state — invalidating a lane
     # that plan() can't even see yet has no visible effect on a dry-run.
     assert actions(p)[("@root", "scan")] == "execute"
@@ -160,11 +160,11 @@ def test_plan_cannot_preview_effect_of_a_deleted_file():
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
-    before = actions(plan(pipe))
+    before = actions(pipe.plan())
     os.remove(os.path.join(TEST_FOLDER, "f2.txt"))
-    after = actions(plan(pipe))
+    after = actions(pipe.plan())
     assert before == after == {
         ("@root", "scan"): "execute",
         ("@root", "read"): "pending",
@@ -175,14 +175,14 @@ def test_plan_cannot_preview_effect_of_a_deleted_file():
 def test_plan_writes_nothing():
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     with get_session() as session:
         runs_before = session.query(Run).count()
         events_before = session.query(RunEvent).count()
 
-    plan(pipe)
-    plan(pipe, force=True)
+    pipe.plan()
+    pipe.plan(force=True)
 
     with get_session() as session:
         assert session.query(Run).count() == runs_before
@@ -197,13 +197,13 @@ def test_run_resolves_every_planned_pending_to_created():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.reused_count == 0
     assert summary.created_count == 6  # 2 files x (scan + read + upper)
 
     # And now that it's cached, a second run reuses everything — this is
     # the "per-lane reuse" the Trap describes, visible via run(), not a
     # standalone plan() call (see test_second_plan_still_shows_execute_and_pending_not_reuse).
-    summary2 = run(pipe, workers=1)
+    summary2 = pipe.run(workers=1)
     assert summary2.created_count == 0
     assert summary2.reused_count == 6

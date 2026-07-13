@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -82,7 +82,7 @@ def csv_source(name):
 
 
 def assert_run(pipe, **kw):
-    summary = run(pipe, workers=1, **kw)
+    summary = pipe.run(workers=1, **kw)
     if summary.failed_count > 0:
         with get_session() as session:
             for e in (
@@ -133,7 +133,7 @@ def test_two_way_equijoin():
         return {"oid": order["oid"], "name": customer["name"]}
 
     pipe = pipeline(
-        id="j", name="j",
+        name="j",
         steps=[orders_src, customers_src, order, customer, enrich],
     )
     assert_run(pipe)
@@ -185,7 +185,7 @@ def test_four_way_star_join():
         return "".join([a["v"], b["v"], c["v"], d["v"]])
 
     pipe = pipeline(
-        id="star", name="star",
+        name="star",
         steps=[*srcs, a, b, c, d, merge],
     )
     assert_run(pipe)
@@ -220,10 +220,10 @@ def test_join_failed_parent_lane():
         return a["v"] + b["v"]
 
     pipe = pipeline(
-        id="join_fail", name="join_fail",
+        name="join_fail",
         steps=[a_src, b_src, load_a, load_b, merge],
     )
-    s1 = run(pipe, workers=1)
+    s1 = pipe.run(workers=1)
     
     assert s1.failed_count == 1
     assert s1.blocked_count == 1
@@ -258,10 +258,10 @@ def test_join_failed_parent_lane_use_passed():
         return a["v"] + b["v"]
 
     pipe = pipeline(
-        id="join_fail_pass", name="join_fail_pass",
+        name="join_fail_pass",
         steps=[a_src, b_src, load_a, load_b, merge],
     )
-    s1 = run(pipe, workers=1)
+    s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
     assert s1.blocked_count == 0
@@ -317,10 +317,10 @@ def test_join_empty():
         return a["v"] + b["v"]
 
     pipe = pipeline(
-        id="join_empty", name="join_empty",
+        name="join_empty",
         steps=[a_src, b_src, load_a, load_b, merge],
     )
-    s1 = run(pipe, workers=1)
+    s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 0
     assert s1.blocked_count == 0

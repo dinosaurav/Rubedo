@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, source, step, pipeline
+from rubedo import source, step, pipeline
 from rubedo.db import init_db
 from rubedo.store import init_store
 
@@ -75,11 +75,11 @@ def test_param_fed_root_runs_once_then_reuses():
 
     pipe = pipeline(name="headless", steps=[head])
 
-    s1 = run(pipe, params={"n": 7})
+    s1 = pipe.run(params={"n": 7})
     assert (s1.created_count, s1.reused_count) == (1, 0)
     assert s1.output_for("head") == {"@root": {"seen": 7}}
 
-    s2 = run(pipe, params={"n": 7})
+    s2 = pipe.run(params={"n": 7})
     assert (s2.created_count, s2.reused_count) == (0, 1)
     assert s2.output_for("head") == {"@root": {"seen": 7}}
 
@@ -91,11 +91,11 @@ def test_changed_params_recompute_and_old_params_still_cached():
 
     pipe = pipeline(name="headless", steps=[head])
 
-    assert run(pipe, params={"n": 1}).created_count == 1
+    assert pipe.run(params={"n": 1}).created_count == 1
     # A different param value is a distinct address -> a new generation.
-    assert run(pipe, params={"n": 2}).created_count == 1
+    assert pipe.run(params={"n": 2}).created_count == 1
     # The first value's output was never superseded (distinct address): reuse.
-    assert run(pipe, params={"n": 1}).reused_count == 1
+    assert pipe.run(params={"n": 1}).reused_count == 1
 
 
 def test_root_with_no_params_is_a_constant():
@@ -108,11 +108,11 @@ def test_root_with_no_params_is_a_constant():
 
     pipe = pipeline(name="const", steps=[head])
 
-    s1 = run(pipe)
+    s1 = pipe.run()
     assert (s1.created_count, s1.reused_count) == (1, 0)
     assert s1.output_for("head") == {"@root": 42}
 
-    s2 = run(pipe)
+    s2 = pipe.run()
     assert (s2.created_count, s2.reused_count) == (0, 1)
     # Executed exactly once across both runs.
     assert calls["n"] == 1
@@ -129,7 +129,7 @@ def test_root_lane_feeds_downstream_map():
 
     pipe = pipeline(name="chain", steps=[head, double])
 
-    s = run(pipe, params={"base": 21})
+    s = pipe.run(params={"base": 21})
     assert s.created_count == 2
     assert s.output_for("double") == {"@root": 42}
 
@@ -146,7 +146,7 @@ def test_headless_map_root_and_expand_root_coexist():
 
     pipe = pipeline(name="mixed", steps=[rows, config])
 
-    s = run(pipe)
+    s = pipe.run()
     # two expand children + one @root config lane
     assert s.created_count == 3
     assert s.output_for("config") == {"@root": {"scale": 10}}
@@ -158,5 +158,8 @@ def test_bare_pipeline_with_no_source_and_no_root_is_rejected():
     def leaf(ghost):
         return ghost
 
+    # Validation (at least one root) runs lazily on first verb/`.spec`
+    # access, not at pipeline() construction time (TODO 15: no eager
+    # .build() anymore).
     with pytest.raises(ValueError):
-        pipeline(name="empty", steps=[leaf])
+        pipeline(name="empty", steps=[leaf]).spec

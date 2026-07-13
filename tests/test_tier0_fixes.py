@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Filtered, Selection, invalidate, pipeline, run, step
+from rubedo import Filtered, Selection, invalidate, pipeline, step
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, Run, RunCoordinateStatus
 from rubedo.selection import get_selection_materialization_ids
@@ -102,9 +102,9 @@ def test_disjoint_parent_lanes_raise_clear_error():
     def combine(a, b):
         return {"a": a, "b": b}
 
-    pipe = pipeline(id="dj", name="dj", steps=[a, b, combine])
+    pipe = pipeline(name="dj", steps=[a, b, combine])
     with pytest.raises(ValueError, match="disjoint lane sets"):
-        run(pipe, workers=1)
+        pipe.run(workers=1)
 
 
 def test_diamond_parents_still_run():
@@ -122,8 +122,8 @@ def test_diamond_parents_still_run():
     def both(upper, lower):
         return {"u": upper, "l": lower}
 
-    pipe = pipeline(id="dm", name="dm", steps=[scan, upper, lower, both])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="dm", steps=[scan, upper, lower, both])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4  # scan + upper + lower + both
 
@@ -139,8 +139,8 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     def read(scan):
         return scan["text"]
 
-    pipe = pipeline(id="inv", name="inv", steps=[scan, read])
-    run(pipe, workers=1)
+    pipe = pipeline(name="inv", steps=[scan, read])
+    pipe.run(workers=1)
 
     import rubedo.invalidation as inv_mod
 
@@ -175,9 +175,9 @@ def test_selection_ids_unique_across_runs():
     def read(scan):
         return scan["text"]
 
-    pipe = pipeline(id="uniq", name="uniq", steps=[scan, read])
-    run(pipe, workers=1)
-    run(pipe, workers=1)  # reuse: a second status row per materialization
+    pipe = pipeline(name="uniq", steps=[scan, read])
+    pipe.run(workers=1)
+    pipe.run(workers=1)  # reuse: a second status row per materialization
 
     with get_session() as session:
         # Scoped to "read" (not scan too): the point under test is
@@ -205,8 +205,8 @@ def test_invalidate_scoped_to_pipeline():
     def read_v2(scan):
         return scan["text"]
 
-    run(pipeline(id="p1", name="p1", steps=[scan, read_v1]), workers=1)
-    run(pipeline(id="p2", name="p2", steps=[scan, read_v2]), workers=1)
+    pipeline(name="p1", steps=[scan, read_v1]).run(workers=1)
+    pipeline(name="p2", steps=[scan, read_v2]).run(workers=1)
 
     # Scoped to step="read" too (not just pipeline): each pipeline now has
     # two steps (scan + read), so pipeline-only scoping would catch both.
@@ -220,7 +220,8 @@ def test_invalidate_scoped_to_pipeline():
         assert dead.pipeline_id == "p2"
 
 
-# --- B5: skip_cache parents of join/group_key are rejected at build time ---
+# --- B5: skip_cache parents of join/group_key are rejected (validated
+# lazily on first `.spec` access, TODO 15 — no eager .build() anymore) ---
 
 
 def test_join_rejects_skip_cache_parent():
@@ -243,7 +244,7 @@ def test_join_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="skip_cache parent"):
-        pipeline(id="jz", name="jz", steps=[left, right, j])
+        pipeline(name="jz", steps=[left, right, j]).spec
 
 
 def test_group_key_rejects_skip_cache_parent():
@@ -260,7 +261,7 @@ def test_group_key_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="materialized parents"):
-        pipeline(id="gz", name="gz", steps=[src, u, r])
+        pipeline(name="gz", steps=[src, u, r]).spec
 
 
 # --- B6: expand may yield bytes payloads ------------------------------------
@@ -287,10 +288,10 @@ def test_expand_yields_bytes_and_reuses():
             assert isinstance(chunks, bytes)
             return len(chunks)
 
-        return pipeline(id="bx", name="bx", steps=[read, chunks, size])
+        return pipeline(name="bx", steps=[read, chunks, size])
 
     params = {"path": path}
-    s1 = run(make_pipe(), params=params, workers=1)
+    s1 = make_pipe().run(params=params, workers=1)
     assert s1.failed_count == 0
     # read (1) + two bytes children + two size outputs; the anchor is not a lane
     assert s1.created_count == 5
@@ -306,7 +307,7 @@ def test_expand_yields_bytes_and_reuses():
         }
     assert sizes == {5, 4}  # alpha, beta
 
-    s2 = run(make_pipe(), params=params, workers=1)
+    s2 = make_pipe().run(params=params, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 5)
 
 
@@ -323,8 +324,8 @@ def test_failed_plus_filtered_run_is_completed_with_failures():
             raise RuntimeError("boom")
         return Filtered(reason="not wanted")
 
-    pipe = pipeline(id="st", name="st", steps=[scan, gate])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="st", steps=[scan, gate])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 1
     assert summary.filtered_count == 1
     assert summary.status == "completed_with_failures"
@@ -354,7 +355,7 @@ def test_ephemeral_coords_compute_in_parallel():
     def out(util):
         return util
 
-    pipe = pipeline(id="par", name="par", steps=[scan, read, util, out])
-    summary = run(pipe)
+    pipe = pipeline(name="par", steps=[scan, read, util, out])
+    summary = pipe.run()
     assert summary.failed_count == 0
     assert summary.created_count == 6  # 2 scan + 2 read + 2 out

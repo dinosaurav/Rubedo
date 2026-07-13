@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import plan, run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     Materialization,
@@ -99,7 +99,7 @@ def build_pipeline(calls, util_version="1"):
         return f"report: {parse}"
 
     return pipeline(
-        id="sc", name="sc", steps=[scan, read, parse, report]
+        name="sc", steps=[scan, read, parse, report]
     )
 
 
@@ -108,7 +108,7 @@ def test_util_never_materialized_or_recorded():
     create_file("f1.txt", "  HELLO  ")
     pipe = build_pipeline(calls)
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.created_count == 3  # scan + read + report; parse invisible
     assert calls == ["parse"]
 
@@ -138,10 +138,10 @@ def test_fully_cached_run_skips_util_entirely():
     create_file("f1.txt", "hello")
     pipe = build_pipeline(calls)
 
-    run(pipe, workers=1)
+    pipe.run(workers=1)
     assert calls == ["parse"]
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.reused_count == 3
     assert calls == ["parse"], "cached run must not execute the util at all"
 
@@ -150,11 +150,11 @@ def test_util_identity_change_recomputes_consumer():
     calls = []
     create_file("f1.txt", "hello")
     pipe = build_pipeline(calls)
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     calls2 = []
     pipe = build_pipeline(calls2, util_version="2")
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     # scan + read reused; report recomputed because the util's identity is
     # in its key
     assert (summary.created_count, summary.reused_count) == (1, 2)
@@ -183,8 +183,8 @@ def test_util_shared_by_two_consumers_runs_once():
         return {"len": len(norm)}
 
     pipe = pipeline(
-id="fan", name="fan", steps=[scan, read, norm, upper, length])
-    summary = run(pipe, workers=2)
+name="fan", steps=[scan, read, norm, upper, length])
+    summary = pipe.run(workers=2)
     assert summary.failed_count == 0
     assert calls == ["norm"], "memoized per run despite two consumers"
 
@@ -205,8 +205,8 @@ def test_util_failure_fails_the_consumer():
         return boom
 
     pipe = pipeline(
-id="fail", name="fail", steps=[scan, read, boom, use])
-    summary = run(pipe, workers=1)
+name="fail", steps=[scan, read, boom, use])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:
@@ -231,8 +231,8 @@ def test_blocked_propagates_through_util():
         return mid
 
     pipe = pipeline(
-id="blk", name="blk", steps=[scan, read, mid, use])
-    summary = run(pipe, workers=1)
+name="blk", steps=[scan, read, mid, use])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:
@@ -260,8 +260,8 @@ def test_chained_utils():
         return lower
 
     pipe = pipeline(
-id="chain", name="chain", steps=[scan, read, strip, lower, out])
-    summary = run(pipe, workers=1)
+name="chain", steps=[scan, read, strip, lower, out])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 0
 
     from rubedo.store import read_materialization_output
@@ -276,7 +276,7 @@ def test_plan_omits_utils():
     create_file("f1.txt", "hello")
     pipe = build_pipeline(calls)
 
-    p = plan(pipe)
+    p = pipe.plan()
     step_names = {i.step_name for i in p.items}
     assert step_names == {"scan", "read", "report"}
     assert calls == [], "planning must not execute the util"
@@ -293,5 +293,7 @@ def test_registration_validations():
     def orphan(path):
         pass
 
+    # skip_cache-has-no-consumer validation runs lazily on first `.spec`
+    # access (TODO 15: no eager .build() anymore).
     with pytest.raises(ValueError, match="no consumer"):
-        pipeline(id="bad", name="bad", steps=[orphan])
+        pipeline(name="bad", steps=[orphan]).spec

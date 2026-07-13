@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     RUN_HEARTBEAT_STALE_SECONDS,
@@ -115,7 +115,7 @@ def test_completed_run_stores_terminal_status_and_heartbeat():
     def upper(scan):
         return {"text": scan["text"].upper()}
 
-    summary = run(pipeline(id="lv", name="lv", steps=[scan, upper]))
+    summary = pipeline(name="lv", steps=[scan, upper]).run()
     assert summary.status == "completed"
 
     with get_session() as session:

@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline
+from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     ImmutabilityError,
@@ -86,10 +86,10 @@ def run_simple_pipeline(pipe_id="imm"):
     def read(scan):
         return scan["text"].strip()
 
-    pipe = pipeline(id=pipe_id, name=pipe_id, steps=[scan, read])
+    pipe = pipeline(name=pipe_id, steps=[scan, read])
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
-    return pipe, run(pipe, workers=1)
+    return pipe, pipe.run(workers=1)
 
 
 def test_append_only_rows_reject_updates():
@@ -160,7 +160,7 @@ def test_restore_preserves_invalidation_history():
 
     invalidate(Selection(step="read"), reason="looked wrong")
     # Deterministic step: rerun produces identical bytes -> restored, not new row
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.created_count == 1
 
     with get_session() as session:

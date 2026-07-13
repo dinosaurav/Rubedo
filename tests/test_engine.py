@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pytest
-from rubedo import step, pipeline, run
+from rubedo import step, pipeline
 from rubedo.db import get_session, init_db
 import rubedo.db as db
 from rubedo.models import (
@@ -39,9 +39,7 @@ def count_lines(scan: dict) -> dict:
     return {"text": text, "line_count": len(lines), "empty": len(text) == 0}
 
 
-test_pipeline = pipeline(
-    id="p-test", name="Test Pipeline", steps=[scan, count_lines]
-)
+test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
 
 
 def _coord_for_path(session, run_id, step_name, filename):
@@ -112,7 +110,7 @@ def setup_teardown():
 
 
 def test_first_run_creates_all():
-    res = run(test_pipeline, workers=1)
+    res = test_pipeline.run(workers=1)
     assert res.run_id is not None
 
     with get_session() as session:
@@ -129,8 +127,8 @@ def test_first_run_creates_all():
 
 
 def test_second_run_reuses_all():
-    run(test_pipeline, workers=1)
-    res2 = run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
+    res2 = test_pipeline.run(workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -140,12 +138,12 @@ def test_second_run_reuses_all():
 
 
 def test_edit_one_file_recreates_one():
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
 
     with open("test_input/a.txt", "w") as f:
         f.write("one\ntwo\nthree")
 
-    res2 = run(test_pipeline, workers=1)
+    res2 = test_pipeline.run(workers=1)
 
     with get_session() as session:
         coords = {
@@ -161,17 +159,15 @@ def test_edit_one_file_recreates_one():
 
 
 def test_change_code_version_recreates_all():
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
 
     @step(name="count-lines", version="v2", depends_on=["scan"])
     def count_lines_v2(scan: dict) -> dict:
         return {"ok": True}
 
-    p_v2 = pipeline(
-        id="p-test", name="Test Pipeline", steps=[scan, count_lines_v2]
-    )
+    p_v2 = pipeline(name="p-test", steps=[scan, count_lines_v2])
 
-    res2 = run(p_v2, workers=1)
+    res2 = p_v2.run(workers=1)
 
     with get_session() as session:
         coords = (
@@ -192,10 +188,8 @@ def test_failure_creates_no_materialization():
             raise Exception("Failure in a.txt")
         return {"ok": True}
 
-    p_fail = pipeline(
-        id="p-fail", name="Test", steps=[scan, failing_processor]
-    )
-    res = run(p_fail, workers=1)
+    p_fail = pipeline(name="p-fail", steps=[scan, failing_processor])
+    res = p_fail.run(workers=1)
 
     with get_session() as session:
         coords = {
@@ -220,7 +214,7 @@ def test_failure_creates_no_materialization():
 
 
 def test_select_by_coordinate_glob():
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
 
     sel = Selection(source_id="scan", coordinate_glob="row-*")
     from rubedo.selection import get_selection_materialization_ids
@@ -238,7 +232,7 @@ def test_select_by_coordinate_glob():
 
 
 def test_invalidate_selected():
-    res1 = run(test_pipeline, workers=1)
+    res1 = test_pipeline.run(workers=1)
 
     with get_session() as session:
         b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
@@ -258,14 +252,14 @@ def test_invalidate_selected():
 
 
 def test_invalidated_result_not_reused():
-    res1 = run(test_pipeline, workers=1)
+    res1 = test_pipeline.run(workers=1)
 
     with get_session() as session:
         b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
     sel = Selection(coordinate_glob=b_coord, step="count-lines")
     invalidate(sel, "test")
 
-    res2 = run(test_pipeline, workers=1)
+    res2 = test_pipeline.run(workers=1)
     with get_session() as session:
         coords = {
             c.coordinate: c
@@ -282,7 +276,7 @@ def test_invalidated_result_not_reused():
 
 def test_logical_deletion():
     # 1. First run, create files
-    res1 = run(test_pipeline, workers=1)
+    res1 = test_pipeline.run(workers=1)
     assert res1.created_count == 4  # 2 files x (scan lane + count-lines lane)
     assert res1.reused_count == 0
 
@@ -295,7 +289,7 @@ def test_logical_deletion():
 
     # 3. Second run: a.txt simply isn't scanned — there is no "removed"
     #    bookkeeping. "Current" is just the latest run's lanes.
-    res2 = run(test_pipeline, workers=1)
+    res2 = test_pipeline.run(workers=1)
     assert res2.created_count == 0
     assert res2.reused_count == 2  # only b.txt's scan + count-lines lanes
 
@@ -320,15 +314,15 @@ def test_restore_deleted_reuses_cache():
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
     os.remove("test_input/a.txt")
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
 
     # Restore file with exact same content
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
     # Third run should REUSE, not create
-    res3 = run(test_pipeline, workers=1)
+    res3 = test_pipeline.run(workers=1)
     assert res3.created_count == 0
     assert res3.reused_count == 4  # a.txt and b.txt, scan + count-lines each

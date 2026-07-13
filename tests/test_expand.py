@@ -6,8 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, source, step, pipeline
-from rubedo.runner import plan
+from rubedo import source, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -68,7 +67,7 @@ def create_file(name, content):
 
 
 def assert_run(pipe):
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     if summary.failed_count > 0:
         with get_session() as session:
             events = (
@@ -123,7 +122,6 @@ def _shout():
 
 def make_pipe():
     return pipeline(
-        id="x",
         name="x",
         steps=[_scan(), _read(), _split(), _shout()],
     )
@@ -183,7 +181,7 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
         return split["line"].upper()
 
     pipe = pipeline(
-        id="c", name="c", steps=[_scan(), _read(), split, shout]
+        name="c", steps=[_scan(), _read(), split, shout]
     )
     assert_run(pipe)
     assert len(calls) == 1  # scraped once
@@ -218,7 +216,7 @@ def test_expand_reacts_to_a_changed_source_lane():
 def test_expand_plan_marks_downstream_pending():
     create_file("a.txt", "alpha\nbeta")
     pipe = make_pipe()
-    rp = plan(pipe)
+    rp = pipe.plan()
     # Downstream of an unexecuted expand can't be enumerated: it's pending.
     actions = {it.step_name: it.action for it in rp.items}
     assert actions.get("shout") == "pending"
@@ -234,7 +232,7 @@ def test_expand_identical_payloads_collapse():
         yield {"v": 2}
 
     pipe = pipeline(
-        id="d", name="d", steps=[_scan(), _read(), dup]
+        name="d", steps=[_scan(), _read(), dup]
     )
     assert_run(pipe)
     with get_session() as session:
@@ -260,7 +258,7 @@ def test_source_decorator():
     def up(things):
         return things["x"].upper()
 
-    pipe = pipeline(id="s", name="s", steps=[things, up])  # no source=
+    pipe = pipeline(name="s", steps=[things, up])  # no source=
     s = assert_run(pipe)
     assert (s.created_count, s.reused_count) == (6, 0)  # 3 things + 3 up
     assert calls == [1]
@@ -301,7 +299,7 @@ def test_root_expand_is_a_source():
     def double(rows):
         return rows["n"] * 2
 
-    pipe = pipeline(id="r", name="r", steps=[rows, double])  # no source
+    pipe = pipeline(name="r", steps=[rows, double])  # no source
     s = assert_run(pipe)
     assert (s.created_count, s.reused_count) == (6, 0)  # 3 rows + 3 double
 

@@ -7,13 +7,13 @@ DB/store fixture entirely.
 
 import pytest
 
-from rubedo import PipelineBuilder, describe
+from rubedo import pipeline
 
 
 def _count_lines_shaped():
     """A linear chain: expand root -> map -> map -> reduce, mirroring
     examples/count_lines/count_lines.py's DAG shape."""
-    p = PipelineBuilder(id="count-lines", name="Count Lines DAG")
+    p = pipeline(name="count-lines")
 
     @p.source(name="input_files", version="1")
     def input_files():
@@ -31,13 +31,13 @@ def _count_lines_shaped():
     def total_lines(count_lines):
         return 0
 
-    return p.build()
+    return p
 
 
 def _newsroom_shaped():
     """join -> expand -> group_key reduce, mirroring
     examples/newsroom/newsroom.py's DAG shape."""
-    p = PipelineBuilder(id="newsroom", name="Newsroom")
+    p = pipeline(name="newsroom")
 
     @p.source(name="feeds", version="1")
     def feeds():
@@ -77,7 +77,7 @@ def _newsroom_shaped():
     def digest(articles):
         return {}
 
-    return p.build()
+    return p
 
 
 COUNT_LINES_ASCII = (
@@ -126,7 +126,7 @@ NEWSROOM_ASCII = (
 
 def test_ascii_count_lines_shaped_is_byte_identical():
     pipe = _count_lines_shaped()
-    assert describe(pipe, format="ascii") == COUNT_LINES_ASCII
+    assert pipe.describe(format="ascii") == COUNT_LINES_ASCII
     # every step name present
     for name in ("input_files", "read_lines", "count_lines", "total_lines"):
         assert name in COUNT_LINES_ASCII
@@ -137,7 +137,7 @@ def test_ascii_count_lines_shaped_is_byte_identical():
 
 def test_ascii_newsroom_shaped_is_byte_identical():
     pipe = _newsroom_shaped()
-    assert describe(pipe, format="ascii") == NEWSROOM_ASCII
+    assert pipe.describe(format="ascii") == NEWSROOM_ASCII
     for name in ("feeds", "publishers", "feed", "publisher", "feed_meta", "articles", "digest"):
         assert name in NEWSROOM_ASCII
     assert "[join]" in NEWSROOM_ASCII
@@ -147,30 +147,29 @@ def test_ascii_newsroom_shaped_is_byte_identical():
 
 def test_ascii_is_deterministic_across_calls():
     pipe = _newsroom_shaped()
-    first = describe(pipe, format="ascii")
-    second = describe(pipe, format="ascii")
+    first = pipe.describe(format="ascii")
+    second = pipe.describe(format="ascii")
     assert first == second
 
 
 def test_ascii_falls_back_to_text_when_a_layer_is_too_wide():
-    p = PipelineBuilder(id="wide", name="Wide DAG")
+    pipe = pipeline(name="wide")
     for i in range(15):
         def _make(i):
-            @p.step(name=f"step_number_{i:02d}", version="1")
+            @pipe.step(name=f"step_number_{i:02d}", version="1")
             def s(**kwargs):
                 return {}
             return s
         _make(i)
-    pipe = p.build()
 
-    ascii_out = describe(pipe, format="ascii")
-    text_out = describe(pipe, format="text")
+    ascii_out = pipe.describe(format="ascii")
+    text_out = pipe.describe(format="text")
     assert ascii_out == text_out
     # sanity: the wide layer really is over the ascii width budget
-    assert len(pipe.steps) == 15
+    assert len(pipe.spec.steps) == 15
 
 
 def test_unknown_format_raises_and_lists_all_three():
     pipe = _count_lines_shaped()
     with pytest.raises(ValueError, match="expected 'text', 'mermaid', or 'ascii'"):
-        describe(pipe, format="bogus")
+        pipe.describe(format="bogus")

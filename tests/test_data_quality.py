@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus
 from rubedo.store import init_store
@@ -92,8 +92,8 @@ def test_output_model_success():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(id="p", name="p", steps=[scan, parse])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="p", steps=[scan, parse])
+    summary = pipe.run(workers=1)
 
     assert summary.created_count == 2  # scan's lane + parse's lane
     assert summary.failed_count == 0
@@ -107,8 +107,8 @@ def test_output_model_failure():
     def parse(scan):
         return {"name": "alice"}
 
-    pipe = pipeline(id="p", name="p", steps=[scan, parse])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="p", steps=[scan, parse])
+    summary = pipe.run(workers=1)
 
     # scan's own lane still succeeds; only the dependent parse lane fails.
     assert summary.created_count == 1
@@ -132,8 +132,8 @@ def test_assertions_success():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(id="p", name="p", steps=[scan, parse])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="p", steps=[scan, parse])
+    summary = pipe.run(workers=1)
 
     assert summary.created_count == 2  # scan's lane + parse's lane
     assert summary.failed_count == 0
@@ -151,8 +151,8 @@ def test_assertions_failure():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(id="p", name="p", steps=[scan, parse])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="p", steps=[scan, parse])
+    summary = pipe.run(workers=1)
 
     # scan's own lane still succeeds; only the dependent parse lane fails.
     assert summary.created_count == 1
@@ -177,8 +177,8 @@ def test_expand_step_validation():
         yield {"num": 1}
         yield {"bad_key": 2} # This should fail validation
 
-    pipe = pipeline(id="p", name="p", steps=[produce])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="p", steps=[produce])
+    summary = pipe.run(workers=1)
 
     # Expand step runs once per parent. The entire parent execution fails if any child fails.
     assert summary.failed_count == 1

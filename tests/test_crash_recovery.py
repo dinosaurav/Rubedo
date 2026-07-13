@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import patch
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization
-from rubedo.runner import run
 from rubedo.store import stage_and_commit
 from rubedo import step, pipeline
 import uuid
@@ -74,7 +73,7 @@ def dummy_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
 
-p_dummy = pipeline(id="p-dummy", name="Dummy", steps=[scan, dummy_processor])
+p_dummy = pipeline(name="p-dummy", steps=[scan, dummy_processor])
 
 
 def test_crash_before_processing(setup_teardown):
@@ -83,11 +82,9 @@ def test_crash_before_processing(setup_teardown):
     def crashing_processor(scan: dict) -> str:
         raise Exception("Crash before processing completes!")
 
-    p_crashing = pipeline(
-        id="p-crash", name="Crash", steps=[scan, crashing_processor]
-    )
+    p_crashing = pipeline(name="p-crash", steps=[scan, crashing_processor])
 
-    summary = run(p_crashing, workers=1)
+    summary = p_crashing.run(workers=1)
     # scan(a)/(b) succeed; both crashing(a)/(b) fail -> partial success.
     assert summary.status == "completed_with_failures"
     assert summary.failed_count == 2
@@ -95,7 +92,7 @@ def test_crash_before_processing(setup_teardown):
 
     # Rerun should attempt again (and still fail if we use the crashing one,
     # but let's use the normal one to show it recovers)
-    summary2 = run(p_dummy, workers=1)
+    summary2 = p_dummy.run(workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 2  # dummy(a) + dummy(b); scan reused
     assert summary2.reused_count == 2  # scan(a) + scan(b)
@@ -108,7 +105,7 @@ def test_crash_during_staging(setup_teardown):
         raise Exception("Disk full or worker killed during write")
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=crashing_stage):
-        summary = run(p_dummy, workers=1)
+        summary = p_dummy.run(workers=1)
         assert summary.status == "failed"
         assert summary.created_count == 0
 
@@ -117,7 +114,7 @@ def test_crash_during_staging(setup_teardown):
         assert session.query(Materialization).count() == 0
 
     # Rerun normally
-    summary2 = run(p_dummy, workers=1)
+    summary2 = p_dummy.run(workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 4  # scan(a,b) + dummy(a,b)
 
@@ -135,7 +132,7 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
         "rubedo.ledger.stage_and_commit",
         side_effect=crashing_stage_but_write_succeeds,
     ):
-        summary = run(p_dummy, workers=1)
+        summary = p_dummy.run(workers=1)
         assert summary.status == "failed"
 
     # Verify no materialization row
@@ -145,18 +142,18 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
     # Rerun normally
     # The output address will be exactly the same.
     # Because stage_and_commit does an atomic os.replace, it will harmlessly overwrite the orphaned file.
-    summary2 = run(p_dummy, workers=1)
+    summary2 = p_dummy.run(workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 4  # scan(a,b) + dummy(a,b)
 
 
 def test_success_and_reuse(setup_teardown):
-    summary1 = run(p_dummy, workers=1)
+    summary1 = p_dummy.run(workers=1)
     assert summary1.status == "completed"
     assert summary1.created_count == 4  # scan(a,b) + dummy(a,b)
 
     # Rerun should skip
-    summary2 = run(p_dummy, workers=1)
+    summary2 = p_dummy.run(workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 0
     assert summary2.reused_count == 4

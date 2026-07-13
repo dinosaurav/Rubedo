@@ -3,7 +3,7 @@ import shutil
 import pytest
 from unittest.mock import patch
 
-from rubedo import plan, run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 import rubedo.store as store
 
@@ -49,7 +49,7 @@ def _root_output_address(pipe, params):
     """The address my_step's single @root lane will commit to — computed by
     plan() (a pure dry-run) so the race-injection below can target it
     without reaching into planning internals."""
-    p = plan(pipe, params=params)
+    p = pipe.plan(params=params)
     (item,) = p.items
     return item.output_address
 
@@ -59,7 +59,7 @@ def test_concurrency_identical_bytes_collision():
     # This simulates another worker completing the same task right before we commit.
     original_stage_and_commit = store.stage_and_commit
 
-    pipe = pipeline(id="p1", name="p1", steps=[my_step])
+    pipe = pipeline(name="p1", steps=[my_step])
     params = {"content": "A"}
     output_address = _root_output_address(pipe, params)
 
@@ -94,7 +94,7 @@ def test_concurrency_identical_bytes_collision():
         return final_path, output_content_hash, content_type
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
-        summary = run(pipe, params=params)
+        summary = pipe.run(params=params)
 
     if summary.failed_count > 0:
         with get_session() as session:
@@ -111,7 +111,7 @@ def test_concurrency_different_bytes_collision():
     # This means the current run must supersede it.
     original_stage_and_commit = store.stage_and_commit
 
-    pipe = pipeline(id="p2", name="p2", steps=[my_step])
+    pipe = pipeline(name="p2", steps=[my_step])
     params = {"content": "A"}
     output_address = _root_output_address(pipe, params)
 
@@ -144,7 +144,7 @@ def test_concurrency_different_bytes_collision():
         return final_path, output_content_hash, content_type
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
-        summary = run(pipe, params=params)
+        summary = pipe.run(params=params)
 
     if summary.failed_count > 0:
         with get_session() as session:

@@ -3,8 +3,8 @@ import os
 import shutil
 from rubedo.db import init_db, get_session
 from rubedo.store import init_store, read_materialization_output
-from rubedo.spec import step, pipeline
-from rubedo.runner import run, topological_sort
+from rubedo import step, pipeline
+from rubedo.planning import topological_sort
 from rubedo.models import RunCoordinateStatus, Materialization, MaterializationEdge
 import uuid
 from sqlalchemy import create_engine
@@ -112,8 +112,8 @@ def test_topological_sort():
     def c(b):
         pass
 
-    p = pipeline(id="p1", name="p1", steps=[scan, a, b, c])
-    topo = topological_sort(p)
+    p = pipeline(name="p1", steps=[scan, a, b, c])
+    topo = topological_sort(p.spec)
     assert [s.name for s in topo] == ["scan", "a", "b", "c"]
 
 
@@ -126,12 +126,12 @@ def test_linear_dag():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(id="p1", name="p1", steps=[scan, read, upper])
+    pipe = pipeline(name="p1", steps=[scan, read, upper])
 
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     with get_session() as session:
         # Check coordinates created
@@ -176,10 +176,10 @@ def test_cache_hit():
     def read(scan):
         return scan["text"].strip()
 
-    pipe = pipeline(id="p2", name="p2", steps=[scan, read])
+    pipe = pipeline(name="p2", steps=[scan, read])
 
     create_file("f1.txt", "hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     with get_session() as session:
         statuses = session.query(RunCoordinateStatus).all()
@@ -187,7 +187,7 @@ def test_cache_hit():
         assert {s.status for s in statuses} == {"created"}
 
     # Run again, should be reused
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     with get_session() as session:
         # 2 from first run, 2 from second run
@@ -212,17 +212,17 @@ def test_invalidate_downstream_then_rerun():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(id="p4", name="p4", steps=[scan, read, upper])
+    pipe = pipeline(name="p4", steps=[scan, read, upper])
 
     create_file("f1.txt", "hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     res = invalidate(Selection(step="upper"), reason="bad output")
     assert res["invalidated_count"] == 1
 
     # Recompute resurrects the tombstoned materialization; its lineage
     # edges already exist and must not be inserted twice
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.created_count == 1
     assert summary.failed_count == 0
 
@@ -257,7 +257,7 @@ def test_duplicate_content_files_share_materialization():
     def upper(scan_nopath):
         return scan_nopath["text"].strip().upper()
 
-    pipe = pipeline(id="p5", name="p5", steps=[scan_nopath, upper])
+    pipe = pipeline(name="p5", steps=[scan_nopath, upper])
 
     # Same content -> same lane -> one materialization and one lineage edge,
     # without a unique-constraint crash, even though the generator yields it
@@ -265,7 +265,7 @@ def test_duplicate_content_files_share_materialization():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "hello")
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 0
 
     with get_session() as session:
@@ -286,11 +286,11 @@ def test_dag_blocked_on_failure():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(id="p3", name="p3", steps=[scan, read, upper])
+    pipe = pipeline(name="p3", steps=[scan, read, upper])
 
     create_file("f1.txt", "hello")
 
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
     with get_session() as session:
         rc_read = (

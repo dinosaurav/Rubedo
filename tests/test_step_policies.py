@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus, RunEvent
 from rubedo.spec import parse_rate_limit
@@ -84,8 +84,8 @@ def test_retries_until_success():
             raise TimeoutError("transient")
         return "ok"
 
-    pipe = pipeline(id="p", name="p", steps=[flaky])
-    summary = run(pipe, params={"path": path}, workers=1)
+    pipe = pipeline(name="p", steps=[flaky])
+    summary = pipe.run(params={"path": path}, workers=1)
 
     assert calls["n"] == 3
     assert (summary.created_count, summary.failed_count) == (1, 0)
@@ -111,8 +111,8 @@ def test_retries_exhausted_records_failure():
     def doomed(params):
         raise TimeoutError("always")
 
-    pipe = pipeline(id="p", name="p", steps=[doomed])
-    summary = run(pipe, params={"path": path}, workers=1)
+    pipe = pipeline(name="p", steps=[doomed])
+    summary = pipe.run(params={"path": path}, workers=1)
 
     assert summary.failed_count == 1
     with get_session() as session:
@@ -136,8 +136,8 @@ def test_retry_on_filters_exception_types():
         calls["n"] += 1
         raise ValueError("deterministic bug — retrying just multiplies cost")
 
-    pipe = pipeline(id="p", name="p", steps=[buggy])
-    summary = run(pipe, params={"path": path}, workers=1)
+    pipe = pipeline(name="p", steps=[buggy])
+    summary = pipe.run(params={"path": path}, workers=1)
 
     assert calls["n"] == 1, "non-matching exception must not be retried"
     assert summary.failed_count == 1
@@ -160,10 +160,10 @@ def test_rate_limit_paces_execution():
     def polite(scan):
         return "done"
 
-    pipe = pipeline(id="p", name="p", steps=[scan, polite])
+    pipe = pipeline(name="p", steps=[scan, polite])
 
     start = time.monotonic()
-    summary = run(pipe, workers=4)
+    summary = pipe.run(workers=4)
     elapsed = time.monotonic() - start
 
     assert summary.created_count == 8  # 4 scan + 4 polite
@@ -223,10 +223,10 @@ def test_fresh_output_is_reused():
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(id="p", name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape])
     params = {"path": path}
-    run(pipe, params=params, workers=1)
-    summary = run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
+    summary = pipe.run(params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
 
@@ -239,13 +239,13 @@ def test_expired_deterministic_output_is_refreshed():
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(id="p", name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape])
     params = {"path": path}
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
     # Expired -> re-executes; identical bytes -> refreshed, not a new row
-    summary = run(pipe, params=params, workers=1)
+    summary = pipe.run(params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (1, 0)
 
     with get_session() as session:
@@ -259,7 +259,7 @@ def test_expired_deterministic_output_is_refreshed():
         assert lc.action == "refreshed"
 
     # refreshed_at reset the clock: next run reuses again
-    summary3 = run(pipe, params=params, workers=1)
+    summary3 = pipe.run(params=params, workers=1)
     assert (summary3.created_count, summary3.reused_count) == (0, 1)
 
 
@@ -275,12 +275,12 @@ def test_expired_nondeterministic_output_is_superseded():
     def scrape(params):
         return {"attempt": next(counter)}
 
-    pipe = pipeline(id="p", name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape])
     params = {"path": path}
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
-    summary = run(pipe, params=params, workers=1)
+    summary = pipe.run(params=params, workers=1)
     assert summary.created_count == 1
 
     with get_session() as session:
@@ -291,18 +291,16 @@ def test_expired_nondeterministic_output_is_superseded():
 
 
 def test_staleness_visible_in_plan():
-    from rubedo import plan
-
     path = create_file("f1.txt", "hello")
 
     @step(name="scrape", version="1", stale_after="1h")
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(id="p", name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape])
     params = {"path": path}
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
-    p = plan(pipe, params=params)
+    p = pipe.plan(params=params)
     assert p.counts == {"execute": 1}

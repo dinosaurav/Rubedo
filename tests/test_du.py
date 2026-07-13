@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline
+from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import get_session
 from rubedo.du import storage_report
 from rubedo.models import Materialization
@@ -86,14 +86,14 @@ def make_shout_pipeline():
             if os.path.isfile(path):
                 yield open(path).read().upper()
 
-    return pipeline(id="du", name="du", steps=[shout])
+    return pipeline(name="du", steps=[shout])
 
 
 def test_sizes_and_counts_for_populated_store():
     # Outputs are text-serialized: "ALPHA" = 5 bytes, "HI" = 2 bytes.
     create_file("a.txt", "alpha")
     create_file("b.txt", "hi")
-    summary = run(make_shout_pipeline(), workers=1)
+    summary = make_shout_pipeline().run(workers=1)
     assert summary.created_count == 2
 
     report = storage_report()
@@ -121,7 +121,7 @@ def test_sizes_and_counts_for_populated_store():
 
 def test_invalidated_only_object_is_reclaimable():
     create_file("a.txt", "alpha")
-    run(make_shout_pipeline(), workers=1)
+    make_shout_pipeline().run(workers=1)
 
     res = invalidate(Selection(step="shout"), reason="test")
     assert res["invalidated_count"] == 1
@@ -166,7 +166,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     def norm(scan):
         return scan["text"].strip()
 
-    summary = run(pipeline(id="du", name="du", steps=[scan, norm]), workers=1)
+    summary = pipeline(name="du", steps=[scan, norm]).run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4  # 2 files x (scan + norm)
 
@@ -234,7 +234,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
 
 def test_missing_object_file_is_reported_not_crashed():
     create_file("a.txt", "alpha")
-    run(make_shout_pipeline(), workers=1)
+    make_shout_pipeline().run(workers=1)
 
     with get_session() as session:
         mat = session.query(Materialization).one()
@@ -263,7 +263,7 @@ def test_reclaimed_object_reported_separately_from_missing():
     # nothing auto-pruned.
     for content in ("alpha", "beta", "gamma"):
         create_file("a.txt", content)
-        run(make_shout_pipeline(), workers=1)
+        make_shout_pipeline().run(workers=1)
 
     before = storage_report()
     assert before.total_objects == 3

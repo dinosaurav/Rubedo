@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import plan, run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, RunEvent
 from rubedo.store import init_store
@@ -88,7 +88,7 @@ def body_v2(params):
 
 def register(fn, version, code="warn"):
     spec = step(name="work", version=version, code=code)(fn)
-    pipe = pipeline(id="cd", name="cd", steps=[spec])
+    pipe = pipeline(name="cd", steps=[spec])
     return pipe, spec
 
 
@@ -97,17 +97,17 @@ def test_code_auto_recomputes_on_code_change():
     p = {"path": path}
 
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    s1 = run(pipe, params=p, workers=1)
+    s1 = pipe.run(params=p, workers=1)
     assert s1.created_count == 1
 
     # Same code: cache hit
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    s2 = run(pipe, params=p, workers=1)
+    s2 = pipe.run(params=p, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
     # Edited code: identity changed, recompute without any version bump
     pipe, _ = register(body_v2, "1.0.0", code="auto")
-    s3 = run(pipe, params=p, workers=1)
+    s3 = pipe.run(params=p, workers=1)
     assert (s3.created_count, s3.reused_count) == (1, 0)
 
     # code='auto' never drift-warns: identity already tracks the source
@@ -116,7 +116,7 @@ def test_code_auto_recomputes_on_code_change():
     pipe, _ = register(body_v2, "1.0.0", code="auto")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        s4 = run(pipe, params=p, workers=1)
+        s4 = pipe.run(params=p, workers=1)
     assert s4.reused_count == 1
 
 
@@ -125,11 +125,11 @@ def test_version_and_code_are_independent_axes():
     p = {"path": path}
 
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    run(pipe, params=p, workers=1)
+    pipe.run(params=p, workers=1)
 
     # Same code, bumped version: version alone changes identity
     pipe, _ = register(body_v1, "2.0.0", code="auto")
-    s = run(pipe, params=p, workers=1)
+    s = pipe.run(params=p, workers=1)
     assert (s.created_count, s.reused_count) == (1, 0)
 
 
@@ -143,12 +143,12 @@ def test_manual_version_warns_on_drift_but_reuses():
     p = {"path": path}
 
     pipe, _ = register(body_v1, "v1")
-    run(pipe, params=p, workers=1)
+    pipe.run(params=p, workers=1)
 
     # Code edited, version not bumped: reuse stands, but loudly
     pipe, _ = register(body_v2, "v1")
     with pytest.warns(UserWarning, match="source code changed"):
-        summary = run(pipe, params=p, workers=1)
+        summary = pipe.run(params=p, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
     with get_session() as session:
@@ -166,12 +166,12 @@ def test_no_warning_when_code_unchanged():
     path = create_file("f1.txt", "hello")
     p = {"path": path}
     pipe, _ = register(body_v1, "v1")
-    run(pipe, params=p, workers=1)
+    pipe.run(params=p, workers=1)
 
     pipe, _ = register(body_v1, "v1")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        summary = run(pipe, params=p, workers=1)
+        summary = pipe.run(params=p, workers=1)
     assert summary.reused_count == 1
 
 
@@ -179,10 +179,10 @@ def test_plan_surfaces_drift_warning():
     path = create_file("f1.txt", "hello")
     params = {"path": path}
     pipe, _ = register(body_v1, "v1")
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
 
     pipe, _ = register(body_v2, "v1")
-    p = plan(pipe, params=params)
+    p = pipe.plan(params=params)
     assert len(p.warnings) == 1
     assert "source code changed" in p.warnings[0]
     assert p.counts == {"reuse": 1}
@@ -191,7 +191,7 @@ def test_plan_surfaces_drift_warning():
 def test_code_hash_recorded_on_materialization():
     path = create_file("f1.txt", "hello")
     pipe, spec = register(body_v1, "v1")
-    run(pipe, params={"path": path}, workers=1)
+    pipe.run(params={"path": path}, workers=1)
 
     with get_session() as session:
         mat = session.query(Materialization).one()

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline, trace
+from rubedo import Selection, invalidate, step, pipeline, trace
 from rubedo.db import init_db
 from rubedo.store import init_store
 
@@ -101,7 +101,7 @@ def make_pipeline():
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 
-    return pipeline(id="tr", name="tr", steps=[scan, extract, summarize, total])
+    return pipeline(name="tr", steps=[scan, extract, summarize, total])
 
 
 def _by_step(result):
@@ -111,7 +111,7 @@ def _by_step(result):
 def test_trace_downstream_from_indexed_seed():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
-    run(make_pipeline())
+    make_pipeline().run()
 
     result = trace(Selection(index={"company": "acme"}))
 
@@ -136,7 +136,7 @@ def test_trace_downstream_from_indexed_seed():
 
 def test_trace_upstream_resolves_root_payload():
     create_file("a.txt", "acme,10")
-    run(make_pipeline())
+    make_pipeline().run()
 
     result = trace(Selection(step="summarize"))
 
@@ -155,7 +155,7 @@ def test_trace_upstream_resolves_root_payload():
 
 def test_trace_live_only_seeding_and_include_superseded():
     create_file("a.txt", "acme,10")
-    run(make_pipeline())
+    make_pipeline().run()
 
     invalidate(Selection(index={"company": "acme"}), reason="test")
 
@@ -172,7 +172,7 @@ def test_trace_live_only_seeding_and_include_superseded():
 
 def test_trace_coordinates_present():
     create_file("a.txt", "acme,10")
-    run(make_pipeline())
+    make_pipeline().run()
 
     result = trace(Selection(index={"company": "acme"}))
     coords = {n.step_name: n.coordinate for n in result.nodes}

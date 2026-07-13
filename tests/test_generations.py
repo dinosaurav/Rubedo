@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline
+from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     Materialization,
@@ -97,7 +97,7 @@ def make_nondeterministic_pipeline(pipe_id="gen"):
     def summarize(generate):
         return f"attempt={generate['attempt']}"
 
-    return pipeline(id=pipe_id, name=pipe_id, steps=[generate, summarize])
+    return pipeline(name=pipe_id, steps=[generate, summarize])
 
 
 def get_mats(step_name):
@@ -115,13 +115,13 @@ def test_invalidate_nondeterministic_creates_new_generation():
     path = create_file("f1.txt", "hello")
     params = {"path": path}
 
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
     (gen1,) = get_mats("generate")
     (sum1,) = get_mats("summarize")
 
     invalidate(Selection(step="generate"), reason="bad output")
 
-    summary = run(pipe, params=params, workers=1)
+    summary = pipe.run(params=params, workers=1)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -166,8 +166,8 @@ def test_force_nondeterministic_supersedes_live_generation():
     path = create_file("f1.txt", "hello")
     params = {"path": path}
 
-    run(pipe, params=params, workers=1)
-    summary = run(pipe, params=params, workers=1, force=True)
+    pipe.run(params=params, workers=1)
+    summary = pipe.run(params=params, workers=1, force=True)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -194,12 +194,12 @@ def test_force_deterministic_reuses_live_row():
     def stable(params):
         return open(params["path"]).read().upper()
 
-    pipe = pipeline(id="det", name="det", steps=[stable])
+    pipe = pipeline(name="det", steps=[stable])
     path = create_file("f1.txt", "hello")
     params = {"path": path}
 
-    run(pipe, params=params, workers=1)
-    run(pipe, params=params, workers=1, force=True)
+    pipe.run(params=params, workers=1)
+    pipe.run(params=params, workers=1, force=True)
 
     mats = get_mats("stable")
     assert len(mats) == 1, "identical bytes are the same fact, not a new generation"
@@ -222,25 +222,25 @@ def test_params_are_part_of_cache_identity():
         return "pass" if score["ok"] else "fail"
 
     pipe = pipeline(
-        id="par", name="par", steps=[score, label], params_model=Thresh
+        name="par", steps=[score, label], params_model=Thresh
     )
     path = create_file("f1.txt", "hello")
 
-    s1 = run(pipe, params={"threshold": 1, "path": path}, workers=1)
+    s1 = pipe.run(params={"threshold": 1, "path": path}, workers=1)
     assert (s1.created_count, s1.reused_count) == (2, 0)
 
     # Same params: full cache hit
-    s2 = run(pipe, params={"threshold": 1, "path": path}, workers=1)
+    s2 = pipe.run(params={"threshold": 1, "path": path}, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 2)
 
     # Different params, different answer: score recomputes (params are in
     # its address) and label follows through the content-hash chain
-    s3 = run(pipe, params={"threshold": 100, "path": path}, workers=1)
+    s3 = pipe.run(params={"threshold": 100, "path": path}, workers=1)
     assert (s3.created_count, s3.reused_count) == (2, 0)
 
     # Different params, same answer: score recomputes but produces identical
     # bytes, so label is reused off the unchanged content hash
-    s4 = run(pipe, params={"threshold": 2, "path": path}, workers=1)
+    s4 = pipe.run(params={"threshold": 2, "path": path}, workers=1)
     assert (s4.created_count, s4.reused_count) == (1, 1)
 
 
@@ -254,10 +254,10 @@ def test_params_do_not_churn_param_free_pipelines():
     def upper():
         return open(path).read().upper()
 
-    pipe = pipeline(id="nopar", name="nopar", steps=[upper])
+    pipe = pipeline(name="nopar", steps=[upper])
 
-    run(pipe, workers=1)
-    s2 = run(pipe, params={"anything": 42}, workers=1)
+    pipe.run(workers=1)
+    s2 = pipe.run(params={"anything": 42}, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
 
@@ -271,10 +271,10 @@ def test_string_payload_round_trips_as_string():
         assert isinstance(emit, str), f"expected str, got {type(emit)}"
         return emit + "!"
 
-    pipe = pipeline(id="types", name="types", steps=[emit, check])
+    pipe = pipeline(name="types", steps=[emit, check])
     path = create_file("f1.txt", "x")
 
-    summary = run(pipe, params={"path": path}, workers=1)
+    summary = pipe.run(params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit")
     assert mat.content_type == "text"
@@ -290,10 +290,10 @@ def test_bytes_payload_round_trips_as_bytes():
         assert isinstance(emit_b, bytes)
         return {"length": len(emit_b)}
 
-    pipe = pipeline(id="types-b", name="types-b", steps=[emit_b, check_b])
+    pipe = pipeline(name="types-b", steps=[emit_b, check_b])
     path = create_file("f1.txt", "x")
 
-    summary = run(pipe, params={"path": path}, workers=1)
+    summary = pipe.run(params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit_b")
     assert mat.content_type == "bytes"

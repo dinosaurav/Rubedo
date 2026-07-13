@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -77,7 +77,7 @@ def scan():
 
 
 def assert_run(pipe):
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     if summary.failed_count > 0:
         with get_session() as session:
             for e in (
@@ -122,7 +122,7 @@ def test_group_key_partitions_by_indexed_field():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
 
     outs = _outputs("rollup")
@@ -143,7 +143,7 @@ def test_group_key_none_is_one_all_group():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     assert set(outs) == {"@all"}
@@ -164,7 +164,7 @@ def test_group_key_multivalue_joins_multiple_groups():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     # the single lane is a member of both groups
@@ -195,7 +195,7 @@ def test_group_key_reduce_after_expand():
     def rollup(articles):
         return {"n": len(articles)}
 
-    pipe = pipeline(id="g", name="g", steps=[scan, read, articles, rollup])
+    pipe = pipeline(name="g", steps=[scan, read, articles, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     # reduce gathers the minted expand lanes and groups them
@@ -218,9 +218,9 @@ def test_group_key_unindexed_field_raises():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup])
     with pytest.raises(ValueError, match="no indexed value"):
-        run(pipe, workers=1)
+        pipe.run(workers=1)
 
 
 def test_group_key_requires_reduce_shape():

@@ -7,8 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline, Filtered
-from rubedo.runner import plan
+from rubedo import step, pipeline, Filtered
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     Materialization,
@@ -72,7 +71,7 @@ def create_file(name, content):
         f.write(content)
 
 def assert_run(pipe):
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     if summary.failed_count > 0:
         with get_session() as session:
             events = session.query(RunEvent).filter_by(run_id=summary.run_id, level="error").all()
@@ -132,7 +131,7 @@ def test_reduce_basic_and_lineage():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce1", name="reduce1", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce1", steps=[scan, parse, sum_values])
     summary = assert_run(pipe)
 
     assert summary.created_count == 7  # 3 scan + 3 parse + 1 reduce
@@ -156,7 +155,7 @@ def test_reduce_caching():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce2", name="reduce2", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce2", steps=[scan, parse, sum_values])
 
     # Run 1: Create
     s1 = assert_run(pipe)
@@ -202,7 +201,7 @@ def test_reduce_filtered_lane():
             assert 20 in parse.values()
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce3", name="reduce3", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce3", steps=[scan, parse, sum_values])
     assert_run(pipe)
 
     with get_session() as session:
@@ -238,8 +237,8 @@ def test_reduce_failed_parent_lane():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce4", name="reduce4", steps=[scan, parse, sum_values])
-    s1 = run(pipe, workers=1)
+    pipe = pipeline(name="reduce4", steps=[scan, parse, sum_values])
+    s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
     assert s1.blocked_count == 1
@@ -267,8 +266,8 @@ def test_reduce_failed_parent_lane_use_passed():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce4_use_passed", name="reduce4_use_passed", steps=[scan, parse, sum_values])
-    s1 = run(pipe, workers=1)
+    pipe = pipeline(name="reduce4_use_passed", steps=[scan, parse, sum_values])
+    s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
     assert s1.blocked_count == 0
@@ -296,7 +295,7 @@ def test_reduce_downstream_map():
     def format_val(sum):
         return f"Total: {sum}"
 
-    pipe = pipeline(id="reduce5", name="reduce5", steps=[scan, parse, sum_values, format_val])
+    pipe = pipeline(name="reduce5", steps=[scan, parse, sum_values, format_val])
     s1 = assert_run(pipe)
 
     assert s1.created_count == 4  # scan + parse + sum + format
@@ -317,18 +316,18 @@ def test_reduce_plan():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce6", name="reduce6", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce6", steps=[scan, parse, sum_values])
 
-    p1 = plan(pipe)
+    p1 = pipe.plan()
     # scan (a root expand) always plans as "execute"; everything downstream
     # of it — including the reduce — is unknowable without running the
     # generator, so it plans "pending" (TODO 14 Trap point 1).
     sum_items = [i for i in p1.items if i.step_name == "sum"]
     assert any(i.action == "pending" for i in sum_items)
 
-    run(pipe, workers=1)
+    pipe.run(workers=1)
 
-    p2 = plan(pipe)
+    p2 = pipe.plan()
     # A second plan() still can't see past the root expand: it always
     # re-plans "execute" for scan and "pending" downstream, never "reuse" —
     # see test_plan.py's test_second_plan_still_shows_execute_and_pending_not_reuse.
@@ -364,8 +363,8 @@ def test_reduce_all_filtered():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce_empty", name="reduce_empty", steps=[scan, parse, sum_values])
-    s1 = run(pipe, workers=1)
+    pipe = pipeline(name="reduce_empty", steps=[scan, parse, sum_values])
+    s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 0
     assert s1.blocked_count == 0

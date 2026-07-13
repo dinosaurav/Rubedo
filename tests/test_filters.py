@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Filtered, plan, run, step, pipeline
+from rubedo import Filtered, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationIndexEntry, RunCoordinateStatus
 from rubedo.store import init_store
@@ -97,7 +97,7 @@ def build_pipeline(calls=None):
     def summarize(screen):
         return screen.upper()
 
-    pipe = pipeline(id="flt", name="flt", steps=[scan, screen, summarize])
+    pipe = pipeline(name="flt", steps=[scan, screen, summarize])
     return pipe, calls
 
 
@@ -144,7 +144,7 @@ def test_filtered_coordinate_skips_downstream():
     create_file("short.txt", "tiny")
     pipe, _ = build_pipeline()
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     # scan(long) + scan(short) [scan itself never filters] + screen(long) +
     # summarize(long)
     assert summary.created_count == 4
@@ -175,10 +175,10 @@ def test_filter_decision_is_cached():
     create_file("short.txt", "tiny")
     pipe, calls = build_pipeline([])
 
-    run(pipe, workers=1)
+    pipe.run(workers=1)
     assert calls == ["short.txt"]
 
-    summary = run(pipe, workers=1)
+    summary = pipe.run(workers=1)
     assert calls == ["short.txt"], "cached verdict: filter step must not re-execute"
     assert summary.filtered_count == 2
     assert summary.created_count == 0
@@ -194,12 +194,12 @@ def test_filter_decision_is_cached():
 def test_content_change_reverses_the_verdict():
     create_file("f.txt", "tiny")
     pipe, _ = build_pipeline()
-    summary1 = run(pipe, workers=1)
+    summary1 = pipe.run(workers=1)
     assert summary1.filtered_count == 2
 
     # File grows past the threshold: new input hash, fresh decision
     create_file("f.txt", "now long enough to pass the filter")
-    summary2 = run(pipe, workers=1)
+    summary2 = pipe.run(workers=1)
     assert summary2.filtered_count == 0
     assert summary2.created_count == 3  # scan(f) + screen(f) + summarize(f)
 
@@ -227,11 +227,11 @@ def test_plan_shows_filtered_chain():
     def summarize(screen):
         return screen.upper()
 
-    pipe = pipeline(id="flt2", name="flt2", steps=[screen, summarize])
+    pipe = pipeline(name="flt2", steps=[screen, summarize])
     params = {"text": "tiny"}
-    run(pipe, params=params, workers=1)
+    pipe.run(params=params, workers=1)
 
-    p = plan(pipe, params=params)
+    p = pipe.plan(params=params)
     actions = {(i.coordinate, i.step_name): i.action for i in p.items}
     assert actions[("@root", "screen")] == "reuse"  # the verdict is cached
     assert actions[("@root", "summarize")] == "filtered"
@@ -248,8 +248,8 @@ def test_skip_cache_step_cannot_filter():
     def use(util):
         return util
 
-    pipe = pipeline(id="bad", name="bad", steps=[scan, util, use])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(name="bad", steps=[scan, util, use])
+    summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
     with get_session() as session:

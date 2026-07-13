@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db
 from rubedo.server import app
 from rubedo.store import init_store
@@ -89,9 +89,7 @@ def make_pipeline():
     def my_proc(scan: dict, params: MyParams):
         return {"val": params.my_val}
 
-    return pipeline(
-        id="test-proc", name="Test Proc", steps=[scan, my_proc], params_model=MyParams
-    )
+    return pipeline(name="test-proc", steps=[scan, my_proc], params_model=MyParams)
 
 
 def test_unrun_pipelines_are_invisible():
@@ -106,8 +104,8 @@ def test_run_pipeline_appears_with_definition_snapshot():
         f.write("hello")
 
     pipe = make_pipeline()
-    run(pipe, workers=1)
-    run(pipe, workers=1)
+    pipe.run(workers=1)
+    pipe.run(workers=1)
 
     res = client.get("/api/pipelines")
     assert res.status_code == 200
@@ -120,7 +118,7 @@ def test_run_pipeline_appears_with_definition_snapshot():
     assert item["last_run_at"] is not None
 
     definition = item["definition"]
-    assert definition["name"] == "Test Proc"
+    assert definition["name"] == "test-proc"
     (step_def,) = [s for s in definition["steps"] if s["name"] == "my-step"]
     assert step_def["name"] == "my-step"
     assert step_def["version"] == "v1"
@@ -130,15 +128,14 @@ def test_run_pipeline_appears_with_definition_snapshot():
 
 def test_describe_renders_dag_without_running():
     pipe = make_pipeline()
-    from rubedo import describe
 
-    text = describe(pipe)
+    text = pipe.describe()
     assert "test-proc" in text
     # "scan" is the root now; "my-step" depends on it.
     assert "scan (1) (root)" in text
     assert "my-step (v1) <- scan" in text
     assert "retries=2" in text
 
-    mermaid = describe(pipe, format="mermaid")
+    mermaid = pipe.describe(format="mermaid")
     assert mermaid.startswith("graph TD")
     assert 'my-step["my-step<br/>v1"]' in mermaid

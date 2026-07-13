@@ -6,6 +6,11 @@ consecutive 1:1 (map) steps as soon as its own inputs commit; reduce/join
 (and, for now, expand and multi-parent maps) remain barriers that
 synchronize on all lanes. Ledger rows — statuses, addresses, lifecycle —
 must be identical across modes.
+
+schedule=/home= are Pipeline construction-time settings (TODO 15): a
+cross-mode comparison builds two Pipeline wrappers over the *same*
+underlying step objects (identical addresses/hashes) rather than reusing
+one Pipeline instance with different settings per call.
 """
 
 import os
@@ -18,7 +23,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Filtered, run, step, pipeline
+from rubedo import Filtered, pipeline, step
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     Materialization,
@@ -120,9 +125,9 @@ def coord_for_path(filename):
     return None
 
 
-def _chain_pipe(pid: str):
-    """The 4-step chain (scan + 3-step map chain) used by the equivalence
-    tests."""
+def _chain_steps():
+    """The 3-step map chain (on top of the module-level `scan` root) used
+    by the equivalence tests."""
 
     @step(name="s1", version="1", depends_on=["scan"])
     def s1(scan):
@@ -136,7 +141,7 @@ def _chain_pipe(pid: str):
     def s3(s2):
         return s2 + "!"
 
-    return pipeline(id=pid, name=pid, steps=[scan, s1, s2, s3])
+    return [scan, s1, s2, s3]
 
 
 def _status_rows(run_id):
@@ -162,16 +167,19 @@ def test_mode_equivalence_fresh_stores():
     create_file("a.txt", "alpha")
     create_file("b.txt", "beta")
     create_file("c.txt", "gamma")
-    pipe = _chain_pipe("equiv")
+    steps = _chain_steps()
 
     home_a = os.path.join(os.path.abspath(ENV_FOLDER), "homeA")
     home_b = os.path.join(os.path.abspath(ENV_FOLDER), "homeB")
 
-    s_broad = run(pipe, home=home_a, schedule="broad")
+    pipe_broad = pipeline(name="equiv", steps=steps, schedule="broad", home=home_a)
+    pipe_deep = pipeline(name="equiv", steps=steps, schedule="deep", home=home_b)
+
+    s_broad = pipe_broad.run()
     facts_broad = _status_rows(s_broad.run_id)  # read before re-pointing at B
     hashes_broad = _mat_hashes()
 
-    s_deep = run(pipe, home=home_b, schedule="deep")
+    s_deep = pipe_deep.run()
     facts_deep = _status_rows(s_deep.run_id)
     hashes_deep = _mat_hashes()
 
@@ -185,24 +193,30 @@ def test_mode_equivalence_fresh_stores():
 def test_broad_then_deep_reuses_everything():
     create_file("a.txt", "alpha")
     create_file("b.txt", "beta")
-    pipe = _chain_pipe("cross1")
+    steps = _chain_steps()
     home = os.path.join(os.path.abspath(ENV_FOLDER), "homeC")
 
-    s1 = run(pipe, home=home, schedule="broad")
+    pipe_broad = pipeline(name="cross1", steps=steps, schedule="broad", home=home)
+    pipe_deep = pipeline(name="cross1", steps=steps, schedule="deep", home=home)
+
+    s1 = pipe_broad.run()
     assert (s1.created_count, s1.reused_count) == (8, 0)  # 2 files x 4 steps
-    s2 = run(pipe, home=home, schedule="deep")
+    s2 = pipe_deep.run()
     assert (s2.created_count, s2.reused_count) == (0, 8)
 
 
 def test_deep_then_broad_reuses_everything():
     create_file("a.txt", "alpha")
     create_file("b.txt", "beta")
-    pipe = _chain_pipe("cross2")
+    steps = _chain_steps()
     home = os.path.join(os.path.abspath(ENV_FOLDER), "homeD")
 
-    s1 = run(pipe, home=home, schedule="deep")
+    pipe_deep = pipeline(name="cross2", steps=steps, schedule="deep", home=home)
+    pipe_broad = pipeline(name="cross2", steps=steps, schedule="broad", home=home)
+
+    s1 = pipe_deep.run()
     assert (s1.created_count, s1.reused_count) == (8, 0)
-    s2 = run(pipe, home=home, schedule="broad")
+    s2 = pipe_broad.run()
     assert (s2.created_count, s2.reused_count) == (0, 8)
 
 
@@ -230,8 +244,8 @@ def test_deep_pipelines_lanes_across_steps():
             gate.set()  # proves s2(A) ran before s1(B) completed
         return s1.upper()
 
-    pipe = pipeline(id="deep_pipe", name="deep_pipe", steps=[scan, s1, s2])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="deep_pipe", steps=[scan, s1, s2], schedule="deep")
+    summary = pipe.run()
 
     assert gate.is_set()
     assert summary.status == "completed"
@@ -265,8 +279,8 @@ def test_broad_stages_whole_steps():
         s2_started.append(time.monotonic())
         return s1 * 2
 
-    pipe = pipeline(id="staged", name="staged", steps=[scan, s1, s2])
-    summary = run(pipe)  # broad is the default
+    pipe = pipeline(name="staged", steps=[scan, s1, s2])  # broad is the default
+    summary = pipe.run()
 
     assert summary.created_count == 6  # 2 files x (scan + s1 + s2)
     assert len(s1_finished) == 2 and len(s2_started) == 2
@@ -294,8 +308,8 @@ def test_deep_failure_cascades_to_downstream_cells():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(id="cascade", name="cascade", steps=[scan, s1, s2, s3])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="cascade", steps=[scan, s1, s2, s3], schedule="deep")
+    summary = pipe.run()
 
     assert summary.status == "completed_with_failures"
     # scan(a) + scan(b) + s1(a) + s2(a) + s3(a); s1(b) fails, s2/s3(b) block.
@@ -337,8 +351,8 @@ def test_deep_filtered_mid_chain():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(id="filt", name="filt", steps=[scan, s1, s2, s3])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="filt", steps=[scan, s1, s2, s3], schedule="deep")
+    summary = pipe.run()
 
     assert summary.status == "completed"
     # scan(a)+scan(b)+s1(a)+s1(b) [s1 never filters] + s2(a) + s3(a)
@@ -373,8 +387,8 @@ def test_deep_reduce_barrier_receives_all_lanes():
     def total(dbl):
         return {"n": len(dbl), "total": sum(dbl.values())}
 
-    pipe = pipeline(id="barrier", name="barrier", steps=[scan, parse, dbl, total])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="barrier", steps=[scan, parse, dbl, total], schedule="deep")
+    summary = pipe.run()
 
     assert summary.status == "completed"
     assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
@@ -407,8 +421,8 @@ def test_deep_shared_rate_limiter_paces_across_lanes():
         starts.append(time.monotonic())
         return fetch * 2
 
-    pipe = pipeline(id="paced", name="paced", steps=[scan, fetch, enrich])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="paced", steps=[scan, fetch, enrich], schedule="deep")
+    summary = pipe.run()
 
     assert summary.status == "completed"
     assert len(starts) == 3
@@ -445,8 +459,8 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
         post_starts.append(time.monotonic())
         return mid + "!"
 
-    pipe = pipeline(id="overlap", name="overlap", steps=[scan, src, mid, post])
-    summary = run(pipe, schedule="deep")
+    pipe = pipeline(name="overlap", steps=[scan, src, mid, post], schedule="deep")
+    summary = pipe.run()
 
     assert summary.status == "completed"
     assert len(mid_starts) == len(post_starts) == 3
@@ -457,14 +471,12 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
     )
 
 
-# (g) Anything but broad/deep is rejected loudly.
+# (g) Anything but broad/deep is rejected loudly — now at pipeline()
+# construction time (schedule= moved off run(), see TODO 15).
 def test_invalid_schedule_raises():
-    create_file("a.txt", "x")
-
     @step(name="s1", version="1", depends_on=["scan"])
     def s1(scan):
         return scan["text"]
 
-    pipe = pipeline(id="bad", name="bad", steps=[scan, s1])
     with pytest.raises(ValueError, match="schedule"):
-        run(pipe, schedule="sideways")
+        pipeline(name="bad", steps=[scan, s1], schedule="sideways")

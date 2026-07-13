@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import get_session
 from rubedo.gc import (
     _anchor_mat_ids,
@@ -130,7 +130,7 @@ def _norm_chain(folder=TEST_FOLDER):
 
 def make_pipe(retention=None, folder=TEST_FOLDER, pid="gcp"):
     return pipeline(
-        id=pid, name=pid,
+        name=pid,
         steps=[_shout(folder)], retention=retention,
     )
 
@@ -149,10 +149,8 @@ def live_hashes():
 
 
 def test_retention_validation_and_definition_snapshot():
-    from rubedo.spec import definition
-
-    assert definition(make_pipe(retention=3))["retention"] == 3
-    assert "retention" not in definition(make_pipe())  # None -> omitted
+    assert make_pipe(retention=3).definition()["retention"] == 3
+    assert "retention" not in make_pipe().definition()  # None -> omitted
 
     for bad in (0, -1, True, 2.5):
         with pytest.raises(ValueError):
@@ -166,11 +164,11 @@ def test_retention_validation_and_definition_snapshot():
 
 def test_retention_demotes_only_the_oldest_generation():
     write("a.txt", "gen1")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen2")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen3")
-    s3 = run(make_pipe(retention=2), workers=1)  # auto-prune fires here
+    s3 = make_pipe(retention=2).run(workers=1)  # auto-prune fires here
 
     with get_session() as s:
         mats = {m.output_content_hash[:10]: m for m in s.query(Materialization).all()}
@@ -214,15 +212,15 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
     try:
         # Pipeline B produces "SHARED" and keeps it live forever.
         write("b.txt", "SHARED", folder=other)
-        pb = pipeline(id="pb", name="pb", steps=_norm_chain(other))
-        run(pb, workers=1)
+        pb = pipeline(name="pb", steps=_norm_chain(other))
+        pb.run(workers=1)
 
         # Pipeline A: gen1 also normalizes to "SHARED" (same object, different
         # address), gen2 is different. retention=1 prunes gen1.
         write("a.txt", "SHARED ")  # strips to SHARED -> shares B's object
-        run(make_pipe_norm(retention=1), workers=1)
+        make_pipe_norm(retention=1).run(workers=1)
         write("a.txt", "OTHER")
-        run(make_pipe_norm(retention=1), workers=1)  # auto-prune demotes gen1
+        make_pipe_norm(retention=1).run(workers=1)  # auto-prune demotes gen1
 
         with get_session() as s:
             shared_hash = None
@@ -246,7 +244,7 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
 
 def make_pipe_norm(retention=None):
     return pipeline(
-        id="gcp", name="gcp",
+        name="gcp",
         steps=_norm_chain(TEST_FOLDER), retention=retention,
     )
 
@@ -258,11 +256,11 @@ def make_pipe_norm(retention=None):
 
 def test_pruned_lane_reappears_and_lazily_heals():
     write("a.txt", "gen1")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen2")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen3")
-    run(make_pipe(retention=2), workers=1)  # gen1 pruned + object deleted
+    make_pipe(retention=2).run(workers=1)  # gen1 pruned + object deleted
 
     with get_session() as s:
         gen1 = [
@@ -274,7 +272,7 @@ def test_pruned_lane_reappears_and_lazily_heals():
 
     # The input reappears: recompute rewrites the bytes and restores the row.
     write("a.txt", "gen1")
-    run(make_pipe(retention=2), workers=1)
+    make_pipe(retention=2).run(workers=1)
 
     with get_session() as s:
         healed = s.get(Materialization, gen1_id)
@@ -295,11 +293,11 @@ def test_pruned_lane_reappears_and_lazily_heals():
 
 def test_gc_refuses_and_auto_prune_skips_while_a_run_is_live():
     write("a.txt", "gen1")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen2")
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "gen3")
-    run(make_pipe(), workers=1)  # no retention -> nothing pruned yet
+    make_pipe().run(workers=1)  # no retention -> nothing pruned yet
 
     # Inject a run whose heartbeat is fresh (effective status == running).
     with get_session() as s:
@@ -339,11 +337,11 @@ def test_gc_refuses_and_auto_prune_skips_while_a_run_is_live():
 def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     # No retention -> no auto-prune; three distinct generations on disk.
     write("a.txt", "AAAA")  # -> "AAAA" (4 bytes)
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "BBBBB")  # -> 5 bytes
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
     write("a.txt", "CCCCCC")  # -> 6 bytes (latest terminal run)
-    run(make_pipe(), workers=1)
+    make_pipe().run(workers=1)
 
     # Map each generation's output text -> content hash while all are present.
     from rubedo.store import read_materialization_output
@@ -433,7 +431,7 @@ def _upper():
 
 def make_expand_pipe(retention=None):
     return pipeline(
-        id="xp", name="xp",
+        name="xp",
         steps=[_scan(), _read(), _split(), _upper()], retention=retention,
     )
 
@@ -442,9 +440,9 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
     write("a.txt", "alpha\nbeta")
     # Three runs, content unchanged: the anchor is needed by every run for
     # reuse but never appears in RunCoordinateStatus.
-    run(make_expand_pipe(retention=2), workers=1)
-    run(make_expand_pipe(retention=2), workers=1)
-    run(make_expand_pipe(retention=2), workers=1)  # auto-prune fires
+    make_expand_pipe(retention=2).run(workers=1)
+    make_expand_pipe(retention=2).run(workers=1)
+    make_expand_pipe(retention=2).run(workers=1)  # auto-prune fires
 
     with get_session() as s:
         # The anchor = the split-step materialization with no status row.
@@ -470,7 +468,7 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
 
     # A subsequent run still reuses via the anchor: the expand fn is NOT called.
     calls_before = _split_calls["n"]
-    summary = run(make_expand_pipe(retention=2), workers=1)
+    summary = make_expand_pipe(retention=2).run(workers=1)
     assert _split_calls["n"] == calls_before  # anchor reuse: fn skipped
     assert summary.created_count == 0
 
@@ -484,11 +482,11 @@ def test_gc_applies_recorded_retention_policy_manually():
     # Runs carry retention=2 but we can still call gc() to reconcile; here the
     # auto-prune already trimmed to the window, so a manual gc is a no-op.
     write("a.txt", "gen1")
-    run(make_pipe(retention=2), workers=1)
+    make_pipe(retention=2).run(workers=1)
     write("a.txt", "gen2")
-    run(make_pipe(retention=2), workers=1)
+    make_pipe(retention=2).run(workers=1)
     write("a.txt", "gen3")
-    run(make_pipe(retention=2), workers=1)
+    make_pipe(retention=2).run(workers=1)
 
     report = gc(delete=True)  # reads retention=2 from latest run's definition
     assert report.applied

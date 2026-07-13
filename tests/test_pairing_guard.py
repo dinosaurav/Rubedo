@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import run, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
     ImmutabilityError,
@@ -89,10 +89,10 @@ def seed_pipeline():
     def read(scan):
         return scan["text"].strip()
 
-    pipe = pipeline(id="pg", name="pg", steps=[scan, read])
+    pipe = pipeline(name="pg", steps=[scan, read])
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
-    run(pipe, workers=1)
+    pipe.run(workers=1)
     return pipe
 
 

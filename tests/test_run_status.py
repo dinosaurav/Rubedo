@@ -11,7 +11,6 @@ from rubedo.models import (
     MaterializationIndexEntry,
     RunEvent,
 )
-from rubedo.runner import run
 from rubedo import step, pipeline
 import uuid
 from sqlalchemy.pool import StaticPool
@@ -111,7 +110,7 @@ def dummy_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
 
-p_dummy = pipeline(id="p-dummy", name="Dummy", steps=[scan, dummy_processor])
+p_dummy = pipeline(name="p-dummy", steps=[scan, dummy_processor])
 
 
 @step(name="failing", version="v1", depends_on=["scan"])
@@ -121,11 +120,11 @@ def failing_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
 
-p_fail = pipeline(id="p-fail", name="Fail", steps=[scan, failing_processor])
+p_fail = pipeline(name="p-fail", steps=[scan, failing_processor])
 
 
 def test_first_run_creates_statuses(setup_teardown):
-    res = run(p_dummy, workers=1)
+    res = p_dummy.run(workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
@@ -143,8 +142,8 @@ def test_first_run_creates_statuses(setup_teardown):
 
 
 def test_second_run_reuses_statuses(setup_teardown):
-    run(p_dummy, workers=1)
-    res2 = run(p_dummy, workers=1)
+    p_dummy.run(workers=1)
+    res2 = p_dummy.run(workers=1)
 
     with get_session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
@@ -163,13 +162,13 @@ def test_second_run_reuses_statuses(setup_teardown):
 
 def test_changed_file_creates_one(setup_teardown):
     input_dir = setup_teardown
-    run(p_dummy, workers=1)
+    p_dummy.run(workers=1)
 
     # modify one file
     with open(os.path.join(input_dir, "a.txt"), "w") as f:
         f.write("one_modified")
 
-    res2 = run(p_dummy, workers=1)
+    res2 = p_dummy.run(workers=1)
 
     coord_a = coord_for_path("a.txt", run_id=res2.run_id)
     coord_b = coord_for_path("b.txt", run_id=res2.run_id)
@@ -198,7 +197,7 @@ def test_changed_file_creates_one(setup_teardown):
 
 def test_deleted_file_absent_from_next_run(setup_teardown):
     input_dir = setup_teardown
-    res1 = run(p_dummy, workers=1)
+    res1 = p_dummy.run(workers=1)
 
     # get old address (the "dummy" step's, matching the old single-step intent)
     coord_a = coord_for_path("a.txt")
@@ -212,7 +211,7 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
 
     os.remove(os.path.join(input_dir, "a.txt"))
 
-    res2 = run(p_dummy, workers=1)
+    res2 = p_dummy.run(workers=1)
 
     with get_session() as session:
         coords = {
@@ -237,7 +236,7 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
 
 
 def test_failed_coordinate_records_failed(setup_teardown):
-    res = run(p_fail, workers=1)
+    res = p_fail.run(workers=1)
 
     coord_a = coord_for_path("a.txt")
     coord_b = coord_for_path("b.txt")
@@ -271,7 +270,7 @@ def test_failed_coordinate_records_failed(setup_teardown):
 
 
 def test_event_log_populated(setup_teardown):
-    res = run(p_dummy, workers=1)
+    res = p_dummy.run(workers=1)
 
     with get_session() as session:
         events = session.query(RunEvent).filter_by(run_id=res.run_id).all()

@@ -3,7 +3,7 @@ import shutil
 import pytest
 import uuid
 
-from rubedo import step, pipeline, run, Selection
+from rubedo import step, pipeline, Selection
 from rubedo.db import get_session, init_db
 import rubedo.db as db
 from rubedo.models import Base, Materialization
@@ -73,8 +73,8 @@ def test_selection_version_range():
     @step(name="dummy", version="1.0.0", depends_on=["scan"])
     def step_v1(scan): return scan["text"]
 
-    p1 = pipeline(id="p-test", name="T", steps=[scan, step_v1])
-    run(p1, workers=1)
+    p1 = pipeline(name="p-test", steps=[scan, step_v1])
+    p1.run(workers=1)
 
     # 2. Run with version 2.1.0 on a modified file
     with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
@@ -83,8 +83,8 @@ def test_selection_version_range():
     @step(name="dummy", version="2.1.0", depends_on=["scan"])
     def step_v2(scan): return scan["text"]
 
-    p2 = pipeline(id="p-test", name="T", steps=[scan, step_v2])
-    run(p2, workers=1)
+    p2 = pipeline(name="p-test", steps=[scan, step_v2])
+    p2.run(workers=1)
 
     # 3. Run with unparseable version on another file
     with open(os.path.join(TEST_FOLDER, "c.txt"), "w") as f:
@@ -93,8 +93,8 @@ def test_selection_version_range():
     @step(name="dummy", version="legacy-v1", depends_on=["scan"])
     def step_legacy(scan): return scan["text"]
 
-    p3 = pipeline(id="p-test", name="T", steps=[scan, step_legacy])
-    run(p3, workers=1)
+    p3 = pipeline(name="p-test", steps=[scan, step_legacy])
+    p3.run(workers=1)
 
     # We now have materializations with versions: 1.0.0, 2.1.0, legacy-v1
     # (plus scan's own child lanes, version "1" throughout — untouched by

@@ -2,7 +2,7 @@ import os
 import tempfile
 import pytest
 from fastapi.testclient import TestClient
-from rubedo import step, pipeline, run
+from rubedo import step, pipeline
 from rubedo.server import app
 from rubedo.db import init_db
 import rubedo.db as db
@@ -36,9 +36,7 @@ def count_lines(scan: dict) -> ProcessResult:
     )
 
 
-test_pipeline = pipeline(
-    id="p-test", name="Test Pipeline", steps=[scan, count_lines]
-)
+test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +71,7 @@ def setup_teardown():
         f.write("one")
 
     # Run a process to populate DB
-    run(test_pipeline, workers=1)
+    test_pipeline.run(workers=1)
 
     yield
 

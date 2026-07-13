@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import Selection, invalidate, run, step, pipeline, trace
+from rubedo import Selection, invalidate, step, pipeline, trace
 from rubedo.db import get_session, init_db
 from rubedo.models import Materialization, MaterializationLifecycle
 from rubedo.store import init_store
@@ -103,7 +103,7 @@ def make_pipeline():
         return {"sum": sum(v["double"] for v in summarize.values())}
 
     return pipeline(
-        id="invd", name="invd", steps=[scan, extract, summarize, total]
+        name="invd", steps=[scan, extract, summarize, total]
     )
 
 
@@ -134,7 +134,7 @@ def _invalidated_lifecycle_counts(mat_ids):
 def test_downstream_flips_seed_and_descendants_then_heals():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
-    run(make_pipeline())
+    make_pipeline().run()
 
     result = invalidate(
         Selection(index={"company": "acme"}), reason="bad extract", downstream=True
@@ -161,7 +161,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
 
     # Lazy heal: the next run recomputes exactly the invalidated set; both
     # scan lanes plus the surviving globex extract/summarize are reused.
-    summary = run(make_pipeline())
+    summary = make_pipeline().run()
     assert summary.created_count == 3
     assert summary.reused_count == 4
 
@@ -169,7 +169,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
 def test_downstream_flipped_set_equals_trace_preview():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
-    run(make_pipeline())
+    make_pipeline().run()
 
     sel = Selection(index={"company": "acme"})
     # trace() is the preview: capture its live nodes BEFORE invalidating,
@@ -189,7 +189,7 @@ def test_downstream_flipped_set_equals_trace_preview():
 def test_downstream_invalidation_is_idempotent():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
-    run(make_pipeline())
+    make_pipeline().run()
 
     sel = Selection(index={"company": "acme"})
     first = invalidate(sel, reason="first", downstream=True)
@@ -209,7 +209,7 @@ def test_downstream_invalidation_is_idempotent():
 def test_default_invalidation_touches_only_direct_matches():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
-    run(make_pipeline())
+    make_pipeline().run()
 
     result = invalidate(Selection(index={"company": "acme"}), reason="just the seed")
 
