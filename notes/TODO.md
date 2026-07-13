@@ -384,6 +384,40 @@ stay.
   promise, this dies; if that promise is softened, revisit whether
   `materialization_lifecycle` + the pairing guard could shrink
   (**DANGEROUS** — touches invariant 8, GC safety, and crash recovery).
+- **Sinks / export verb** (the return leg of the refinement loop:
+  CSV/Sheet in → refined batch back out). A sink is **not a step** —
+  steps are cached, non-idempotency-protected facts; export is an
+  idempotent side effect that should re-run freely. Shape: a ledger
+  projection at the server's altitude — `p.export(select=..., to=...)`
+  / `rubedo export` reads live materializations via `selection.py`,
+  joins on indexed fields as the row key, writes out (CSV/Parquet
+  trivially; Google Sheets via gspread, Excel via openpyxl as extras).
+  Incremental sync falls out of content-addressing: record last hash
+  written per (target, lane), push only changed rows — miniature
+  reverse ETL (Census/Hightouch pattern). Owner: wants this, not for
+  all users — a verb at the edge, never a concept in the engine
+  (2026-07-13).
+- **Step-version diff.** The ledger already holds *both generations*
+  across a version bump — a `diff("step", "v1", "v2")` showing per-lane
+  output changes is prompt A/B testing as a read-only ledger query
+  (run v2 on a sample, compare, then commit to the batch). Data model
+  needs nothing; pairs with the parked run-diff/code-diff ideas
+  (2026-07-13).
+- **Per-lane cost tracking / $-saved.** Steps that call paid APIs
+  record cost per lane; run summary reports "reused $N of prior work."
+  The product's value prop as a number, printed every run. Rides the
+  existing ledger (2026-07-13).
+- **Human-in-the-loop overrides** — accept/correct individual lane
+  outputs (LLM refinement always needs a human pass on some rows).
+  Natural fit: an override is a new generation with provenance
+  `human` instead of a step run, so append-only survives — but this
+  touches the generations protocol, invariant 8, and would be the
+  dashboard's first write surface (**DANGEROUS** — full design
+  session required, do not sketch in code) (2026-07-13).
+- **Failure triage view.** Blocked/failed lanes already accumulate in
+  the ledger; a first-class "these 14 rows failed, retry just these"
+  surface (CLI + dashboard) turns an engine fact into a refinement
+  workflow (2026-07-13).
 
 ──────────────────────────────────────────────────────────────────────
 
