@@ -299,13 +299,18 @@ def describe(spec: PipelineSpec, format: str = "text") -> str
 
 Renders a pipeline's DAG before it's ever run — no ledger access at all.
 `format="text"` (default) prints each step in dependency order with its
-policies; `format="mermaid"` emits a Mermaid graph for markdown viewers.
+policies; `format="mermaid"` emits a Mermaid graph for markdown viewers;
+`format="ascii"` draws topo-layered boxes joined by unicode box-drawing
+edges — legible up to ~20 steps, right in a terminal. Not graphviz-quality
+(naive edge crossings are allowed); if a layer is too wide to draw legibly
+it falls back to `format="text"` for that graph.
 
 ```python
 from rubedo import describe
 
 print(describe(p))
 print(describe(p, format="mermaid"))
+print(describe(p, format="ascii"))
 ```
 
 ## `trace()`

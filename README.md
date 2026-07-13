@@ -52,7 +52,7 @@ def count_lines(scan: dict) -> ProcessResult:
 
 p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
 
-print(describe(p))            # the DAG, before ever running (also: format="mermaid")
+print(describe(p))            # the DAG, before ever running (also: format="mermaid", format="ascii")
 print(plan(p))                # dry-run: what would run() do to my data, and why
 summary = run(p)              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
