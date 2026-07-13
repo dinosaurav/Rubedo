@@ -352,9 +352,54 @@ Acceptance: no comment in `src/` references a TODO item number or narrates
 a past change; constraint comments (invariant references, trap guards)
 stay.
 
+## 20. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/cloud-control-plane.md]**
+
+Declares a pipeline's environment surface so step code is byte-identical
+local and cloud: `secrets=` names vault-injected, log-masked values (API
+keys); `env=` names deploy-config-injected, visible values (log levels).
+Locally both come from the shell/`.env` as today — the declaration changes
+nothing about execution; a cloud worker populates the env from it. Useful
+standalone as executable documentation of what a pipeline needs to run.
+
+- `pipeline(secrets: list[str] = [], env: list[str] = [])`, stored as
+  fields on `PipelineSpec`. Validation lives in `pipeline.py`'s
+  `_build_spec` with the existing checks — **not** in `spec.py` (data
+  leaf): names non-empty and unique, no overlap between the two lists, no
+  reserved `RUBEDO_*` names. `definition()` serializes both (plain string
+  lists).
+- Config that changes step outputs stays in `params_model` (already
+  hashed into per-step identity); `secrets=`/`env=` are for credentials
+  and operational config only. The docs state this; the lint nudges it.
+- `rubedo check <file.py>`: best-effort AST walk, no import of user code —
+  find `@step`-decorated functions and `pipeline(...)` calls in the file,
+  warn on `os.environ[...]`/`os.getenv(...)` reads inside step bodies
+  whose variable name isn't declared in `secrets=`/`env=`. Warning-only;
+  skip silently on parse failure or dynamic names.
+
+**Trap:** the lint is advisory forever — dynamic names and indirection
+make inference untrustworthy, so it must never block, never gate deploy,
+and never be treated as authoritative by other tooling. And the
+declarations must not leak into per-step cache identity: two pipelines
+differing only in `secrets=` reuse each other's materializations.
+
+Acceptance: `pipeline(secrets=["OPENAI_API_KEY"], env=["LOG_LEVEL"])`
+validates (overlap, duplicates, and `RUBEDO_*` names raise);
+`definition()` includes both lists; a run's reuse behavior is identical
+with and without the declarations; `rubedo check` warns naming the
+undeclared variable on an undeclared `os.environ` read in a step and
+passes once declared; full verification checklist green.
+
 ──────────────────────────────────────────────────────────────────────
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
+
+- **Cloud control plane** — hosted execution, deploy/build service,
+  scheduler, secrets vault, shared team cache, dashboard write surfaces.
+  Spine ratified 2026-07-13; full design in `notes/cloud-control-plane.md`
+  (services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
+  engine-side slice is item 20. Remaining sessions before building: vault
+  build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
+  the doc's open-questions section.
 
 - **Bucketed reduce** (`shape="reduce"` with a batch size). The naive
   "first 50 to finish" is nondeterministic and breaks order-independent
