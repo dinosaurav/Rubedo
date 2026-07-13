@@ -1,0 +1,115 @@
+/* Rubedo docs theme — mirrors the marketing site's "blueprint punk" palette:
+   white/black body, Important Red (#FF0033) accent, Satoshi display font,
+   square (no border-radius) chrome. See marketing/src/index.css. */
+
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,400&display=swap');
+
+:root {
+  --md-text-font: 'Satoshi';
+  --md-code-font: 'SFMono-Regular';
+}
+
+/* Light (default) scheme — white bg, near-black text, red accent */
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #ffffff;
+
+  --md-primary-fg-color: #ffffff;
+  --md-primary-fg-color--light: #ffffff;
+  --md-primary-fg-color--dark: #ffffff;
+  --md-primary-bg-color: #1a1a1a;
+  --md-primary-bg-color--light: rgba(26, 26, 26, 0.7);
+
+  --md-accent-fg-color: #ff0033;
+  --md-accent-fg-color--transparent: rgba(255, 0, 51, 0.1);
+  --md-accent-bg-color: #ffffff;
+  --md-accent-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-typeset-a-color: #ff0033;
+
+  --md-code-bg-color: #f9f9f9;
+  --md-code-fg-color: #1a1a1a;
+}
+
+/* Dark (slate) scheme — same red accent on black, not on the marketing
+   site (which is light-only) but keeps the toggle usable */
+[data-md-color-scheme="slate"] {
+  --md-hue: 0;
+  --md-default-bg-color: #121212;
+
+  --md-primary-fg-color: #121212;
+  --md-primary-fg-color--light: #121212;
+  --md-primary-fg-color--dark: #121212;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-accent-fg-color: #ff3355;
+  --md-accent-fg-color--transparent: rgba(255, 51, 85, 0.15);
+  --md-accent-bg-color: #121212;
+  --md-accent-bg-color--light: rgba(18, 18, 18, 0.7);
+
+  --md-typeset-a-color: #ff3355;
+
+  --md-code-bg-color: #1a1a1a;
+}
+
+/* Header / nav tabs: white chrome with a red hairline, like the marketing
+   site's <header style="border-bottom: 1px solid red"> */
+.md-header {
+  border-bottom: 1px solid #ff0033;
+  box-shadow: none;
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  border-bottom-color: #ff3355;
+}
+
+.md-tabs {
+  border-bottom: 1px solid #ff0033;
+}
+
+[data-md-color-scheme="slate"] .md-tabs {
+  border-bottom-color: #ff3355;
+}
+
+/* Square, sharp-edged chrome instead of Material's rounded defaults */
+.md-typeset code,
+.md-typeset pre,
+.md-typeset .highlight,
+.md-typeset .admonition,
+.md-typeset details,
+.md-search__form,
+.md-typeset .tabbed-labels,
+.md-typeset table:not([class]) {
+  border-radius: 0;
+}
+
+.md-typeset pre > code {
+  border-radius: 0;
+}
+
+.md-typeset code {
+  border: 1px solid rgba(255, 0, 51, 0.25);
+}
+
+.md-typeset pre code {
+  border: none;
+}
+
+.md-typeset .highlight {
+  border: 1px solid #ff0033;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .highlight {
+  border-color: #ff3355;
+}
+
+.md-typeset h1,
+.md-typeset h2 {
+  color: var(--md-accent-fg-color);
+}
+
+.md-nav__link--active,
+.md-nav__link:focus,
+.md-nav__link:hover {
+  color: var(--md-accent-fg-color);
+}

@@ -1,26 +1,30 @@
 site_name: Rubedo
 site_description: Local-first batch engine - DAG pipelines over keyed collections
-site_url: https://rubedo.dev/docs/
+site_url: https://dinosaurav.github.io/Rubedo/docs/
 site_dir: marketing/dist/docs
 
 repo_url: https://github.com/dinosaurav/Rubedo
 repo_name: dinosaurav/Rubedo
 edit_uri: edit/main/docs/
 
+extra_css:
+  - stylesheets/extra.css
+
 theme:
   name: material
+  font: false
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: white
+      accent: red
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: black
+      accent: red
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
