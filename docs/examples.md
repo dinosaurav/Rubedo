@@ -25,14 +25,14 @@ Rubedo is that the second run recomputes only what actually changed.
 | Example | Service(s) | Shape | Shows off |
 |---|---|---|---|
 | [`count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines) | local files | map → reduce | the basics: `params_model`, a reduce step |
-| [`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest) | Hacker News + an LLM | filter → LLM → LLM reduce | a custom `Source`, `Filtered`, `index=`, caching non-idempotent LLM calls |
+| [`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest) | Hacker News + an LLM | filter → LLM → LLM reduce | a `@p.source` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
 | [`github_health`](https://github.com/dinosaurav/Rubedo/tree/main/examples/github_health) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, `ProcessResult`, reduce |
 | [`weather_advisory`](https://github.com/dinosaurav/Rubedo/tree/main/examples/weather_advisory) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
 | [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
-| [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → reduce | `TableSource` in streaming (`batch_size`) mode |
+| [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → reduce | a table recipe: a `@p.source` root doing a plain SELECT loop |
 | [`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare elapsed time |
 | [`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed) | local files (self-contained) | expand | `shape="expand"` — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
-| [`newsroom`](https://github.com/dinosaurav/Rubedo/tree/main/examples/newsroom) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multi-source `sources={}`, N-way `shape="join"`, `shape="expand"`, and a `group_key` reduce |
+| [`newsroom`](https://github.com/dinosaurav/Rubedo/tree/main/examples/newsroom) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple `@p.source` roots, N-way `shape="join"`, `shape="expand"`, and a `group_key` reduce |
 | [`pdf_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/pdf_digest) | a PDF + a vision & a text LLM | map root → expand → LLM → reduce → 2× LLM | a source-less `map` root (the PDF path is a param, no `Source`), a cheap vision LLM on figure pages, and a picture-aware vs. text-only summary comparison |
 
 ## Detail, by example
@@ -75,11 +75,11 @@ genuinely CPU-bound.
 
 **[`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup)**
 — self-contained: creates a small SQLite `orders` table in your temp dir,
-then rolls it up with `TableSource(..., batch_size=100)`. Streaming mode
-reads rows in server-side chunks and re-fetches each row's payload lazily
-when its lane actually runs, so the whole table never has to sit in memory
-at once — and because `batch_size` isn't part of a source's identity, you
-can flip it on or off without invalidating anything.
+then rolls it up with a `@p.source` root that's a plain `SELECT * FROM
+orders` loop, one row per lane. A table recipe like this buffers every row
+before the run commits (fine here; see
+[Concepts: sources](concepts/sources.md) for the streaming variant a much
+larger table would need).
 
 **[`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown)**
 — downloads a real ~370k-word English dictionary, splits it into 8 chunks,
@@ -97,16 +97,15 @@ its own content-addressed downstream lane. The whole expansion is cached
 against its parent, so a re-run of the "scrape" step re-expands nothing.
 
 **[`newsroom`](https://github.com/dinosaurav/Rubedo/tree/main/examples/newsroom)**
-— every producer shape at once. Two CSV sources (`feeds`, `publishers`)
-meet in an N-way `shape="join"` on the publisher name (minting `feed|publisher`
+— every producer shape at once. Two `@p.source` CSV roots (`feeds`,
+`publishers`) meet in an N-way `shape="join"` on the publisher name (minting `feed|publisher`
 pair lanes), each feed then `shape="expand"`s into a lane per article, and a
 final `shape="reduce"` step with `group_key="region"` folds the articles into
 one digest per region. Entirely self-contained — no network calls.
 
 **[`pdf_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/pdf_digest)**
-— the source-less-root example: `load_pdf` takes no `depends_on` and no
-`Source`, reading the PDF path out of `params` instead and minting a single
-`@root` lane. From there: `split_chunks` (expand) fans the document into one
+— the source-less-root example: `load_pdf` takes no `depends_on`, reading
+the PDF path out of `params` instead and minting a single `@root` lane. From there: `split_chunks` (expand) fans the document into one
 lane per page/figure, `caption` (map) sends only image chunks to a cheap
 vision LLM, `rejoin` (reduce) reassembles reading order into a
 picture-aware and a text-only document, and two more LLM steps summarize

@@ -7,14 +7,19 @@ Rubedo is a local-first batch engine: you define a DAG of Python steps over a co
 It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid APIs — where "just re-run the script" means paying for everything again and hoping the results come back the same.
 
 ```python
+import csv
 from rubedo import step, pipeline, run
 
-@step(name="summarize", version="v1")
-def summarize(row: dict):
-    return {"summary": call_llm(row["notes"])}   # runs once per distinct row — ever
+@step(name="leads", version="v1", shape="expand")
+def leads():
+    with open("leads.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-p = pipeline(id="summarize", name="Summarize",
-             source=CsvSource("leads.csv"), steps=[summarize])
+@step(name="summarize", version="v1", depends_on=["leads"])
+def summarize(leads: dict):
+    return {"summary": call_llm(leads["notes"])}   # runs once per distinct row — ever
+
+p = pipeline(id="summarize", name="Summarize", steps=[leads, summarize])
 run(p)   # second run: created=0, reused=everything
 ```
 

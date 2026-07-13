@@ -31,7 +31,6 @@ def step(
     shape: str = "map",
     executor: str = "thread",
     group_key: Optional[str] = None,
-    source: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
@@ -47,7 +46,7 @@ imports your code — `@step` just builds a data object; nothing runs until
 |---|---|---|---|
 | `name` | `str` | required | The step's identity within the pipeline; referenced by `depends_on`. |
 | `version` | `str` | required | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
-| `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — it either reads a `Source` or, if the pipeline has none, mints a single source-less `@root` lane from `params`. |
+| `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — `shape="expand"` yields the pipeline's initial lanes (ingestion is just this shape; see [Concepts: sources](../concepts/sources.md)), or a `shape="map"` root mints a single source-less `@root` lane from `params`. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model overriding the pipeline-level `params_model` for this step's own validation (rare; usually set on `pipeline()` instead). |
 | `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `run(..., workers=N)`. |
 | `code` | `"warn"` \| `"auto"` | `"warn"` | What a source edit means. `"warn"`: edits never recompute, but reusing an output whose code has since changed logs a loud warning (in run output, event log, and `plan()`). `"auto"`: the function's source hash joins the cache identity, so any edit recomputes with no version bump — requires an inspectable function source. |
@@ -62,7 +61,6 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` | `"map"` | See [Concepts: shapes](../concepts/shapes.md). |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
 | `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
-| `source` | `str` \| `None` | `None` | For a root step in a multi-source pipeline (`sources={...}`): which named source this step reads. Required when a pipeline declares more than one source and this step is a root. |
 | `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys must exactly match `depends_on`. |
 | `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
 | `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
@@ -90,10 +88,10 @@ def enrich(row: dict) -> ProcessResult:
     ...
 ```
 
-Parameter binding: a root step over a `Source` receives the source's
-payload as a single **positional** argument (a source-less root map or a
-root `expand` receives no payload at all — only `params`, if declared); a
-dependent step receives one **keyword** argument per parent, named after
+Parameter binding: a root step (source-less `map` or root `expand`) receives
+no payload argument at all — only `params`, if declared; a dependent step
+(including a root `expand`'s own downstream consumers) receives one
+**keyword** argument per parent, named after
 that parent's step name (a `reduce` step's parent kwarg is a
 `{coordinate: value}` dict instead of a single value); any step may
 additionally declare a `params` argument to receive the run's validated
@@ -121,54 +119,55 @@ def hn_top():
         yield fetch_story(sid)
 ```
 
-Drop it straight into `pipeline(steps=[...])` — no `folder=`/`source=`
-needed, since the decorated function *is* the source.
+Drop it straight into `pipeline(steps=[...])` — nothing else needed, since
+the decorated function *is* the source. See
+[Concepts: sources](../concepts/sources.md) for the folder/CSV/table/cloud
+recipes.
 
 ## `pipeline()`
 
 ```python
 def pipeline(
     name: str,
-    folder: Optional[str] = None,
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
-    source: Optional[Source] = None,
-    sources: Optional[Dict[str, Source]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     retention: Optional[int] = None,
 ) -> PipelineSpec
 ```
 
-Builds a `PipelineSpec` from a list of steps plus optional source sugar.
+Builds a `PipelineSpec` from a list of steps. There is no separate source
+concept: ingestion is just a parentless `@step(shape="expand")` (see
+[Concepts: sources](../concepts/sources.md)) or a `@source`-decorated one,
+included in `steps=` like any other.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | `str` | required | Human-readable pipeline name. |
-| `folder` | `str` \| `None` | `None` | Sugar for `source=FolderSource(folder)`. Mutually exclusive with `source=`/`sources=`. |
 | `steps` | `list[StepSpec]` \| `None` | `None` | The steps built by `@step`/`@source`. |
 | `id` | `str` \| `None` | `name` | Stable pipeline identity recorded on every run; defaults to `name`. |
-| `source` | `Source` \| `None` | `None` | A single `Source` instance (e.g. `CsvSource(...)`). Mutually exclusive with `folder=`/`sources=`. |
-| `sources` | `dict[str, Source]` \| `None` | `None` | Multiple named sources, for pipelines with `shape="join"` — each root step then picks one with `@step(source="name")`. Mutually exclusive with `folder=`/`source=`. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `run(pipe, params={...})` validates against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
 | `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set. See [Guide: retention](../guides/retention.md). |
 
-Passing none of `folder=`/`source=`/`sources=` is legal: then some root
-step must originate lanes itself — either a `shape="expand"` root (yields
-N lanes every run) or a source-less `shape="map"` root (mints a single
-`@root` lane from its `params`).
+A pipeline needs no explicit source step at all: some root step must
+originate lanes itself — either a `shape="expand"` root (yields N lanes
+every run) or a source-less `shape="map"` root (mints a single `@root`
+lane from its `params`).
 
 ```python
-from rubedo import CsvSource, step, pipeline
+import csv
+from rubedo import step, pipeline
 
-@step(name="enrich", version="v1")
-def enrich(row: dict):
-    return {"email": row["email"], "summary": call_llm(row["notes"])}
+@step(name="leads", version="v1", shape="expand")
+def leads():
+    with open("data/leads.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-leads = pipeline(
-    id="enrich-leads", name="Enrich Leads",
-    source=CsvSource("data/leads.csv"),
-    steps=[enrich],
-)
+@step(name="enrich", version="v1", depends_on=["leads"])
+def enrich(leads: dict):
+    return {"email": leads["email"], "summary": call_llm(leads["notes"])}
+
+pipeline(id="enrich-leads", name="Enrich Leads", steps=[leads, enrich])
 ```
 
 ## `PipelineBuilder`
@@ -190,11 +189,19 @@ would return.
 ```python
 from rubedo import PipelineBuilder
 
-p = PipelineBuilder(id="count-lines", name="Count Lines", folder="input")
+p = PipelineBuilder(id="count-lines", name="Count Lines")
 
-@p.step(name="read_lines", version="read-v1")
-def read_lines(path: str):
-    return {"lines": open(path).read().splitlines()}
+@p.source(name="scan", version="1")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+@p.step(name="read_lines", version="read-v1", depends_on=["scan"])
+def read_lines(scan: dict):
+    return {"lines": scan["text"].splitlines()}
 
 count_lines_pipeline = p.build()
 ```
@@ -204,7 +211,6 @@ count_lines_pipeline = p.build()
 ```python
 def run(
     pipeline: PipelineSpec,
-    source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
     workers: Optional[int] = None,
@@ -221,7 +227,6 @@ The single entry point that actually executes a pipeline.
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `pipeline` | `PipelineSpec` | required | The pipeline to run. |
-| `source` | `Source \| str \| None` | `None` | Overrides the pipeline's declared source for this run — only valid for single-source pipelines. A `str` is sugar for `FolderSource(str)`. |
 | `params` | `dict \| None` | `None` | Run-level parameters, validated against `pipeline.params_model` if one is declared. |
 | `workers` | `int \| None` | `None` | Overrides every step's `workers=` for this run. |
 | `force` | `bool` | `False` | Re-executes every lane regardless of cache state. |
@@ -512,105 +517,17 @@ print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))
 
 ## Sources
 
-### `Source`
+There is no `Source` class or protocol to implement — ingestion is a
+parentless `@step(shape="expand")` (`@source` is sugar for exactly that;
+see [`@source`](#source) above), and every lane it yields is
+content-addressed (`row-<hash>`): identical payloads collapse to one lane,
+and an edited item reads as removed + created, so incrementality survives
+reordering, dedup, and appends for free. To find or track an item by a
+human field (email, id, file name), `@step(index=[...])` it and query — the
+coordinate is never a human key.
 
-```python
-class Source(ABC):
-    @property
-    @abstractmethod
-    def id(self) -> str: ...
-    @abstractmethod
-    def scan(self) -> List[SourceItem]: ...
-    @abstractmethod
-    def load(self, item: SourceItem) -> Any: ...
-```
-
-The protocol every source implements: `id` is a stable identity string
-recorded as `source_id` on runs; `scan()` snapshots every current
-coordinate; `load()` hands a root step its payload for one `SourceItem`.
-Write your own by subclassing this for anything not covered by the built-ins
-below (an API listing, a message queue, ...). See
-[Concepts: sources](../concepts/sources.md).
-
-### `SourceItem`
-
-```python
-@dataclass
-class SourceItem:
-    coordinate: str
-    content_hash: str
-    ref: Any = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-```
-
-One coordinate from a `Source` scan. `ref` is an opaque handle the owning
-source uses in `load()` — it never participates in identity, only
-`coordinate` and `content_hash` do.
-
-### `FolderSource`
-
-```python
-class FolderSource(Source):
-    def __init__(self, path: str): ...
-```
-
-Files under `path`. Coordinate = the file's path relative to `path`
-(forward-slash-normalized); payload handed to root steps = the file's
-absolute path. `folder="..."` on `pipeline()` is sugar for this.
-
-```python
-from rubedo import FolderSource
-FolderSource("data/inbox")
-```
-
-### `CsvSource`
-
-```python
-class CsvSource(Source):
-    def __init__(self, path: str): ...
-```
-
-Rows of a CSV file, one lane per row, payload = the row as a `dict`. Lanes
-are **content-addressed** (`row-<hash>`): identical rows collapse to one
-lane, and an edited row reads as removed + created, so incrementality
-survives reordering, dedup, and appends for free. To find or track a row by
-a human field (email, id), `@step(index=[...])` it downstream and query —
-the coordinate is never a human key.
-
-```python
-from rubedo import CsvSource
-CsvSource("data/leads.csv")
-```
-
-### `TableSource`
-
-```python
-class TableSource(Source):
-    def __init__(
-        self,
-        engine_url: str,
-        *,
-        table: str,
-        key=None,
-        columns: Optional[List[str]] = None,
-        batch_size: Optional[int] = None,
-    ): ...
-```
-
-Rows of a SQL table via SQLAlchemy, content-addressed like `CsvSource`.
-
-| Parameter | Type | Default | Meaning |
-|---|---|---|---|
-| `engine_url` | `str` | required | A SQLAlchemy engine URL. Credentials are stripped when building `.id`, so they never leak into the ledger. |
-| `table` | `str` | required | Table name (interpolated directly — an internal schema declaration from pipeline code, not user input). |
-| `key` | `str \| list[str] \| None` | `None` | Column(s) `load()` re-fetches a streamed row by. **Not** a lane key — it never affects the coordinate. Required only when `batch_size` is set. |
-| `columns` | `list[str] \| None` | `None` | Restrict the `SELECT` to these columns; `None` means `SELECT *`. |
-| `batch_size` | `int \| None` | `None` | `None` (default): the whole table is read once in `scan()`, each row's payload carried along, so `load()` is a passthrough. Set to a positive int for streaming mode: rows are read in server-side chunks of this size, only `(key, content_hash)` kept, and `load()` re-fetches a single row by `key` when its lane actually runs — bounded memory at the cost of one query per lane. Not part of `.id`, so toggling it never invalidates the cache. |
-
-```python
-from rubedo import TableSource
-TableSource("postgresql://host/db", table="orders", key="order_id", batch_size=500)
-```
+See [Concepts: sources](../concepts/sources.md) for the folder, CSV, SQL
+table, and cloud object storage recipes.
 
 ## `gc()`
 

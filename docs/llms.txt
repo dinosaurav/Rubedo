@@ -3,29 +3,29 @@
 Rubedo is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
 
 ## Concepts in 10 lines
-1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder).
-2. **Sources:** `CsvSource`/`FolderSource`/`TableSource` define input lanes — every lane is content-addressed (`row-<hash>`; identical rows collapse). To find a row by a human field, index it. A pipeline can have several: `pipeline(sources={"a": SrcA, "b": SrcB})`, and a root step picks one with `@step(source="a")`. Or use no source at all: a root `@step(shape="expand")` yields the initial lanes.
+1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), content-addressed as `row-<hash>` — identical payloads collapse to one lane.
+2. **Ingestion is a step, not a class:** there is no `Source` protocol. A parentless `@step(shape="expand")` (or `@source` for short) `yield`s a payload per item — that's the whole ingestion story. A folder scan, a CSV read, a SQL query are all a few lines of plain Python in the generator body; to find a row by a human field, index it. A pipeline can have several source-shaped roots (each just another `@step(shape="expand")`) — a `join` combines them.
 3. **Steps:** Pure functions decorated with `@step(version="...")`.
-4. **Pipelines:** A DAG of steps over a source.
+4. **Pipelines:** A DAG of steps, headed by one or more roots (source-shaped `expand` steps, and/or a source-less `map` root fed by `params`).
 5. **Execution:** The engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
 6. **Immutability:** Results are content-addressed and saved in `.rubedo/objects`. Never mutate inputs; always return new data.
 7. **Identity:** A step's cache identity is defined by its inputs + `version` + `params`.
-8. **Generations:** A rerun supersedes old outputs with new ones.
+8. **Generations:** A rerun supersedes old outputs with new ones (byte-identical output = reuse, not a new generation).
 9. **Filtering:** Return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
-10. **Shapes:** `map` (1:1, default); `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across sources, matched on indexed fields).
-11. **PipelineBuilder:** You can also build pipelines fluently via `p = PipelineBuilder(...)` and `@p.step(...)`.
+10. **Shapes:** `map` (1:1, default); `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across expand roots, matched on indexed fields).
+11. **PipelineBuilder:** You can also build pipelines fluently via `p = PipelineBuilder(...)`, `@p.step(...)`, and `@p.source(...)`.
 
 ## Step Contract
-- The first argument is the payload (dict) from the Source or the upstream step.
-- Additional positional arguments represent outputs from other upstream steps (by exact name).
-- Keyword-only arguments (e.g., `*, prompt: str`) are `params`. They are automatically injected by `run()` and participate in the cache key.
-- A step returns a JSON-serializable `dict` (or `Filtered`).
+- A root step (no `depends_on`) receives **no payload argument** — only `params`, if it declares one. A source-shaped (`shape="expand"`) root's body does its own scanning/fetching and `yield`s payloads; a source-less `map` root reads `params` and returns a single value.
+- A dependent step receives one **keyword** argument per parent, named after that parent's step name exactly (e.g. `depends_on=["screen"]` → `def enrich(screen: dict): ...`). A `reduce` step's parent kwarg is a `{coordinate: value}` dict instead of a single value.
+- Any step may additionally declare a `params` keyword argument to receive the run's validated params dict — it participates in the cache key only for steps that declare it.
+- A step returns a JSON-serializable value, a `ProcessResult` (value + metadata), or `Filtered(reason=...)`.
 
 ## Cache Identity Rules
 A step's output is cached based on:
-1. The **input hash** (the content of the incoming payload).
+1. The **input hash** (the content of the incoming payload(s) from its parent(s), or the yielded value's own hash for an `expand` child).
 2. The **code version** (`version` string in `@step`). If you change the logic, you MUST bump the version. (Alternatively, `code="auto"` tries to hash the AST, but explicit version is safer).
-3. The **parameters** (`params` kwargs).
+3. The **parameters** (`params`), only for steps that declare a `params` argument.
 
 ## Step Policies
 - `retries=3, retry_on=Exception`: Automatically retry failures.
@@ -34,22 +34,27 @@ A step's output is cached based on:
 - `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step.
 - `assertions=[callable, ...]`: A list of callables that take the output value. If any raise an exception, the step fails.
 - `shape="reduce"`: receives `{lane_key: payload}` for all lanes and returns one output. Add `group_key="field"` (an indexed field of the parent) to emit one output per group instead of one over `@all`.
-- `shape="expand"`: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records.
-- `shape="join"` with `join_on={parent: field, ...}`: N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are typically different sources (multi-source, above); `filter` after the join for non-equi predicates.
+- `shape="expand"`: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records — and for ingestion itself (a parentless `expand` is how a pipeline gets its first lanes).
+- `shape="join"` with `join_on={parent: field, ...}`: N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are typically different `expand` roots (multiple sources, below); `filter` after the join for non-equi predicates.
 
 ## Complete Worked Example
 ```python
 from rubedo import step, pipeline, run, Filtered
-from rubedo.sources import CsvSource
+import csv
 
-@step(name="screen", version="1")
-def screen(row: dict) -> dict:
-    if not row.get("url"):
+@step(name="rows", version="1", shape="expand")
+def rows():
+    with open("input.csv", newline="") as f:
+        yield from csv.DictReader(f)
+
+@step(name="screen", version="1", depends_on=["rows"])
+def screen(rows: dict) -> dict:
+    if not rows.get("url"):
         return Filtered("No URL")
-    return row
+    return rows
 
 @step(name="enrich", version="1", depends_on=["screen"], retries=3, rate_limit="10/min", index=["company"])
-def enrich(screen: dict, *, prompt_mode: str) -> dict:
+def enrich(screen: dict, params: dict) -> dict:
     # Fake LLM logic
     return {"company": screen["company"], "summary": "..."}
 
@@ -57,21 +62,31 @@ def enrich(screen: dict, *, prompt_mode: str) -> dict:
 def summarize(enrich: dict) -> dict:
     return {"total": len(enrich), "data": list(enrich.values())}
 
-source = CsvSource("input.csv")
-p = pipeline(id="enrichment", name="Enrich", source=source, steps=[screen, enrich, summarize])
-summary = run(p, params={"enrich": {"prompt_mode": "detailed"}})
+p = pipeline(id="enrichment", name="Enrich", steps=[rows, screen, enrich, summarize])
+summary = run(p, params={"prompt_mode": "detailed"})
 print(summary.output_for("summarize"))
 ```
 
-## Join + Expand Example (multi-source)
+## Join + Expand Example (multiple sources)
 ```python
-from rubedo import CsvSource, step, pipeline, run
+from rubedo import step, pipeline, run
+import csv
 
-@step(name="order", version="1", source="orders", index=["cust"])
-def order(row): return {"oid": row["oid"], "cust": row["cust"]}
+@step(name="orders_src", version="1", shape="expand")
+def orders_src():
+    with open("orders.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-@step(name="customer", version="1", source="customers", index=["cid"])
-def customer(row): return {"cid": row["cid"], "name": row["name"]}
+@step(name="customers_src", version="1", shape="expand")
+def customers_src():
+    with open("customers.csv", newline="") as f:
+        yield from csv.DictReader(f)
+
+@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
+
+@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @step(name="enrich", version="1", shape="join",
       depends_on=["order", "customer"],
@@ -85,9 +100,7 @@ def lines(enrich):
         yield {"oid": enrich["oid"], "n": i}  # yield payloads; content-addressed lanes
 
 p = pipeline(id="orders", name="Orders",
-             sources={"orders": CsvSource("orders.csv"),
-                      "customers": CsvSource("customers.csv")},
-             steps=[order, customer, enrich, lines])
+             steps=[orders_src, customers_src, order, customer, enrich, lines])
 summary = run(p)
 print(summary.output_for("lines"))
 ```
@@ -96,3 +109,4 @@ print(summary.output_for("lines"))
 1. **Mutating inputs:** `row["new_field"] = "x"; return row`. BAD. This breaks content-addressing and JSON serialization guarantees. Always create a new dict: `return {**row, "new_field": "x"}`.
 2. **Missing version bumps:** Changing step logic without bumping `version` will cause the engine to reuse the old cache.
 3. **`skip_cache` on expensive steps:** Only use `skip_cache` for cheap data transformations. Never use it on LLM calls or network requests.
+4. **Yielding references instead of content:** an ingestion generator should `yield` the item's actual data (e.g. `{"path": name, "text": open(path).read()}`), not just a path or id — the yielded payload is what gets hashed into the lane's identity.

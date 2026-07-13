@@ -38,16 +38,19 @@ Pipelines are plain Python objects — define them wherever your code lives:
 ```python
 from rubedo import ProcessResult, step, pipeline, run, plan, describe
 
-@step(name="read_lines", version="read-v1")
-def read_lines(path: str):
-    return {"lines": open(path).read().splitlines()}
+@step(name="scan", version="1", shape="expand")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(read_lines["lines"])})
+@step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan: dict) -> ProcessResult:
+    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", folder="input",
-             steps=[read_lines, count_lines])
+p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
 
 print(describe(p))            # the DAG, before ever running (also: format="mermaid")
 print(plan(p))                # dry-run: what would run() do to my data, and why
@@ -69,28 +72,32 @@ Prefer a fluent style? `PipelineBuilder` builds the same object:
 
 ```python
 from rubedo import PipelineBuilder
-p = PipelineBuilder(id="count-lines", name="Count Lines", folder="input")
+p = PipelineBuilder(id="count-lines", name="Count Lines")
 
-@p.step(name="read_lines", version="read-v1")
-def read_lines(path: str): ...
+@p.source(name="scan", version="1")
+def scan(): ...
 
 count_lines = p.build()
 ```
 
-## Sources
+## Ingestion is a step
 
-Items come from a `Source` — anything that can enumerate `(coordinate, content_hash)` pairs and load payloads. `folder="..."` is sugar for `FolderSource` (each file is a lane; root steps receive its path). `CsvSource` makes each row a lane and hands root steps the row dict; `TableSource` does the same for SQL rows, with an optional `batch_size` streaming mode:
+There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` (a `@source` for short via `PipelineBuilder`) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
 
 ```python
-from rubedo import CsvSource, step, pipeline
+import csv
+from rubedo import step, pipeline
 
-@step(name="enrich", version="v1")
-def enrich(row: dict):
-    return {"email": row["email"], "summary": call_llm(row["notes"])}
+@step(name="leads", version="v1", shape="expand")
+def leads():
+    with open("data/leads.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-leads = pipeline(id="enrich-leads", name="Enrich Leads",
-                 source=CsvSource("data/leads.csv"),
-                 steps=[enrich])
+@step(name="enrich", version="v1", depends_on=["leads"])
+def enrich(leads: dict):
+    return {"email": leads["email"], "summary": call_llm(leads["notes"])}
+
+pipeline(id="enrich-leads", name="Enrich Leads", steps=[leads, enrich])
 ```
 
 Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), index it with `@step(index=[...])` and query — the lane key is never a human key.
@@ -128,14 +135,24 @@ By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan
 
 - **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of an indexed field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
-- **`join`** — an N-way equijoin across multiple sources, matched on an indexed field, minting one lane per matched tuple:
+- **`join`** — an N-way equijoin across multiple `expand` roots, matched on an indexed field, minting one lane per matched tuple:
 
 ```python
-@step(name="order", version="1", source="orders", index=["cust"])
-def order(row): return {"oid": row["oid"], "cust": row["cust"]}
+@step(name="orders_src", version="1", shape="expand")
+def orders_src():
+    with open("orders.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-@step(name="customer", version="1", source="customers", index=["cid"])
-def customer(row): return {"cid": row["cid"], "name": row["name"]}
+@step(name="customers_src", version="1", shape="expand")
+def customers_src():
+    with open("customers.csv", newline="") as f:
+        yield from csv.DictReader(f)
+
+@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
+
+@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @step(name="enrich", version="1", shape="join",
       depends_on=["order", "customer"],
@@ -144,20 +161,18 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 
 p = pipeline(id="enrich", name="Enrich",
-             sources={"orders": CsvSource("orders.csv"),
-                      "customers": CsvSource("customers.csv")},
-             steps=[order, customer, enrich])
+             steps=[orders_src, customers_src, order, customer, enrich])
 ```
 
-Multiple sources are declared with `sources={name: Source}` (single `source=`/`folder=` are the one-source sugar), and each root step names its source with `@step(source="name")`. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
+Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
 
-A pipeline doesn't need a source at all. A `map` step with no `depends_on` and no source is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `run(pipe, params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
+A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `run(pipe, params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
 
 ```python
-@step(name="load_pdf", version="1")          # no depends_on, no source
+@step(name="load_pdf", version="1")          # no depends_on
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
-pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])   # no source= needed
+pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])
 ```
 
 See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → reduce → two summaries.

@@ -16,16 +16,19 @@ is almost every step you'll write:
 ```python
 from rubedo import ProcessResult, step, pipeline, run
 
-@step(name="read_lines", version="read-v1")
-def read_lines(path: str):
-    return {"lines": open(path).read().splitlines()}
+@step(name="scan", version="1", shape="expand")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(read_lines["lines"])})
+@step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan: dict) -> ProcessResult:
+    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", folder="input",
-             steps=[read_lines, count_lines])
+p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
 run(p)
 ```
 
@@ -34,15 +37,16 @@ item — which is most transformation, extraction, and enrichment logic.
 
 ### The source-less `map` root
 
-A root (`no depends_on`) normally reads from the pipeline's `Source`. But a
-`map` root with **no source at all** is legal, and mints a single lane whose
-input is its `params` (or a constant, if the function takes none):
+A root (`no depends_on`) is usually `shape="expand"` — the ingestion shape
+(see [sources.md](sources.md)). But a plain `map` root with **no**
+`depends_on` is also legal, and mints a single lane whose input is its
+`params` (or a constant, if the function takes none):
 
 ```python
-@step(name="load_pdf", version="1")          # no depends_on, no source
+@step(name="load_pdf", version="1")          # no depends_on
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
-pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])   # no source= needed
+pipeline(id="pdf", name="PDF", steps=[load_pdf, ...])
 
 run(pipeline_obj, params={"pdf": "report.pdf"})
 ```
@@ -52,7 +56,7 @@ to `hash(step, version, "@root", params_hash)`: same `params=` reuses the
 cached output, a changed `params=` makes a new generation. It's the
 everyday counterpart to an `expand` root, which mints N lanes instead of
 one — a way to feed a value *into* the head of a pipeline instead of
-scanning a `Source` for one. See [`../examples.md`](../examples.md)
+scanning for one. See [`../examples.md`](../examples.md)
 (`examples/pdf_digest`) for this feeding an `expand` → vision-LLM →
 `reduce` chain end to end.
 
@@ -131,10 +135,11 @@ periodic re-scrape on top of that.
 
 ### Expand roots (sources)
 
-An `expand` step with **no** `depends_on` is a root — a *source* in every
-sense that matters: it yields the pipeline's initial lanes and, having no
-parent to cache against, **always re-executes**, every run (no anchor is
-written or checked). `@source` is exactly this, spelled as a decorator:
+An `expand` step with **no** `depends_on` is a root — it yields the
+pipeline's initial lanes and, having no parent to cache against, **always
+re-executes**, every run (no anchor is written or checked). This *is* how
+ingestion works — there's no separate source concept, just this shape used
+with no parent. `@source` is exactly this, spelled as a decorator:
 
 ```python
 from rubedo import source
@@ -146,8 +151,8 @@ def hn_top():
 ```
 
 which is sugar for `@step(shape="expand")` with no `depends_on`. Drop it
-straight into `pipeline(steps=[...])` — no `source=` needed. See
-[sources.md](sources.md) for how this compares to a `Source` class.
+straight into `pipeline(steps=[...])` — nothing else needed. See
+[sources.md](sources.md) for the folder/CSV/table/cloud recipes.
 
 Reach for `expand` whenever the *number* of downstream items isn't known
 until you've fetched something — RSS feeds, paginated APIs, multi-page
@@ -163,11 +168,21 @@ field, intersects on shared values, and mints one pair lane per matched
 tuple — coordinate `a|b|…`, the members' coordinates joined by `|`:
 
 ```python
-@step(name="order", version="1", source="orders", index=["cust"])
-def order(row): return {"oid": row["oid"], "cust": row["cust"]}
+@step(name="orders_src", version="1", shape="expand")
+def orders_src():
+    with open("orders.csv", newline="") as f:
+        yield from csv.DictReader(f)
 
-@step(name="customer", version="1", source="customers", index=["cid"])
-def customer(row): return {"cid": row["cid"], "name": row["name"]}
+@step(name="customers_src", version="1", shape="expand")
+def customers_src():
+    with open("customers.csv", newline="") as f:
+        yield from csv.DictReader(f)
+
+@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
+
+@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @step(name="enrich", version="1", shape="join",
       depends_on=["order", "customer"],
@@ -176,9 +191,7 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 
 p = pipeline(id="enrich", name="Enrich",
-             sources={"orders": CsvSource("orders.csv"),
-                      "customers": CsvSource("customers.csv")},
-             steps=[order, customer, enrich])
+             steps=[orders_src, customers_src, order, customer, enrich])
 ```
 
 Every side named in `join_on` must be indexed on the field it's matched by

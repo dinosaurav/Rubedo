@@ -25,10 +25,9 @@ place*.
     A coordinate is **not the identity of work** — that's the
     content-addressed **output address** (below), computed from the step
     too, not just the item. And it's **not the primary search handle** —
-    that's `@step(index=[...])`. For a `FolderSource` the coordinate happens
-    to be a file's relative path, which makes it *look* like a name, but
-    nothing downstream is allowed to treat it as one. Query by what a step
-    *computed* (`index=`), not by coordinate.
+    that's `@step(index=[...])`. A coordinate is always `row-<hash>`, never
+    a file name or a row id, so nothing downstream can treat it as one.
+    Query by what a step *computed* (`index=`), not by coordinate.
 
 A coordinate can also be **minted mid-DAG**: `expand` mints a fresh
 content-addressed `row-<hash>` lane per yielded payload, and `join` mints an

@@ -9,7 +9,7 @@ re-running.
 
 Every command below was actually run to produce the output shown — copy the
 code blocks into a real directory and you'll see the same shapes (exact hash
-prefixes will differ, since they're content-addressed).
+prefixes and coordinates will differ, since they're content-addressed).
 
 ## Setup
 
@@ -36,7 +36,7 @@ meh
 (`review4.txt` is deliberately too short to classify — that's the
 `Filtered` case below.)
 
-## Two map steps over a folder
+## An expand root and a map step over a folder
 
 ```python title="pipeline.py"
 from rubedo import Filtered, ProcessResult, describe, plan, run, step, pipeline
@@ -45,14 +45,18 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
 
 
-@step(name="read_review", version="v1")
-def read_review(path: str):
-    return {"text": open(path).read()}
+@step(name="scan", version="v1", shape="expand")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
 
-@step(name="classify", version="v1", depends_on=["read_review"], index=["rating"])
-def classify(read_review: dict) -> ProcessResult:
-    words = read_review["text"].lower().split()
+@step(name="classify", version="v1", depends_on=["scan"], index=["rating"])
+def classify(scan: dict) -> ProcessResult:
+    words = scan["text"].lower().split()
     if len(words) < 3:
         return Filtered(reason="too short to classify")
     pos = sum(1 for w in words if w.strip(".,!'\"") in POSITIVE)
@@ -61,7 +65,7 @@ def classify(read_review: dict) -> ProcessResult:
     return ProcessResult(value={"rating": rating, "word_count": len(words)})
 
 
-p = pipeline(id="reviews", name="Review Classifier", folder="input", steps=[read_review, classify])
+p = pipeline(id="reviews", name="Review Classifier", steps=[scan, classify])
 
 if __name__ == "__main__":
     print(describe(p))
@@ -75,12 +79,14 @@ if __name__ == "__main__":
     )
 ```
 
-`read_review` is a source-backed `map` root (`folder="input"`, no
-`depends_on`): one lane per file, keyed by relative path, payload = absolute
-path. `classify` is an ordinary dependent `map` step. `index=["rating"]`
-extracts the `rating` field of its output into the search index at commit
-time — that's what makes it queryable by content later, not just by
-filename.
+There's no `folder=` kwarg — ingestion is just a step. `scan` is a
+parentless `@step(shape="expand")`: it walks `./input` and `yield`s each
+file's own content (not just its path — the yielded payload is what gets
+hashed into the lane's identity), and each yield mints its own
+content-addressed lane. `classify` is an ordinary dependent `map` step.
+`index=["rating"]` extracts the `rating` field of its output into the
+search index at commit time — that's what makes it queryable by content
+later, not just by which file produced it.
 
 Run it:
 
@@ -89,30 +95,26 @@ uv run python pipeline.py
 ```
 
 ```text
-Pipeline 'reviews' over folder:input
-  read_review (v1) (root)
-  classify (v1) <- read_review
+Pipeline 'reviews' — roots: scan
+  scan (v1) (root)
+  classify (v1) <- scan
 
-Plan for 'reviews' over folder:input: 4 execute, 4 pending
-  execute  read_review          review3.txt @ 6bba23b90110
-  execute  read_review          review2.txt @ a5a048b43aa8
-  execute  read_review          review1.txt @ c9aa2d8b820b
-  execute  read_review          review4.txt @ c93d2628ed03
-  pending  classify             review1.txt
-  pending  classify             review2.txt
-  pending  classify             review3.txt
-  pending  classify             review4.txt
+Plan for 'reviews' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  classify             @root
 
 created=7 reused=0 filtered=1
 ```
 
-`plan()` shows `classify` as `pending`, not `execute` — its output address
-depends on `read_review`'s output, which doesn't exist yet at plan time.
-`run()` resolves that: 7 materializations get created (4 `read_review` + 3
-`classify`) and `review4.txt` — "meh", one word — gets **filtered**: its step
-returned `Filtered(reason=...)` instead of a `ProcessResult`. That verdict is
-cached like any other output; it isn't an error, and it isn't re-decided
-every run.
+`scan` plans as a single `execute` — an `expand` root has no parent to
+cache its enumeration against, so its actual lanes (one per file) are
+unknowable until it runs. `classify` shows `pending`, not `execute`: its
+output address depends on lanes `scan` hasn't minted yet. `run()` resolves
+both: 7 materializations get created (4 `scan` file-lanes + 3 `classify`
+lanes) and `review4.txt` — "meh", one word — gets **filtered**: its step
+returned `Filtered(reason=...)` instead of a `ProcessResult`. That verdict
+is cached like any other output; it isn't an error, and it isn't
+re-decided every run.
 
 Run it again, unchanged:
 
@@ -121,24 +123,29 @@ uv run python pipeline.py
 ```
 
 ```text
-Plan for 'reviews' over folder:input: 8 reuse
-  ...
+Plan for 'reviews' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  classify             @root
+
 created=0 reused=7 filtered=1
 ```
 
-Every lane's `plan()` action reads `reuse` — including `review4.txt`'s
-`classify` lane, whose *cached filter decision* is what's being reused. But
-notice the run summary still reports it under `filtered_count`, not
-`reused_count`: a filtered marker isn't a "usable output" in the sense
-`reused_count` means, so the ledger keeps counting it as `filtered` on every
-run it's read back, even though nothing executed.
+`plan()` prints the exact same coarse shape as the first run — an `expand`
+root always plans as `execute` (it never caches its own enumeration to
+preview against) and everything downstream stays `pending`, even
+immediately after a completed run. This is deliberate: `plan()` is a pure
+dry-run and can't reach into a hypothetical future execution to say what an
+unexecuted generator would yield. `run()`'s summary is where the real
+story shows: `created=0 reused=7` — every lane, including the filtered
+one, was a cache hit.
 
 ## Querying by an indexed field
 
 `classify`'s `index=["rating"]` makes `rating` a queryable field of its
-output, independent of which file produced it. `trace()` takes a
-`Selection` and follows lineage from whatever matches — it doubles as a
-read-only query tool:
+output, independent of which file produced it — useful precisely because
+coordinates are content hashes (`row-<hash>`), not file names. `trace()`
+takes a `Selection` and follows lineage from whatever matches — it doubles
+as a read-only query tool:
 
 ```python title="query.py"
 from rubedo import Selection, trace
@@ -149,17 +156,19 @@ print(result)
 
 ```text
 Trace: 1 seed, 1 upstream, 0 downstream
-  upstream   read_review          review1.txt                  @ c9aa2d8b820b  value={'text': 'This product is absolutely amazing and wonderful, …
-  seed       classify             review1.txt                  @ 88ca616d682d
+  upstream   scan                 row-76410e514a8e             @ d0c553c86373  value={'path': 'review1.txt', 'text': 'This product is absolutely …
+  seed       classify             row-76410e514a8e             @ d6e7fbcd2e3f
 ```
 
 `step:` and other `key:value` terms before the colon are reserved engine
 facts (`step`, `coord`, `version`, `live`, ...); anything else — here
-`rating` — matches an indexed field. `trace()` walks `review1.txt`'s
-`classify` output back to the `read_review` output it came from, resolving
-the root's stored payload so you can see what text actually produced the
-verdict. See [Guide: search and invalidation](guides/search-and-invalidation.md)
-for the full selection language.
+`rating` — matches an indexed field. `trace()` walks the matched
+`classify` output back to the `scan` output it came from, resolving the
+root's stored payload so you can see *which file* — `review1.txt` — and
+what text actually produced the verdict, since the coordinate itself
+(`row-76410e514a8e`) doesn't say. See
+[Guide: search and invalidation](guides/search-and-invalidation.md) for the
+full selection language.
 
 ## Editing an input: surgical recompute
 
@@ -174,25 +183,24 @@ uv run python pipeline.py
 ```
 
 ```text
-Plan for 'reviews' over folder:input: 1 execute, 1 pending, 6 reuse
-  reuse    read_review          review3.txt @ 6bba23b90110
-  execute  read_review          review2.txt @ 273c02673025
-  reuse    read_review          review1.txt @ c9aa2d8b820b
-  reuse    read_review          review4.txt @ c93d2628ed03
-  pending  classify             review2.txt
-  reuse    classify             review1.txt @ 88ca616d682d
-  reuse    classify             review3.txt @ e1b94b177e71
-  reuse    classify             review4.txt @ 1c766d499336
+Plan for 'reviews' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  classify             @root
 
 created=2 reused=5 filtered=1
 ```
 
-Only `review2.txt`'s two lanes recompute. Rubedo didn't diff the file or
-track which line changed — `read_review`'s output address is
-`hash(step, version, input_hash)`, `input_hash` folds in the file's content
-hash, and a different hash is a different address. The other three files'
-content hashes are untouched, so their addresses — and every step that
-consumed them — are still valid.
+`plan()`'s coarse shape never changes — but `run()`'s summary shows only
+`review2.txt`'s two lanes recomputed (`created=2`), while the other three
+files' lanes reused (`reused=5`, including the filtered `review4.txt`).
+Rubedo didn't diff the file or track which line changed: `scan` yields the
+file's full content, that content is what gets hashed into its lane's
+coordinate and address, and a different hash is a different lane entirely
+— the old `review2.txt` lane simply isn't visited this run (an edited file
+reads as removed + added, not changed). `classify`'s address in turn
+depends on `scan`'s output content hash, so only the new lane's `classify`
+recomputes; the other three files' content hashes are untouched, so their
+addresses — and everything that consumed them — are still valid.
 
 ## Bumping a step's version
 
@@ -204,7 +212,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent", "value
 ```
 
 ```python
-@step(name="classify", version="v2", depends_on=["read_review"], index=["rating"])
+@step(name="classify", version="v2", depends_on=["scan"], index=["rating"])
 ```
 
 ```bash
@@ -212,31 +220,23 @@ uv run python pipeline.py
 ```
 
 ```text
-Plan for 'reviews' over folder:input: 4 execute, 4 reuse
-  reuse    read_review          review3.txt @ 6bba23b90110
-  reuse    read_review          review2.txt @ 273c02673025
-  reuse    read_review          review1.txt @ c9aa2d8b820b
-  reuse    read_review          review4.txt @ c93d2628ed03
-  execute  classify             review1.txt @ f9f01d8f1da1
-  execute  classify             review2.txt @ 0a95750802f8
-  execute  classify             review3.txt @ 8f6c20974f23
-  execute  classify             review4.txt @ 3c11179dc494
+Plan for 'reviews' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  classify             @root
 
 created=3 reused=4 filtered=1
 ```
 
-`read_review` is completely untouched — its `version` and inputs didn't
-change. `classify` recomputes for **every** lane, regardless of whether that
-lane's actual verdict changed, because `version` is folded into every
-lane's output address: bumping it mints a whole new set of addresses for
-that step. This is the deliberate, coarse-grained lever — contrast it with
+`scan` is completely untouched — its `version` and yielded content didn't
+change, so all four of its lanes reuse. `classify` recomputes for **every**
+lane (`created=3` live classifications + the 1 filtered lane, which still
+counts as a fresh `Filtered()` this run, not a reused one — `filtered=1`
+stays 1 both before and after the bump), regardless of whether that lane's
+actual verdict changed, because `version` is folded into every lane's
+output address: bumping it mints a whole new set of addresses for that
+step. This is the deliberate, coarse-grained lever — contrast it with
 [`code="auto"`](concepts/versioning.md), which recomputes only where the
 function's source actually changed.
-
-`review4.txt` ("meh") is still `Filtered` after the recompute — its word
-count is still under the threshold; `filtered_count` stays 1 both before and
-after the bump, it just reflects a freshly-computed `Filtered()` this time
-instead of a reused one.
 
 ## Invalidating a selection and re-running
 
@@ -256,7 +256,7 @@ print(result)
 ```
 
 ```text
-{'run_id': 'run_5003ceaa8c88', 'invalidated_count': 2, 'seed_count': 2, 'downstream_count': 0, 'materialization_ids': [11, 12]}
+{'run_id': 'run_997f9495c519', 'invalidated_count': 2, 'seed_count': 2, 'downstream_count': 0, 'materialization_ids': [11, 13]}
 ```
 
 !!! note "Why `version:v2` is in the query"
@@ -278,30 +278,27 @@ uv run python pipeline.py
 ```
 
 ```text
-Plan for 'reviews' over folder:input: 2 execute, 6 reuse
-  reuse    read_review          review3.txt @ 6bba23b90110
-  reuse    read_review          review2.txt @ 273c02673025
-  reuse    read_review          review1.txt @ c9aa2d8b820b
-  reuse    read_review          review4.txt @ c93d2628ed03
-  execute  classify             review1.txt @ f9f01d8f1da1
-  execute  classify             review2.txt @ 0a95750802f8
-  reuse    classify             review3.txt @ e1b94b177e71
-  reuse    classify             review4.txt @ 3c11179dc494
+Plan for 'reviews' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  classify             @root
 
 created=2 reused=5 filtered=1
 ```
 
-Exactly the two invalidated lanes recompute — `review3.txt` (neutral) and
-`review4.txt` (filtered) were never touched, so they reuse. `plan()` before
-`run()` throughout this tutorial is exactly the habit worth keeping: it's
-the same decision engine `run()` uses, so it tells you precisely what's
-about to happen — and what it costs — before anything executes or gets
-billed.
+Exactly the two invalidated lanes recompute (`created=2`); the rest —
+including the neutral and filtered reviews — reuse. `plan()` can't preview
+which two those'll be (it never sees past the `scan` root — see above),
+but `trace()` can, both before invalidating (to see the blast radius) and
+after (to confirm what actually moved): run `trace()` with the same
+`Selection` and read the counts, exactly as
+[Guide: search and invalidation](guides/search-and-invalidation.md) covers.
 
 ## Where to go next
 
 - [Concepts: shapes](concepts/shapes.md) — `reduce`, `expand`, and `join`,
-  the three shapes beyond the `map` steps used here.
+  the three shapes beyond the `map` step used here.
+- [Concepts: sources](concepts/sources.md) — the ingestion recipes: folder,
+  CSV, SQL table, cloud object storage.
 - [Guide: search and invalidation](guides/search-and-invalidation.md) — the
   full `Selection` query language, `downstream=True`, and the CLI
   equivalents.

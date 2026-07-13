@@ -20,16 +20,19 @@ no project scaffolding required:
 ```python
 from rubedo import ProcessResult, step, pipeline, run, plan, describe
 
-@step(name="read_lines", version="read-v1")
-def read_lines(path: str):
-    return {"lines": open(path).read().splitlines()}
+@step(name="scan", version="1", shape="expand")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(read_lines["lines"])})
+@step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan: dict) -> ProcessResult:
+    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", folder="input",
-             steps=[read_lines, count_lines])
+p = pipeline(id="count-lines", name="Count Lines", steps=[scan, count_lines])
 
 print(describe(p))            # the DAG, before ever running (also: format="mermaid")
 print(plan(p))                # dry-run: what would run() do to my data, and why
@@ -37,31 +40,30 @@ summary = run(p)              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
-`folder="input"` means: scan `./input` for files, one lane per file, and hand
-each root step the file's absolute path. `describe()` renders the DAG before
+There's no `folder=` kwarg — ingestion is just a step: `scan` is a
+parentless `@step(shape="expand")` that walks `./input` and `yield`s each
+file's own content (not just its path — the yielded payload is what gets
+hashed into the lane's identity). `describe()` renders the DAG before
 anything runs; `plan()` is a read-only dry-run of what `run()` would do to
 every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
 `run()` actually executes it and returns a `RunSummary`.
 
-With four input files of different lengths, that quickstart prints:
+With four input files, that quickstart prints:
 
 ```text
-Plan for 'count-lines' over folder:input: 4 execute, 4 pending
-  execute  read_lines           file2.txt @ 2db729839948
-  execute  read_lines           file3.txt @ caf5efe6be27
-  execute  read_lines           file1.txt @ 48898d92ae13
-  execute  read_lines           file4.txt @ 09ae8a2c8171
-  pending  count_lines          file1.txt
-  pending  count_lines          file2.txt
-  pending  count_lines          file3.txt
-  pending  count_lines          file4.txt
+Plan for 'count-lines' over scan: 1 execute, 1 pending
+  execute  scan                 @root
+  pending  count_lines          @root
 created=8 reused=0
 ```
 
-`count_lines`'s lanes show as `pending` in the plan, not `execute` — its
-output address depends on `read_lines`'s output, which doesn't exist yet, so
-the address (and therefore reuse-or-execute) is unknowable without actually
-running `read_lines` first.
+`scan` plans as a single `execute` — it has no parent to cache its
+enumeration against, so its actual lanes are unknowable until it runs.
+`count_lines` shows `pending`, not `execute`: its output address depends on
+lanes `scan` hasn't minted yet, so the address (and therefore
+reuse-or-execute) is unknowable without actually running `scan` first. Once
+`run()` actually executes it, `created=8` is `scan`'s four file-lanes plus
+`count_lines`'s four downstream lanes.
 
 ### Run it twice
 
@@ -80,8 +82,8 @@ your code. Now edit one input file and run a third time:
 created=2 reused=6
 ```
 
-Only the edited file's two lanes (`read_lines` and `count_lines`) recompute;
-the other three files' outputs are untouched and reused as-is. This is
+Only the edited file's two lanes (`scan` and `count_lines`) recompute; the
+other three files' outputs are untouched and reused as-is. This is
 **surgical invalidation**: Rubedo doesn't know or care that only one file
 changed — it just discovers that six of the eight addresses are still valid
 and two aren't. For a step that calls a paid LLM instead of counting lines,
@@ -130,12 +132,20 @@ pipeline has more than a couple of steps:
 ```python
 from rubedo import PipelineBuilder
 
-p = PipelineBuilder(id="count-lines", name="Count Lines", folder="input")
+p = PipelineBuilder(id="count-lines", name="Count Lines")
 
-@p.step(name="read_lines", version="read-v1")
-def read_lines(path: str): ...
+@p.source(name="scan", version="1")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-count_lines = p.build()
+@p.step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan: dict): ...
+
+count_lines_pipeline = p.build()
 ```
 
 `p.build()` returns the same `PipelineSpec` object `pipeline()` would —
@@ -153,8 +163,8 @@ itself.
 - [Concepts: the model](concepts/model.md) — lanes, coordinates, addresses,
   and the vocabulary the rest of the docs assume.
 - [Concepts: shapes](concepts/shapes.md) — `map`, `reduce`, `expand`, `join`.
-- [Concepts: sources](concepts/sources.md) — `FolderSource`, `CsvSource`,
-  `TableSource`, and writing your own.
+- [Concepts: sources](concepts/sources.md) — the folder, CSV, SQL table, and
+  cloud storage ingestion recipes.
 - [Concepts: versioning](concepts/versioning.md) — `version` vs. `code`, and
   what a source edit means.
 - [Guide: execution policies](guides/execution-policies.md) — retries, rate
