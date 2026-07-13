@@ -1,9 +1,15 @@
 # marketing/
 
-The Rubedo landing page (rubedo.dev): a Vite + React app. Content must stay
-in sync with the root [`README.md`](../README.md) — that file is the source
-of truth for what Rubedo does; this page restates it, never invents beyond
-it.
+The Rubedo landing page, deployed to GitHub Pages at
+https://dinosaurav.github.io/Rubedo/ (see
+[`../.github/workflows/pages.yml`](../.github/workflows/pages.yml)): a Vite +
+React app. Content must stay in sync with the root
+[`README.md`](../README.md) — that file is the source of truth for what
+Rubedo does; this page restates it, never invents beyond it.
+
+No custom domain yet, so the site is served under the `/Rubedo/` project-page
+subpath — see the `base` comment in [`vite.config.js`](vite.config.js) for
+what to change if that changes.
 
 ## Develop
 

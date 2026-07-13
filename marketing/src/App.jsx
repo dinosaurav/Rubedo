@@ -5,6 +5,10 @@ import Tooltip from './components/Tooltip'
 import './index.css'
 
 const GITHUB_URL = 'https://github.com/dinosaurav/Rubedo'
+// import.meta.env.BASE_URL follows Vite's `base` config (see vite.config.js),
+// so this resolves correctly whether the site is served at `/`, `/Rubedo/`,
+// or a future custom domain — never hardcode `/docs/`.
+const DOCS_URL = `${import.meta.env.BASE_URL}docs/`
 
 function App() {
   return (
@@ -22,7 +26,7 @@ function App() {
           <a href="#features">Features</a>
           <div style={{ width: '1px', height: '1.2rem', backgroundColor: 'var(--border-color)', margin: '0 0.5rem' }}></div>
           <a href={GITHUB_URL} target="_blank" rel="noreferrer">GitHub</a>
-          <a href="/docs/" className="btn" style={{ padding: '0.4rem 0.9rem' }}>Docs</a>
+          <a href={DOCS_URL} className="btn" style={{ padding: '0.4rem 0.9rem' }}>Docs</a>
         </nav>
       </header>
 
@@ -49,7 +53,7 @@ function App() {
             <code style={{ fontSize: '1.1rem', padding: '0.75rem 1rem', border: '1px solid var(--border-color)', color: 'var(--text-primary)', backgroundColor: 'transparent' }}>
               pip install rubedo
             </code>
-            <a href="/docs/" className="btn btn-solid">Read the docs</a>
+            <a href={DOCS_URL} className="btn btn-solid">Read the docs</a>
             <a href={GITHUB_URL} className="btn" target="_blank" rel="noreferrer">GitHub</a>
           </div>
           <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>
@@ -114,7 +118,7 @@ summary = run(p)              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")`}</code></pre>
           <p style={{ fontSize: '0.9rem', opacity: 0.75, marginTop: '1rem' }}>
             See <a href={`${GITHUB_URL}/tree/main/examples/count_lines`} target="_blank" rel="noreferrer">examples/count_lines</a> in
-            the repo, or the full walkthrough in the <a href="/docs/">docs</a>.
+            the repo, or the full walkthrough in the <a href={DOCS_URL}>docs</a>.
           </p>
         </section>
 
@@ -242,9 +246,9 @@ rubedo gc --max-bytes 2GiB         # dry-run against a budget, oldest runs first
           <div>
             <h4 style={{ marginBottom: '1rem', color: 'var(--accent-primary)' }}>Docs</h4>
             <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <li><a href="/docs/">Documentation</a></li>
-              <li><a href="/docs/notes/producer-model/">Producer Model</a></li>
-              <li><a href="/docs/notes/invariants/">Architecture &amp; Invariants</a></li>
+              <li><a href={DOCS_URL}>Documentation</a></li>
+              <li><a href={`${DOCS_URL}notes/producer-model/`}>Producer Model</a></li>
+              <li><a href={`${DOCS_URL}notes/invariants/`}>Architecture &amp; Invariants</a></li>
             </ul>
           </div>
         </div>

@@ -2,11 +2,17 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
+  // Deployed to GitHub Pages as a project site (github.com/dinosaurav/Rubedo),
+  // which serves at /Rubedo/, not the domain root — hence the base path. Only
+  // applied to production builds so `npm run dev` still serves at `/`. If a
+  // custom domain is ever attached, change this back to '/' (and site_url in
+  // ../mkdocs.yml to match) — everything else here is unaffected.
+  base: command === 'build' ? '/Rubedo/' : '/',
   build: {
     // The MkDocs site builds separately into dist/docs/ (see site_dir in
-    // ../mkdocs.yml) and is served at /docs/ on rubedo.dev. Vite's default
+    // ../mkdocs.yml) and is served at /docs/ under that base. Vite's default
     // `emptyOutDir: true` would wipe the whole outDir — including dist/docs/
     // — on every `vite build`, so it's disabled here. `npm run build` is
     // therefore non-destructive but non-cleaning: stale files from a
@@ -14,4 +20,4 @@ export default defineConfig({
     // README.md in this directory for the recommended clean-build recipe.
     emptyOutDir: false,
   },
-})
+}))
