@@ -52,15 +52,11 @@ def _build_spec(
     no live output anywhere references the bytes, the object deleted. None
     (default) keeps everything. Set-and-forget storage hygiene for
     long-lived pipelines.
-    """
-    if retention is not None and (
-        isinstance(retention, bool) or not isinstance(retention, int) or retention < 1
-    ):
-        raise ValueError(
-            f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
-            f"got {retention!r}"
-        )
 
+    retention itself is validated eagerly in `Pipeline.__init__` (it doesn't
+    depend on the accumulated step list, so it fails fast at construction
+    rather than waiting for the first verb call).
+    """
     roots = [s for s in steps if not s.depends_on]
     if not roots:
         raise ValueError("pipeline has no root step to originate lanes")
@@ -120,6 +116,13 @@ class Pipeline:
     ):
         if schedule not in SCHEDULES:
             raise ValueError(f"schedule must be one of {SCHEDULES}, got {schedule!r}")
+        if retention is not None and (
+            isinstance(retention, bool) or not isinstance(retention, int) or retention < 1
+        ):
+            raise ValueError(
+                f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
+                f"got {retention!r}"
+            )
         self.name = name
         self.params_model = params_model
         self.retention = retention
