@@ -1,20 +1,33 @@
 # TODO
 
 Each open item below is a self-contained spec: the design decisions are
-settled (owner design sessions 2026-07-10/11 — do not re-litigate; flag
+settled (owner design sessions 2026-07-10/11/12 — do not re-litigate; flag
 genuine contradictions), with file pointers, gotchas, and acceptance
 criteria. Read `CLAUDE.md` first for conventions, and `notes/invariants.md`
 for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
-recommended build order: the cloud chain (**6** → **7**+**7b** → **8** →
-**13**) builds when multi-machine demand is real — though **8** is
-independently buildable (workers never touch the ledger/store; item 7 is its
-throughput story, not a prerequisite). (**10b** retention GC shipped — see
-the Done changelog.)
+recommended build order: the simplification chain (**14** → **15** → **16**)
+comes first — 14 deletes exactly the surface 15 has to move, and 15 moves
+the decorator 16 touches; the editorial trio (**17**, **18**, **19**) slots
+anywhere. The cloud chain (**6** → **7**+**7b** → **8** → **13**) builds
+when multi-machine demand is real — though **8** is independently buildable
+(workers never touch the ledger/store; item 7 is its throughput story, not a
+prerequisite), and **6 needs a respec after 14** (see its note). (**10b**
+retention GC shipped — see the Done changelog.) Unsettled ideas live in
+**Parked** at the bottom — do not build those without a design session.
 
-## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10]**
+## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
+
+> **2026-07-12:** item 14 deletes the `Source` protocol this spec subclasses.
+> The settled *decisions* survive — etag-based change token, LIST-only
+> enumeration, `client_factory=` — but the shape becomes an `@source` recipe:
+> the source generator LISTs and yields `{key, etag, size}` (cheap tokens,
+> zero GetObject), and a downstream cached `map` step GETs the bytes. The
+> containment property is preserved by lane structure instead of by
+> `scan()`/`load()`: a churned token recomputes one lane (one re-download),
+> nothing else. Do not build as written; respec against the post-14 world.
 
 Local folders and SQL are great starts, but modern data lives in buckets. Add
 `Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`). **The
@@ -301,6 +314,222 @@ reduce over N parents fetches all N worker-side; an indexed, asserted,
 filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
+
+## 14. Kill `sources.py` — ingestion is an `@source` step  **[design settled 2026-07-12]**
+
+The producer model already unified ingestion: `@source` is *defined as* a
+parentless `expand` step, and the examples run on it. `sources.py` is now a
+second, legacy way of doing the same thing. Delete the concept: the `Source`
+protocol, `SourceItem`, the scan/load split, `FolderSource`, `CsvSource`,
+`TableSource` (with its `key=` re-fetch handle and `source_id`), the
+`folder=`/`source=`/`sources=` pipeline kwargs, `@step(source="name")`
+routing, and `PipelineSpec.source`/`source_for`. This is the single biggest
+delete-a-concept available in the codebase.
+
+**Settled decisions (owner design session 2026-07-12 — do not re-litigate):**
+
+- **Recipes, not classes.** No replacement helpers ship in the package —
+  a folder is a three-line `pathlib` generator yielding
+  `{"path": rel, "text": ...}`, a CSV is a `csv.DictReader` loop, a table is
+  a SELECT loop. They live in docs (`docs/concepts/sources.md` becomes the
+  recipes page) and examples.
+- **Yield content, not references.** Whatever the generator yields is what
+  gets hashed to mint the lane — a recipe that yields paths would pin lanes
+  to names, not content. (Scan already read every file to hash it; no new
+  I/O.) Cheap-token flows (cloud) yield tokens and let a downstream cached
+  step fetch — see item 6's respec note.
+- **Buffering is accepted for v1.** `TableSource`'s `batch_size` streaming
+  dies with it; if expand buffers all yields before commit (verify), that's
+  documented in the recipes page, not fixed here. A streaming expand is
+  Parked.
+- **Multi-source needs no machinery.** Several `@source` steps per pipeline;
+  `join` doesn't care that its parents are expand roots.
+
+**Mechanics:** delete `src/rubedo/sources.py` and every import; strip the
+source fields/kwargs from `spec.py` (`pipeline()` keeps only `steps=` et
+al.); remove the source-scan path from `planning.py` (root planning becomes
+the existing expand-root path, nothing else). Sweep README ("Sources"
+section), docs, examples (mostly on `@p.source` already), and tests — the
+standard fixture shape in `AGENTS.md` ("per-test scanned folder") changes to
+a folder-recipe `@source`; update that section in the same pass.
+
+**Trap (part of the spec):** (1) plan-time enumeration changes on *first*
+runs: today a fresh folder pipeline shows per-lane decisions at `plan()`
+because scan runs at plan time; post-14 a first run shows one `execute` per
+source + `pending` downstream, exactly like any expand today (second runs
+enumerate via the expand anchor without re-running the fn). This is a
+deliberate UX change — update the plan/tutorial docs, don't "fix" it by
+running user code at plan time. (2) Lane keys for folder flows change from
+relpath to `row-<hash>` — an edited file becomes removed+added like
+everywhere else; `count_lines` output and any test asserting relpath
+coordinates must follow. (3) The engine-never-imports-user-code invariant is
+untouched — source fns are steps; the definition snapshot records names,
+never code.
+
+Acceptance: `grep -r "FolderSource\|CsvSource\|TableSource\|SourceItem" src
+tests examples docs README.md` → zero hits; `sources.py` is gone;
+`count_lines` runs Created:N then Reused:N on the folder recipe; a two-source
+`join` example still works (`examples/newsroom`); a fresh-store `plan()`
+shows source-execute + pending and the *second* `plan()` shows per-lane
+reuse; full verification checklist green; docs rebuilt with zero warnings.
+
+## 15. The rotation — one `Pipeline` object, verbs as methods  **[design settled 2026-07-12; after 14]**
+
+Two ways to build (`pipeline(steps=[...])` vs `PipelineBuilder`) and
+free-function verbs (`run(p)`, `plan(p)`, `describe(p)`) collapse into one
+object. The dependency tree rotates so no lazy imports are needed: data
+stays a leaf, verbs live above the engine.
+
+**Settled decisions (owner design session 2026-07-12 — do not re-litigate):**
+
+- **`Pipeline` absorbs `PipelineBuilder`** (the class is deleted).
+  `pipeline(name=...)` returns a `Pipeline`; steps register via `@p.step` /
+  `@p.source` or the `steps=[...]` kwarg (both stay; `.build()` dies —
+  validation runs lazily on the first verb and is cached).
+- **Free `run()`/`plan()`/`describe()` are removed from the public API**
+  (not aliased, not deprecated — deleted from `rubedo.__init__`). The engine
+  keeps internal functions; `trace`/`invalidate`/`gc`/`Selection` stay free —
+  they are store-level, not pipeline-level.
+- **`id` dies; `name` is the identity.** One required arg:
+  `pipeline(name="count-lines")`. The ledger's `pipeline_id` column simply
+  stores the name (no column rename, no schema change); `Selection`'s
+  `pipeline:` term matches it. Renaming a pipeline orphans its history —
+  same as changing `id` today, acceptable pre-1.0.
+- **Settings live at construction, not per-run.** `schedule=` and `home=`
+  move from `run()`/`plan()` onto `pipeline(...)` (joining `retention=`,
+  `params_model=`). `run()` keeps only per-invocation things:
+  `p.run(params=None, force=False, progress=False)`; `p.plan(params=None,
+  force=False)`. If multiple-configs-per-pipeline demand appears later, the
+  pattern is an apply-settings/override method — parked, not built now.
+- **Module rotation:** `spec.py` stays pure data (StepSpec/PipelineSpec,
+  `step()`, `source()`, `definition()`); new `src/rubedo/pipeline.py` sits
+  *above* the engine (imports runner internals) and defines `Pipeline` +
+  the `pipeline()` factory; `runner.py` splits along its one clean seam —
+  segment machinery (`_run_segment`, topo partition, broad/deep) moves to
+  `src/rubedo/scheduler.py`, run/plan orchestration stays. The
+  all-ledger-writes-on-the-main-thread rule must be restated at the top of
+  both files. `planning.py` is not touched.
+
+**Trap (part of the spec):** (1) import direction is the whole point —
+`spec.py` must never import `pipeline.py`/`runner.py`; if you feel a lazy
+import coming, the code is in the wrong module. (2) The docs site
+(shipped 2026-07-12) and README teach `run(p)` — they must flip to
+`p.run()` in the same commit or the docs lie; ditto every test and example
+(tests hold the `pipeline(...)` return value already, so mostly a verb
+sweep). (3) `describe()`'s mermaid/text formats move as-is
+(`p.describe(format="mermaid")`); `definition()` snapshots must be
+byte-identical before/after the rotation so history and the dashboard
+don't fork.
+
+Acceptance: `from rubedo import run` raises ImportError; the quickstart is
+`p = pipeline(name=...)` / `@p.step` / `p.run()` and `examples/count_lines`
+reads that way; `rg "\brun\(p" src tests examples docs README.md` → zero
+hits; a definition snapshot recorded before the rotation is byte-identical
+to one recorded after (pin with a test against a fixture snapshot); ledger
+rows for a re-run over a pre-rotation store fully reuse; full verification
+checklist green; docs rebuilt with zero warnings.
+
+## 16. Step ergonomics: auto-name, default version  **[design settled 2026-07-12; with/after 15]**
+
+`@step` requires `name=` and `version=`; both should have defaults.
+
+**Settled decisions (owner design session 2026-07-12):** `name` defaults to
+`fn.__name__` (precedent: `@source` already does exactly this); `version`
+defaults to `"0"`; **`code="warn"` stays the default** — the drift warning
+is the teaching moment, and auto-recompute-on-edit stays a deliberate
+opt-in (`code="auto"`). Explicitly considered and rejected: pairing an
+omitted version with `code="auto"` (silent policy magic; owner 2026-07-12).
+
+**Trap:** duplicate auto-names (two steps from same-named fns) must still
+die loudly via the existing duplicate-name validation — the error message
+should say the name came from the function. Bare `@step` (no parens) should
+work if cheap, else `@step()` is fine — pick one and document it.
+
+Acceptance: `@step()\ndef parse(...)` yields a step named `parse`, version
+`"0"`; editing its body under the default warns (code-drift) rather than
+recomputes; duplicate function names error with a message naming both
+definitions; the tutorial's first example drops `name=`/`version=` and the
+versioning docs still introduce them immediately after.
+
+## 17. Rewrite `notes/invariants.md` values-first  **[editorial; owner reviews draft before commit]**
+
+The eight invariants read as implementation facts and create weird
+emphases; they should derive from the project's actual promises. Structure
+the rewrite as ~4 core promises — *never pay twice for the same
+computation; never lie about what happened; order and parallelism never
+change results; bytes are disposable, facts are not* — with the current
+invariants recast as supporting guarantees underneath (merge freely;
+nothing user-visible changes).
+
+**Trap:** the numbering is load-bearing — `models.py` ("invariant 8"
+pairing guard), `gc.py` ("invariant 7"), AGENTS.md, and the docs site
+(which publishes the file verbatim via snippet-include) all reference
+numbers. Renumber if the new structure wants it, but grep-sweep every
+reference in the same commit, and rebuild the docs. This is also the item
+that answers "is the generations machinery necessary" — the schema exists
+to serve *never lie about what happened*; if that promise survives the
+rewrite unchanged, the Parked schema-simplification question dies with it.
+
+Acceptance: `rg "invariant [0-9]" src tests notes docs AGENTS.md` resolves
+against the new document with no dangling numbers; docs build clean; owner
+signed off on the draft before the commit.
+
+## 18. Notes hygiene: kill obsolete design notes  **[editorial]**
+
+Delete `notes/unification-plan.md` (historical; git remembers; already
+unpublished from the docs site). Fix `notes/producer-model.md`: the
+`(subkey, value)` expand emit contract it describes was never built —
+shipped code mints plain `row-<hash>` lanes from bare yielded values
+(confirmed against `execution.py`/`planning.py`, 2026-07-12) — and its
+`manifest` references describe machinery that no longer exists. Item 14
+will obsolete more of it; do this item after 14 to sweep once.
+
+Acceptance: `rg -i manifest src tests notes docs README.md AGENTS.md` →
+zero hits outside the Done changelog; `producer-model.md` describes shipped
+behavior only (no "proposed" sections); `unification-plan.md` is gone.
+
+## 19. Comment cleanup pass  **[editorial; owner drives style]**
+
+A pass over `src/`, `tests/`, and `examples/` replacing process-note
+comments (what changed, which TODO item shipped it, why the diff was
+correct) with code-truth comments (constraints the code can't show).
+Known instances: `spec.py:91` ("TODO 10b"), `du.py:82`. The owner will
+set the rewrite style on first contact; don't batch-rewrite ahead of that.
+
+Acceptance: no comment in `src/` references a TODO item number or narrates
+a past change; constraint comments (invariant references, trap guards)
+stay.
+
+──────────────────────────────────────────────────────────────────────
+
+## Parked (ideas, deliberately unspecced — design session required before building)
+
+- **Bucketed reduce** (`shape="reduce"` with a batch size). The naive
+  "first 50 to finish" is nondeterministic and breaks order-independent
+  cache identity; sorted-chunks shift every boundary on any insertion
+  (near-total recompute). The viable design is **hash buckets**:
+  `hash(lane_key) % ceil(n/50)` → stable membership, ~50-sized batches,
+  only the touched bucket recomputes, each bucket fires as soon as its
+  members land (pairs with `schedule="deep"`), and tree-reduce falls out
+  free (a second reduce over the bucket outputs). Nondeterministic batching
+  would only be tolerable with a cache-identity opt-out — its own can of
+  worms. Owner: useful for some flows, not near-term (2026-07-12).
+- **`plan --why` / recompute-blame.** Itemize which identity slot changed
+  for an `execute` decision (input vs params vs code vs version vs stale)
+  against the last live generation; the "blame" extension walks lineage
+  upstream to the *first* changed thing and shows its value diff. Later.
+- **`describe(format="ascii")`** — hand-rolled terminal DAG rendering
+  (topo layers, unicode boxes), no new deps, not-graphviz-quality. (The
+  `rubedo dag` CLI variant was considered and dropped as not notable,
+  2026-07-12.)
+- **Streaming expand** — commit yielded children incrementally instead of
+  buffering the full expansion; replaces what `TableSource.batch_size` did
+  before item 14. Only matters for sources larger than memory.
+- **Generations/schema simplification** — gated on item 17: if the
+  invariants rewrite keeps *never lie about what happened* as a core
+  promise, this dies; if that promise is softened, revisit whether
+  `materialization_lifecycle` + the pairing guard could shrink
+  (**DANGEROUS** — touches invariant 8, GC safety, and crash recovery).
 
 ──────────────────────────────────────────────────────────────────────
 
