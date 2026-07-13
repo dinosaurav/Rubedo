@@ -8,13 +8,14 @@ for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
-recommended build order: the simplification chain (**14** → **15** → **16**)
-comes first — 14 deletes exactly the surface 15 has to move, and 15 moves
-the decorator 16 touches; the editorial trio (**17**, **18**, **19**) and
-**20** (ascii describe) slot anywhere. The cloud chain (**6** → **7**+**7b** → **8** → **13**) builds
-when multi-machine demand is real — though **8** is independently buildable
-(workers never touch the ledger/store; item 7 is its throughput story, not a
-prerequisite), and **6 needs a respec after 14** (see its note). (**10b**
+recommended build order: the simplification chain continues **15** → **16**
+(15 moves the decorator 16 touches; **14** sources purge shipped 2026-07-13
+— see the Done changelog); the editorial trio (**17**, **18**, **19**) and
+**20** slot anywhere (**20** ascii describe is built, merging). The cloud
+chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
+demand is real — though **8** is independently buildable (workers never
+touch the ledger/store; item 7 is its throughput story, not a
+prerequisite), and **6 needs a respec post-14** (see its note). (**10b**
 retention GC shipped — see the Done changelog.) Unsettled ideas live in
 **Parked** at the bottom — do not build those without a design session.
 
@@ -315,65 +316,7 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 14. Kill `sources.py` — ingestion is an `@source` step  **[design settled 2026-07-12]**
-
-The producer model already unified ingestion: `@source` is *defined as* a
-parentless `expand` step, and the examples run on it. `sources.py` is now a
-second, legacy way of doing the same thing. Delete the concept: the `Source`
-protocol, `SourceItem`, the scan/load split, `FolderSource`, `CsvSource`,
-`TableSource` (with its `key=` re-fetch handle and `source_id`), the
-`folder=`/`source=`/`sources=` pipeline kwargs, `@step(source="name")`
-routing, and `PipelineSpec.source`/`source_for`. This is the single biggest
-delete-a-concept available in the codebase.
-
-**Settled decisions (owner design session 2026-07-12 — do not re-litigate):**
-
-- **Recipes, not classes.** No replacement helpers ship in the package —
-  a folder is a three-line `pathlib` generator yielding
-  `{"path": rel, "text": ...}`, a CSV is a `csv.DictReader` loop, a table is
-  a SELECT loop. They live in docs (`docs/concepts/sources.md` becomes the
-  recipes page) and examples.
-- **Yield content, not references.** Whatever the generator yields is what
-  gets hashed to mint the lane — a recipe that yields paths would pin lanes
-  to names, not content. (Scan already read every file to hash it; no new
-  I/O.) Cheap-token flows (cloud) yield tokens and let a downstream cached
-  step fetch — see item 6's respec note.
-- **Buffering is accepted for v1.** `TableSource`'s `batch_size` streaming
-  dies with it; if expand buffers all yields before commit (verify), that's
-  documented in the recipes page, not fixed here. A streaming expand is
-  Parked.
-- **Multi-source needs no machinery.** Several `@source` steps per pipeline;
-  `join` doesn't care that its parents are expand roots.
-
-**Mechanics:** delete `src/rubedo/sources.py` and every import; strip the
-source fields/kwargs from `spec.py` (`pipeline()` keeps only `steps=` et
-al.); remove the source-scan path from `planning.py` (root planning becomes
-the existing expand-root path, nothing else). Sweep README ("Sources"
-section), docs, examples (mostly on `@p.source` already), and tests — the
-standard fixture shape in `AGENTS.md` ("per-test scanned folder") changes to
-a folder-recipe `@source`; update that section in the same pass.
-
-**Trap (part of the spec):** (1) plan-time enumeration changes on *first*
-runs: today a fresh folder pipeline shows per-lane decisions at `plan()`
-because scan runs at plan time; post-14 a first run shows one `execute` per
-source + `pending` downstream, exactly like any expand today (second runs
-enumerate via the expand anchor without re-running the fn). This is a
-deliberate UX change — update the plan/tutorial docs, don't "fix" it by
-running user code at plan time. (2) Lane keys for folder flows change from
-relpath to `row-<hash>` — an edited file becomes removed+added like
-everywhere else; `count_lines` output and any test asserting relpath
-coordinates must follow. (3) The engine-never-imports-user-code invariant is
-untouched — source fns are steps; the definition snapshot records names,
-never code.
-
-Acceptance: `grep -r "FolderSource\|CsvSource\|TableSource\|SourceItem" src
-tests examples docs README.md` → zero hits; `sources.py` is gone;
-`count_lines` runs Created:N then Reused:N on the folder recipe; a two-source
-`join` example still works (`examples/newsroom`); a fresh-store `plan()`
-shows source-execute + pending and the *second* `plan()` shows per-lane
-reuse; full verification checklist green; docs rebuilt with zero warnings.
-
-## 15. The rotation — one `Pipeline` object, verbs as methods  **[design settled 2026-07-12; after 14]**
+## 15. The rotation — one `Pipeline` object, verbs as methods  **[design settled 2026-07-12; 14 shipped]**
 
 Two ways to build (`pipeline(steps=[...])` vs `PipelineBuilder`) and
 free-function verbs (`run(p)`, `plan(p)`, `describe(p)`) collapse into one
@@ -570,6 +513,22 @@ runs (pinned by snapshot test); unknown formats still raise the existing
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-13 — sources purge (item 14):** `sources.py` deleted — ingestion
+is an `@source` (parentless expand) step, full stop. The `Source` protocol,
+`SourceItem`, scan/load, `FolderSource`/`CsvSource`/`TableSource`, the
+`folder=`/`source=`/`sources=` kwargs, `@step(source=)` routing, and
+`source_for` are gone; replacements are recipes in
+`docs/concepts/sources.md` (folder/CSV/table/cloud-token). `definition()`
+`source_id` = sorted root-step names. Test sweep rewrote every scanned
+folder as a root `@step(shape="expand")` (AGENTS.md Test conventions has
+the pattern + two recurring judgment calls: headless param-fed roots for
+supersession tests and for `plan()`-preview tests). **Acceptance-line
+correction found in the build:** `plan()` never previews an expand root's
+enumeration — a second `plan()` stays execute+pending forever (pinned by
+`test_plan.py`); it is the second *run* that reuses. Live-verified:
+count_lines 22/22, newsroom join 21/21, hn_digest real LLM run. Engine
+`ef31228`, tests `190b020`, examples `ee138e7`, docs `967eb4c`.
 
 **2026-07-11 — retention GC (item 10b, byte-deleting):** `pipeline(retention=N)` (keep-last-N terminal runs) + a global `rubedo gc [--max-bytes SIZE] [--delete]` budget, dry-run by default. Two phases on existing machinery (`src/rubedo/gc.py`): **demote** live mats outside a pipeline's keep-set with paired `pruned` lifecycle rows (never a ledger delete — bytes, not facts); **sweep** object files no live mat references anywhere (the shared-object ref-count), logging each in the new append-only `object_reclamations` table. End-of-successful-run auto-prunes when `retention=` is set (skips, never errors, while another run beats); unconfigured runs get a cheap cached warn-threshold. gc refuses while any run is live (restore race). **Trap 5 resolved with evidence:** an expand cache anchor appears in neither `RunCoordinateStatus` nor `MaterializationEdge`, so the keep-set is widened structurally — an anchor *is* a live mat with zero status refs, always kept (pinned: the anchor test asserts it would be demoted without the widening). `rubedo du` now reports reclaimed vs missing; lazy heal restores a pruned lane whose input reappears. `tests/test_gc.py` + `tests/test_du.py`.
 
