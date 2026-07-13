@@ -10,8 +10,8 @@ Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
 recommended build order: the simplification chain (**14** → **15** → **16**)
 comes first — 14 deletes exactly the surface 15 has to move, and 15 moves
-the decorator 16 touches; the editorial trio (**17**, **18**, **19**) slots
-anywhere. The cloud chain (**6** → **7**+**7b** → **8** → **13**) builds
+the decorator 16 touches; the editorial trio (**17**, **18**, **19**) and
+**20** (ascii describe) slot anywhere. The cloud chain (**6** → **7**+**7b** → **8** → **13**) builds
 when multi-machine demand is real — though **8** is independently buildable
 (workers never touch the ledger/store; item 7 is its throughput story, not a
 prerequisite), and **6 needs a respec after 14** (see its note). (**10b**
@@ -500,6 +500,40 @@ Acceptance: no comment in `src/` references a TODO item number or narrates
 a past change; constraint comments (invariant references, trap guards)
 stay.
 
+## 20. `describe(format="ascii")` — terminal DAG rendering  **[design settled 2026-07-12; independent, lands on the method after 15]**
+
+`describe()` speaks `text` (a dependency-ordered list) and `mermaid` (needs
+a markdown viewer); neither *draws* in a terminal. Add `format="ascii"`:
+topo-layered boxes connected by unicode box-drawing edges, so `p.describe()`
+output can show the actual DAG shape — diamonds, fan-in, joins — where you
+run.
+
+**Settled decisions (owner design session 2026-07-12):** hand-rolled in
+`spec.py` next to the existing renderers — **no new dependencies** (no
+grandalf/networkx-layout; networkx in the dev group is for tests, not this).
+Explicitly not-graphviz-quality: legible up to ~20 steps; simple layered
+layout (steps grouped by topo depth, one row per layer), `│ ┌ ┐ └ ┘ ├ ┤ ─`
+edges, edge crossings allowed and rendered naively. Box label = step name
+plus a shape tag for non-map steps (`[reduce]`, `[expand]`, `[join]`),
+mirroring what `format="text"` annotates. (The `rubedo dag` CLI variant —
+rendering from ledger definition snapshots — was considered and dropped as
+not notable, 2026-07-12.)
+
+**Trap (part of the spec):** output must be **deterministic** — stable
+ordering within a layer (spec order, not dict/set order) so the string is
+snapshot-testable and diffable; don't let layout depend on hash iteration
+order. Degrade gracefully: if a layer is wider than the layout can draw,
+fall back to the `text` renderer for that graph rather than emitting
+garbage — never crash on a legal DAG.
+
+Acceptance: `describe(count_lines_pipe, format="ascii")` and the newsroom
+pipeline (join → expand → group_key reduce) both render with every step
+name and edge present; the same spec yields a byte-identical string across
+runs (pinned by snapshot test); unknown formats still raise the existing
+`ValueError` listing all three; no new runtime dependencies
+(`scripts/smoke_test.sh` stays green); after item 15 it is reachable as
+`p.describe(format="ascii")` unchanged.
+
 ──────────────────────────────────────────────────────────────────────
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
@@ -518,13 +552,15 @@ stay.
   for an `execute` decision (input vs params vs code vs version vs stale)
   against the last live generation; the "blame" extension walks lineage
   upstream to the *first* changed thing and shows its value diff. Later.
-- **`describe(format="ascii")`** — hand-rolled terminal DAG rendering
-  (topo layers, unicode boxes), no new deps, not-graphviz-quality. (The
-  `rubedo dag` CLI variant was considered and dropped as not notable,
-  2026-07-12.)
-- **Streaming expand** — commit yielded children incrementally instead of
-  buffering the full expansion; replaces what `TableSource.batch_size` did
-  before item 14. Only matters for sources larger than memory.
+- **Streaming expand** — commit each yielded child as it arrives instead
+  of buffering the full expansion. Multiple independent payoffs: bounded
+  memory on huge fan-outs, a crash mid-expansion keeps the
+  already-committed children, and under `schedule="deep"` downstream
+  lanes could start before the expansion finishes (barrier relaxation).
+  **The trap that makes it non-trivial:** the expand *anchor* must commit
+  strictly last, after every child — an early anchor + a mid-expansion
+  crash reads as a complete, reusable expansion on the next run. Unrelated
+  to item 14/scan; parked on demand, not on design doubt.
 - **Generations/schema simplification** — gated on item 17: if the
   invariants rewrite keeps *never lie about what happened* as a core
   promise, this dies; if that promise is softened, revisit whether
