@@ -8,11 +8,11 @@ for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
-recommended build order: the editorial pair (**17**, **19**) slots anywhere
+recommended build order: the editorial item **19** slots anywhere
 (**16** step ergonomics shipped 2026-07-13, **15** the rotation shipped
 2026-07-13, **14** sources purge shipped 2026-07-13, **20** ascii describe
-shipped 2026-07-13, **18** notes hygiene shipped 2026-07-13 — see the Done
-changelog). The cloud
+shipped 2026-07-13, **18** notes hygiene shipped 2026-07-13, **17** the
+invariants rewrite shipped 2026-07-13 — see the Done changelog). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
 touch the ledger/store; item 7 is its throughput story, not a
@@ -273,7 +273,8 @@ worker↔store directly; the runner handles only hashes and metadata.
   main-thread**: the runner commits from the returned metadata via a
   `stage_and_commit` variant that skips byte staging (the object is
   already in the store) but runs the full `_commit_materialization`
-  generations/pairing machinery unchanged. Invariant 3 survives: a worker
+  generations/pairing machinery unchanged. The crash-safety guarantee
+  survives (`notes/invariants.md`, promise 2): a worker
   dying mid-PUT leaves at most an unreferenced object at a
   content-addressed key and no ledger row; a retry lands idempotently on
   the same key (item 7's 412-is-success).
@@ -316,29 +317,6 @@ reduce over N parents fetches all N worker-side; an indexed, asserted,
 filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
-
-## 17. Rewrite `notes/invariants.md` values-first  **[editorial; owner reviews draft before commit]**
-
-The eight invariants read as implementation facts and create weird
-emphases; they should derive from the project's actual promises. Structure
-the rewrite as ~4 core promises — *never pay twice for the same
-computation; never lie about what happened; order and parallelism never
-change results; bytes are disposable, facts are not* — with the current
-invariants recast as supporting guarantees underneath (merge freely;
-nothing user-visible changes).
-
-**Trap:** the numbering is load-bearing — `models.py` ("invariant 8"
-pairing guard), `gc.py` ("invariant 7"), AGENTS.md, and the docs site
-(which publishes the file verbatim via snippet-include) all reference
-numbers. Renumber if the new structure wants it, but grep-sweep every
-reference in the same commit, and rebuild the docs. This is also the item
-that answers "is the generations machinery necessary" — the schema exists
-to serve *never lie about what happened*; if that promise survives the
-rewrite unchanged, the Parked schema-simplification question dies with it.
-
-Acceptance: `rg "invariant [0-9]" src tests notes docs AGENTS.md` resolves
-against the new document with no dangling numbers; docs build clean; owner
-signed off on the draft before the commit.
 
 ## 19. Comment cleanup pass  **[editorial; owner drives style]**
 
@@ -425,11 +403,6 @@ passes once declared; full verification checklist green.
   strictly last, after every child — an early anchor + a mid-expansion
   crash reads as a complete, reusable expansion on the next run. Unrelated
   to item 14/scan; parked on demand, not on design doubt.
-- **Generations/schema simplification** — gated on item 17: if the
-  invariants rewrite keeps *never lie about what happened* as a core
-  promise, this dies; if that promise is softened, revisit whether
-  `materialization_lifecycle` + the pairing guard could shrink
-  (**DANGEROUS** — touches invariant 8, GC safety, and crash recovery).
 - **Sinks** (the return leg of the refinement loop: CSV/Sheet in →
   refined batch back out; Sheets via gspread, Excel via openpyxl as
   extras, CSV/Parquet trivially). Belongs **in code, in the pipeline
@@ -466,7 +439,8 @@ passes once declared; full verification checklist green.
   outputs (LLM refinement always needs a human pass on some rows).
   Natural fit: an override is a new generation with provenance
   `human` instead of a step run, so append-only survives — but this
-  touches the generations protocol, invariant 8, and would be the
+  touches the generations protocol and the pairing guard
+  (`notes/invariants.md`), and would be the
   dashboard's first write surface (**DANGEROUS** — full design
   session required, do not sketch in code) (2026-07-13).
 - **Failure triage view.** Blocked/failed lanes already accumulate in
@@ -477,6 +451,37 @@ passes once declared; full verification checklist green.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-13 — invariants rewrite, values-first (item 17):**
+`notes/invariants.md` restructured under four core promises — *never pay
+twice for the same computation; never lie about what happened; order and
+parallelism never change results; bytes are disposable, facts are not* —
+with the former eight invariants recast as supporting guarantees
+underneath (nothing user-visible changes; no behavior changed). Owner
+reviewed and approved the draft (`notes/invariants-draft.md`, deleted on
+ship), with one override of the draft's own "keep numbers stable"
+proposal: **renumber everything under the new promise-scoped scheme**
+(`promise.guarantee`, e.g. `2.6`) **and strip invariant-number references
+out of code entirely** — `models.py`'s pairing-guard comment and
+`ImmutabilityError` message, and `gc.py`'s demote/pairing-guard comments,
+now describe the constraint in plain language and point at
+`notes/invariants.md` generally rather than citing a number; matching
+`pytest.raises(match=...)` regexes and comments in
+`tests/test_pairing_guard.py`/`test_immutability.py`/
+`test_invalidate_downstream.py` updated in lock-step. Prose swept
+everywhere a number could go dangling: `AGENTS.md`, `README.md`,
+`notes/retention.md`, `notes/producer-model.md`, `docs/guides/retention.md`,
+`docs/concepts/model.md` (its independent "eight invariants, plainly"
+paraphrase rewritten to the same four-promise structure), `docs/index.md`,
+and this file. **The Parked "Generations/schema simplification" idea
+dies**, per its own terms: it was gated on whether *never lie about what
+happened* survived the rewrite as a core promise, and it does — the
+generations schema (append-only `materialization_lifecycle`, the
+`before_commit` pairing guard) is the mechanism that makes that promise
+mechanically true, not incidental plumbing, so no simplification of it
+ships. `rg -i "invariant [0-9]"` is zero hits in `src/`/`tests/`;
+`uv run mkdocs build --strict` clean. Commits `63e0c33` (doc swap +
+code/test sweep), `d660d2c` (docs-site + notes sweep).
 
 **2026-07-13 — step ergonomics (item 16):** `@step`'s `name=`/`version=`
 both got defaults — `name` falls back to the decorated function's
@@ -641,7 +646,7 @@ introspection). Foundation, in one breath: the **producer model**
 `group_key` reduce, multi-source, N-way `join` — see
 `notes/producer-model.md`) · content-addressed store + generations
 (supersede/restore/refresh) · append-only ledger with ORM immutability
-guards + the invariant-8 pairing guard · single `run()`/`plan()` entry
+guards + the liveness-flip pairing guard · single `run()`/`plan()` entry
 points, no registry, definition snapshots · step policies (retries,
 rate_limit, stale_after, skip_cache fusion, assertions, filters,
 `on_failed`) · `index=` + selection language with semver ranges ·
