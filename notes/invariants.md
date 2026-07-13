@@ -40,23 +40,23 @@ questions (declared with `@step(index=[...])`, extracted at commit — a label
 is just data someone chose to index).
 
 **Source:**
-Anything that can enumerate coordinates with content hashes and load their
-payloads (folder of files, CSV rows, table rows), identified by a stable
-`source_id`. A pipeline may declare several (`sources={name: Source}`); a root
-step picks one with `@step(source="name")`. Conceptually a source is the root
-**producer** — the same lane-minting primitive as `expand`/`join` (see
-`producer-model.md`).
+Not a separate type — ingestion is a root step. `@source` (sugar for a
+parentless `expand`) is a generator that yields payloads; each becomes a
+content-addressed `row-<hash>` lane. A folder, a CSV, a SQL table are
+*recipes* (a `pathlib` walk, a `csv.DictReader` loop, a `SELECT` loop) —
+documented in `docs/concepts/sources.md`, not shipped as classes. A pipeline
+may declare several `@source` roots; `join` doesn't care that its parents
+are roots. Conceptually a source is the root **producer** — the same
+lane-minting primitive as `expand`/`join` (see `producer-model.md`).
 
 **Root (head of a pipeline):**
 Any step with no `depends_on` originates lanes, and its `shape` sets how many:
-an `expand` root yields N (a source that re-runs every run); a `map` root over
-a declared source mints one lane per scanned coordinate; a `map` root with **no
-source** mints a single `@root` lane whose input is its params (or a constant
-when it takes none). The source-less map root is addressed by
+an `expand` root yields N (`@source`; re-runs every run — see below) or a
+`map` root mints a single `@root` lane whose input is its params (or a
+constant when it takes none). The map root is addressed by
 `hash(step, version, @root, params)`, so identical params reuse the cached
 output and changed params make a new generation — a lane fed *into* the head
-rather than scanned for. A pipeline with no source is legal as long as some
-root originates lanes.
+rather than scanned for. A pipeline needs at least one root to originate lanes.
 
 **Run-coordinate status:**
 Relationship between a run and a coordinate: created, reused, failed, blocked,

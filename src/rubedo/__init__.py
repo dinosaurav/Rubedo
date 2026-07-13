@@ -15,7 +15,6 @@ from .spec import (
 )
 from .models import Filtered, ProcessResult, RunSummary
 from .selection import Selection
-from .sources import Source, SourceItem, FolderSource, CsvSource
 from .invalidation import invalidate
 from .runner import plan, run, RunPlan
 from .progress import TerminalProgress
@@ -30,10 +29,6 @@ __all__ = [
     "ProcessResult",
     "RunSummary",
     "Selection",
-    "Source",
-    "SourceItem",
-    "FolderSource",
-    "CsvSource",
     "step",
     "source",
     "pipeline",

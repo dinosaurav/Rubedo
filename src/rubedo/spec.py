@@ -6,8 +6,6 @@ from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal
 from pydantic import BaseModel
 from dataclasses import dataclass
 
-from .sources import Source
-
 _RATE_PERIODS = {"s": 1.0, "sec": 1.0, "second": 1.0,
                  "m": 60.0, "min": 60.0, "minute": 60.0,
                  "h": 3600.0, "hour": 3600.0}
@@ -64,28 +62,24 @@ class StepSpec:
     shape: str = "map"  # map | reduce | expand
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
-    source: Optional[str] = None  # root step: which named source it reads
     join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
 
 
-DEFAULT_SOURCE = "__source__"
-
-
 @dataclass
 class PipelineSpec:
     """The static definition of a complete DAG pipeline.
 
-    `sources` maps a name to a Source. Single-source pipelines use one entry
-    under DEFAULT_SOURCE; multi-source pipelines (for joins) name each one and
-    root steps pick with `@step(source="name")`.
+    Ingestion has no separate concept: a root step (no `depends_on`) *is*
+    the source. A `shape="expand"` root yields the initial lanes (re-running
+    every run — see `@source`, sugar for exactly this); a `shape="map"` root
+    mints a single lane from its params (or a constant). A pipeline may
+    declare several roots — `join` doesn't care that its parents are roots.
     """
     id: str
     name: str
-    folder: Optional[str]
-    sources: Dict[str, "Source"]
     steps: List[StepSpec]
     params_model: Optional[Type[BaseModel]] = None
     # Retention policy (TODO 10b): keep only this pipeline's last N *terminal*
@@ -93,31 +87,6 @@ class PipelineSpec:
     # keep everything. Rides the definition() snapshot each run records, so the
     # ops path (rubedo gc) reads it without importing user code.
     retention: Optional[int] = None
-
-    @property
-    def source(self) -> Source:
-        """The sole source — convenience for single-source pipelines."""
-        if len(self.sources) == 1:
-            return next(iter(self.sources.values()))
-        raise ValueError(
-            "pipeline has multiple sources; use .sources or a step's source="
-        )
-
-    def source_for(self, step: "StepSpec") -> Optional[Source]:
-        """The Source a step reads, or None if it reads none.
-
-        Dependent steps and root *expand* steps (which are themselves sources)
-        read nothing; a *source-less* root map reads nothing either (it mints
-        a single lane from its params/a constant); a root non-expand step over
-        a declared source reads a named/sole source.
-        """
-        if step.depends_on or step.shape == "expand":
-            return None
-        if not self.sources:
-            return None  # source-less root map: mints its own single lane
-        if step.source is not None:
-            return self.sources[step.source]
-        return next(iter(self.sources.values()))  # single-source default
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -150,7 +119,6 @@ def step(
     shape: str = "map",
     executor: str = "thread",
     group_key: Optional[str] = None,
-    source: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
@@ -312,7 +280,6 @@ def step(
             shape=shape,
             executor=executor,
             group_key=group_key,
-            source=source,
             join_on=join_on,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,
@@ -333,8 +300,8 @@ def source(fn=None, *, name=None, version="1", **step_kwargs):
             for sid in fetch_top_ids():
                 yield fetch_story(sid)
 
-    It is exactly `@step(shape="expand")` with no `depends_on`, so drop it in
-    `pipeline(steps=[...])` with no `source=`. `name` defaults to the function
+    It is exactly `@step(shape="expand")` with no `depends_on`, so drop it
+    straight into `pipeline(steps=[...])`. `name` defaults to the function
     name; other `@step` policies (`index=`, `retries=`, `rate_limit=`, …)
     forward through.
     """
@@ -348,21 +315,20 @@ def source(fn=None, *, name=None, version="1", **step_kwargs):
 
 def pipeline(
     name: str,
-    folder: Optional[str] = None,
     steps: Optional[List[StepSpec]] = None,
     id: Optional[str] = None,
-    source: Optional[Source] = None,
-    sources: Optional[Dict[str, "Source"]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     retention: Optional[int] = None,
 ) -> PipelineSpec:
-    """Construct a pipeline from its steps (and optional source sugar).
+    """Construct a pipeline from its steps.
 
-    Pass at most one of `folder=` (FolderSource sugar), `source=` (one Source),
-    or `sources={name: Source}` (multiple). Or pass none: then the roots *are*
-    the source — a `shape="expand"` root yields the initial lanes, and a
-    `shape="map"` root mints a single lane whose input is its params (or a
-    constant when it takes none). Same params reuse; changed params recompute.
+    Ingestion is not a separate concept: the roots (steps with no
+    `depends_on`) *are* the source. A `shape="expand"` root (see `@source`)
+    yields the initial lanes and re-runs every run; a `shape="map"` root
+    mints a single lane whose input is its params (or a constant when it
+    takes none) — same params reuse, changed params recompute. A pipeline
+    may declare several roots; `join` doesn't care that its parents are
+    roots.
 
     retention=N keeps only this pipeline's last N terminal runs' outputs: at the
     end of a successful run (or on `rubedo gc`), generations that only older runs
@@ -377,44 +343,11 @@ def pipeline(
             f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
             f"got {retention!r}"
         )
-    given = [x for x in (folder, source, sources) if x is not None]
-    if len(given) > 1:
-        raise ValueError("Pass at most one of folder=, source=, or sources=")
-
-    if sources is None:
-        if folder is not None:
-            from .sources import FolderSource
-
-            sources = {DEFAULT_SOURCE: FolderSource(folder)}
-        elif source is not None:
-            sources = {DEFAULT_SOURCE: source}
-        else:
-            sources = {}  # no source: a root expand step yields the lanes
 
     steps = steps or []
-    single = len(sources) == 1
     roots = [s for s in steps if not s.depends_on]
-    if not sources and not roots:
-        raise ValueError(
-            "pipeline has no source and no root step to originate lanes"
-        )
-    for s in steps:
-        if s.source is not None and s.source not in sources:
-            raise ValueError(
-                f"Step '{s.name}' reads source '{s.source}', which is not in "
-                f"sources={sorted(sources)}"
-            )
-        # Every root mints lanes: an expand root fans out N, a map root mints
-        # one. A source-backed map root reads that source; a source-less map
-        # root mints a single '@root' lane (input = its params, or a
-        # constant). The only rule left is disambiguating which source a root
-        # reads when a pipeline declares several.
-        if not s.depends_on and s.shape != "expand" and sources:
-            if s.source is None and not single:
-                raise ValueError(
-                    f"Root step '{s.name}' must declare source= (pipeline has "
-                    f"multiple sources {sorted(sources)})"
-                )
+    if not roots:
+        raise ValueError("pipeline has no root step to originate lanes")
 
     consumed = {dep for s in steps for dep in s.depends_on}
     name_to_step = {s.name: s for s in steps}
@@ -442,8 +375,6 @@ def pipeline(
     return PipelineSpec(
         id=id or name,
         name=name,
-        folder=folder,
-        sources=sources,
         steps=steps,
         params_model=params_model,
         retention=retention,
@@ -485,8 +416,6 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["group_key"] = s.group_key
         if s.join_on is not None:
             entry["join_on"] = dict(s.join_on)
-        if s.source is not None:
-            entry["source"] = s.source
         if s.executor != "thread":
             entry["executor"] = s.executor
         if s.output_model is not None:
@@ -501,7 +430,6 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {
         "id": spec.id,
         "name": spec.name,
-        "source_id": ",".join(sorted(s.id for s in spec.sources.values())),
         "steps": steps,
     }
     if spec.retention is not None:
@@ -535,14 +463,10 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
     if format != "text":
         raise ValueError(f"Unknown format {format!r}: expected 'text' or 'mermaid'")
 
-    src_desc = ", ".join(
-        (f"{name}={s.id}" if name != DEFAULT_SOURCE else s.id)
-        for name, s in sorted(spec.sources.items())
-    )
-    lines = [f"Pipeline '{spec.id}' over {src_desc}"]
+    roots = sorted(s.name for s in spec.steps if not s.depends_on)
+    lines = [f"Pipeline '{spec.id}' — roots: {', '.join(roots)}"]
     for s in topo:
-        root_tag = f" (root:{s.source})" if s.source else " (root)"
-        deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else root_tag
+        deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
         policies = []
         if s.skip_cache:
             policies.append("skip_cache")

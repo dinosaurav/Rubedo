@@ -12,9 +12,20 @@ from sqlalchemy.orm import Session
 from .hashing import compute_output_address, hash_json
 from .models import Materialization, MaterializationIndexEntry
 from .spec import PipelineSpec, StepSpec
-from .sources import SourceItem
 from .store import read_materialization_output
 from .util import iso_age_seconds
+
+
+@dataclass
+class RootItem:
+    """A synthetic lane item for a source-less root map: its single `@root`
+    lane, or (for a root skip_cache step) the per-coordinate placeholder
+    used to key its ephemeral memo. Not part of the public API — a root
+    step (no `depends_on`) mints its own lanes directly: an expand root
+    yields N via its generator, a map root mints this one synthetic lane."""
+
+    coordinate: str
+    content_hash: str
 
 
 class MatRef:
@@ -44,7 +55,7 @@ class EphemeralRef:
     """
 
     step: StepSpec
-    item: SourceItem
+    item: RootItem
     parent_refs: Dict[str, Any]
     identity_hash: str
 
@@ -60,7 +71,7 @@ class StepDecision:
     """The planned action for a coordinate in a step (execute, reuse, filter, block, or pending)."""
     coordinate: str
     action: str  # reuse | execute | blocked | pending | filtered
-    item: Optional[SourceItem] = None
+    item: Optional[RootItem] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
     existing: Optional[MatRef] = None
@@ -504,7 +515,7 @@ def _plan_join(
 def _plan_step(
     session: Session,
     step: StepSpec,
-    scanned_items: List[SourceItem],
+    scanned_items: List[RootItem],
     coord_step_mats: Dict[Tuple[str, str], Union[MatRef, EphemeralRef, Literal["blocked", "failed", "pending", "filtered"]]],
     params_hash: str,
     force: bool,
@@ -625,8 +636,7 @@ def _plan_step(
         for c in sorted(coords):
             it = coord_to_item.get(c)
             if not it:
-                from .sources import SourceItem
-                it = SourceItem(coordinate=c, content_hash="", metadata={})
+                it = RootItem(coordinate=c, content_hash="")
             targets.append((c, it, it.content_hash))
 
     resolved_targets = []

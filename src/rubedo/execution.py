@@ -28,7 +28,6 @@ from .planning import (
     expand_child_identity,
 )
 from .spec import StepSpec
-from .sources import Source
 from .store import read_materialization_output
 
 
@@ -132,15 +131,12 @@ class ExecutionOutcome:
     is_anchor: bool = False
 
 
-def _resolve_parent_value(
-    ref, step_sources: Dict[str, Source], params: Optional[dict], memo: _RunMemo
-):
+def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     """
     Resolve the output value of a parent step, computing it lazily if ephemeral.
 
     Args:
         ref: The reference to the parent output (MatRef or EphemeralRef).
-        step_sources: step name -> the Source it reads (root/skip_cache roots).
         params (Optional[dict]): Run parameters.
         memo (_RunMemo): The run memoizer for ephemeral steps.
 
@@ -148,33 +144,27 @@ def _resolve_parent_value(
         Any: The resolved output value.
     """
     if isinstance(ref, EphemeralRef):
-        return _compute_ephemeral(ref, step_sources, params, memo)
+        return _compute_ephemeral(ref, params, memo)
     return read_materialization_output(ref)
 
 
-def _compute_ephemeral(
-    ref: EphemeralRef, step_sources: Dict[str, Source], params: Optional[dict],
-    memo: _RunMemo,
-):
+def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo):
     """Lazily compute a skip_cache step's value, at most once per run."""
 
     def produce():
         step = ref.step
-        if not step.depends_on:
-            args = (
-                [step_sources[step.name].load(ref.item)]
-                if step.name in step_sources
-                else []
-            )
-            kwargs = {}
-        else:
-            args = []
-            kwargs = {
-                dep: _resolve_parent_value(
-                    ref.parent_refs[dep], step_sources, params, memo
-                )
+        # A root step (map or expand) reads no payload — it mints its own
+        # lane(s) and receives only params. A dependent step gets parent
+        # outputs by parameter name.
+        args: List[Any] = []
+        kwargs = (
+            {}
+            if not step.depends_on
+            else {
+                dep: _resolve_parent_value(ref.parent_refs[dep], params, memo)
                 for dep in step.depends_on
             }
+        )
         if _step_accepts_params(step):
             kwargs["params"] = _build_step_params(step, params)
         result = step.fn(*args, **kwargs)
@@ -215,7 +205,6 @@ def _validate_output(step: StepSpec, value: Any) -> None:
 def _process_decision(
     step: StepSpec,
     decision: StepDecision,
-    step_sources: Dict[str, Source],
     params: Optional[dict],
     accepts_params: bool,
     params_hash: str,
@@ -228,46 +217,33 @@ def _process_decision(
     Honors the step's rate limit (`limiter` is one instance per step per
     run, shared across every call the runner dispatches for that step,
     retries included) and retry policy (only exceptions matching retry_on
-    are retried). `step_sources` maps a step name to the Source it reads
-    (root/skip_cache roots), so each root loads from its own source in a
-    multi-source pipeline. `process_pool`, when the step declares
-    executor="process", is where the step body runs — retries and rate
-    limiting stay in the calling (thread) layer.
+    are retried). `process_pool`, when the step declares executor="process",
+    is where the step body runs — retries and rate limiting stay in the
+    calling (thread) layer.
 
     Returns a list because an expand fans one parent lane into an anchor
     plus N children; every other shape returns exactly one outcome.
     """
 
     def call(decision: StepDecision, pool: Optional[Any] = None):
-        # Root steps get the source payload positionally; dependent steps
-        # get parent outputs by parameter name. Either kind may declare
-        # `params`. A *root expand* is itself a source — it reads no payload.
+        # Dependent steps get parent outputs by parameter name; either kind
+        # may declare `params`. A root step (map or expand) reads no
+        # payload — it mints its own lane(s) from its params/generator.
+        args: List[Any] = []
         if not step.depends_on:
-            # A root expand (itself a source) and a source-less root map both
-            # read no payload — they receive only params. A source-backed root
-            # map loads its scanned payload positionally.
-            if step.shape == "expand" or step.name not in step_sources:
-                args = []
-            else:
-                assert decision.item is not None
-                args = [step_sources[step.name].load(decision.item)]
             kwargs = {}
         elif step.shape == "reduce":
-            args = []
             kwargs = {
                 dep: {
-                    lane: _resolve_parent_value(
-                        ref, step_sources, params, memo
-                    )
+                    lane: _resolve_parent_value(ref, params, memo)
                     for lane, ref in decision.parent_mats[dep].items()
                 }
                 for dep in step.depends_on
             }
         else:
-            args = []
             kwargs = {
                 dep: _resolve_parent_value(
-                    decision.parent_mats[dep], step_sources, params, memo
+                    decision.parent_mats[dep], params, memo
                 )
                 for dep in step.depends_on
             }

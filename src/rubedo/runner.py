@@ -43,13 +43,13 @@ from .planning import (
     ROOT_LANE,
     EphemeralRef,  # noqa: F401  (re-exported: part of the runner's public surface)
     MatRef,  # noqa: F401
+    RootItem,
     StepDecision,  # noqa: F401
     _plan_step,
     _step_accepts_params,
     topological_sort,
 )
 from .spec import PipelineSpec, StepSpec, definition
-from .sources import Source, SourceItem, coerce_source
 from .store import init_store
 from .util import utcnow_iso
 
@@ -102,62 +102,37 @@ def _run_heartbeat(run_id: str):
         stop.set()
 
 
-def _resolve_sources(pipeline: PipelineSpec, source) -> Dict[str, Source]:
-    """{name: Source} for this run, applying a single-source override."""
-    if source is not None:
-        if len(pipeline.sources) != 1:
-            raise ValueError(
-                "source= override is only valid for single-source pipelines"
-            )
-        return {next(iter(pipeline.sources)): coerce_source(source)}
-    return dict(pipeline.sources)
+def _root_step_names(pipeline: PipelineSpec) -> List[str]:
+    """The pipeline's roots (no `depends_on`) — the producers that mint its
+    initial lanes, sorted for a stable, deterministic identity string."""
+    return sorted(s.name for s in pipeline.steps if not s.depends_on)
 
 
-def _run_source_id(sources: Dict[str, Source]) -> str:
-    """Combined identity of all a run's sources (one id for a single source)."""
-    return ",".join(sorted(s.id for s in sources.values()))
+def _run_source_id(pipeline: PipelineSpec) -> str:
+    """Combined identity of a run's roots (one name for a single root)."""
+    return ",".join(_root_step_names(pipeline))
 
 
-def _source_name_for(pipeline: PipelineSpec, sources: Dict[str, Source], step):
-    """The source name a step reads, or None if it reads none.
+def _scanned_for(step: StepSpec) -> List[RootItem]:
+    """The synthetic items feeding a source-less map root's plan.
 
-    Dependent steps, root *expand* steps (themselves sources), and *source-less*
-    root maps (which mint their own single lane) read nothing.
-    """
-    if step.depends_on or step.shape == "expand":
-        return None
-    if not sources:
-        return None
-    return step.source if step.source is not None else next(iter(sources))
-
-
-def _scanned_for(
-    step: StepSpec, sname: Optional[str], items_by_source: Dict[str, list]
-) -> list:
-    """The items feeding one step's plan.
-
-    A source-backed step gets its source's scan; a source-less non-expand root
-    mints a single synthetic ROOT_LANE item (its input is a constant, so it
-    runs once and then reuses); everything else (dependent steps, root expands)
+    A non-expand root mints a single synthetic '@root' item (its input is a
+    constant, so it runs once and then reuses); everything else (dependent
+    steps, root expands — which yield their own lanes via the generator)
     gets nothing.
     """
-    if sname:
-        return items_by_source[sname]
     if not step.depends_on and step.shape != "expand":
-        return [SourceItem(coordinate=ROOT_LANE, content_hash=ROOT_LANE)]
+        return [RootItem(coordinate=ROOT_LANE, content_hash=ROOT_LANE)]
     return []
 
 
-def _resolve_invocation(pipeline: PipelineSpec, source, params):
-    """Shared by run() and plan(): source coercion and param validation."""
-    if source is not None:
-        source = coerce_source(source)
-
+def _resolve_invocation(pipeline: PipelineSpec, params):
+    """Shared by run() and plan(): params validation."""
     if pipeline.params_model:
         params = pipeline.params_model.model_validate(params or {}).model_dump(
             mode="json"
         )
-    return pipeline, source, params
+    return pipeline, params
 
 
 def _deep_eligible(step: StepSpec) -> bool:
@@ -204,9 +179,6 @@ def _run_segment(
     ctx: _RunContext,
     seg_steps: List[StepSpec],
     pipeline: PipelineSpec,
-    sources: Dict[str, Source],
-    items_by_source: Dict[str, list],
-    step_sources: Dict[str, Source],
     params: Optional[dict],
     params_hash: str,
     force: bool,
@@ -267,7 +239,6 @@ def _run_segment(
             _process_decision,
             step,
             decision,
-            step_sources,
             params,
             accepts[step.name],
             params_hash,
@@ -279,11 +250,10 @@ def _run_segment(
 
     def plan_cells(step: StepSpec, lanes: Optional[List[str]]) -> None:
         """Plan a step (whole, or one lane's cell) and act on the decisions."""
-        sname = _source_name_for(pipeline, sources, step)
         decisions = _plan_step(
             session,
             step,
-            _scanned_for(step, sname, items_by_source),
+            _scanned_for(step),
             ctx.coord_step_mats,
             params_hash,
             force,
@@ -464,7 +434,6 @@ class RunPlan:
 
 def plan(
     pipeline: PipelineSpec,
-    source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
     force: bool = False,
@@ -475,6 +444,10 @@ def plan(
     "execute" means the step function would run for that coordinate;
     "pending" means the answer depends on an upstream execution whose output
     (and therefore this coordinate's address) is unknowable without running.
+    A root *expand* step (`@source`) always plans as one "execute" — it has
+    no parent to cache its enumeration against, so its lanes are unknowable
+    until it actually runs (a second `plan()` sees them via the expand
+    anchor without re-running the generator).
 
     home, if given, points the ledger/object store at a custom root instead
     of the default `.rubedo`/RUBEDO_HOME (see notes/TODO.md item 1).
@@ -484,10 +457,8 @@ def plan(
     if home is not None:
         _init_home(home)
 
-    pipeline, source, params = _resolve_invocation(pipeline, source, params)
-    sources = _resolve_sources(pipeline, source)
+    pipeline, params = _resolve_invocation(pipeline, params)
     topo_steps = topological_sort(pipeline)
-    items_by_source = {name: src.scan() for name, src in sources.items()}
     params_hash = hash_json(params or {})
 
     items: List[PlannedCoordinate] = []
@@ -497,11 +468,10 @@ def plan(
     with get_session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
-            sname = _source_name_for(pipeline, sources, step)
             decisions = _plan_step(
                 session,
                 step,
-                _scanned_for(step, sname, items_by_source),
+                _scanned_for(step),
                 coord_step_mats,
                 params_hash,
                 force,
@@ -530,7 +500,7 @@ def plan(
 
     return RunPlan(
         pipeline_id=pipeline.id,
-        source_id=_run_source_id(sources),
+        source_id=_run_source_id(pipeline),
         items=items,
         counts=counts,
         warnings=plan_warnings,
@@ -539,7 +509,6 @@ def plan(
 
 def run(
     pipeline: PipelineSpec,
-    source: Optional[Source | str] = None,
     *,
     params: Optional[dict] = None,
     workers: Optional[int] = None,
@@ -563,10 +532,9 @@ def run(
     reduce/join (and, for now, expand and multi-parent maps) still
     synchronize on all lanes.
     """
-    pipeline, source, params = _resolve_invocation(pipeline, source, params)
+    pipeline, params = _resolve_invocation(pipeline, params)
     return run_pipeline(
         pipeline=pipeline,
-        source=source,
         params=params,
         workers=workers,
         force=force,
@@ -579,7 +547,6 @@ def run(
 
 def run_pipeline(
     pipeline: PipelineSpec,
-    source: Optional[Source | str] = None,
     workers: Optional[int] = None,
     force: bool = False,
     params: Optional[dict] = None,
@@ -593,7 +560,6 @@ def run_pipeline(
 
     Args:
         pipeline (PipelineSpec): The pipeline to run.
-        source (Optional[Source | str]): The source data.
         workers (Optional[int]): Number of parallel workers to use.
         force (bool): If True, forces re-execution of cached outputs.
         params (Optional[dict]): Run-level parameters.
@@ -615,17 +581,11 @@ def run_pipeline(
 
     from .progress import TerminalProgress
 
-    sources = _resolve_sources(pipeline, source)
     topo_steps = topological_sort(pipeline)
-    step_sources = {
-        s.name: sources[_source_name_for(pipeline, sources, s)]
-        for s in topo_steps
-        if _source_name_for(pipeline, sources, s) is not None
-    }
     ctx = _RunContext(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         pipeline_id=pipeline.id,
-        source_id=_run_source_id(sources),
+        source_id=_run_source_id(pipeline),
         totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
         by_step={
             s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
@@ -664,8 +624,6 @@ def run_pipeline(
                 progress_cb = prog.update
 
             try:
-                items_by_source = {name: src.scan() for name, src in sources.items()}
-
                 params_hash = hash_json(params or {})
                 memo = _RunMemo()
 
@@ -675,9 +633,6 @@ def run_pipeline(
                         ctx,
                         seg_steps,
                         pipeline,
-                        sources,
-                        items_by_source,
-                        step_sources,
                         params,
                         params_hash,
                         force,
