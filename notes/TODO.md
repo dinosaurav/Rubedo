@@ -8,11 +8,11 @@ for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
-recommended build order: **16** no longer waits on anything (**15** the
-rotation shipped 2026-07-13, **14** sources purge shipped 2026-07-13 — see
-the Done changelog); the editorial pair (**17**, **19**) slots
-anywhere (**20** ascii describe shipped 2026-07-13; **18** notes hygiene
-shipped 2026-07-13). The cloud
+recommended build order: the editorial pair (**17**, **19**) slots anywhere
+(**16** step ergonomics shipped 2026-07-13, **15** the rotation shipped
+2026-07-13, **14** sources purge shipped 2026-07-13, **20** ascii describe
+shipped 2026-07-13, **18** notes hygiene shipped 2026-07-13 — see the Done
+changelog). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
 touch the ledger/store; item 7 is its throughput story, not a
@@ -317,28 +317,6 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 16. Step ergonomics: auto-name, default version  **[design settled 2026-07-12; 15 shipped]**
-
-`@step` requires `name=` and `version=`; both should have defaults.
-
-**Settled decisions (owner design session 2026-07-12):** `name` defaults to
-`fn.__name__` (precedent: `@source` already does exactly this); `version`
-defaults to `"0"`; **`code="warn"` stays the default** — the drift warning
-is the teaching moment, and auto-recompute-on-edit stays a deliberate
-opt-in (`code="auto"`). Explicitly considered and rejected: pairing an
-omitted version with `code="auto"` (silent policy magic; owner 2026-07-12).
-
-**Trap:** duplicate auto-names (two steps from same-named fns) must still
-die loudly via the existing duplicate-name validation — the error message
-should say the name came from the function. Bare `@step` (no parens) should
-work if cheap, else `@step()` is fine — pick one and document it.
-
-Acceptance: `@step()\ndef parse(...)` yields a step named `parse`, version
-`"0"`; editing its body under the default warns (code-drift) rather than
-recomputes; duplicate function names error with a message naming both
-definitions; the tutorial's first example drops `name=`/`version=` and the
-versioning docs still introduce them immediately after.
-
 ## 17. Rewrite `notes/invariants.md` values-first  **[editorial; owner reviews draft before commit]**
 
 The eight invariants read as implementation facts and create weird
@@ -410,6 +388,27 @@ stay.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-13 — step ergonomics (item 16):** `@step`'s `name=`/`version=`
+both got defaults — `name` falls back to the decorated function's
+`__name__` (the precedent `@source` already set), `version` defaults to
+`"0"`, and `code="warn"` stays the default either way (an unbumped default
+version behaves exactly like a hand-picked one: edits warn on drift rather
+than silently recomputing). `@step` now works bare (`@step`, no parens) as
+well as called (`@step()`, `@step(version=...)`), mirroring `@source`'s
+existing `fn=None`-sentinel shape; all of `step()`'s validation moved
+inside the decorator closure so it can resolve the name from the function
+first. Duplicate step names — the realistic new collision, since two
+same-named functions in different modules now silently produce the same
+step name — die at `Pipeline._build_spec` construction time (moved up from
+only being caught deep in `planning.topological_sort`, which keeps its own
+simpler check as a backstop for direct `PipelineSpec` construction), naming
+both functions' `module.qualname`. Docs: the tutorial's first pipeline
+drops `name=`/`version=` entirely (every printed block re-run live and
+updated); `concepts/versioning.md` and `reference/api.md` teach the
+defaults where `version`/`code` are already explained. `tests/
+test_step_ergonomics.py`; `docs build --strict` clean. Commits `b82f1f1`
+(engine + tests), `7b5ee1d` (docs).
 
 **2026-07-13 — the rotation (item 15):** `PipelineBuilder` deleted;
 `pipeline(name=...)` now returns a `Pipeline` — the one object steps
