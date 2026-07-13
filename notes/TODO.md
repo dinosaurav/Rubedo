@@ -8,9 +8,9 @@ for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
-recommended build order: the simplification chain continues **15** → **16**
-(15 moves the decorator 16 touches; **14** sources purge shipped 2026-07-13
-— see the Done changelog); the editorial pair (**17**, **19**) slots
+recommended build order: **16** no longer waits on anything (**15** the
+rotation shipped 2026-07-13, **14** sources purge shipped 2026-07-13 — see
+the Done changelog); the editorial pair (**17**, **19**) slots
 anywhere (**20** ascii describe shipped 2026-07-13; **18** notes hygiene
 shipped 2026-07-13). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
@@ -317,63 +317,7 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 15. The rotation — one `Pipeline` object, verbs as methods  **[design settled 2026-07-12; 14 shipped]**
-
-Two ways to build (`pipeline(steps=[...])` vs `PipelineBuilder`) and
-free-function verbs (`run(p)`, `plan(p)`, `describe(p)`) collapse into one
-object. The dependency tree rotates so no lazy imports are needed: data
-stays a leaf, verbs live above the engine.
-
-**Settled decisions (owner design session 2026-07-12 — do not re-litigate):**
-
-- **`Pipeline` absorbs `PipelineBuilder`** (the class is deleted).
-  `pipeline(name=...)` returns a `Pipeline`; steps register via `@p.step` /
-  `@p.source` or the `steps=[...]` kwarg (both stay; `.build()` dies —
-  validation runs lazily on the first verb and is cached).
-- **Free `run()`/`plan()`/`describe()` are removed from the public API**
-  (not aliased, not deprecated — deleted from `rubedo.__init__`). The engine
-  keeps internal functions; `trace`/`invalidate`/`gc`/`Selection` stay free —
-  they are store-level, not pipeline-level.
-- **`id` dies; `name` is the identity.** One required arg:
-  `pipeline(name="count-lines")`. The ledger's `pipeline_id` column simply
-  stores the name (no column rename, no schema change); `Selection`'s
-  `pipeline:` term matches it. Renaming a pipeline orphans its history —
-  same as changing `id` today, acceptable pre-1.0.
-- **Settings live at construction, not per-run.** `schedule=` and `home=`
-  move from `run()`/`plan()` onto `pipeline(...)` (joining `retention=`,
-  `params_model=`). `run()` keeps only per-invocation things:
-  `p.run(params=None, force=False, progress=False)`; `p.plan(params=None,
-  force=False)`. If multiple-configs-per-pipeline demand appears later, the
-  pattern is an apply-settings/override method — parked, not built now.
-- **Module rotation:** `spec.py` stays pure data (StepSpec/PipelineSpec,
-  `step()`, `source()`, `definition()`); new `src/rubedo/pipeline.py` sits
-  *above* the engine (imports runner internals) and defines `Pipeline` +
-  the `pipeline()` factory; `runner.py` splits along its one clean seam —
-  segment machinery (`_run_segment`, topo partition, broad/deep) moves to
-  `src/rubedo/scheduler.py`, run/plan orchestration stays. The
-  all-ledger-writes-on-the-main-thread rule must be restated at the top of
-  both files. `planning.py` is not touched.
-
-**Trap (part of the spec):** (1) import direction is the whole point —
-`spec.py` must never import `pipeline.py`/`runner.py`; if you feel a lazy
-import coming, the code is in the wrong module. (2) The docs site
-(shipped 2026-07-12) and README teach `run(p)` — they must flip to
-`p.run()` in the same commit or the docs lie; ditto every test and example
-(tests hold the `pipeline(...)` return value already, so mostly a verb
-sweep). (3) `describe()`'s mermaid/text formats move as-is
-(`p.describe(format="mermaid")`); `definition()` snapshots must be
-byte-identical before/after the rotation so history and the dashboard
-don't fork.
-
-Acceptance: `from rubedo import run` raises ImportError; the quickstart is
-`p = pipeline(name=...)` / `@p.step` / `p.run()` and `examples/count_lines`
-reads that way; `rg "\brun\(p" src tests examples docs README.md` → zero
-hits; a definition snapshot recorded before the rotation is byte-identical
-to one recorded after (pin with a test against a fixture snapshot); ledger
-rows for a re-run over a pre-rotation store fully reuse; full verification
-checklist green; docs rebuilt with zero warnings.
-
-## 16. Step ergonomics: auto-name, default version  **[design settled 2026-07-12; with/after 15]**
+## 16. Step ergonomics: auto-name, default version  **[design settled 2026-07-12; 15 shipped]**
 
 `@step` requires `name=` and `version=`; both should have defaults.
 
@@ -466,6 +410,43 @@ stay.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-13 — the rotation (item 15):** `PipelineBuilder` deleted;
+`pipeline(name=...)` now returns a `Pipeline` — the one object steps
+register on (`@p.step`/`@p.source` or `steps=[...]`, both stay) and verbs
+live on as methods (`.run()`/`.plan()`/`.describe()`/`.definition()`); no
+more `.build()` — the `PipelineSpec` builds and validates lazily on first
+verb/`.spec` access and is cached. `id` is gone; `name` is the sole
+identity (the ledger's `pipeline_id` column stores it verbatim, no schema
+change). `schedule=`/`home=` moved from `run()`/`plan()` onto
+`pipeline(...)` construction, joining `retention=`/`params_model=`
+(retention's own validation stays eager, at `__init__`, since — unlike the
+step-list checks — it doesn't depend on steps registered later). Module
+rotation: `spec.py` is now pure data (`StepSpec`/`PipelineSpec`/`step()`/
+`source()`/`definition()` only) and never imports upward; new
+`src/rubedo/pipeline.py` sits above the engine and owns `Pipeline` +
+`pipeline()` + the moved validation; `runner.py` split along its one seam
+— segment machinery (`_partition_segments`/`_run_segment`, broad/deep,
+`_scanned_for`) moved to new `src/rubedo/scheduler.py`, run/plan
+orchestration stayed. `planning.py` untouched. `definition()`'s output is
+pinned byte-identical across the rotation by
+`tests/test_definition_snapshot.py` (recorded before, verified unchanged
+after — the JSON's `"id"` key is retained, mirroring `"name"`, for
+dashboard/history schema stability). Every test, example, and doc page
+swept from `run(p)`/`plan(p)`/`describe(p)`/`PipelineBuilder` to
+`p.run()`/`p.plan()`/`p.describe()`/`pipeline(...)`; live-verified against
+the pre-rotation `.rubedo` store (not wiped): `count_lines` Reused: 22/22,
+plus `newsroom`/`expand_feed`/`orders_rollup`/`github_health`/
+`gutenberg_stats`/`weather_advisory` all run clean (`graphify`/`hn_digest`/
+`pdf_digest` need `OPENROUTER_API_KEY`, swept but not executed). **Spec
+ambiguity found and resolved pragmatically:** the settled `p.run(params=
+None, force=False, progress=False)` signature omitted `workers=`/
+`progress_cb=` (heavily used by tests for determinism); kept both as
+per-invocation `Pipeline.run()` parameters — consistent with "run() keeps
+only per-invocation things," just not exhaustively enumerated. Commits
+`2edf4ed` (snapshot pin), `3280f67` (engine rotation), `3a1098f` (retention
+eager-validation fix), `471eb44` (test sweep), `5e98587` (examples sweep),
+`1bf31b4` (docs sweep).
 
 **2026-07-13 — ascii describe (item 20):** `describe(format="ascii")` —
 hand-rolled layered terminal DAG rendering in `spec.py` (depth = longest
