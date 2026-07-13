@@ -10,8 +10,9 @@ Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
 recommended build order: the simplification chain continues **15** → **16**
 (15 moves the decorator 16 touches; **14** sources purge shipped 2026-07-13
-— see the Done changelog); the editorial trio (**17**, **18**, **19**)
-slots anywhere (**20** ascii describe shipped 2026-07-13). The cloud
+— see the Done changelog); the editorial pair (**17**, **19**) slots
+anywhere (**20** ascii describe shipped 2026-07-13; **18** notes hygiene
+shipped 2026-07-13). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
 touch the ledger/store; item 7 is its throughput story, not a
@@ -417,20 +418,6 @@ Acceptance: `rg "invariant [0-9]" src tests notes docs AGENTS.md` resolves
 against the new document with no dangling numbers; docs build clean; owner
 signed off on the draft before the commit.
 
-## 18. Notes hygiene: kill obsolete design notes  **[editorial]**
-
-Delete `notes/unification-plan.md` (historical; git remembers; already
-unpublished from the docs site). Fix `notes/producer-model.md`: the
-`(subkey, value)` expand emit contract it describes was never built —
-shipped code mints plain `row-<hash>` lanes from bare yielded values
-(confirmed against `execution.py`/`planning.py`, 2026-07-12) — and its
-`manifest` references describe machinery that no longer exists. Item 14
-will obsolete more of it; do this item after 14 to sweep once.
-
-Acceptance: `rg -i manifest src tests notes docs README.md AGENTS.md` →
-zero hits outside the Done changelog; `producer-model.md` describes shipped
-behavior only (no "proposed" sections); `unification-plan.md` is gone.
-
 ## 19. Comment cleanup pass  **[editorial; owner drives style]**
 
 A pass over `src/`, `tests/`, and `examples/` replacing process-note
@@ -488,6 +475,21 @@ path from a root; virtual passthrough nodes route edges spanning layers;
 `tests/test_describe_ascii.py`); canvas >100 columns falls back to the
 `text` renderer; zero new dependencies; `ValueError` lists all three
 formats. Commit `1f117eb`.
+
+**2026-07-13 — notes hygiene (item 18):** `notes/unification-plan.md`
+deleted (historical; already unpublished from the docs site). Swept
+`notes/producer-model.md` for item-14 fallout: the never-built `(subkey,
+value)` expand emit contract corrected to the shipped bare-value/
+`row-<hash>` contract; every `Manifest`/`ManifestEntry` reference removed
+(that table, and the per-producer census it motivated, were both dropped
+before shipping — reworded as a "tried, then dropped" retrospective); the
+stale pre-build "What changes in the code" proposal section deleted
+(wrong on most bullets in hindsight); Sequencing step 4a rewritten from
+the deleted `pipeline(sources={...})`/`@step(source=)` API to the shipped
+multi-`@source`-root reality. `tests/test_run_status.py` comment reworded
+off the same dead "manifest" concept. Verified against `spec.py`/
+`planning.py`/`execution.py`; `rg -i manifest src tests notes docs
+README.md AGENTS.md` clean outside this changelog. Commit `404ee6c`.
 
 **2026-07-13 — sources purge (item 14):** `sources.py` deleted — ingestion
 is an `@source` (parentless expand) step, full stop. The `Source` protocol,
