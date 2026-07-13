@@ -242,7 +242,7 @@ rubedo gc --max-bytes 2GiB      # dry-run against a budget (oldest runs first)
 rubedo gc --max-bytes 2GiB --delete   # apply it
 ```
 
-Retention deletes **bytes, never facts** (invariant 7): a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove). [notes/retention.md](notes/retention.md) is the full model — policies, the demote/sweep phases, guarantees, and the recompute trade-off.
+Retention deletes **bytes, never facts**: a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove). [notes/retention.md](notes/retention.md) is the full model — policies, the demote/sweep phases, guarantees, and the recompute trade-off.
 
 The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors:
 
@@ -265,7 +265,7 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 ## Design
 
-The ledger is **append-only** and enforced at the ORM layer: committed outputs are immutable, every liveness transition is recorded, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the eight invariants the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
+The ledger is **append-only** and enforced at the ORM layer: committed outputs are immutable, every liveness transition is recorded, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
 
 ## Project status
 

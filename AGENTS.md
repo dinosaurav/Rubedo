@@ -111,9 +111,9 @@ accurate and load-bearing; keep them updated when behavior changes.
   mutable columns anywhere are projections (`Run` lifecycle columns,
   `Materialization.is_live`/`refreshed_at`). Tests that must backdate rows
   use raw SQL deliberately. A `before_commit` session guard (the pairing
-  guard) additionally enforces invariant 8: every `is_live`/`refreshed_at`
+  guard) additionally enforces that every `is_live`/`refreshed_at`
   flip must ship a `materialization_lifecycle` row for that materialization in
-  the same transaction. It accumulates across flushes (the supersede path
+  the same transaction (see `notes/invariants.md`). It accumulates across flushes (the supersede path
   flushes a demotion before its lifecycle row exists) and skips savepoint
   releases (`in_nested_transaction()`).
 - `src/rubedo/gc.py` — retention GC: demote (paired `pruned` lifecycle

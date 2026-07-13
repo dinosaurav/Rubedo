@@ -33,7 +33,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 
 ## Understand the model
 
-- **[The model](concepts/model.md)** — lanes, addresses, the ledger, and the eight invariants.
+- **[The model](concepts/model.md)** — lanes, addresses, the ledger, and the promises it keeps.
 - **[Shapes](concepts/shapes.md)** — `map`, `reduce`, `expand`, `join`.
 - **[Sources](concepts/sources.md)** — folders, CSV rows, SQL tables, multi-source pipelines.
 - **[Code changes & versioning](concepts/versioning.md)** — what an edit means to the cache.

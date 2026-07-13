@@ -88,7 +88,8 @@ raises `ImmutabilityError` on update/delete for ledger tables). It records:
   `superseded` / `refreshed` / `invalidated` / `pruned`). `is_live` and
   `refreshed_at` on `Materialization` are just mutable *projections* of this
   log — a commit-time session guard rejects any flip that doesn't ship a
-  paired lifecycle row in the same transaction (invariant 8).
+  paired lifecycle row in the same transaction (see
+  [`../notes/invariants.md`](../notes/invariants.md)).
 - **Materialization edges** — lineage: which output(s) a given output was
   derived from. This is what `trace()` walks.
 
@@ -154,29 +155,35 @@ step's committed materializations forward as the next step's parent lookup.
 See [../guides/inspecting-runs.md](../guides/inspecting-runs.md) for reading
 the output of both.
 
-## The eight invariants, plainly
+## The promises, plainly
 
-1. **No materialization without a successful commit.** A row only exists if
-   its output actually landed.
-2. **A committed materialization never changes.** Fix forward with a new
-   generation, never edit one in place.
-3. **A dying worker corrupts nothing committed.** Execution is DB-free, so a
-   killed process leaves no half-written ledger state.
-4. **"Already done" is checked against the ledger, not memory.** Skip-if-exists
-   is a materialization lookup, not a runtime cache.
-5. **You see current state through views, never raw storage.** Users
-   enumerate live outputs, not the object store directly.
-6. **Run status lives on the run–coordinate edge, not on the bytes.** The
-   same output can be `created` in one run and `reused` in the next; that's
-   a fact about the run, not the object.
-7. **Invalidation and retention delete facts never, bytes sometimes.**
-   Invalidation is a logical tombstone. Retention GC (see
+Everything above exists to keep four promises (the full guarantee-level
+detail lives in [`../notes/invariants.md`](../notes/invariants.md)):
+
+1. **Never pay twice for the same computation.** "Already done" is checked
+   against the ledger, not memory — skip-if-exists is a materialization
+   lookup keyed on the deterministic output address, not a runtime cache,
+   and the generations protocol extends this across time so identical
+   bytes always reuse or restore rather than recompute.
+2. **Never lie about what happened.** No materialization row exists unless
+   its output actually landed; a committed materialization never changes in
+   place (fix forward with a new generation); a dying worker corrupts
+   nothing committed, because execution is DB-free; users see current state
+   through views, never raw storage; run status lives on the
+   run–coordinate edge, not on the bytes (the same output can be `created`
+   in one run and `reused` in the next); and every liveness flip ships its
+   lifecycle row in the same transaction — a commit-time guard enforces
+   this, so there is no code path that can flip `is_live` silently.
+3. **Order and parallelism never change results.** Output addresses come
+   from `step`/`version`/`input_hash`(/`params`/`code`), never from
+   wall-clock order or worker assignment, so `schedule="broad"` vs
+   `"deep"` and `executor="thread"` vs `"process"` always converge on
+   identical ledger rows.
+4. **Bytes are disposable, facts are not.** Invalidation and retention
+   delete facts never, bytes sometimes: retention GC (see
    [../guides/retention.md](../guides/retention.md)) demotes and eventually
    deletes *object bytes*, but the ledger row, the lineage, and the record
    of the deletion itself (`object_reclamations`) all survive forever.
-8. **Every liveness flip ships its lifecycle row in the same transaction.**
-   A commit-time guard enforces this — there is no code path that can flip
-   `is_live` silently.
 
 ## Where to go next
 

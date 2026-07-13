@@ -148,8 +148,9 @@ core must never leak into the simple case.
    removed lane's materializations stay `is_live` and unreferenced. This is
    harmless (nothing computes against them) and actually *beneficial*: a
    removed lane that later returns with the same content re-addresses the live
-   materialization and restores for free. It's also consistent with invariant
-   7 (never silently delete history). The only cost is storage growth under
+   materialization and restores for free. It's also consistent with the
+   bytes-are-disposable-facts-are-not promise (`notes/invariants.md`) — history
+   is never silently deleted. The only cost is storage growth under
    heavy churn — a deferrable, opt-in retention/GC policy (age-out or
    ref-count), never a core concern.
 3. **Fan-out bound — RESOLVED: no limit, by design.** An `expand` may yield

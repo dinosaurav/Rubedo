@@ -82,7 +82,8 @@ the ledger:
 1. **Demote.** Every live materialization of the pipeline that falls
    outside the keep-set gets `is_live=False`, each flip paired with a
    `pruned` lifecycle row in the same transaction (the same append-only
-   bookkeeping `invalidate()` uses — invariant 8 enforces the pairing).
+   bookkeeping `invalidate()` uses — a commit-time pairing guard enforces
+   it; see [`../notes/invariants.md`](../notes/invariants.md)).
 2. **Sweep.** A physical object's bytes are deleted only when **every**
    materialization referencing that content hash — across *all* pipelines,
    *all* steps, all history — is now non-live. Because the store dedupes
@@ -91,7 +92,7 @@ the ledger:
    deletion is logged in the append-only `object_reclamations` table
    *before* the file is unlinked.
 
-## Invariant 7: bytes never facts
+## Bytes are disposable, facts are not
 
 Retention deletes **bytes**, never **facts**. A demoted or swept
 materialization keeps its ledger row, its lineage edges, and its index

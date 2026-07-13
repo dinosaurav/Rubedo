@@ -62,8 +62,8 @@ pipeline's last N terminal runs (via `RunCoordinateStatus`), plus every
 expand cache anchor (see below). Every still-live materialization of that
 pipeline *outside* the keep-set is flipped `is_live=False`, each flip
 paired with a `pruned` lifecycle row in the same transaction — the same
-append-only bookkeeping as invalidation and supersede (invariant 8; the
-pairing guard enforces it mechanically).
+append-only bookkeeping as invalidation and supersede (the pairing guard
+enforces it mechanically; see `notes/invariants.md`).
 
 **Sweep.** A physical object's bytes are deleted only when **every**
 materialization referencing that content hash — across all pipelines, all
