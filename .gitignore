@@ -59,6 +59,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Private notes (owner-only strategy docs, never published)
+notes/private/
+
 # Environments and Secrets
 .env
 .env.local

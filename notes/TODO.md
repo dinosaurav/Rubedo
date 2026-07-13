@@ -352,7 +352,7 @@ Acceptance: no comment in `src/` references a TODO item number or narrates
 a past change; constraint comments (invariant references, trap guards)
 stay.
 
-## 20. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/cloud-control-plane.md]**
+## 20. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/private/cloud-control-plane.md (gitignored, owner-local)]**
 
 Declares a pipeline's environment surface so step code is byte-identical
 local and cloud: `secrets=` names vault-injected, log-masked values (API
@@ -395,8 +395,9 @@ passes once declared; full verification checklist green.
 
 - **Cloud control plane** — hosted execution, deploy/build service,
   scheduler, secrets vault, shared team cache, dashboard write surfaces.
-  Spine ratified 2026-07-13; full design in `notes/cloud-control-plane.md`
-  (services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
+  Spine ratified 2026-07-13; full design in
+  `notes/private/cloud-control-plane.md` (gitignored, owner-local —
+  services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
   engine-side slice is item 20. Remaining sessions before building: vault
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
@@ -429,19 +430,28 @@ passes once declared; full verification checklist green.
   promise, this dies; if that promise is softened, revisit whether
   `materialization_lifecycle` + the pairing guard could shrink
   (**DANGEROUS** — touches invariant 8, GC safety, and crash recovery).
-- **Sinks / export verb** (the return leg of the refinement loop:
-  CSV/Sheet in → refined batch back out). A sink is **not a step** —
-  steps are cached, non-idempotency-protected facts; export is an
-  idempotent side effect that should re-run freely. Shape: a ledger
-  projection at the server's altitude — `p.export(select=..., to=...)`
-  / `rubedo export` reads live materializations via `selection.py`,
-  joins on indexed fields as the row key, writes out (CSV/Parquet
-  trivially; Google Sheets via gspread, Excel via openpyxl as extras).
-  Incremental sync falls out of content-addressing: record last hash
-  written per (target, lane), push only changed rows — miniature
-  reverse ETL (Census/Hightouch pattern). Owner: wants this, not for
-  all users — a verb at the edge, never a concept in the engine
-  (2026-07-13).
+- **Sinks** (the return leg of the refinement loop: CSV/Sheet in →
+  refined batch back out; Sheets via gspread, Excel via openpyxl as
+  extras, CSV/Parquet trivially). Belongs **in code, in the pipeline
+  file** — settled. The open fork is **step vs verb**, and it's the
+  real design session. Owner leans *step* for simplicity
+  (2026-07-13): a terminal reduce that writes the target gets
+  change-detection free from the planner (inputs unchanged → reuse →
+  no write — the incremental-sync diff with zero new concepts), shows
+  delivery in `describe()`/lineage, and is in fact writable today
+  with no new machinery. The tension to resolve before blessing it:
+  the ledger is trustworthy because it describes a store the engine
+  owns; a Sheet is mutable external state, so a *cached* "delivered"
+  can silently go false (hand-edited/replaced target won't re-write
+  without a version bump), delivery failures conflate with refinement
+  failures in run outcomes, and the sink's materialization is a
+  receipt, not data — entering GC/retention/lineage machinery built
+  for data. Candidate synthesis: declared in the pipeline and drawn
+  in the DAG like a step, but diffs against the ledger's own record
+  (not assumed target state) and logs delivery as events rather than
+  materializations. Verb alternative (`p.export(select=..., to=...)`
+  as a ledger projection at the server's altitude) stays on the table
+  as the re-assertable/repair-friendly shape.
 - **Step-version diff.** The ledger already holds *both generations*
   across a version bump — a `diff("step", "v1", "v2")` showing per-lane
   output changes is prompt A/B testing as a read-only ledger query
