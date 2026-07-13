@@ -156,7 +156,8 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     assert survivors == {"scan", "extract", "summarize"}
     assert sum(1 for _, (_, live) in liveness.items() if live) == 4
 
-    # Every flip ships exactly one "invalidated" lifecycle row (invariant 8).
+    # Every flip ships exactly one "invalidated" lifecycle row (the pairing
+    # guard requires it — see notes/invariants.md).
     assert _invalidated_lifecycle_counts(flipped) == {m: 1 for m in flipped}
 
     # Lazy heal: the next run recomputes exactly the invalidated set; both

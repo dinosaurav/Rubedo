@@ -127,8 +127,9 @@ def test_materialization_liveness_is_the_only_legal_update():
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.is_live = False
-        # Projection column is allowed, but invariant 8 requires the flip to
-        # ship a lifecycle row in the same transaction (pairing guard).
+        # Projection column is allowed, but the pairing guard requires the
+        # flip to ship a lifecycle row in the same transaction (see
+        # notes/invariants.md).
         session.add(
             MaterializationLifecycle(
                 materialization_id=mat.id,

@@ -1,5 +1,28 @@
 # Rubedo Invariants and Vocabulary
 
+## The promises
+
+Everything below exists to keep four promises. Read these first; the
+vocabulary and guarantees that follow are how the promises are kept, not the
+point in themselves.
+
+1. **Never pay twice for the same computation.** If Rubedo has already
+   produced a given output for a given input, it will find and hand back
+   that output instead of recomputing — even for a non-idempotent step
+   (an LLM call, a scrape) where recomputing would be wasteful or wrong.
+2. **Never lie about what happened.** What the ledger says ran, succeeded,
+   or is currently live is always true, and it stays true after crashes,
+   concurrent runs, and time. If something didn't actually commit, no row
+   claims it did; if a fact was ever true, no later write erases it.
+3. **Order and parallelism never change results.** The same pipeline over
+   the same inputs produces the same addresses and the same ledger rows
+   whether steps run on one thread or many, one process or a pool, in
+   whatever order the scheduler happens to pick.
+4. **Bytes are disposable, facts are not.** Storage can always be
+   reclaimed under pressure or a retention policy — but doing so only ever
+   deletes object bytes, never the record of what ran, what it produced,
+   or that the deletion happened.
+
 ## Vocabulary
 
 **Object/output bytes:**
@@ -28,10 +51,13 @@ stable across scans. A coordinate is **content-addressed by default**
 added); declare `key=` for a stable, legible coordinate (an edit then reads as
 "changed" — same coordinate, new hash — and a non-unique declared key is an
 error, not a silent suffix). It may also be **minted mid-DAG**: `expand`
-yields `parent/subkey` lanes, `join` mints `a|b|…` pair lanes. It is *not* the
-identity of work (that is the content-addressed output address) and not the
-primary search handle (`index=`) — for file sources it merely coincides with
-the path.
+mints content-addressed `row-<hash>` child lanes, keyed on the child's own
+content rather than on parent+position — an edit to one child never
+renumbers its siblings, and identical children (even from different
+parents) collapse to one lane; `join` mints `a|b|…` pair lanes. It is *not*
+the identity of work (that is the content-addressed output address) and not
+the primary search handle (`index=`) — for file sources it merely coincides
+with the path.
 
 **Searching:**
 Two channels, one home each: lane keys for source-shaped questions
@@ -94,9 +120,9 @@ append-only `materialization_lifecycle` table (invalidated / restored /
 superseded / refreshed rows) is the truth about every liveness and freshness
 transition. Every `is_live`/`refreshed_at` change must be accompanied by a
 lifecycle row for the same materialization in the same transaction — a session
-guard enforces this at commit (see invariant 8). Similarly, Run's status
-columns are a projection of the `run_events` log — and they are
-**terminal-only** (`completed` / `completed_with_failures` / `failed`; NULL
+guard enforces this at commit (see guarantee 2.6, under "never lie about what
+happened," below). Similarly, Run's status columns are a projection of the
+`run_events` log — and they are **terminal-only** (`completed` / `completed_with_failures` / `failed`; NULL
 while in flight). "running" is never stored: it is a present-tense claim no
 durable row can keep truthfully (a killed process would leave it lying
 forever). Readers derive `running`/`interrupted` from `last_heartbeat_at`, an
@@ -106,21 +132,79 @@ pairing — presence is about *now*, not history, and nothing durable is ever
 derived from it. A machine that sleeps and wakes resumes beating, so an
 "interrupted" run flips back to "running" on its own.
 
-## Core Invariants
+## Guarantees, by promise
 
-1. No materialization row exists unless the output committed successfully.
-2. A committed materialization is immutable.
-3. Workers may die at any point without corrupting committed state.
-4. Skip-if-exists checks materialization existence, not worker memory.
-5. Users enumerate through current views (the latest run's active lanes), never raw object storage.
-6. Run status lives on the run-coordinate edge, not on output bytes.
-7. Invalidation never silently deletes historical facts. Retention GC deletes
-   *bytes*, never *facts*: it demotes materializations (a paired `pruned`
-   lifecycle row) and sweeps object files that no live materialization
-   references, but never removes a ledger row — the record of what ran, and of
-   the deletion itself (`object_reclamations`), always survives.
-8. Ledger tables are append-only, enforced by ORM guards; the only legal
-   updates anywhere are the projection columns (Run lifecycle,
-   Materialization.is_live). Every `is_live`/`refreshed_at` flip must ship a
-   `materialization_lifecycle` row for that materialization in the same
-   transaction — a `before_commit` session guard rejects an unpaired flip.
+Each promise above is kept by one or more concrete guarantees, numbered
+`<promise>.<guarantee>` (e.g. `2.6` is the sixth guarantee under promise 2) so
+a reference always carries which promise it serves. These numbers are prose
+cross-reference identifiers for *this document only* — code never names them;
+comments and error messages describe the constraint directly and, at most,
+point at this file in general terms.
+
+### 1 — Never pay twice for the same computation
+
+- **(1.1) "Already done" is checked against the ledger, not memory.**
+  Skip-if-exists is a materialization lookup keyed on the deterministic
+  output address, not a runtime cache — so it survives process restarts,
+  new workers, and separate runs equally.
+- **(1.2)** Content-addressing does the rest of the work implicitly: an
+  output address is `hash(step, code_version, input_hash[, params][, code])`
+  — identical inputs always land on the same address, so a cache hit is
+  found by construction, not by a lookup table someone has to maintain.
+- **(1.3)** The generations protocol extends this across time, not just
+  within a run: identical bytes reuse or restore the existing row; only
+  genuinely different bytes supersede it (`ledger.py`'s
+  `_commit_materialization`). A pruned lane whose input later reappears with
+  the same content restores the old row for free instead of recomputing.
+
+### 2 — Never lie about what happened
+
+- **(2.1) No materialization row exists unless the output committed
+  successfully.** A row is never created optimistically or speculatively.
+- **(2.2) A committed materialization is immutable.** Facts about a
+  generation, once true, are never edited in place — a change means a new
+  generation, never a rewritten old one.
+- **(2.3) Workers may die at any point without corrupting committed state.**
+  Execution is DB-free; a killed process leaves no half-written ledger row.
+- **(2.4) Users enumerate through current views (the latest run's active
+  lanes), never raw object storage.** What you're shown is always ledger
+  truth, never an accidental read of bytes the ledger doesn't currently
+  vouch for.
+- **(2.5) Run status lives on the run-coordinate edge, not on output
+  bytes.** The same output can be `created` in one run and `reused` in
+  the next — that's a fact about the run, not a property of the object,
+  and the ledger keeps them separate rather than conflating them.
+- **(2.6) Ledger tables are append-only, enforced by ORM guards; the only
+  legal updates anywhere are the projection columns (`Run` lifecycle,
+  `Materialization.is_live`/`refreshed_at`).** Every `is_live`/`refreshed_at`
+  flip must ship a `materialization_lifecycle` row for that materialization
+  in the same transaction — a `before_commit` session guard (the pairing
+  guard) rejects an unpaired flip. This is the guarantee that makes the
+  rest of this section mechanically true rather than a design intention:
+  without it, the ledger could go stale-but-silent.
+
+### 3 — Order and parallelism never change results
+
+- **(3.1)** Output addresses are computed from `step`, `version`,
+  `input_hash`, and optionally `params`/`code` — never from wall-clock
+  order, thread scheduling, or worker assignment. Two runs of the same
+  pipeline over the same inputs always produce the same addresses
+  regardless of how the work was scheduled.
+- **(3.2)** `schedule="broad"` (stage-at-a-time) and `schedule="deep"`
+  (pipelining consecutive ≤1-parent map steps through a lane) are a
+  scheduling choice only — the resulting ledger rows are identical either
+  way.
+- **(3.3)** `executor="thread"` vs `executor="process"` changes how step
+  functions are run, never what address or content they produce.
+- **(3.4)** `reduce`/`join` fan-in is keyed on which lanes survived (by
+  content, via `group_key`/`join_on`), never on the order lanes happened to
+  finish in.
+
+### 4 — Bytes are disposable, facts are not
+
+- **(4.1) Invalidation never silently deletes historical facts. Retention
+  GC deletes *bytes*, never *facts*:** it demotes materializations (a
+  paired `pruned` lifecycle row) and sweeps object files that no live
+  materialization references, but never removes a ledger row — the
+  record of what ran, and of the deletion itself
+  (`object_reclamations`), always survives.

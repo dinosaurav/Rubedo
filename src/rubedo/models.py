@@ -298,7 +298,7 @@ for _model, _allowed in _PROJECTION_COLUMNS.items():  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# Pairing-rule guard (invariant 8)
+# Pairing-rule guard (see notes/invariants.md)
 #
 # is_live/refreshed_at are legal to update (above), but every such flip must
 # ship a materialization_lifecycle row in the same transaction — otherwise the
@@ -357,7 +357,7 @@ def _assert_liveness_pairing(session):
         raise ImmutabilityError(
             f"materialization(s) {sorted(missing)} changed is_live/refreshed_at "
             f"without a materialization_lifecycle row in the same transaction "
-            f"(invariant 8: every liveness transition is logged)"
+            f"(every liveness transition must be logged; see notes/invariants.md)"
         )
 
 

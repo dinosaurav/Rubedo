@@ -1,4 +1,4 @@
-"""Pairing-rule guard (invariant 8): every is_live/refreshed_at flip must ship
+"""Pairing-rule guard (notes/invariants.md): every is_live/refreshed_at flip must ship
 a materialization_lifecycle row in the same transaction. The guard is enforced
 at commit (not flush) because the supersede path flushes a demotion before its
 lifecycle row can name the replacement.
@@ -101,7 +101,7 @@ def test_is_live_flip_without_lifecycle_row_raises():
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.is_live = False  # a liveness transition with no lifecycle row
-        with pytest.raises(ImmutabilityError, match="invariant 8"):
+        with pytest.raises(ImmutabilityError, match="materialization_lifecycle row in the same transaction"):
             session.commit()
         session.rollback()
 
@@ -115,7 +115,7 @@ def test_refreshed_at_flip_without_lifecycle_row_raises():
     with get_session() as session:
         mat = session.query(Materialization).first()
         mat.refreshed_at = utcnow_iso()
-        with pytest.raises(ImmutabilityError, match="invariant 8"):
+        with pytest.raises(ImmutabilityError, match="materialization_lifecycle row in the same transaction"):
             session.commit()
         session.rollback()
 
@@ -154,7 +154,7 @@ def test_lifecycle_row_for_a_different_materialization_does_not_satisfy_the_guar
                 created_at=utcnow_iso(),
             )
         )
-        with pytest.raises(ImmutabilityError, match="invariant 8"):
+        with pytest.raises(ImmutabilityError, match="materialization_lifecycle row in the same transaction"):
             session.commit()
         session.rollback()
 

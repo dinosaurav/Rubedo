@@ -13,9 +13,10 @@ run through the same two phases:
 
   demote  Flip every still-live materialization of a pipeline that falls
           *outside* the keep-set to is_live=False, with a paired
-          `pruned` lifecycle row (invariant 8 enforces the pairing).
+          `pruned` lifecycle row (the pairing guard enforces this — see
+          notes/invariants.md).
           Ledger rows are never deleted — retention removes *bytes*, never
-          *facts* (invariant 7).
+          *facts* (same document).
   sweep   Delete an object file only when *every* materialization referencing
           it, across *all* pipelines, is now non-live (du.py's reclaimable
           rule — the shared-object trap: one live reference anywhere keeps the
@@ -404,7 +405,7 @@ def _apply(
                 created_at=utcnow_iso(),
             )
         )
-    session.commit()  # pairing guard (invariant 8) validates the pruned rows
+    session.commit()  # pairing guard validates the pruned rows (notes/invariants.md)
     for content_hash, _ in reclaimed:
         try:
             os.remove(_get_object_path(content_hash))
