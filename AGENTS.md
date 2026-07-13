@@ -15,8 +15,9 @@ accurate and load-bearing; keep them updated when behavior changes.
   schema change (new/removed *column* — new tables are fine, create_all
   handles them): `rm -rf .rubedo/rubedo.sqlite .rubedo/objects
   .rubedo/staging`, then repopulate by running
-  `uv run python examples/count_lines/count_lines.py` twice (expect Created: 15 then
-  Reused: 15). Say so in the commit message.
+  `uv run python examples/count_lines/count_lines.py` twice (expect Created: 22 then
+  Reused: 22 — 7 files x 3 steps + 1 reduce; TODO 14 made the source root's
+  own per-lane commit count too). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check src/rubedo/ tests/ examples/`,
   `uv run mypy src/rubedo`, `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the

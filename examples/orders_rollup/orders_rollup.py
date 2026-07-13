@@ -1,16 +1,16 @@
-"""Roll up orders straight from a SQL table with TableSource.
+"""Roll up orders straight from a SQL table with a @p.source recipe.
 
     orders table ─▶ classify ─▶ rollup (reduce)
-      (streamed)    (index)
+                    (index)
 
 This one is self-contained: it creates a small SQLite "orders" database in your
 temp dir, then runs a Rubedo pipeline over it. Each row is a coordinate.
 
-TableSource is used in streaming mode (batch_size=100): rows are read in
-server-side chunks and payloads are fetched lazily per lane, so the whole table
-never has to sit in memory — the switch you'd flip for a table too big to pull
-in one query. Because batch_size isn't part of a source's identity, you can turn
-streaming on or off without invalidating anything.
+The `orders` source is a plain SELECT loop (TODO 14: no source class, no
+batch_size streaming mode — a table recipe is just a root
+`@step(shape="expand")` yielding one dict per row, buffered like any other
+expand for v1; see docs/concepts/sources.md for the pattern on a table too
+big to pull in one query).
 
 Run it:
 
