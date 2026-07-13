@@ -41,7 +41,7 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
         )
 
     roots = sorted(s.name for s in spec.steps if not s.depends_on)
-    lines = [f"Pipeline '{spec.id}' — roots: {', '.join(roots)}"]
+    lines = [f"Pipeline '{spec.name}' — roots: {', '.join(roots)}"]
     for s in topo:
         deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
         policies = []
@@ -246,4 +246,4 @@ def _describe_ascii(spec: PipelineSpec, topo: List[StepSpec]) -> str:
         canvas_rows.extend(conn_rows)
 
     body = "\n".join("".join(row).rstrip() for row in canvas_rows)
-    return f"Pipeline '{spec.id}'\n{body}"
+    return f"Pipeline '{spec.name}'\n{body}"

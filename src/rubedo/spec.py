@@ -77,8 +77,12 @@ class PipelineSpec:
     every run — see `@source`, sugar for exactly this); a `shape="map"` root
     mints a single lane from its params (or a constant). A pipeline may
     declare several roots — `join` doesn't care that its parents are roots.
+
+    `name` is the pipeline's sole identity (there is no separate `id`): the
+    ledger's `pipeline_id` column stores it verbatim, and `Selection`'s
+    `pipeline:` term matches against it. Built and validated by
+    `Pipeline`/`pipeline()` in `pipeline.py` — this class stays plain data.
     """
-    id: str
     name: str
     steps: List[StepSpec]
     params_model: Optional[Type[BaseModel]] = None
@@ -313,79 +317,13 @@ def source(fn=None, *, name=None, version="1", **step_kwargs):
     return wrap(fn) if fn is not None else wrap
 
 
-def pipeline(
-    name: str,
-    steps: Optional[List[StepSpec]] = None,
-    id: Optional[str] = None,
-    params_model: Optional[Type[BaseModel]] = None,
-    retention: Optional[int] = None,
-) -> PipelineSpec:
-    """Construct a pipeline from its steps.
-
-    Ingestion is not a separate concept: the roots (steps with no
-    `depends_on`) *are* the source. A `shape="expand"` root (see `@source`)
-    yields the initial lanes and re-runs every run; a `shape="map"` root
-    mints a single lane whose input is its params (or a constant when it
-    takes none) — same params reuse, changed params recompute. A pipeline
-    may declare several roots; `join` doesn't care that its parents are
-    roots.
-
-    retention=N keeps only this pipeline's last N terminal runs' outputs: at the
-    end of a successful run (or on `rubedo gc`), generations that only older runs
-    referenced are pruned — their liveness flipped off and, once no live output
-    anywhere references the bytes, the object deleted. None (default) keeps
-    everything. Set-and-forget storage hygiene for long-lived pipelines.
-    """
-    if retention is not None and (
-        isinstance(retention, bool) or not isinstance(retention, int) or retention < 1
-    ):
-        raise ValueError(
-            f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
-            f"got {retention!r}"
-        )
-
-    steps = steps or []
-    roots = [s for s in steps if not s.depends_on]
-    if not roots:
-        raise ValueError("pipeline has no root step to originate lanes")
-
-    consumed = {dep for s in steps for dep in s.depends_on}
-    name_to_step = {s.name: s for s in steps}
-    for s in steps:
-        if s.skip_cache and s.name not in consumed:
-            raise ValueError(
-                f"Step '{s.name}' has skip_cache but no consumer: its output "
-                "would never be computed or stored"
-            )
-        if s.shape == "join":
-            for dep in s.join_on or {}:
-                parent = name_to_step.get(dep)
-                if parent and parent.skip_cache:
-                    raise ValueError(
-                        f"Step '{s.name}': shape='join' cannot have a skip_cache parent ('{dep}')"
-                    )
-        if s.shape == "reduce" and s.group_key is not None:
-            for dep in s.depends_on:
-                parent = name_to_step.get(dep)
-                if parent and parent.skip_cache:
-                    raise ValueError(
-                        f"Step '{s.name}': group_key requires materialized parents, but '{dep}' is skip_cache"
-                    )
-
-    return PipelineSpec(
-        id=id or name,
-        name=name,
-        steps=steps,
-        params_model=params_model,
-        retention=retention,
-    )
-
-
 def definition(spec: PipelineSpec) -> Dict[str, Any]:
     """JSON-safe snapshot of a pipeline's structure and policies.
 
     Recorded on every Run row so the ledger knows what DAG produced each
-    run's outputs, and rendered by describe().
+    run's outputs, and rendered by describe(). The "id" key is retained
+    (mirroring "name") for schema stability across the TODO 15 rotation —
+    `id` as a concept separate from `name` no longer exists.
     """
     steps = []
     for s in spec.steps:
@@ -428,7 +366,7 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         steps.append(entry)
 
     snapshot: Dict[str, Any] = {
-        "id": spec.id,
+        "id": spec.name,
         "name": spec.name,
         "steps": steps,
     }
@@ -437,39 +375,3 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         # its latest run's definition_json — never by importing user code.
         snapshot["retention"] = spec.retention
     return snapshot
-
-
-class PipelineBuilder:
-    """A helper for constructing pipelines using the builder pattern.
-    
-    Instead of passing a list of steps to `pipeline(steps=[...])`, you can 
-    use `@p.step()` to accumulate them on the builder instance.
-    """
-    def __init__(self, params_model: Optional[Type[BaseModel]] = None, **pipeline_kwargs):
-        self.pipeline_kwargs = pipeline_kwargs
-        self.params_model = params_model
-        self.steps: List[StepSpec] = []
-        
-    def step(self, *args, **kwargs):
-        """Decorate a function to define it as a step in this pipeline."""
-        def decorator(fn):
-            s = step(*args, **kwargs)(fn)
-            self.steps.append(s)
-            return s
-        return decorator
-
-    def source(self, fn=None, **kwargs):
-        """Decorate a function to define it as a source step in this pipeline."""
-        def wrap(f):
-            s = source(**kwargs)(f)
-            self.steps.append(s)
-            return s
-        return wrap(fn) if fn is not None else wrap
-        
-    def build(self, **kwargs) -> PipelineSpec:
-        """Construct the final PipelineSpec using the accumulated steps."""
-        merged = {**self.pipeline_kwargs, **kwargs}
-        merged["steps"] = self.steps + merged.get("steps", [])
-        if self.params_model and "params_model" not in merged:
-            merged["params_model"] = self.params_model
-        return pipeline(**merged)

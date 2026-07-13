@@ -95,11 +95,13 @@ def _build_snapshot_spec():
 
 def test_definition_snapshot_is_byte_identical_across_the_rotation():
     scan, enrich, rollup = _build_snapshot_spec()
-    spec = pipeline(
+    p = pipeline(
         name="snap-fixture",
         steps=[scan, enrich, rollup],
         params_model=Params,
         retention=5,
     )
-    snapshot = definition(spec)
+    snapshot = definition(p.spec)  # Pipeline.spec: validated PipelineSpec, built lazily
     assert json.dumps(snapshot, indent=2, sort_keys=True) == PINNED_DEFINITION_JSON
+    # Pipeline.definition() is the same snapshot via the object's own verb.
+    assert p.definition() == snapshot
