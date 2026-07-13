@@ -11,10 +11,10 @@ vocabulary first; the sequencing section at the bottom traces what was built.
 Today the DAG is **coordinate-preserving**: every coordinate (lane key) is
 minted by the `Source` at scan time, and steps are only `map` (1:1) or
 `reduce` (N:1). This privileges two things — `Source` (the sole
-coordinate-creator) and `Manifest` (the sole census) — and it blocks
-everything data-dependent: `expand` (fetch an RSS feed, *then* yield a lane
-per article) and `join` (both need coordinate creation, and join needs two
-independent roots).
+coordinate-creator) and a source-only removal census (the sole
+change-detector) — and it blocks everything data-dependent: `expand` (fetch
+an RSS feed, *then* yield a lane per article) and `join` (both need
+coordinate creation, and join needs two independent roots).
 
 The generalization: **stop privileging `Source`. There are only producers
 that emit keyed items; a `Source` is the producer that emits from no input.**
@@ -67,31 +67,33 @@ a kind of reduce — reduce *collapses*, join *expands*. Join is the binary,
 collective member of the **expand** family, which is exactly why putting
 coordinate-creation in the core is what unblocks it.
 
-## What a manifest is (and the per-producer generalization)
+## Removal detection: a census that was tried, then dropped
 
-A manifest is a **remembered census**, chained run-over-run. Each run a
-producer takes a roll-call — "these coordinates exist now, with these content
-fingerprints" — and stores it (`Manifest` + `ManifestEntry`,
-`parent_manifest_id` links the chain). Its sole job is to detect **removal and
-change**, which content-addressing cannot see on its own: an address hit means
-reuse and a miss means create, but a *vanished* coordinate leaves no trace in
-the current scan. So you diff this run's census against last run's; anything
-present before and absent now is `removed`.
+Before this redesign, only the source detected removal: each run it took a
+roll-call — "these coordinates exist now, with these content fingerprints" —
+and diffed it against the previous run's chained roll-call. That machinery
+(and the table it lived in) is gone; what follows is what motivated, and
+eventually killed, extending the idea.
 
-Today only the source keeps a census (`_snapshot_source`, `ledger.py:585`).
-Generalized: **every producer keeps its own census** ("the lanes I emitted
-this run"), and removal is a per-producer diff. The cascade is automatic — a
-removed input yields no output, so the downstream census shrinks and records
-the removal there too. The source is just the root of the cascade.
+The generalization considered here was to give **every producer** its own
+roll-call ("the lanes I emitted this run"), so removal would be a per-producer
+diff and the cascade automatic — a removed input yields no output, so the
+downstream roll-call shrinks and records the removal there too. The source
+would just be the root of the cascade.
 
 **Removal ≠ invalidation — two different axes.** Removal (a coordinate
-vanishing) is a per-*lane* fact: it records a `removed` status + event and
-correctly does **not** touch `is_live`, because `is_live` is a property of a
-*materialization* (an address), not a lane. Invalidation (a result is bad) is
-the per-*materialization* operation that flips `is_live=False`
-(`invalidation.py:58`) + appends a lifecycle row. A removed lane's
-materialization is still a valid result — some future lane may re-address it —
-so keeping it live is right. These stay orthogonal in the producer model.
+vanishing) is a per-*lane* fact and correctly does **not** touch `is_live`,
+because `is_live` is a property of a *materialization* (an address), not a
+lane. Invalidation (a result is bad) is the per-*materialization* operation
+that flips `is_live=False` (`invalidation.py:58`) + appends a lifecycle row. A
+removed lane's materialization is still a valid result — some future lane may
+re-address it — so keeping it live is right. These stay orthogonal.
+
+**The generalization was never built.** See "Sequencing" step 2 below: silent
+orphaning of a vanished lane already gives the same practical outcome as a
+removal report, so the schema-touching bookkeeping — source-only or
+generalized — wasn't worth it. A vanished coordinate today simply doesn't
+appear in this run's lane statuses; nothing diffs against history.
 
 ## Decisions (locked this session)
 
@@ -110,10 +112,12 @@ pair predicate in the core — that is the N×M explosion; a predicate is
 expressed as a `filter` step *after* the join. Matching is answered entirely
 by hashes, so it stays cheap.
 
-**C — Caching is per-lane, plus a membership census.** An `expand`/`join` is
-**not** one blob. Each emitted lane content-addresses and reuses on its own
-(unchanged from map), and the producer's manifest records **which** lanes
-exist this run. Reuse survives; membership is the only new bookkeeping.
+**C — Caching is per-lane, no membership census.** An `expand`/`join` is
+**not** one blob: each emitted lane content-addresses and reuses on its own
+(unchanged from map). The membership bookkeeping this decision proposed (a
+per-producer record of which lanes exist each run) was never built — see the
+removal-detection section above and Sequencing step 2: silent orphaning of
+vanished lanes turned out sufficient, so no census shipped for any shape.
 
 **D — `reduce` gains a `group_key`.** Today's single `@all` lane is
 `group_key = ()` (one total group). A declared group key gives per-group
@@ -129,22 +133,6 @@ exist?" is no longer "it's in the source folder" but "step 3 emitted it from
 input Y," visible only via `MaterializationEdge`. Accepted, on the condition
 that the map-a-folder common path stays a one-liner via defaults — the general
 core must never leak into the simple case.
-
-## What changes in the code (map, not a plan)
-
-- **`spec.py`** — shapes become producer kinds; add `expand`/`join` specs, a
-  `group_key` on reduce, and key extractors (`key=` / `on=`).
-- **`sources.py`** — `Source` becomes the nullary root `Producer` (its
-  `scan()` is `produce({})`); `PipelineSpec.source` (singular) becomes a set
-  of root producers, which is also what multi-root/join needs.
-- **`planning.py`** — dependent-step target gathering already reads
-  `coord_step_mats`; add coordinate-minting for expand/join, group_key for
-  reduce. The in-memory join table handles new coordinates unchanged — it is
-  just more entries.
-- **`ledger.py`** — `_snapshot_source` → `_snapshot_producer`, per
-  `(run, step)`; removal diff per producer. Possibly fold the census onto
-  `run_coordinate_statuses`, which already records `(run, coordinate, step)`.
-- **`models.py`** — `Manifest` gains a producer/step dimension.
 
 ## Open questions (owner)
 
@@ -166,14 +154,17 @@ core must never leak into the simple case.
    ref-count), never a core concern.
 3. **Fan-out bound — RESOLVED: no limit, by design.** An `expand` may yield
    unboundedly, deliberately past normal size constraints. No cap, no warn.
-4. **Multi-root pipeline API.** How do you declare two roots + a join in
-   `pipeline()` once `source=` is plural?
+4. **Multi-root pipeline API — RESOLVED: no pipeline-level API at all.** Item
+   14 settled it: a root is just any step with no `depends_on`, and a
+   pipeline may declare as many as it likes (`@source` sugars a parentless
+   `expand` root). `join`/multi-parent steps `depends_on` whichever roots
+   they need — no dict, no per-step routing kwarg. See 4a below.
 5. **Reduce/join removal — RESOLVED: just orphan.** A group that empties or a
    pair whose match vanishes simply stops being emitted; its old
    materialization orphans (live, unreferenced), exactly like a vanished
-   expanded lane. No census, no `removed` report — consistent with the step-2
-   decision that `removed` is a low-value notification, not an operation. The
-   `ledger.py:642` skip-reduce shortcut is fine to leave as-is.
+   expanded lane. No census, no removal report — consistent with the step-2
+   decision that reporting a removal is a low-value notification, not an
+   operation. The `ledger.py:642` skip-reduce shortcut is fine to leave as-is.
 6. **Group-key stability** under content-addressed lanes (the same
    removed-vs-changed churn as A, one level up).
 
@@ -194,34 +185,37 @@ mechanism. **Expand needs no new execution model.**
 
 **Finding 2 — expand needs no schema change and no census for a correct MVP.**
 Minted coordinates are just strings in `run_coordinate_statuses` +
-`materializations`. They are not source coordinates, so source-manifest removal
-never touches them; a vanished expanded lane simply becomes orphaned-live —
-exactly the resolved Q1/Q2 behavior. So the schema-touching per-producer census
-is **not** a prerequisite for expand.
+`materializations`. They are not source coordinates, so the source's own
+removal tracking never touches them; a vanished expanded lane simply becomes
+orphaned-live — exactly the resolved Q1/Q2 behavior. So the schema-touching
+per-producer census is **not** a prerequisite for expand.
 
 **Revised sequencing — go vertical, skip the churn.** The behavior-preserving
 `Source`→`Producer` refactor buys nothing until something uses the generality,
 so it is premature abstraction. Instead ship the capability first and let the
 census follow when a concrete need (expand *caching*) pulls it in.
 
-**Expand emit contract (proposed):**
-- `@step(shape="expand")`; the fn returns an iterable of `(subkey, value)`.
-- Minted coordinate: content-addressed by decision A — `row-<hash(value)>` by
-  default; the fn's `subkey` may seed a lineage-legible `f"{parent}/{subkey}"`
-  when declared. (Not identity — identity stays the content-addressed output.)
-- Execution: `_execute_step` yields one outcome per emitted pair;
-  `_commit_execution_result` writes one materialization per minted coordinate,
-  each `MaterializationEdge`-linked to the parent.
+**Expand emit contract (as shipped):**
+- `@step(shape="expand")`; the fn yields bare payload values — no subkey, no
+  pair.
+- Minted coordinate: content-addressed by decision A, always —
+  `row-<hash(value)[:12]>` (`expand_child_coord`, `planning.py`). Identical
+  payloads collapse to one lane. Not identity — identity stays the
+  content-addressed output address.
+- Execution: `_expand_outcomes` (`execution.py`) yields one outcome per
+  distinct emitted value; each becomes its own materialization,
+  `MaterializationEdge`-linked to the parent.
 
 **The one real fork — expand caching.** An expand is 1:N, so it cannot cache
 by a single `output_address` like a map, and re-running a non-idempotent expand
 (LLM) every run is unacceptable. To reuse when the parent lane is unchanged we
 must remember what the expand emitted for that parent (its membership). Two
-options: **(a)** a minimal membership record now — a small table keyed
-`(step, parent_coord) → {subkey: content_hash}` enabling "parent unchanged →
-replay emitted lanes without running"; ships with expand. **(b)** the full
-per-producer census now — more work, but it is coming anyway. **Recommend (a)**,
-generalized to (b) when the census lands.
+options: **(a)** a minimal anchor now — one record addressed by `(step,
+parent-content-hash)` storing the list of child content hashes, enabling
+"parent unchanged → replay emitted lanes without running"; ships with expand.
+**(b)** the full per-producer census — more work, and only pays for itself if
+something besides expand needs it. **Recommend (a)**, revisit (b) only on
+demand.
 
 **`group_key`'s distinct constraint (later):** grouping parent lanes by a field
 of their *value* needs values at plan time, but planning only reads content
@@ -248,10 +242,17 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    with an identical duplicate row collapsing to one lane. Querying keyless
    lanes by their human handle is deferred to the index/lineage tooling
    (`TODO.md` item 5) — keyed lanes stay legible so nothing regresses there.
+   *(`sources.py` and its `CsvSource`/`TableSource` classes were later
+   deleted wholesale by item 14 — the sources purge — and replaced by
+   `@source` recipes, `docs/concepts/sources.md`; the content-addressing
+   behavior described above is unchanged, just moved into plain generator
+   code.)*
 1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
-   yields `(subkey, value)` pairs; each mints a lane `parent/subkey` with a
-   deterministic address `hash(step, version, parent-content, subkey)`, an edge
-   to the parent, and normal downstream chaining.
+   yields bare payload values (no subkey, no pair); each distinct value mints
+   a content-addressed `row-<hash>` lane with address `hash(step, version,
+   child-content-hash[, params])` — the child's identity is its own content,
+   so identical children collapse and there is no parent/subkey in the
+   identity — an edge to the parent, and normal downstream chaining.
    **Caching (the key insight, owner-driven):** an expand also stores its full
    yielded list as a **cache anchor** — one materialization addressed by the
    *parent* (`hash(step, version, parent-content)`), which *is* predictable
@@ -273,13 +274,15 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    payloads live once in the child materializations, the anchor is a tiny hash
    list, and item 11 is retired. The behavior-preserving `Producer` refactor
    stays **dropped** as premature.
-2. **Per-producer census** — ❌ **dropped from the critical path (owner call).**
-   `removed` is only a *report* (a status row + event + `removed_count`); it
-   never deletes or unlives anything (`ledger.py:635-663`). Minted lanes
-   already orphan silently today (they're not in the source manifest), and
-   silent orphaning is functionally identical to "removed." So the census —
-   whose only job was extending that report to minted/group lanes — buys
-   nothing worth a schema change. If "what orphaned?" is ever wanted, it's the
+2. **Per-producer census** — ❌ **dropped from the critical path (owner call),
+   then the source-only version dropped too.** A removal report never deletes
+   or unlives anything — it was only ever a notification. Minted lanes
+   already orphan silently (they're not tracked by any removal report), and
+   silent orphaning is functionally identical to reporting "removed." So the
+   census — whose only job was extending that report to minted/group lanes —
+   bought nothing worth a schema change, and the original source-only version
+   was later removed as well: today there is no removal report anywhere, only
+   silent orphaning. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
 3. **`group_key` reduce** — ✅ **DONE**. `@step(shape="reduce",
    group_key="field")` partitions the reduction's parent lanes by a named
@@ -297,16 +300,17 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    (6) + full suite (160) green, ruff clean, and a live feed → 5 story lanes →
    per-topic digest pipeline.
 4. **Multi-root + `join`** — the finale, split in two:
-   - **4a. Multi-source** — ✅ **DONE**. `pipeline(sources={name: Source})`
-     (decided API: named sources dict); root steps pick one with
-     `@step(source="name")`. `pipeline(source=X)` / `folder=X` unchanged
-     (single source under `DEFAULT_SOURCE`). The runner scans each source,
-     threads a per-step `step_sources` map into execution so each root loads
-     from its own source, and snapshots each source's manifest separately.
-     Coordinates don't collide because `coord_step_mats` is keyed by
-     `(coord, step)`. Single-source behavior byte-identical (validated: full
-     suite 165 green incl. `tests/test_multisource.py`). A single-source
-     `source=` override is rejected on multi-source pipelines.
+   - **4a. Multi-source** — ✅ **DONE, then subsumed by item 14.** What
+     shipped here (`pipeline(sources={name: Source})`, a named-sources dict,
+     and `@step(source="name")` routing) is gone: item 14 deleted the
+     `Source` protocol entirely, and with it the routing kwarg. Today
+     "multi-source" is just several parentless `@step(shape="expand")` roots
+     (`@source`) declared in the same pipeline — no pipeline-level kwarg, no
+     per-root routing. A downstream step names whichever root(s) it needs in
+     `depends_on`; coordinates never collide because `coord_step_mats` is
+     keyed by `(coord, step)`. Live-verified in
+     `examples/newsroom/newsroom.py` (two `@source` roots joined on
+     publisher) and covered by `tests/test_join.py`.
    - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
      depends_on=[a, b, ...], join_on={a: field, b: field, ...})`: an **N-way**
      equijoin matching each side's `@step(index=[...])` field by value

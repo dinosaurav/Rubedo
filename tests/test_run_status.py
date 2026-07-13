@@ -221,7 +221,7 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
             .filter_by(run_id=res2.run_id)
             .all()
         }
-        # a.txt simply isn't scanned this run — no "removed" status, no manifest.
+        # a.txt simply isn't scanned this run — no "removed" status, no removal tracking.
         assert coord_a not in coords
 
         run_row = session.query(Run).filter_by(id=res2.run_id).first()
