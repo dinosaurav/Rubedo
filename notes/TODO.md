@@ -10,8 +10,8 @@ Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog). Order below is the
 recommended build order: the simplification chain continues **15** → **16**
 (15 moves the decorator 16 touches; **14** sources purge shipped 2026-07-13
-— see the Done changelog); the editorial trio (**17**, **18**, **19**) and
-**20** slot anywhere (**20** ascii describe is built, merging). The cloud
+— see the Done changelog); the editorial trio (**17**, **18**, **19**)
+slots anywhere (**20** ascii describe shipped 2026-07-13). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
 touch the ledger/store; item 7 is its throughput story, not a
@@ -443,40 +443,6 @@ Acceptance: no comment in `src/` references a TODO item number or narrates
 a past change; constraint comments (invariant references, trap guards)
 stay.
 
-## 20. `describe(format="ascii")` — terminal DAG rendering  **[design settled 2026-07-12; independent, lands on the method after 15]**
-
-`describe()` speaks `text` (a dependency-ordered list) and `mermaid` (needs
-a markdown viewer); neither *draws* in a terminal. Add `format="ascii"`:
-topo-layered boxes connected by unicode box-drawing edges, so `p.describe()`
-output can show the actual DAG shape — diamonds, fan-in, joins — where you
-run.
-
-**Settled decisions (owner design session 2026-07-12):** hand-rolled in
-`spec.py` next to the existing renderers — **no new dependencies** (no
-grandalf/networkx-layout; networkx in the dev group is for tests, not this).
-Explicitly not-graphviz-quality: legible up to ~20 steps; simple layered
-layout (steps grouped by topo depth, one row per layer), `│ ┌ ┐ └ ┘ ├ ┤ ─`
-edges, edge crossings allowed and rendered naively. Box label = step name
-plus a shape tag for non-map steps (`[reduce]`, `[expand]`, `[join]`),
-mirroring what `format="text"` annotates. (The `rubedo dag` CLI variant —
-rendering from ledger definition snapshots — was considered and dropped as
-not notable, 2026-07-12.)
-
-**Trap (part of the spec):** output must be **deterministic** — stable
-ordering within a layer (spec order, not dict/set order) so the string is
-snapshot-testable and diffable; don't let layout depend on hash iteration
-order. Degrade gracefully: if a layer is wider than the layout can draw,
-fall back to the `text` renderer for that graph rather than emitting
-garbage — never crash on a legal DAG.
-
-Acceptance: `describe(count_lines_pipe, format="ascii")` and the newsroom
-pipeline (join → expand → group_key reduce) both render with every step
-name and edge present; the same spec yields a byte-identical string across
-runs (pinned by snapshot test); unknown formats still raise the existing
-`ValueError` listing all three; no new runtime dependencies
-(`scripts/smoke_test.sh` stays green); after item 15 it is reachable as
-`p.describe(format="ascii")` unchanged.
-
 ──────────────────────────────────────────────────────────────────────
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
@@ -513,6 +479,15 @@ runs (pinned by snapshot test); unknown formats still raise the existing
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-13 — ascii describe (item 20):** `describe(format="ascii")` —
+hand-rolled layered terminal DAG rendering in `spec.py` (depth = longest
+path from a root; virtual passthrough nodes route edges spanning layers;
+`├`/`┤` junctions vs corner arms chosen by rank bookkeeping). Deterministic
+(spec order, snapshot-pinned byte-identical in
+`tests/test_describe_ascii.py`); canvas >100 columns falls back to the
+`text` renderer; zero new dependencies; `ValueError` lists all three
+formats. Commit `1f117eb`.
 
 **2026-07-13 — sources purge (item 14):** `sources.py` deleted — ingestion
 is an `@source` (parentless expand) step, full stop. The `Source` protocol,
