@@ -8,11 +8,11 @@ from .spec import (
     step,
     source,
     pipeline,
-    describe,
     PipelineSpec,
     StepSpec,
     PipelineBuilder,
 )
+from .render import describe
 from .models import Filtered, ProcessResult, RunSummary
 from .selection import Selection
 from .invalidation import invalidate

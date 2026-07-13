@@ -42,25 +42,31 @@ accurate and load-bearing; keep them updated when behavior changes.
 
 ## Architecture map
 
-- `src/rubedo/spec.py` — `@step` / `pipeline()` (and `PipelineBuilder`) build plain
-  `StepSpec`/`PipelineSpec` objects. No registry: the engine never imports
-  user code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
-  parent's surviving lanes; `group_key` partitions into one output per
-  indexed-field value, else a single `"@all"`) / `expand` (1:N — the fn
-  yields payloads, minting content-addressed `row-<hash>` child lanes; **no
-  `depends_on` = a root = a source** that yields the initial lanes and re-runs
-  every run, so `pipeline(steps=[...])` needs no `source=`) / `join` (N-way
-  equijoin on `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes).
-  A **source-less `map` root** (no `depends_on`, no source) mints a single
-  `@root` lane whose input is its params (or a constant) — so a pipeline can
-  begin with a plain step fed a value instead of scanning for one; same params
-  reuse, changed params recompute (`ROOT_LANE` in `planning.py`).
-  `pipeline(sources={name: Source})` declares multiple roots and a root step
-  picks one with `@step(source="name")` (`source=`/`folder=` stay
-  single-source). `executor` is `"thread"` (default) or `"process"` (a `loky`
-  pool serializing via `cloudpickle`, so closures are fine). `describe()`
-  renders DAGs (text/Mermaid); `definition()` is the JSON snapshot each run
-  records.
+- `src/rubedo/spec.py` — pure data: `@step` / `pipeline()` (and
+  `PipelineBuilder`) build plain `StepSpec`/`PipelineSpec` objects. No
+  registry: the engine never imports user code. `shape` ∈ `map` (1:1,
+  default) / `reduce` (N:1 fan-in over a parent's surviving lanes;
+  `group_key` partitions into one output per indexed-field value, else a
+  single `"@all"`) / `expand` (1:N — the fn yields payloads, minting
+  content-addressed `row-<hash>` child lanes; **no `depends_on` = a root =
+  a source** that yields the initial lanes and re-runs every run, so
+  `pipeline(steps=[...])` needs no separate ingestion concept — see
+  `@source`) / `join` (N-way equijoin on `join_on={parent: indexed_field}`,
+  minting `a|b|…` pair lanes). A **source-less `map` root** (no
+  `depends_on`) mints a single `@root` lane whose input is its params (or a
+  constant) — so a pipeline can begin with a plain step fed a value instead
+  of scanning for one; same params reuse, changed params recompute
+  (`ROOT_LANE` in `planning.py`). A pipeline may declare several `@source`
+  roots; `join` doesn't care that its parents are roots. `executor` is
+  `"thread"` (default) or `"process"` (a `loky` pool serializing via
+  `cloudpickle`, so closures are fine). `definition()` is the JSON snapshot
+  each run records. `spec.py` never imports `pipeline.py`/`runner.py` —
+  data stays a leaf.
+- `src/rubedo/render.py` — `describe()` (text/Mermaid/ascii DAG rendering)
+  and the ascii layout internals (`_AsciiNode`, `_ascii_layers`,
+  `_ascii_positions`, `_describe_ascii`). Sits above `spec.py` and
+  `planning.py` (both imported at module level — rendering needs
+  topological order).
 - `src/rubedo/sources.py` — `Source` protocol (scan → `SourceItem`s, load →
   payload); `FolderSource`, `CsvSource`, `TableSource` (SQL rows, optional
   `batch_size` streaming mode, `source_id` built without leaking
