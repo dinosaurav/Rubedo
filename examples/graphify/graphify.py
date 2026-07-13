@@ -27,14 +27,11 @@ import networkx as nx
 from networkx.algorithms import community
 from dotenv import load_dotenv
 
-from rubedo import ProcessResult, describe, run, PipelineBuilder
+from rubedo import ProcessResult, pipeline
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
-p = PipelineBuilder(
-    id="graphify",
-    name="Graphify DAG",
-)
+p = pipeline(name="graphify")
 
 @p.source(name="src_files", version="1")
 def src_files():
@@ -247,10 +244,10 @@ def export_graph(find_god_nodes) -> ProcessResult:
     )
 
 def main():
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
-    summary = run(pipe)
+    summary = pipe.run()
     print(f"Run ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
     

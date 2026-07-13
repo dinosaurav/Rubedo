@@ -17,7 +17,7 @@ import json
 import os
 import tempfile
 
-from rubedo import describe, PipelineBuilder, run
+from rubedo import pipeline
 
 
 def make_feed(folder):
@@ -30,7 +30,7 @@ def make_feed(folder):
         json.dump(articles, f)
 
 
-p = PipelineBuilder(id="expand-feed", name="Expand Feed")
+p = pipeline(name="expand-feed")
 
 @p.source(name="feed_files", version="1")
 def feed_files():
@@ -62,13 +62,13 @@ def main():
     os.makedirs(folder, exist_ok=True)
     make_feed(folder)
 
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
 
-    s1 = run(pipe)
+    s1 = pipe.run()
     print(f"run 1: created={s1.created_count} reused={s1.reused_count}")
-    s2 = run(pipe)
+    s2 = pipe.run()
     print(f"run 2: created={s2.created_count} reused={s2.reused_count}  (fetch was cached)")
     
     print("\n--- Final Output (headline) ---")

@@ -26,7 +26,7 @@ import csv
 import os
 import tempfile
 
-from rubedo import describe, PipelineBuilder, run
+from rubedo import pipeline
 
 
 FEEDS = [("f1", "TechCorp"), ("f2", "BizWire"), ("f3", "TechCorp")]
@@ -49,10 +49,7 @@ def write_csv(path, header, rows):
 
 FOLDER = os.path.join(tempfile.gettempdir(), "rubedo_newsroom")
 
-p = PipelineBuilder(
-    id="newsroom",
-    name="Newsroom",
-)
+p = pipeline(name="newsroom")
 
 @p.source(name="feeds", version="1")
 def feeds():
@@ -109,7 +106,7 @@ def digest(articles: dict) -> dict:
 def make_pipeline(folder):
     write_csv(os.path.join(folder, "feeds.csv"), ["feed_id", "publisher"], FEEDS)
     write_csv(os.path.join(folder, "publishers.csv"), ["publisher", "region"], PUBLISHERS)
-    return p.build()
+    return p
 
 
 
@@ -119,14 +116,14 @@ def main():
     os.makedirs(FOLDER, exist_ok=True)
     pipe = make_pipeline(FOLDER)
 
-    print(describe(pipe))
+    print(pipe.describe())
     print()
 
-    s1 = run(pipe)
+    s1 = pipe.run()
     print(f"\nrun 1: created={s1.created_count} reused={s1.reused_count}")
 
 
-    s2 = run(pipe)
+    s2 = pipe.run()
     print(f"\nrun 2: created={s2.created_count} reused={s2.reused_count}  (no feed re-scraped)")
     
     print("\n--- Final Output (digest) ---")

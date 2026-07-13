@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from rubedo import ProcessResult, describe, PipelineBuilder, run
+from rubedo import ProcessResult, pipeline
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,10 +41,7 @@ def _get(path: str):
         return json.load(r)
 
 
-p = PipelineBuilder(
-    id="repo-health",
-    name="Repo Health",
-)
+p = pipeline(name="repo-health")
 
 @p.source(name="repos", version="1")
 def repos():
@@ -105,11 +102,11 @@ def report(score: dict) -> str:
 
 
 def main():
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
     try:
-        summary = run(pipe)
+        summary = pipe.run()
     except urllib.error.HTTPError as e:
         if e.code == 403:
             print("GitHub rate-limited you — set GITHUB_TOKEN and try again.")

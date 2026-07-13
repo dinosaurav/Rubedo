@@ -56,7 +56,7 @@ import sys
 import time
 import urllib.request
 
-from rubedo import describe, PipelineBuilder, run
+from rubedo import pipeline
 
 
 WORDLIST_URL = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
@@ -154,10 +154,7 @@ def build_pipeline(executor: str):
     """executor is 'thread' or 'process' — also used to suffix step names
     so the two variants never share a cached materialization (see module
     docstring)."""
-    p = PipelineBuilder(
-        id=f"executor-showdown-{executor}",
-        name=f"Executor Showdown ({executor})",
-    )
+    p = pipeline(name=f"executor-showdown-{executor}")
 
     @p.source(name="wordlist_chunks", version="1")
     def wordlist_chunks():
@@ -183,16 +180,16 @@ def build_pipeline(executor: str):
         shape="reduce",
     )(combine_chunks)
 
-    return p.build()
+    return p
 
 
 def run_variant(executor: str, force: bool) -> float:
     pipe = build_pipeline(executor)
-    print(describe(pipe))
+    print(pipe.describe())
     print()
 
     t0 = time.perf_counter()
-    summary = run(pipe, force=force)
+    summary = pipe.run(force=force)
     elapsed = time.perf_counter() - t0
 
     print(

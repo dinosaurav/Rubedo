@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 import os
-from rubedo import Filtered, describe, PipelineBuilder, run
+from rubedo import Filtered, pipeline
 
 
 GEOCODE = "https://geocoding-api.open-meteo.com/v1/search"
@@ -34,10 +34,7 @@ def _get(url: str, params: dict):
         return json.load(r)
 
 
-p = PipelineBuilder(
-    id="weather-advisory",
-    name="Weather Advisory",
-)
+p = pipeline(name="weather-advisory")
 
 @p.source(name="cities", version="1")
 def cities():
@@ -109,10 +106,10 @@ def briefing(advice: dict) -> str:
 
 
 def main():
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
-    summary = run(pipe)
+    summary = pipe.run()
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"

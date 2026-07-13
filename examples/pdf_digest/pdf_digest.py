@@ -43,7 +43,7 @@ import urllib.request
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from rubedo import describe, pipeline, run, step
+from rubedo import pipeline, step
 
 load_dotenv()
 
@@ -206,8 +206,7 @@ def summary_textonly(rejoin: dict) -> str:
 
 
 pdf_digest_pipeline = pipeline(
-    id="pdf-digest",
-    name="PDF Digest DAG",
+    name="pdf-digest",
     params_model=PdfParams,
     steps=[
         load_pdf,
@@ -285,10 +284,10 @@ def main():
             print(f"No --pdf given; generating a sample at {pdf_path}")
             _make_sample_pdf(pdf_path)
 
-    print(describe(pdf_digest_pipeline))
+    print(pdf_digest_pipeline.describe())
     print()
 
-    summary = run(pdf_digest_pipeline, params={"pdf": pdf_path})
+    summary = pdf_digest_pipeline.run(params={"pdf": pdf_path})
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"failed={summary.failed_count}"

@@ -22,7 +22,7 @@ import tempfile
 
 from sqlalchemy import create_engine, text
 
-from rubedo import ProcessResult, describe, PipelineBuilder, run
+from rubedo import ProcessResult, pipeline
 
 
 DB_PATH = os.path.join(tempfile.gettempdir(), "rubedo_demo_orders.db")
@@ -50,10 +50,7 @@ def seed_db():
     engine.dispose()
 
 
-p = PipelineBuilder(
-    id="orders-rollup",
-    name="Orders Rollup",
-)
+p = pipeline(name="orders-rollup")
 
 @p.source(name="orders", version="1")
 def orders():
@@ -92,10 +89,10 @@ def rollup(classify: dict) -> str:
 
 def main():
     seed_db()
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
-    summary = run(pipe)
+    summary = pipe.run()
     print(f"created={summary.created_count} reused={summary.reused_count}")
     print("\n--- Final Output (rollup) ---")
     import json

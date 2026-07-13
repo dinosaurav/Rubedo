@@ -25,15 +25,12 @@ import os
 import re
 import urllib.request
 
-from rubedo import describe, PipelineBuilder, run
+from rubedo import pipeline
 
 
 GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
 
-p = PipelineBuilder(
-    id="gutenberg-stats",
-    name="Gutenberg Stats",
-)
+p = pipeline(name="gutenberg-stats")
 
 @p.source(name="books", version="1")
 def books():
@@ -100,10 +97,10 @@ def report(analyze: dict) -> str:
 
 
 def main():
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
-    summary = run(pipe)
+    summary = pipe.run()
     print(f"created={summary.created_count} reused={summary.reused_count}")
     print("\n--- Final Output (report) ---")
     import json

@@ -1,7 +1,7 @@
 import os
 
 from pydantic import BaseModel, Field
-from rubedo import ProcessResult, describe, run, PipelineBuilder
+from rubedo import ProcessResult, pipeline
 
 
 
@@ -17,9 +17,8 @@ class CountLinesParams(BaseModel):
     )
 
 
-p = PipelineBuilder(
-    id="count-lines",
-    name="Count Lines DAG",
+p = pipeline(
+    name="count-lines",
     params_model=CountLinesParams,
 )
 
@@ -69,14 +68,13 @@ def count_lines(read_lines: dict) -> ProcessResult:
 def total_lines(count_lines: dict):
     return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
 
-count_lines_pipeline = p.build()
+count_lines_pipeline = p
 
 if __name__ == "__main__":
-    print(describe(count_lines_pipeline))
+    print(count_lines_pipeline.describe())
     print()
 
-    summary = run(
-        count_lines_pipeline,
+    summary = count_lines_pipeline.run(
         params={"min_lines": 0, "include_text_preview": False},
     )
     print(f"\nRun ID: {summary.run_id}")

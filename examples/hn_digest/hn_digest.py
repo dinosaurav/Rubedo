@@ -36,7 +36,7 @@ import urllib.request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from rubedo import Filtered, describe, PipelineBuilder, run
+from rubedo import Filtered, pipeline
 
 load_dotenv()
 
@@ -86,7 +86,7 @@ class Screen(BaseModel):
     min_score: int = 100
 
 
-p = PipelineBuilder(id="hn-digest", name="Hacker News Digest")
+p = pipeline(name="hn-digest")
 
 
 @p.source(name="top_story", version="1")
@@ -149,10 +149,10 @@ def digest(classify: dict) -> str:
 
 
 def main():
-    pipe = p.build()
-    print(describe(pipe))
+    pipe = p
+    print(pipe.describe())
     print()
-    summary = run(pipe, params={"min_score": 100})
+    summary = pipe.run(params={"min_score": 100})
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
