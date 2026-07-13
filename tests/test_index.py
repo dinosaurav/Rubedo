@@ -68,10 +68,20 @@ def create_file(name, content):
         f.write(content)
 
 
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
 def make_pipeline():
-    @step(name="extract", version="1", index=["company", "contacts", "meta.region"])
-    def extract(path):
-        text = open(path).read().strip()
+    @step(name="extract", version="1", depends_on=["scan"], index=["company", "contacts", "meta.region"])
+    def extract(scan: dict):
+        text = scan["text"].strip()
         company, region, *contacts = text.split(",")
         return {
             "company": company,
@@ -80,7 +90,7 @@ def make_pipeline():
             "body": text,
         }
 
-    return pipeline(id="ix", name="ix", folder=TEST_FOLDER, steps=[extract])
+    return pipeline(id="ix", name="ix", steps=[scan, extract])
 
 
 def entries():
@@ -149,11 +159,11 @@ def test_reuse_does_not_duplicate_entries():
 def test_missing_fields_are_skipped():
     create_file("a.txt", "acme,east")
 
-    @step(name="extract", version="1", index=["company", "nonexistent", "meta.nope"])
-    def extract(path):
+    @step(name="extract", version="1", depends_on=["scan"], index=["company", "nonexistent", "meta.nope"])
+    def extract(scan: dict):
         return {"company": "acme", "meta": {}}
 
-    pipe = pipeline(id="ix2", name="ix2", folder=TEST_FOLDER, steps=[extract])
+    pipe = pipeline(id="ix2", name="ix2", steps=[scan, extract])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 0
     assert entries() == [("company", "acme")]
@@ -163,22 +173,22 @@ def test_missing_fields_are_skipped():
 def test_index_declaration_is_not_cache_identity():
     create_file("a.txt", "acme,east")
 
-    @step(name="extract", version="1")
-    def extract_v1(path):
+    @step(name="extract", version="1", depends_on=["scan"])
+    def extract_v1(scan: dict):
         return {"company": "acme"}
 
-    pipe = pipeline(id="ix3", name="ix3", folder=TEST_FOLDER, steps=[extract_v1])
+    pipe = pipeline(id="ix3", name="ix3", steps=[scan, extract_v1])
     run(pipe, workers=1)
 
     # Same step, index added: purely operational, so still a cache hit —
     # and (documented) the existing materialization gains no entries
-    @step(name="extract", version="1", index=["company"])
-    def extract_v2(path):
+    @step(name="extract", version="1", depends_on=["scan"], index=["company"])
+    def extract_v2(scan: dict):
         return {"company": "acme"}
 
-    pipe = pipeline(id="ix3", name="ix3", folder=TEST_FOLDER, steps=[extract_v2])
+    pipe = pipeline(id="ix3", name="ix3", steps=[scan, extract_v2])
     summary = run(pipe, workers=1)
-    assert summary.reused_count == 1
+    assert summary.reused_count == 2  # scan's lane + extract's lane
     assert entries() == []
 
 

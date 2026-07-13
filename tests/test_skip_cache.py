@@ -72,12 +72,22 @@ def create_file(name, content):
         f.write(content)
 
 
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
 def build_pipeline(calls, util_version="1"):
     """read (materialized) -> parse (skip_cache util) -> report (materialized)."""
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     @step(name="parse", version=util_version, depends_on=["read"], skip_cache=True)
     def parse(read):
@@ -89,7 +99,7 @@ def build_pipeline(calls, util_version="1"):
         return f"report: {parse}"
 
     return pipeline(
-        id="sc", name="sc", folder=TEST_FOLDER, steps=[read, parse, report]
+        id="sc", name="sc", steps=[scan, read, parse, report]
     )
 
 
@@ -99,14 +109,14 @@ def test_util_never_materialized_or_recorded():
     pipe = build_pipeline(calls)
 
     summary = run(pipe, workers=1)
-    assert summary.created_count == 2  # read + report; parse invisible
+    assert summary.created_count == 3  # scan + read + report; parse invisible
     assert calls == ["parse"]
 
     with get_session() as session:
         step_names = {m.step_name for m in session.query(Materialization).all()}
-        assert step_names == {"read", "report"}
+        assert step_names == {"scan", "read", "report"}
         rc_steps = {c.step_name for c in session.query(RunCoordinateStatus).all()}
-        assert rc_steps == {"read", "report"}
+        assert rc_steps == {"scan", "read", "report"}
 
         # Value flowed through the util correctly
         report_mat = session.query(Materialization).filter_by(step_name="report").one()
@@ -114,9 +124,12 @@ def test_util_never_materialized_or_recorded():
 
         assert read_materialization_output(report_mat) == "report: hello"
 
-        # Lineage skips through: report's parent is read
+        # Lineage skips through: report's parent is read (not scan, and not
+        # the fused-away parse util)
         read_mat = session.query(Materialization).filter_by(step_name="read").one()
-        edge = session.query(MaterializationEdge).one()
+        edge = session.query(MaterializationEdge).filter_by(
+            parent_id=read_mat.id, child_id=report_mat.id
+        ).one()
         assert (edge.parent_id, edge.child_id) == (read_mat.id, report_mat.id)
 
 
@@ -129,7 +142,7 @@ def test_fully_cached_run_skips_util_entirely():
     assert calls == ["parse"]
 
     summary = run(pipe, workers=1)
-    assert summary.reused_count == 2
+    assert summary.reused_count == 3
     assert calls == ["parse"], "cached run must not execute the util at all"
 
 
@@ -142,8 +155,9 @@ def test_util_identity_change_recomputes_consumer():
     calls2 = []
     pipe = build_pipeline(calls2, util_version="2")
     summary = run(pipe, workers=1)
-    # read reused; report recomputed because the util's identity is in its key
-    assert (summary.created_count, summary.reused_count) == (1, 1)
+    # scan + read reused; report recomputed because the util's identity is
+    # in its key
+    assert (summary.created_count, summary.reused_count) == (1, 2)
     assert calls2 == ["parse"]
 
 
@@ -151,9 +165,9 @@ def test_util_shared_by_two_consumers_runs_once():
     calls = []
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     @step(name="norm", version="1", depends_on=["read"], skip_cache=True)
     def norm(read):
@@ -169,7 +183,7 @@ def test_util_shared_by_two_consumers_runs_once():
         return {"len": len(norm)}
 
     pipe = pipeline(
-id="fan", name="fan", folder=TEST_FOLDER, steps=[read, norm, upper, length])
+id="fan", name="fan", steps=[scan, read, norm, upper, length])
     summary = run(pipe, workers=2)
     assert summary.failed_count == 0
     assert calls == ["norm"], "memoized per run despite two consumers"
@@ -178,9 +192,9 @@ id="fan", name="fan", folder=TEST_FOLDER, steps=[read, norm, upper, length])
 def test_util_failure_fails_the_consumer():
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     @step(name="boom", version="1", depends_on=["read"], skip_cache=True)
     def boom(read):
@@ -191,7 +205,7 @@ def test_util_failure_fails_the_consumer():
         return boom
 
     pipe = pipeline(
-id="fail", name="fail", folder=TEST_FOLDER, steps=[read, boom, use])
+id="fail", name="fail", steps=[scan, read, boom, use])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 1
 
@@ -204,8 +218,8 @@ id="fail", name="fail", folder=TEST_FOLDER, steps=[read, boom, use])
 def test_blocked_propagates_through_util():
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1")
-    def read(path):
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
         raise ValueError("root fails")
 
     @step(name="mid", version="1", depends_on=["read"], skip_cache=True)
@@ -217,7 +231,7 @@ def test_blocked_propagates_through_util():
         return mid
 
     pipe = pipeline(
-id="blk", name="blk", folder=TEST_FOLDER, steps=[read, mid, use])
+id="blk", name="blk", steps=[scan, read, mid, use])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 1
 
@@ -229,9 +243,9 @@ id="blk", name="blk", folder=TEST_FOLDER, steps=[read, mid, use])
 def test_chained_utils():
     create_file("f1.txt", "  HELLO  ")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     @step(name="strip", version="1", depends_on=["read"], skip_cache=True)
     def strip(read):
@@ -246,7 +260,7 @@ def test_chained_utils():
         return lower
 
     pipe = pipeline(
-id="chain", name="chain", folder=TEST_FOLDER, steps=[read, strip, lower, out])
+id="chain", name="chain", steps=[scan, read, strip, lower, out])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 0
 
@@ -264,7 +278,7 @@ def test_plan_omits_utils():
 
     p = plan(pipe)
     step_names = {i.step_name for i in p.items}
-    assert step_names == {"read", "report"}
+    assert step_names == {"scan", "read", "report"}
     assert calls == [], "planning must not execute the util"
 
 
@@ -280,4 +294,4 @@ def test_registration_validations():
         pass
 
     with pytest.raises(ValueError, match="no consumer"):
-        pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[orphan])
+        pipeline(id="bad", name="bad", steps=[orphan])

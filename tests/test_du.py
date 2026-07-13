@@ -12,7 +12,7 @@ from rubedo import Selection, invalidate, run, step, pipeline
 from rubedo.db import get_session
 from rubedo.du import storage_report
 from rubedo.models import Materialization
-from rubedo.store import _get_object_path
+from rubedo.store import _get_object_path, read_materialization_output
 
 TEST_FOLDER = ".test_du_data"
 ENV_FOLDER = ".test_du_env"
@@ -74,11 +74,19 @@ def create_file(name, content):
 
 
 def make_shout_pipeline():
-    @step(name="shout", version="1")
-    def shout(path):
-        return open(path).read().upper()
+    # Single-step expand root (TODO 14: no folder= source sugar) that reads
+    # and transforms in the same generator — this keeps the step's own
+    # output content-address exactly hand-countable (no extra scan-step
+    # materialization inflating the byte totals below), matching the old
+    # single-step-over-a-source shape byte for byte.
+    @step(name="shout", version="1", shape="expand")
+    def shout():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield open(path).read().upper()
 
-    return pipeline(id="du", name="du", folder=TEST_FOLDER, steps=[shout])
+    return pipeline(id="du", name="du", steps=[shout])
 
 
 def test_sizes_and_counts_for_populated_store():
@@ -138,40 +146,87 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     normalize to identical output bytes: "same" and "same\\n" strip to the
     same 4-byte object, giving two materializations (different addresses,
     different input hashes) over one physical object.
+
+    This needs a two-step scan -> norm chain (not the single-step shout
+    root above): the scan step's own payload includes "path", so its two
+    lanes stay distinct even though their post-strip content converges —
+    exactly the same-object-different-address case under test.
     """
     create_file("a.txt", "same")
     create_file("b.txt", "same\n")
 
-    @step(name="norm", version="1")
-    def norm(path):
-        return open(path).read().strip()
+    @step(name="scan", version="1", shape="expand", index=["path"])
+    def scan():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
 
-    summary = run(pipeline(id="du", name="du", folder=TEST_FOLDER, steps=[norm]), workers=1)
-    assert summary.created_count == 2
+    @step(name="norm", version="1", depends_on=["scan"])
+    def norm(scan):
+        return scan["text"].strip()
+
+    summary = run(pipeline(id="du", name="du", steps=[scan, norm]), workers=1)
+    assert summary.failed_count == 0
+    assert summary.created_count == 4  # 2 files x (scan + norm)
 
     report = storage_report()
-    assert report.total_materializations == 2
-    assert report.total_objects == 1  # deduped bytes: one physical object
-    assert report.total_bytes == 4  # hand-count: len(b"same")
+    assert report.total_materializations == 4  # 2 scan + 2 norm
+    # norm's two materializations dedupe to one physical object; scan's two
+    # (different "path", so different content, JSON-serialized) add two
+    # more distinct objects.
+    assert report.total_objects == 3
+    (scan_usage,) = [
+        s for s in report.pipelines[0].steps if s.step_name == "scan"
+    ]
+    (norm_usage,) = [
+        s for s in report.pipelines[0].steps if s.step_name == "norm"
+    ]
+    assert norm_usage.objects == 1  # deduped: one shared "same" object
+    assert norm_usage.bytes == len("same")
+    assert report.total_bytes == scan_usage.bytes + norm_usage.bytes
 
     with get_session() as session:
-        addresses = {m.output_address for m in session.query(Materialization).all()}
-        hashes = {m.output_content_hash for m in session.query(Materialization).all()}
+        norm_mats = session.query(Materialization).filter_by(step_name="norm").all()
+        addresses = {m.output_address for m in norm_mats}
+        hashes = {m.output_content_hash for m in norm_mats}
     assert len(addresses) == 2  # distinct addresses...
     assert len(hashes) == 1  # ...sharing one object
 
-    res = invalidate(Selection(coordinate_glob="a.txt"), reason="test")
+    def coordinate_for_path(path_value):
+        with get_session() as session:
+            for m in session.query(Materialization).filter_by(step_name="scan").all():
+                if read_materialization_output(m).get("path") == path_value:
+                    from rubedo.models import RunCoordinateStatus
+
+                    rc = (
+                        session.query(RunCoordinateStatus)
+                        .filter_by(step_name="scan", materialization_id=m.id)
+                        .first()
+                    )
+                    return rc.coordinate
+        return None
+
+    coord_a = coordinate_for_path("a.txt")
+    res = invalidate(
+        Selection(coordinate_glob=coord_a, step="norm"), reason="test"
+    )
     assert res["invalidated_count"] == 1
 
     report = storage_report()
-    assert report.live_materializations == 1
+    norm_live = [
+        m
+        for m in report.pipelines[0].steps
+        if m.step_name == "norm"
+    ][0]
+    assert norm_live.live_materializations == 1
     # One reference is dead, but the survivor keeps the object: NOT reclaimable.
     assert report.reclaimable_objects == 0
     assert report.reclaimable_bytes == 0
-    assert report.total_bytes == 4
 
     # Kill the last live reference and the object becomes reclaimable.
-    invalidate(Selection(coordinate_glob="b.txt"), reason="test")
+    coord_b = coordinate_for_path("b.txt")
+    invalidate(Selection(coordinate_glob=coord_b, step="norm"), reason="test")
     report = storage_report()
     assert report.reclaimable_objects == 1
     assert report.reclaimable_bytes == 4
@@ -202,7 +257,10 @@ def test_reclaimed_object_reported_separately_from_missing():
     *missing* (corruption). The distinction is the object_reclamations log."""
     from rubedo.gc import gc
 
-    # Three generations, no retention -> nothing auto-pruned.
+    # Three distinct-content runs -> three distinct content-addressed
+    # lanes/materializations (TODO 14: an edited file is removed+added, not
+    # a generation of a stable coordinate) -> no retention configured, so
+    # nothing auto-pruned.
     for content in ("alpha", "beta", "gamma"):
         create_file("a.txt", content)
         run(make_shout_pipeline(), workers=1)

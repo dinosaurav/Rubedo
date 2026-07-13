@@ -10,7 +10,13 @@ from sqlalchemy.pool import StaticPool
 from rubedo import run, step, pipeline, Filtered
 from rubedo.runner import plan
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
+from rubedo.models import (
+    Materialization,
+    MaterializationEdge,
+    MaterializationIndexEntry,
+    RunCoordinateStatus,
+    RunEvent,
+)
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_reduce_data"
@@ -74,28 +80,67 @@ def assert_run(pipe):
                 print(f"FAIL: {e.step_name}:{e.coordinate} -> {e.message}")
     return summary
 
+
+@step(name="scan", version="1", shape="expand", index=["path"])
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder=TEST_FOLDER sugar.
+    Indexed on `path` so tests can find "the lane for x.txt" without the
+    coordinate being that literal string."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
+def coord_for_path(filename):
+    """The coordinate scan minted for `filename` — coordinates are
+    row-<hash>, not the filename. A dependent 1:1 map step (parse) shares
+    its ancestor's coordinate unchanged."""
+    with get_session() as session:
+        rows = (
+            session.query(RunCoordinateStatus)
+            .filter_by(step_name="scan")
+            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .all()
+        )
+        for rc in rows:
+            hit = (
+                session.query(MaterializationIndexEntry)
+                .filter_by(
+                    materialization_id=rc.materialization_id,
+                    field="path",
+                    value=filename,
+                )
+                .first()
+            )
+            if hit:
+                return rc.coordinate
+    return None
+
+
 def test_reduce_basic_and_lineage():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
     create_file("c.txt", "30")
 
-    @step(name="parse", version="1")
-    def parse(path):
-        return int(open(path).read().strip())
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        return int(scan["text"].strip())
 
     @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce1", name="reduce1", folder=TEST_FOLDER, steps=[parse, sum_values])
+    pipe = pipeline(id="reduce1", name="reduce1", steps=[scan, parse, sum_values])
     summary = assert_run(pipe)
-    
-    assert summary.created_count == 4  # 3 map + 1 reduce
-    
+
+    assert summary.created_count == 7  # 3 scan + 3 parse + 1 reduce
+
     with get_session() as session:
         mat = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
         assert mat.output_address is not None
-        
+
         edges = session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
         assert len(edges) == 3
 
@@ -103,73 +148,76 @@ def test_reduce_caching():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
-    @step(name="parse", version="1")
-    def parse(path):
-        return int(open(path).read().strip())
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        return int(scan["text"].strip())
 
     @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce2", name="reduce2", folder=TEST_FOLDER, steps=[parse, sum_values])
-    
+    pipe = pipeline(id="reduce2", name="reduce2", steps=[scan, parse, sum_values])
+
     # Run 1: Create
     s1 = assert_run(pipe)
-    assert s1.created_count == 3
-    
+    assert s1.created_count == 5  # 2 scan + 2 parse + 1 reduce
+
     # Run 2: Reused
     s2 = assert_run(pipe)
-    assert s2.reused_count == 3
+    assert s2.reused_count == 5
     assert s2.created_count == 0
-    
-    # Change one file -> parse recomputes, sum recomputes
+
+    # Change one file -> a new content-addressed lane for a.txt (scan +
+    # parse created for it), b.txt's lane is untouched (reused), and the
+    # reduce recomputes because its input membership changed.
     create_file("a.txt", "15")
     s3 = assert_run(pipe)
-    assert s3.reused_count == 1  # parse for b.txt
-    assert s3.created_count == 2 # parse for a.txt, sum
-    
-    # Add a file -> parse computes, sum recomputes
+    assert s3.reused_count == 2  # scan(b), parse(b)
+    assert s3.created_count == 3  # scan(a-new), parse(a-new), sum
+
+    # Add a file -> a new lane computes, sum recomputes
     create_file("c.txt", "30")
     s4 = assert_run(pipe)
-    assert s4.reused_count == 2
-    assert s4.created_count == 2
+    assert s4.reused_count == 4  # scan(a), parse(a), scan(b), parse(b)
+    assert s4.created_count == 3  # scan(c), parse(c), sum
 
 def test_reduce_filtered_lane():
     create_file("a.txt", "keep:10")
     create_file("b.txt", "drop:20")
-    
-    @step(name="parse", version="1")
-    def parse(path):
-        text = open(path).read().strip()
+
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        text = scan["text"].strip()
         if text.startswith("drop"):
             return Filtered("dropped")
         return int(text.split(":")[1])
 
     @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
-        # parse dict should only contain a.txt
-        assert "a.txt" in parse
-        # b.txt is only missing when it starts with "drop"
+        # a.txt (10) is always present; b.txt (20) only when un-filtered.
+        # Coordinates are content-addressed (row-<hash>), not "a.txt"/
+        # "b.txt", so this checks membership by value, not by filename key.
+        assert 10 in parse.values()
         if len(parse) == 2:
-            assert parse["b.txt"] == 20
+            assert 20 in parse.values()
         return sum(parse.values())
-        
-    pipe = pipeline(id="reduce3", name="reduce3", folder=TEST_FOLDER, steps=[parse, sum_values])
+
+    pipe = pipeline(id="reduce3", name="reduce3", steps=[scan, parse, sum_values])
     assert_run(pipe)
-    
+
     with get_session() as session:
         mat = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
         edges = session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
         # Edge only from the survived lane
         assert len(edges) == 1
-        
+
     # Un-filter b.txt
     create_file("b.txt", "keep:20")
     s2 = assert_run(pipe)
-    # b.txt parse recomputes, sum recomputes
-    assert s2.created_count == 2
-    assert s2.reused_count == 1
-    
+    # b.txt's content changed -> new scan+parse lane, sum recomputes
+    assert s2.created_count == 3  # scan(b-new), parse(b-new), sum
+    assert s2.reused_count == 2  # scan(a), parse(a)
+
     with get_session() as session:
         mat2 = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
         edges2 = session.query(MaterializationEdge).filter_by(child_id=mat2.id).all()
@@ -178,10 +226,10 @@ def test_reduce_filtered_lane():
 def test_reduce_failed_parent_lane():
     create_file("a.txt", "10")
     create_file("b.txt", "fail")
-    
-    @step(name="parse", version="1")
-    def parse(path):
-        text = open(path).read().strip()
+
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        text = scan["text"].strip()
         if text == "fail":
             raise ValueError("bad data")
         return int(text)
@@ -190,26 +238,27 @@ def test_reduce_failed_parent_lane():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce4", name="reduce4", folder=TEST_FOLDER, steps=[parse, sum_values])
+    pipe = pipeline(id="reduce4", name="reduce4", steps=[scan, parse, sum_values])
     s1 = run(pipe, workers=1)
-    
+
     assert s1.failed_count == 1
     assert s1.blocked_count == 1
-    
+
+    coord_b = coord_for_path("b.txt")
     with get_session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "blocked"
         meta = json.loads(status.metadata_json)
-        assert "parse:b.txt" in meta["failed_parents"]
+        assert f"parse:{coord_b}" in meta["failed_parents"]
 
 def test_reduce_failed_parent_lane_use_passed():
     create_file("a.txt", "10")
     create_file("b.txt", "fail")
     create_file("c.txt", "20")
 
-    @step(name="parse", version="1")
-    def parse(path):
-        text = open(path).read().strip()
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        text = scan["text"].strip()
         if text == "fail":
             raise ValueError("bad data")
         return int(text)
@@ -218,25 +267,26 @@ def test_reduce_failed_parent_lane_use_passed():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce4_use_passed", name="reduce4_use_passed", folder=TEST_FOLDER, steps=[parse, sum_values])
+    pipe = pipeline(id="reduce4_use_passed", name="reduce4_use_passed", steps=[scan, parse, sum_values])
     s1 = run(pipe, workers=1)
-    
+
     assert s1.failed_count == 1
     assert s1.blocked_count == 0
-    assert s1.created_count == 3  # 2 parse successes + 1 sum
-    
+    assert s1.created_count == 6  # 3 scan + 2 parse successes + 1 sum
+
+    coord_b = coord_for_path("b.txt")
     with get_session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "created"
         meta = json.loads(status.metadata_json)
-        assert "parse:b.txt" in meta["failed_parents"]
+        assert f"parse:{coord_b}" in meta["failed_parents"]
 
 def test_reduce_downstream_map():
     create_file("a.txt", "10")
-    
-    @step(name="parse", version="1")
-    def parse(path):
-        return int(open(path).read().strip())
+
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        return int(scan["text"].strip())
 
     @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
@@ -246,11 +296,11 @@ def test_reduce_downstream_map():
     def format_val(sum):
         return f"Total: {sum}"
 
-    pipe = pipeline(id="reduce5", name="reduce5", folder=TEST_FOLDER, steps=[parse, sum_values, format_val])
+    pipe = pipeline(id="reduce5", name="reduce5", steps=[scan, parse, sum_values, format_val])
     s1 = assert_run(pipe)
-    
-    assert s1.created_count == 3
-    
+
+    assert s1.created_count == 4  # scan + parse + sum + format
+
     with get_session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="format").one()
         assert status.coordinate == "@all"
@@ -258,29 +308,32 @@ def test_reduce_downstream_map():
 
 def test_reduce_plan():
     create_file("a.txt", "10")
-    
-    @step(name="parse", version="1")
-    def parse(path):
-        return int(open(path).read().strip())
+
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        return int(scan["text"].strip())
 
     @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce6", name="reduce6", folder=TEST_FOLDER, steps=[parse, sum_values])
-    
+    pipe = pipeline(id="reduce6", name="reduce6", steps=[scan, parse, sum_values])
+
     p1 = plan(pipe)
-    # Both steps should show as "execute" or "pending" depending on parent state
-    # plan() evaluates topologically, but wait, reduce step depends on parse step, 
-    # which is "execute", so reduce should be "pending"
+    # scan (a root expand) always plans as "execute"; everything downstream
+    # of it — including the reduce — is unknowable without running the
+    # generator, so it plans "pending" (TODO 14 Trap point 1).
     sum_items = [i for i in p1.items if i.step_name == "sum"]
     assert any(i.action == "pending" for i in sum_items)
-    
+
     run(pipe, workers=1)
-    
+
     p2 = plan(pipe)
+    # A second plan() still can't see past the root expand: it always
+    # re-plans "execute" for scan and "pending" downstream, never "reuse" —
+    # see test_plan.py's test_second_plan_still_shows_execute_and_pending_not_reuse.
     sum_items2 = [i for i in p2.items if i.step_name == "sum"]
-    assert any(i.action == "reuse" for i in sum_items2)
+    assert any(i.action == "pending" for i in sum_items2)
 
 def test_registration_errors():
     with pytest.raises(ValueError, match="skip_cache is meaningless with shape='reduce'"):
@@ -292,7 +345,7 @@ def test_registration_errors():
         @step(name="sum", version="1", shape="banana")
         def sum_v2(x):
             pass
-            
+
     with pytest.raises(ValueError, match="requires at least one parent"):
         @step(name="sum", version="1", shape="reduce")
         def sum_v3():
@@ -302,8 +355,8 @@ def test_reduce_all_filtered():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
-    @step(name="parse", version="1")
-    def parse(path):
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
         from rubedo import Filtered
         return Filtered("reason")
 
@@ -311,14 +364,14 @@ def test_reduce_all_filtered():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(id="reduce_empty", name="reduce_empty", folder=TEST_FOLDER, steps=[parse, sum_values])
+    pipe = pipeline(id="reduce_empty", name="reduce_empty", steps=[scan, parse, sum_values])
     s1 = run(pipe, workers=1)
-    
+
     assert s1.failed_count == 0
     assert s1.blocked_count == 0
     assert s1.filtered_count == 2
-    assert s1.created_count == 1 # 1 sum
-    
+    assert s1.created_count == 3  # 2 scan + 1 sum
+
     with get_session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "created"

@@ -11,6 +11,8 @@ import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
 
+TEST_FOLDER = "input"
+
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
@@ -57,48 +59,56 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 
-@step(name="dummy", version="v1")
-def dummy_processor(path: str) -> str:
-    return f"processed_{os.path.basename(path)}"
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder="input" sugar."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
 
-p_dummy = pipeline(id="p-dummy", name="Dummy", folder="input", steps=[dummy_processor])
+@step(name="dummy", version="v1", depends_on=["scan"])
+def dummy_processor(scan: dict) -> str:
+    return f"processed_{scan['path']}"
+
+
+p_dummy = pipeline(id="p-dummy", name="Dummy", steps=[scan, dummy_processor])
 
 
 def test_crash_before_processing(setup_teardown):
-    temp_workspace = setup_teardown
-
     # Simulate a crash during the actual processing function
-    @step(name="crashing", version="v1")
-    def crashing_processor(path: str) -> str:
+    @step(name="crashing", version="v1", depends_on=["scan"])
+    def crashing_processor(scan: dict) -> str:
         raise Exception("Crash before processing completes!")
 
     p_crashing = pipeline(
-        id="p-crash", name="Crash", folder="input", steps=[crashing_processor]
+        id="p-crash", name="Crash", steps=[scan, crashing_processor]
     )
 
-    summary = run(p_crashing, str(temp_workspace), workers=1)
-    assert summary.status == "failed"
+    summary = run(p_crashing, workers=1)
+    # scan(a)/(b) succeed; both crashing(a)/(b) fail -> partial success.
+    assert summary.status == "completed_with_failures"
     assert summary.failed_count == 2
-    assert summary.created_count == 0
+    assert summary.created_count == 2  # scan(a) + scan(b) succeed
 
     # Rerun should attempt again (and still fail if we use the crashing one,
     # but let's use the normal one to show it recovers)
-    summary2 = run(p_dummy, str(temp_workspace), workers=1)
+    summary2 = run(p_dummy, workers=1)
     assert summary2.status == "completed"
-    assert summary2.created_count == 2
-    assert summary2.reused_count == 0
+    assert summary2.created_count == 2  # dummy(a) + dummy(b); scan reused
+    assert summary2.reused_count == 2  # scan(a) + scan(b)
 
 
 def test_crash_during_staging(setup_teardown):
-    temp_workspace = setup_teardown
     # Simulate crash inside stage_and_commit
 
     def crashing_stage(*args, **kwargs):
         raise Exception("Disk full or worker killed during write")
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=crashing_stage):
-        summary = run(p_dummy, str(temp_workspace), workers=1)
+        summary = run(p_dummy, workers=1)
         assert summary.status == "failed"
         assert summary.created_count == 0
 
@@ -107,13 +117,12 @@ def test_crash_during_staging(setup_teardown):
         assert session.query(Materialization).count() == 0
 
     # Rerun normally
-    summary2 = run(p_dummy, str(temp_workspace), workers=1)
+    summary2 = run(p_dummy, workers=1)
     assert summary2.status == "completed"
-    assert summary2.created_count == 2
+    assert summary2.created_count == 4  # scan(a,b) + dummy(a,b)
 
 
 def test_crash_after_staging_before_db_commit(setup_teardown):
-    temp_workspace = setup_teardown
     original_stage = stage_and_commit
 
     def crashing_stage_but_write_succeeds(*args, **kwargs):
@@ -126,7 +135,7 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
         "rubedo.ledger.stage_and_commit",
         side_effect=crashing_stage_but_write_succeeds,
     ):
-        summary = run(p_dummy, str(temp_workspace), workers=1)
+        summary = run(p_dummy, workers=1)
         assert summary.status == "failed"
 
     # Verify no materialization row
@@ -136,19 +145,18 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
     # Rerun normally
     # The output address will be exactly the same.
     # Because stage_and_commit does an atomic os.replace, it will harmlessly overwrite the orphaned file.
-    summary2 = run(p_dummy, str(temp_workspace), workers=1)
+    summary2 = run(p_dummy, workers=1)
     assert summary2.status == "completed"
-    assert summary2.created_count == 2
+    assert summary2.created_count == 4  # scan(a,b) + dummy(a,b)
 
 
 def test_success_and_reuse(setup_teardown):
-    temp_workspace = setup_teardown
-    summary1 = run(p_dummy, str(temp_workspace), workers=1)
+    summary1 = run(p_dummy, workers=1)
     assert summary1.status == "completed"
-    assert summary1.created_count == 2
+    assert summary1.created_count == 4  # scan(a,b) + dummy(a,b)
 
     # Rerun should skip
-    summary2 = run(p_dummy, str(temp_workspace), workers=1)
+    summary2 = run(p_dummy, workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 0
-    assert summary2.reused_count == 2
+    assert summary2.reused_count == 4

@@ -76,12 +76,22 @@ def create_file(name, content):
         f.write(content)
 
 
-def make_pipeline():
-    """extract (indexed) -> summarize -> total (reduce): a 3-step chain."""
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-    @step(name="extract", version="1", index=["company"])
-    def extract(path):
-        company, amount = open(path).read().strip().split(",")
+
+def make_pipeline():
+    """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
+
+    @step(name="extract", version="1", depends_on=["scan"], index=["company"])
+    def extract(scan):
+        company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
 
     @step(name="summarize", version="1", depends_on=["extract"])
@@ -93,7 +103,7 @@ def make_pipeline():
         return {"sum": sum(v["double"] for v in summarize.values())}
 
     return pipeline(
-        id="invd", name="invd", folder=TEST_FOLDER, steps=[extract, summarize, total]
+        id="invd", name="invd", steps=[scan, extract, summarize, total]
     )
 
 
@@ -139,18 +149,21 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     liveness = _liveness_by_id()
     for mat_id in flipped:
         assert liveness[mat_id][1] is False
-    # The sibling lane (globex extract/summarize) is untouched.
+    # The sibling lane (globex extract/summarize) is untouched, and so are
+    # both scan lanes (scan is upstream of the seed, never touched by
+    # downstream invalidation).
     survivors = {step_name for mid, (step_name, live) in liveness.items() if live}
-    assert survivors == {"extract", "summarize"}
-    assert sum(1 for _, (_, live) in liveness.items() if live) == 2
+    assert survivors == {"scan", "extract", "summarize"}
+    assert sum(1 for _, (_, live) in liveness.items() if live) == 4
 
     # Every flip ships exactly one "invalidated" lifecycle row (invariant 8).
     assert _invalidated_lifecycle_counts(flipped) == {m: 1 for m in flipped}
 
-    # Lazy heal: the next run recomputes exactly the invalidated set.
+    # Lazy heal: the next run recomputes exactly the invalidated set; both
+    # scan lanes plus the surviving globex extract/summarize are reused.
     summary = run(make_pipeline())
     assert summary.created_count == 3
-    assert summary.reused_count == 2
+    assert summary.reused_count == 4
 
 
 def test_downstream_flipped_set_equals_trace_preview():
@@ -159,8 +172,14 @@ def test_downstream_flipped_set_equals_trace_preview():
     run(make_pipeline())
 
     sel = Selection(index={"company": "acme"})
-    # trace() is the preview: capture its live nodes BEFORE invalidating.
-    preview = {n.materialization_id for n in trace(sel).nodes if n.is_live}
+    # trace() is the preview: capture its live nodes BEFORE invalidating,
+    # excluding upstream context (scan) — invalidate(downstream=True) never
+    # touches upstream, only the seed and its downstream closure.
+    preview = {
+        n.materialization_id
+        for n in trace(sel).nodes
+        if n.is_live and n.relation != "upstream"
+    }
 
     result = invalidate(sel, reason="preview parity", downstream=True)
 
@@ -201,6 +220,9 @@ def test_default_invalidation_touches_only_direct_matches():
     liveness = _liveness_by_id()
     dead = [step_name for _, (step_name, live) in liveness.items() if not live]
     assert dead == ["extract"]
-    # Downstream summarize/total stay live.
+    # Downstream summarize/total stay live, and so do both scan lanes
+    # (upstream of extract, never touched).
     live_steps = sorted(step_name for _, (step_name, live) in liveness.items() if live)
-    assert live_steps == ["extract", "summarize", "summarize", "total"]
+    assert live_steps == [
+        "extract", "scan", "scan", "summarize", "summarize", "total",
+    ]

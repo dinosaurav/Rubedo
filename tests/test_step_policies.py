@@ -67,24 +67,25 @@ def isolated_env():
 
 
 def create_file(name, content):
-    with open(os.path.join(TEST_FOLDER, name), "w") as f:
+    path = os.path.join(TEST_FOLDER, name)
+    with open(path, "w") as f:
         f.write(content)
+    return path
 
 
 def test_retries_until_success():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
     calls = {"n": 0}
 
     @step(name="flaky", version="1", retries=2, retry_on=TimeoutError)
-    def flaky(path):
+    def flaky(params):
         calls["n"] += 1
         if calls["n"] < 3:
             raise TimeoutError("transient")
         return "ok"
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[flaky])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[flaky])
+    summary = run(pipe, params={"path": path}, workers=1)
 
     assert calls["n"] == 3
     assert (summary.created_count, summary.failed_count) == (1, 0)
@@ -104,15 +105,14 @@ id="p", name="p", folder=TEST_FOLDER, steps=[flaky])
 
 
 def test_retries_exhausted_records_failure():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
 
     @step(name="doomed", version="1", retries=1, retry_on=TimeoutError)
-    def doomed(path):
+    def doomed(params):
         raise TimeoutError("always")
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[doomed])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[doomed])
+    summary = run(pipe, params={"path": path}, workers=1)
 
     assert summary.failed_count == 1
     with get_session() as session:
@@ -128,17 +128,16 @@ id="p", name="p", folder=TEST_FOLDER, steps=[doomed])
 
 
 def test_retry_on_filters_exception_types():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
     calls = {"n": 0}
 
     @step(name="buggy", version="1", retries=5, retry_on=TimeoutError)
-    def buggy(path):
+    def buggy(params):
         calls["n"] += 1
         raise ValueError("deterministic bug — retrying just multiplies cost")
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[buggy])
-    summary = run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[buggy])
+    summary = run(pipe, params={"path": path}, workers=1)
 
     assert calls["n"] == 1, "non-matching exception must not be retried"
     assert summary.failed_count == 1
@@ -148,18 +147,26 @@ def test_rate_limit_paces_execution():
     for i in range(4):
         create_file(f"f{i}.txt", f"content-{i}")
 
-    @step(name="polite", version="1", rate_limit="10/s")
-    def polite(path):
+    # Needs genuine multi-lane parallelism, so a folder-scan expand root
+    # (TODO 14) rather than a single param-fed lane.
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
+
+    @step(name="polite", version="1", depends_on=["scan"], rate_limit="10/s")
+    def polite(scan):
         return "done"
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[polite])
+    pipe = pipeline(id="p", name="p", steps=[scan, polite])
 
     start = time.monotonic()
     summary = run(pipe, workers=4)
     elapsed = time.monotonic() - start
 
-    assert summary.created_count == 4
+    assert summary.created_count == 8  # 4 scan + 4 polite
     # 4 calls at 10/s = at least 3 intervals of 0.1s
     assert elapsed >= 0.28
 
@@ -178,7 +185,7 @@ def test_bad_rate_limit_rejected_at_registration():
     with pytest.raises(ValueError, match="Invalid rate_limit"):
 
         @step(name="x", version="1", rate_limit="oops")
-        def x(path):
+        def x(params):
             pass
 
 
@@ -210,35 +217,35 @@ def backdate_materializations(iso_timestamp):
 
 
 def test_fresh_output_is_reused():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
 
     @step(name="scrape", version="1", stale_after="1h")
-    def scrape(path):
-        return open(path).read()
+    def scrape(params):
+        return open(params["path"]).read()
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
-    run(pipe, workers=1)
-    summary = run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[scrape])
+    params = {"path": path}
+    run(pipe, params=params, workers=1)
+    summary = run(pipe, params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
 
 def test_expired_deterministic_output_is_refreshed():
     from rubedo.models import Materialization, MaterializationLifecycle
 
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
 
     @step(name="scrape", version="1", stale_after="1h")
-    def scrape(path):
-        return open(path).read()
+    def scrape(params):
+        return open(params["path"]).read()
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
-    run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[scrape])
+    params = {"path": path}
+    run(pipe, params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
     # Expired -> re-executes; identical bytes -> refreshed, not a new row
-    summary = run(pipe, workers=1)
+    summary = run(pipe, params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (1, 0)
 
     with get_session() as session:
@@ -252,7 +259,7 @@ id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
         assert lc.action == "refreshed"
 
     # refreshed_at reset the clock: next run reuses again
-    summary3 = run(pipe, workers=1)
+    summary3 = run(pipe, params=params, workers=1)
     assert (summary3.created_count, summary3.reused_count) == (0, 1)
 
 
@@ -261,19 +268,19 @@ def test_expired_nondeterministic_output_is_superseded():
 
     from rubedo.models import Materialization
 
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
     counter = itertools.count()
 
     @step(name="scrape", version="1", stale_after="1h")
-    def scrape(path):
+    def scrape(params):
         return {"attempt": next(counter)}
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
-    run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[scrape])
+    params = {"path": path}
+    run(pipe, params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
-    summary = run(pipe, workers=1)
+    summary = run(pipe, params=params, workers=1)
     assert summary.created_count == 1
 
     with get_session() as session:
@@ -286,16 +293,16 @@ id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
 def test_staleness_visible_in_plan():
     from rubedo import plan
 
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
 
     @step(name="scrape", version="1", stale_after="1h")
-    def scrape(path):
-        return open(path).read()
+    def scrape(params):
+        return open(params["path"]).read()
 
-    pipe = pipeline(
-id="p", name="p", folder=TEST_FOLDER, steps=[scrape])
-    run(pipe, workers=1)
+    pipe = pipeline(id="p", name="p", steps=[scrape])
+    params = {"path": path}
+    run(pipe, params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
 
-    p = plan(pipe)
+    p = plan(pipe, params=params)
     assert p.counts == {"execute": 1}

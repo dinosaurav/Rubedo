@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import FolderSource, run, step, pipeline
+from rubedo import run, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -66,6 +66,16 @@ def create_file(name, content):
         f.write(content)
 
 
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder-source-class sugar."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
 def assert_run(pipe):
     summary = run(pipe, workers=1)
     if summary.failed_count > 0:
@@ -101,9 +111,9 @@ def test_group_key_partitions_by_indexed_field():
     create_file("b.txt", "tech")
     create_file("c.txt", "biz")
 
-    @step(name="classify", version="1", index=["category"])
-    def classify(path):
-        return {"category": open(path).read().strip()}
+    @step(name="classify", version="1", depends_on=["scan"], index=["category"])
+    def classify(scan):
+        return {"category": scan["text"].strip()}
 
     @step(
         name="rollup", version="1", depends_on=["classify"],
@@ -112,9 +122,7 @@ def test_group_key_partitions_by_indexed_field():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(
-        id="g", name="g", source=FolderSource(TEST_FOLDER), steps=[classify, rollup]
-    )
+    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
 
     outs = _outputs("rollup")
@@ -127,17 +135,15 @@ def test_group_key_none_is_one_all_group():
     create_file("a.txt", "tech")
     create_file("b.txt", "biz")
 
-    @step(name="classify", version="1", index=["category"])
-    def classify(path):
-        return {"category": open(path).read().strip()}
+    @step(name="classify", version="1", depends_on=["scan"], index=["category"])
+    def classify(scan):
+        return {"category": scan["text"].strip()}
 
     @step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(
-        id="g", name="g", source=FolderSource(TEST_FOLDER), steps=[classify, rollup]
-    )
+    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     assert set(outs) == {"@all"}
@@ -147,8 +153,8 @@ def test_group_key_none_is_one_all_group():
 def test_group_key_multivalue_joins_multiple_groups():
     create_file("a.txt", "solo")
 
-    @step(name="classify", version="1", index=["tag"])
-    def classify(path):
+    @step(name="classify", version="1", depends_on=["scan"], index=["tag"])
+    def classify(scan):
         return {"tag": ["tech", "ai"]}
 
     @step(
@@ -158,9 +164,7 @@ def test_group_key_multivalue_joins_multiple_groups():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(
-        id="g", name="g", source=FolderSource(TEST_FOLDER), steps=[classify, rollup]
-    )
+    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     # the single lane is a member of both groups
@@ -172,9 +176,9 @@ def test_group_key_multivalue_joins_multiple_groups():
 def test_group_key_reduce_after_expand():
     create_file("feed.txt", "tech\nbiz\ntech")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read().splitlines()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"].splitlines()
 
     @step(
         name="articles", version="1", depends_on=["read"],
@@ -191,10 +195,7 @@ def test_group_key_reduce_after_expand():
     def rollup(articles):
         return {"n": len(articles)}
 
-    pipe = pipeline(
-        id="g", name="g", source=FolderSource(TEST_FOLDER),
-        steps=[read, articles, rollup],
-    )
+    pipe = pipeline(id="g", name="g", steps=[scan, read, articles, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
     # reduce gathers the minted expand lanes and groups them
@@ -206,8 +207,8 @@ def test_group_key_reduce_after_expand():
 def test_group_key_unindexed_field_raises():
     create_file("a.txt", "hello")
 
-    @step(name="classify", version="1")  # category is NOT indexed
-    def classify(path):
+    @step(name="classify", version="1", depends_on=["scan"])  # category is NOT indexed
+    def classify(scan):
         return {"category": "tech"}
 
     @step(
@@ -217,9 +218,7 @@ def test_group_key_unindexed_field_raises():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(
-        id="g", name="g", source=FolderSource(TEST_FOLDER), steps=[classify, rollup]
-    )
+    pipe = pipeline(id="g", name="g", steps=[scan, classify, rollup])
     with pytest.raises(ValueError, match="no indexed value"):
         run(pipe, workers=1)
 

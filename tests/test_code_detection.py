@@ -64,42 +64,50 @@ def isolated_env():
 
 
 def create_file(name, content):
-    with open(os.path.join(TEST_FOLDER, name), "w") as f:
+    path = os.path.join(TEST_FOLDER, name)
+    with open(path, "w") as f:
         f.write(content)
+    return path
 
 
-# Module-level step bodies so tests can register "the same step, edited".
+# Module-level step bodies so tests can register "the same step, edited". A
+# single file, fed by path via params to a headless map root (TODO 14: no
+# folder= source sugar) — no folder-scanning multiplicity is needed here,
+# just one lane whose identity tracks code/version, so a param-fed root
+# keeps plan()'s per-lane visibility (an expand root's downstream lanes are
+# opaque to plan(), see test_plan.py).
 
 
-def body_v1(path):
-    return open(path).read().strip()
+def body_v1(params):
+    return open(params["path"]).read().strip()
 
 
-def body_v2(path):
-    return open(path).read().strip().upper()  # the "edit"
+def body_v2(params):
+    return open(params["path"]).read().strip().upper()  # the "edit"
 
 
 def register(fn, version, code="warn"):
     spec = step(name="work", version=version, code=code)(fn)
-    pipe = pipeline(id="cd", name="cd", folder=TEST_FOLDER, steps=[spec])
+    pipe = pipeline(id="cd", name="cd", steps=[spec])
     return pipe, spec
 
 
 def test_code_auto_recomputes_on_code_change():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    p = {"path": path}
 
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    s1 = run(pipe, workers=1)
+    s1 = run(pipe, params=p, workers=1)
     assert s1.created_count == 1
 
     # Same code: cache hit
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    s2 = run(pipe, workers=1)
+    s2 = run(pipe, params=p, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 1)
 
     # Edited code: identity changed, recompute without any version bump
     pipe, _ = register(body_v2, "1.0.0", code="auto")
-    s3 = run(pipe, workers=1)
+    s3 = run(pipe, params=p, workers=1)
     assert (s3.created_count, s3.reused_count) == (1, 0)
 
     # code='auto' never drift-warns: identity already tracks the source
@@ -108,19 +116,20 @@ def test_code_auto_recomputes_on_code_change():
     pipe, _ = register(body_v2, "1.0.0", code="auto")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        s4 = run(pipe, workers=1)
+        s4 = run(pipe, params=p, workers=1)
     assert s4.reused_count == 1
 
 
 def test_version_and_code_are_independent_axes():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    p = {"path": path}
 
     pipe, _ = register(body_v1, "1.0.0", code="auto")
-    run(pipe, workers=1)
+    run(pipe, params=p, workers=1)
 
     # Same code, bumped version: version alone changes identity
     pipe, _ = register(body_v1, "2.0.0", code="auto")
-    s = run(pipe, workers=1)
+    s = run(pipe, params=p, workers=1)
     assert (s.created_count, s.reused_count) == (1, 0)
 
 
@@ -130,15 +139,16 @@ def test_version_auto_is_rejected():
 
 
 def test_manual_version_warns_on_drift_but_reuses():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    p = {"path": path}
 
     pipe, _ = register(body_v1, "v1")
-    run(pipe, workers=1)
+    run(pipe, params=p, workers=1)
 
     # Code edited, version not bumped: reuse stands, but loudly
     pipe, _ = register(body_v2, "v1")
     with pytest.warns(UserWarning, match="source code changed"):
-        summary = run(pipe, workers=1)
+        summary = run(pipe, params=p, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
     with get_session() as session:
@@ -153,33 +163,35 @@ def test_manual_version_warns_on_drift_but_reuses():
 def test_no_warning_when_code_unchanged():
     import warnings
 
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    p = {"path": path}
     pipe, _ = register(body_v1, "v1")
-    run(pipe, workers=1)
+    run(pipe, params=p, workers=1)
 
     pipe, _ = register(body_v1, "v1")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        summary = run(pipe, workers=1)
+        summary = run(pipe, params=p, workers=1)
     assert summary.reused_count == 1
 
 
 def test_plan_surfaces_drift_warning():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    params = {"path": path}
     pipe, _ = register(body_v1, "v1")
-    run(pipe, workers=1)
+    run(pipe, params=params, workers=1)
 
     pipe, _ = register(body_v2, "v1")
-    p = plan(pipe)
+    p = plan(pipe, params=params)
     assert len(p.warnings) == 1
     assert "source code changed" in p.warnings[0]
     assert p.counts == {"reuse": 1}
 
 
 def test_code_hash_recorded_on_materialization():
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
     pipe, spec = register(body_v1, "v1")
-    run(pipe, workers=1)
+    run(pipe, params={"path": path}, workers=1)
 
     with get_session() as session:
         mat = session.query(Materialization).one()

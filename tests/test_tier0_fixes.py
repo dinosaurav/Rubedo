@@ -70,8 +70,20 @@ def isolated_env():
 
 
 def create_file(name, content):
-    with open(os.path.join(TEST_FOLDER, name), "w") as f:
+    path = os.path.join(TEST_FOLDER, name)
+    with open(path, "w") as f:
         f.write(content)
+    return path
+
+
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder=TEST_FOLDER sugar."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
 
 # --- B1: multi-parent map over disjoint parent lanes -----------------------
@@ -98,24 +110,22 @@ def test_disjoint_parent_lanes_raise_clear_error():
 def test_diamond_parents_still_run():
     create_file("a.txt", "Hello")
 
-    @step(name="upper", version="1")
-    def upper(path):
-        return open(path).read().upper()
+    @step(name="upper", version="1", depends_on=["scan"])
+    def upper(scan):
+        return scan["text"].upper()
 
-    @step(name="lower", version="1")
-    def lower(path):
-        return open(path).read().lower()
+    @step(name="lower", version="1", depends_on=["scan"])
+    def lower(scan):
+        return scan["text"].lower()
 
     @step(name="both", version="1", depends_on=["upper", "lower"])
     def both(upper, lower):
         return {"u": upper, "l": lower}
 
-    pipe = pipeline(
-        id="dm", name="dm", folder=TEST_FOLDER, steps=[upper, lower, both]
-    )
+    pipe = pipeline(id="dm", name="dm", steps=[scan, upper, lower, both])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 0
-    assert summary.created_count == 3
+    assert summary.created_count == 4  # scan + upper + lower + both
 
 
 # --- B3: a failed invalidation must not commit partial flips ---------------
@@ -125,11 +135,11 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     create_file("a.txt", "1")
     create_file("b.txt", "2")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
-    pipe = pipeline(id="inv", name="inv", folder=TEST_FOLDER, steps=[read])
+    pipe = pipeline(id="inv", name="inv", steps=[scan, read])
     run(pipe, workers=1)
 
     import rubedo.invalidation as inv_mod
@@ -161,17 +171,19 @@ def test_selection_ids_unique_across_runs():
     create_file("a.txt", "1")
     create_file("b.txt", "2")
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
-    pipe = pipeline(id="uniq", name="uniq", folder=TEST_FOLDER, steps=[read])
+    pipe = pipeline(id="uniq", name="uniq", steps=[scan, read])
     run(pipe, workers=1)
     run(pipe, workers=1)  # reuse: a second status row per materialization
 
     with get_session() as session:
+        # Scoped to "read" (not scan too): the point under test is
+        # uniqueness across the two runs' status rows, not the raw count.
         ids = get_selection_materialization_ids(
-            session, Selection(coordinate_glob="*")
+            session, Selection(coordinate_glob="*", step="read")
         )
     assert len(ids) == len(set(ids)) == 2
 
@@ -185,18 +197,22 @@ def test_selection_parse_pipeline_term():
 def test_invalidate_scoped_to_pipeline():
     create_file("a.txt", "1")
 
-    @step(name="read", version="1")
-    def read_v1(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read_v1(scan):
+        return scan["text"]
 
-    @step(name="read", version="2")
-    def read_v2(path):
-        return open(path).read()
+    @step(name="read", version="2", depends_on=["scan"])
+    def read_v2(scan):
+        return scan["text"]
 
-    run(pipeline(id="p1", name="p1", folder=TEST_FOLDER, steps=[read_v1]), workers=1)
-    run(pipeline(id="p2", name="p2", folder=TEST_FOLDER, steps=[read_v2]), workers=1)
+    run(pipeline(id="p1", name="p1", steps=[scan, read_v1]), workers=1)
+    run(pipeline(id="p2", name="p2", steps=[scan, read_v2]), workers=1)
 
-    res = invalidate(Selection.parse("pipeline:p2"), reason="scope test")
+    # Scoped to step="read" too (not just pipeline): each pipeline now has
+    # two steps (scan + read), so pipeline-only scoping would catch both.
+    res = invalidate(
+        Selection.parse("pipeline:p2 step:read"), reason="scope test"
+    )
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
@@ -227,7 +243,7 @@ def test_join_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="skip_cache parent"):
-        pipeline(id="jz", name="jz", folder=TEST_FOLDER, steps=[left, right, j])
+        pipeline(id="jz", name="jz", steps=[left, right, j])
 
 
 def test_group_key_rejects_skip_cache_parent():
@@ -244,19 +260,22 @@ def test_group_key_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="materialized parents"):
-        pipeline(id="gz", name="gz", folder=TEST_FOLDER, steps=[src, u, r])
+        pipeline(id="gz", name="gz", steps=[src, u, r])
 
 
 # --- B6: expand may yield bytes payloads ------------------------------------
 
 
 def test_expand_yields_bytes_and_reuses():
-    create_file("a.txt", "alpha\nbeta")
+    path = create_file("a.txt", "alpha\nbeta")
 
     def make_pipe():
+        # A headless param-fed root (TODO 14): this test is about a
+        # downstream expand yielding bytes, not about folder scanning, so a
+        # single param-fed lane keeps it simple.
         @step(name="read", version="1")
-        def read(path):
-            return open(path).read()
+        def read(params):
+            return open(params["path"]).read()
 
         @step(name="chunks", version="1", depends_on=["read"], shape="expand")
         def chunks(read):
@@ -268,11 +287,10 @@ def test_expand_yields_bytes_and_reuses():
             assert isinstance(chunks, bytes)
             return len(chunks)
 
-        return pipeline(
-            id="bx", name="bx", folder=TEST_FOLDER, steps=[read, chunks, size]
-        )
+        return pipeline(id="bx", name="bx", steps=[read, chunks, size])
 
-    s1 = run(make_pipe(), workers=1)
+    params = {"path": path}
+    s1 = run(make_pipe(), params=params, workers=1)
     assert s1.failed_count == 0
     # read (1) + two bytes children + two size outputs; the anchor is not a lane
     assert s1.created_count == 5
@@ -288,7 +306,7 @@ def test_expand_yields_bytes_and_reuses():
         }
     assert sizes == {5, 4}  # alpha, beta
 
-    s2 = run(make_pipe(), workers=1)
+    s2 = run(make_pipe(), params=params, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 5)
 
 
@@ -299,14 +317,13 @@ def test_failed_plus_filtered_run_is_completed_with_failures():
     create_file("good.txt", "keep")
     create_file("bad.txt", "explode")
 
-    @step(name="gate", version="1")
-    def gate(path):
-        text = open(path).read()
-        if text == "explode":
+    @step(name="gate", version="1", depends_on=["scan"])
+    def gate(scan):
+        if scan["text"] == "explode":
             raise RuntimeError("boom")
         return Filtered(reason="not wanted")
 
-    pipe = pipeline(id="st", name="st", folder=TEST_FOLDER, steps=[gate])
+    pipe = pipeline(id="st", name="st", steps=[scan, gate])
     summary = run(pipe, workers=1)
     assert summary.failed_count == 1
     assert summary.filtered_count == 1
@@ -324,9 +341,9 @@ def test_ephemeral_coords_compute_in_parallel():
     # the old whole-memo lock serialized them and would break the barrier.
     barrier = threading.Barrier(2, timeout=5)
 
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     @step(name="util", version="1", depends_on=["read"], skip_cache=True)
     def util(read):
@@ -337,7 +354,7 @@ def test_ephemeral_coords_compute_in_parallel():
     def out(util):
         return util
 
-    pipe = pipeline(id="par", name="par", folder=TEST_FOLDER, steps=[read, util, out])
+    pipe = pipeline(id="par", name="par", steps=[scan, read, util, out])
     summary = run(pipe)
     assert summary.failed_count == 0
-    assert summary.created_count == 4  # 2 read + 2 out
+    assert summary.created_count == 6  # 2 scan + 2 read + 2 out

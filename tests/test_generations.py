@@ -69,8 +69,20 @@ def isolated_env():
 
 
 def create_file(name, content):
-    with open(os.path.join(TEST_FOLDER, name), "w") as f:
+    path = os.path.join(TEST_FOLDER, name)
+    with open(path, "w") as f:
         f.write(content)
+    return path
+
+
+# These tests are all single-file, and genuine "generations" (repeat
+# recomputes landing on the *same* address) require a stable lane — an
+# expand root's own address tracks its yielded content (TODO 14: "identical
+# rows collapse"), so a non-deterministic root would mint a fresh address
+# every run, which is exactly the instability these tests must NOT have.
+# A headless param-fed root (see test_headless_root.py) keeps the "@root"
+# lane's address stable across recomputes; only the step's params/version
+# move it.
 
 
 def make_nondeterministic_pipeline(pipe_id="gen"):
@@ -78,16 +90,14 @@ def make_nondeterministic_pipeline(pipe_id="gen"):
     counter = itertools.count()
 
     @step(name="generate", version="1")
-    def generate(path):
-        return {"attempt": next(counter), "input": open(path).read()}
+    def generate(params):
+        return {"attempt": next(counter), "input": open(params["path"]).read()}
 
     @step(name="summarize", version="1", depends_on=["generate"])
     def summarize(generate):
         return f"attempt={generate['attempt']}"
 
-    return pipeline(
-        id=pipe_id, name=pipe_id, folder=TEST_FOLDER, steps=[generate, summarize]
-    )
+    return pipeline(id=pipe_id, name=pipe_id, steps=[generate, summarize])
 
 
 def get_mats(step_name):
@@ -102,15 +112,16 @@ def get_mats(step_name):
 
 def test_invalidate_nondeterministic_creates_new_generation():
     pipe = make_nondeterministic_pipeline()
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    params = {"path": path}
 
-    run(pipe, workers=1)
+    run(pipe, params=params, workers=1)
     (gen1,) = get_mats("generate")
     (sum1,) = get_mats("summarize")
 
     invalidate(Selection(step="generate"), reason="bad output")
 
-    summary = run(pipe, workers=1)
+    summary = run(pipe, params=params, workers=1)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -152,10 +163,11 @@ def test_invalidate_nondeterministic_creates_new_generation():
 
 def test_force_nondeterministic_supersedes_live_generation():
     pipe = make_nondeterministic_pipeline()
-    create_file("f1.txt", "hello")
+    path = create_file("f1.txt", "hello")
+    params = {"path": path}
 
-    run(pipe, workers=1)
-    summary = run(pipe, workers=1, force=True)
+    run(pipe, params=params, workers=1)
+    summary = run(pipe, params=params, workers=1, force=True)
     assert summary.failed_count == 0
 
     gens = get_mats("generate")
@@ -179,15 +191,15 @@ def test_force_nondeterministic_supersedes_live_generation():
 
 def test_force_deterministic_reuses_live_row():
     @step(name="stable", version="1")
-    def stable(path):
-        return open(path).read().upper()
+    def stable(params):
+        return open(params["path"]).read().upper()
 
-    pipe = pipeline(
-id="det", name="det", folder=TEST_FOLDER, steps=[stable])
-    create_file("f1.txt", "hello")
+    pipe = pipeline(id="det", name="det", steps=[stable])
+    path = create_file("f1.txt", "hello")
+    params = {"path": path}
 
-    run(pipe, workers=1)
-    run(pipe, workers=1, force=True)
+    run(pipe, params=params, workers=1)
+    run(pipe, params=params, workers=1, force=True)
 
     mats = get_mats("stable")
     assert len(mats) == 1, "identical bytes are the same fact, not a new generation"
@@ -199,45 +211,50 @@ def test_params_are_part_of_cache_identity():
 
     class Thresh(BaseModel):
         threshold: int = 0
+        path: str = ""
 
     @step(name="score", version="1", params_model=Thresh)
-    def score(path, params: Thresh):
-        return {"ok": len(open(path).read()) >= params.threshold}
+    def score(params: Thresh):
+        return {"ok": len(open(params.path).read()) >= params.threshold}
 
     @step(name="label", version="1", depends_on=["score"])
     def label(score):
         return "pass" if score["ok"] else "fail"
 
     pipe = pipeline(
-id="par", name="par", folder=TEST_FOLDER, steps=[score, label], params_model=Thresh)
-    create_file("f1.txt", "hello")
+        id="par", name="par", steps=[score, label], params_model=Thresh
+    )
+    path = create_file("f1.txt", "hello")
 
-    s1 = run(pipe, params={"threshold": 1}, workers=1)
+    s1 = run(pipe, params={"threshold": 1, "path": path}, workers=1)
     assert (s1.created_count, s1.reused_count) == (2, 0)
 
     # Same params: full cache hit
-    s2 = run(pipe, params={"threshold": 1}, workers=1)
+    s2 = run(pipe, params={"threshold": 1, "path": path}, workers=1)
     assert (s2.created_count, s2.reused_count) == (0, 2)
 
     # Different params, different answer: score recomputes (params are in
     # its address) and label follows through the content-hash chain
-    s3 = run(pipe, params={"threshold": 100}, workers=1)
+    s3 = run(pipe, params={"threshold": 100, "path": path}, workers=1)
     assert (s3.created_count, s3.reused_count) == (2, 0)
 
     # Different params, same answer: score recomputes but produces identical
     # bytes, so label is reused off the unchanged content hash
-    s4 = run(pipe, params={"threshold": 2}, workers=1)
+    s4 = run(pipe, params={"threshold": 2, "path": path}, workers=1)
     assert (s4.created_count, s4.reused_count) == (1, 1)
 
 
 def test_params_do_not_churn_param_free_pipelines():
+    path = create_file("f1.txt", "hello")
+
+    # No "params" argument at all -> _step_accepts_params is False, so this
+    # step's identity never folds in params, no matter what run() is given
+    # — the point of this test.
     @step(name="upper", version="1")
-    def upper(path):
+    def upper():
         return open(path).read().upper()
 
-    pipe = pipeline(
-id="nopar", name="nopar", folder=TEST_FOLDER, steps=[upper])
-    create_file("f1.txt", "hello")
+    pipe = pipeline(id="nopar", name="nopar", steps=[upper])
 
     run(pipe, workers=1)
     s2 = run(pipe, params={"anything": 42}, workers=1)
@@ -246,7 +263,7 @@ id="nopar", name="nopar", folder=TEST_FOLDER, steps=[upper])
 
 def test_string_payload_round_trips_as_string():
     @step(name="emit", version="1")
-    def emit(path):
+    def emit(params):
         return "123"  # would come back as int 123 under JSON guessing
 
     @step(name="check", version="1", depends_on=["emit"])
@@ -254,11 +271,10 @@ def test_string_payload_round_trips_as_string():
         assert isinstance(emit, str), f"expected str, got {type(emit)}"
         return emit + "!"
 
-    pipe = pipeline(
-id="types", name="types", folder=TEST_FOLDER, steps=[emit, check])
-    create_file("f1.txt", "x")
+    pipe = pipeline(id="types", name="types", steps=[emit, check])
+    path = create_file("f1.txt", "x")
 
-    summary = run(pipe, workers=1)
+    summary = run(pipe, params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit")
     assert mat.content_type == "text"
@@ -266,7 +282,7 @@ id="types", name="types", folder=TEST_FOLDER, steps=[emit, check])
 
 def test_bytes_payload_round_trips_as_bytes():
     @step(name="emit_b", version="1")
-    def emit_b(path):
+    def emit_b(params):
         return b"\x00\x01binary"
 
     @step(name="check_b", version="1", depends_on=["emit_b"])
@@ -274,11 +290,10 @@ def test_bytes_payload_round_trips_as_bytes():
         assert isinstance(emit_b, bytes)
         return {"length": len(emit_b)}
 
-    pipe = pipeline(
-id="types-b", name="types-b", folder=TEST_FOLDER, steps=[emit_b, check_b])
-    create_file("f1.txt", "x")
+    pipe = pipeline(id="types-b", name="types-b", steps=[emit_b, check_b])
+    path = create_file("f1.txt", "x")
 
-    summary = run(pipe, workers=1)
+    summary = run(pipe, params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit_b")
     assert mat.content_type == "bytes"

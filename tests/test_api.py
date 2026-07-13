@@ -13,19 +13,31 @@ from sqlalchemy import create_engine
 
 client = TestClient(app)
 
+TEST_FOLDER = "test_input"
 
-@step(name="count-lines", version="v1")
-def count_lines(path: str) -> ProcessResult:
-    text = open(path, "r", encoding="utf-8").read()
+
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder="test_input" sugar."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
+@step(name="count-lines", version="v1", depends_on=["scan"], index=["path"])
+def count_lines(scan: dict) -> ProcessResult:
+    text = scan["text"]
     lines = text.split("\n")
     return ProcessResult(
-        value={"text": text},
+        value={"text": text, "path": scan["path"]},
         metadata={"line_count": len(lines), "empty": len(text) == 0},
     )
 
 
 test_pipeline = pipeline(
-    id="p-test", name="Test Pipeline", folder="test_input", steps=[count_lines]
+    id="p-test", name="Test Pipeline", steps=[scan, count_lines]
 )
 
 
@@ -61,7 +73,7 @@ def setup_teardown():
         f.write("one")
 
     # Run a process to populate DB
-    run(test_pipeline, "test_input", workers=1)
+    run(test_pipeline, workers=1)
 
     yield
 
@@ -76,7 +88,7 @@ def test_get_runs():
     runs = response.json()
     assert len(runs) == 1
     run = runs[0]
-    assert run["created_count"] == 2
+    assert run["created_count"] == 4  # 2 files x (scan + count-lines)
     assert run["reused_count"] == 0
     assert run["failed_count"] == 0
     assert run["status"] == "completed"
@@ -99,8 +111,9 @@ def test_get_run_coordinates():
     response = client.get(f"/api/runs/{run_id}/coordinates")
     assert response.status_code == 200
     coords = response.json()
-    assert len(coords) == 2
-    assert coords[0]["coordinate"] in ("a.txt", "b.txt")
+    assert len(coords) == 4  # 2 files x (scan + count-lines)
+    # Coordinates are content-addressed (row-<hash>), not "a.txt"/"b.txt".
+    assert coords[0]["coordinate"].startswith("row-")
     assert coords[0]["status"] == "created"
 
 
@@ -108,14 +121,14 @@ def test_get_materializations():
     response = client.get("/api/materializations?limit=10&offset=0")
     assert response.status_code == 200
     mats = response.json()
-    assert len(mats) == 2
+    assert len(mats) == 4
     assert mats[0]["output_address"] is not None
 
 
 def test_selection_preview():
     response = client.post(
         "/api/selection/preview",
-        json={"source_id": "folder:test_input", "coordinate_glob": "*a.txt"},
+        json={"index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()
@@ -126,7 +139,7 @@ def test_selection_preview():
 def test_selection_invalidate():
     response = client.post(
         "/api/selection/invalidate?reason=api test",
-        json={"source_id": "folder:test_input", "coordinate_glob": "*a.txt"},
+        json={"index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()

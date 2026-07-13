@@ -74,12 +74,22 @@ def isolated_env():
             shutil.rmtree(d)
 
 
-def seed_pipeline():
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read().strip()
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-    pipe = pipeline(id="pg", name="pg", folder=TEST_FOLDER, steps=[read])
+
+def seed_pipeline():
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"].strip()
+
+    pipe = pipeline(id="pg", name="pg", steps=[scan, read])
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
     run(pipe, workers=1)

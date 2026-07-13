@@ -68,74 +68,112 @@ def create_file(name, content):
         f.write(content)
 
 
-def make_two_step_pipeline(pipe_id="pl"):
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read().strip()
+def make_pipeline(pipe_id="pl"):
+    # Folder recipe (TODO 14): a root expand step yields each file's
+    # content — the replacement for the old folder=TEST_FOLDER sugar. A
+    # root expand has no parent to cache its enumeration against, so it
+    # always plans as "execute": plan() can never preview what it will
+    # yield without actually running it (see the tests below).
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
+
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"].strip()
 
     @step(name="upper", version="1", depends_on=["read"])
     def upper(read):
         return read.upper()
 
-    return pipeline(id=pipe_id, name=pipe_id, folder=TEST_FOLDER, steps=[read, upper])
+    return pipeline(id=pipe_id, name=pipe_id, steps=[scan, read, upper])
 
 
 def actions(run_plan):
     return {(i.coordinate, i.step_name): i.action for i in run_plan.items}
 
 
-def test_fresh_state_executes_roots_and_pends_downstream():
-    pipe = make_two_step_pipeline()
+def test_fresh_state_executes_source_and_pends_downstream():
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
 
     p = plan(pipe)
+    # One execute for the source (@source is a root expand — no parent to
+    # cache its enumeration against, so it always executes) and one
+    # "pending" per downstream step, not per file: the individual file
+    # lanes don't exist yet at plan time (TODO 14 Trap point 1 — a
+    # deliberate UX change from the old eager-scan-at-plan-time behavior).
     assert actions(p) == {
-        ("f1.txt", "read"): "execute",
-        ("f1.txt", "upper"): "pending",
+        ("@root", "scan"): "execute",
+        ("@root", "read"): "pending",
+        ("@root", "upper"): "pending",
     }
-    assert p.counts == {"execute": 1, "pending": 1}
+    assert p.counts == {"execute": 1, "pending": 2}
 
 
-def test_fully_cached_state_reuses_everything():
-    pipe = make_two_step_pipeline()
+def test_second_plan_still_shows_execute_and_pending_not_reuse():
+    """A root expand (the source) never writes a cache anchor for its own
+    enumeration — it has no parent to key one on — so it always plans as
+    "execute", forever, even immediately after a completed run. Downstream
+    steps then can never resolve past "pending" in a dry-run plan(): their
+    real lanes are only known by actually running the generator. This is
+    the counterpart to the Trap's "second *run*'s planning reuses
+    unchanged lanes" (verified via run()'s reused_count in
+    examples/count_lines and examples/newsroom) — plan() itself, being a
+    pure dry-run, can't reach into a hypothetical future execution."""
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
     run(pipe, workers=1)
 
     p = plan(pipe)
-    assert set(actions(p).values()) == {"reuse"}
-    assert p.counts == {"reuse": 2}
+    assert actions(p) == {
+        ("@root", "scan"): "execute",
+        ("@root", "read"): "pending",
+        ("@root", "upper"): "pending",
+    }
+    assert p.counts == {"execute": 1, "pending": 2}
 
 
-def test_invalidation_shows_execute_and_pending_chain():
-    pipe = make_two_step_pipeline()
+def test_invalidation_does_not_change_the_coarse_plan_shape():
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
     run(pipe, workers=1)
 
     invalidate(Selection(step="read"), reason="redo")
     p = plan(pipe)
-    assert actions(p)[("f1.txt", "read")] == "execute"
-    # Downstream depends on what the re-execution produces
-    assert actions(p)[("f1.txt", "upper")] == "pending"
+    # Same coarse shape as any fresh/cached state — invalidating a lane
+    # that plan() can't even see yet has no visible effect on a dry-run.
+    assert actions(p)[("@root", "scan")] == "execute"
+    assert actions(p)[("@root", "read")] == "pending"
 
 
-def test_deleted_coordinate_absent_from_plan():
-    pipe = make_two_step_pipeline()
+def test_plan_cannot_preview_effect_of_a_deleted_file():
+    """Unlike the pre-14 eager-scan-at-plan-time behavior (where a deleted
+    file's coordinate simply vanished from plan()'s output), plan() can no
+    longer see individual files at all — deleting one changes nothing
+    about the coarse execute+pending shape. The real behavior (a run
+    simply not touching the vanished file's lane) is covered at the run()
+    level by test_engine.py::test_logical_deletion."""
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
     run(pipe, workers=1)
 
+    before = actions(plan(pipe))
     os.remove(os.path.join(TEST_FOLDER, "f2.txt"))
-    p = plan(pipe)
-    # A vanished coordinate simply isn't scanned, so it isn't in the plan —
-    # no "removed" action. Only f1.txt remains, and it reuses.
-    acts = actions(p)
-    assert ("f2.txt", "read") not in acts
-    assert ("f2.txt", "upper") not in acts
-    assert acts[("f1.txt", "read")] == "reuse"
+    after = actions(plan(pipe))
+    assert before == after == {
+        ("@root", "scan"): "execute",
+        ("@root", "read"): "pending",
+        ("@root", "upper"): "pending",
+    }
 
 
 def test_plan_writes_nothing():
-    pipe = make_two_step_pipeline()
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
     run(pipe, workers=1)
 
@@ -151,20 +189,21 @@ def test_plan_writes_nothing():
         assert session.query(RunEvent).count() == events_before
 
 
-def test_plan_matches_run():
-    """The plan's execute/reuse split is exactly what run() then does."""
-    pipe = make_two_step_pipeline()
+def test_run_resolves_every_planned_pending_to_created():
+    """A fresh store's plan() says execute+pending everywhere; actually
+    running it must turn all of that into "created" (never "reused" — there
+    was nothing to reuse yet)."""
+    pipe = make_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
-    run(pipe, workers=1)
-    create_file("f3.txt", "new")
-
-    p = plan(pipe)
-    planned_executes = sum(1 for a in actions(p).values() if a == "execute")
-    planned_pending = sum(1 for a in actions(p).values() if a == "pending")
-    planned_reuses = sum(1 for a in actions(p).values() if a == "reuse")
 
     summary = run(pipe, workers=1)
-    # Deterministic steps: pendings resolve to creates
-    assert summary.created_count == planned_executes + planned_pending == 2
-    assert summary.reused_count == planned_reuses == 4
+    assert summary.reused_count == 0
+    assert summary.created_count == 6  # 2 files x (scan + read + upper)
+
+    # And now that it's cached, a second run reuses everything — this is
+    # the "per-lane reuse" the Trap describes, visible via run(), not a
+    # standalone plan() call (see test_second_plan_still_shows_execute_and_pending_not_reuse).
+    summary2 = run(pipe, workers=1)
+    assert summary2.created_count == 0
+    assert summary2.reused_count == 6

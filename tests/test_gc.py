@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import FolderSource, run, step, pipeline
+from rubedo import run, step, pipeline
 from rubedo.db import get_session
 from rubedo.gc import (
     _anchor_mat_ids,
@@ -90,26 +90,48 @@ def write(name, content, folder=TEST_FOLDER):
         f.write(content)
 
 
-def _shout():
-    @step(name="shout", version="1")
-    def shout(path):
-        return open(path).read().upper()
+def _shout(folder=TEST_FOLDER):
+    # Single-step expand root (TODO 14: no folder-source-class sugar) that
+    # reads and transforms in the same generator — retention/gc keys off
+    # "which of the pipeline's last N runs referenced this materialization",
+    # not off address stability, so a plain content-addressed expand root
+    # (no separate scan step) is enough here.
+    @step(name="shout", version="1", shape="expand")
+    def shout():
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                yield open(path).read().upper()
 
     return shout
 
 
-def _norm():
-    @step(name="norm", version="1")
-    def norm(path):
-        return open(path).read().strip()
+def _norm_chain(folder=TEST_FOLDER):
+    """scan -> norm: a two-step chain (TODO 14), needed (not the single-step
+    _shout() shape above) so pre-strip bytes — not post-strip text — drive
+    the address. Same as test_du.py's shared-object case: two inputs that
+    differ before the transform ("SHARED" vs "SHARED ") but normalize to
+    the same bytes get different addresses sharing one physical object,
+    exactly the "same object, different address" case under test."""
 
-    return norm
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
+
+    @step(name="norm", version="1", depends_on=["scan"])
+    def norm(scan):
+        return scan["text"].strip()
+
+    return [scan, norm]
 
 
 def make_pipe(retention=None, folder=TEST_FOLDER, pid="gcp"):
     return pipeline(
-        id=pid, name=pid, source=FolderSource(folder),
-        steps=[_shout()], retention=retention,
+        id=pid, name=pid,
+        steps=[_shout(folder)], retention=retention,
     )
 
 
@@ -175,8 +197,8 @@ def test_retention_demotes_only_the_oldest_generation():
     # The two kept objects survive on disk.
     for h in live_hashes():
         assert os.path.exists(_get_object_path(h))
-    # Latest output byte-identical.
-    assert s3.output_for("shout") == {"a.txt": "GEN3"}
+    # Latest output byte-identical (coordinates are row-<hash>, not "a.txt").
+    assert list(s3.output_for("shout").values()) == ["GEN3"]
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +214,7 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
     try:
         # Pipeline B produces "SHARED" and keeps it live forever.
         write("b.txt", "SHARED", folder=other)
-        pb = pipeline(id="pb", name="pb", source=FolderSource(other), steps=[_norm()])
+        pb = pipeline(id="pb", name="pb", steps=_norm_chain(other))
         run(pb, workers=1)
 
         # Pipeline A: gen1 also normalizes to "SHARED" (same object, different
@@ -224,8 +246,8 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
 
 def make_pipe_norm(retention=None):
     return pipeline(
-        id="gcp", name="gcp", source=FolderSource(TEST_FOLDER),
-        steps=[_norm()], retention=retention,
+        id="gcp", name="gcp",
+        steps=_norm_chain(TEST_FOLDER), retention=retention,
     )
 
 
@@ -366,10 +388,24 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 # ---------------------------------------------------------------------------
 
 
+def _scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder-source-class sugar."""
+
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
+
+    return scan
+
+
 def _read():
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     return read
 
@@ -397,8 +433,8 @@ def _upper():
 
 def make_expand_pipe(retention=None):
     return pipeline(
-        id="xp", name="xp", source=FolderSource(TEST_FOLDER),
-        steps=[_read(), _split(), _upper()], retention=retention,
+        id="xp", name="xp",
+        steps=[_scan(), _read(), _split(), _upper()], retention=retention,
     )
 
 

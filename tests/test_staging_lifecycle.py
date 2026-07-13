@@ -36,16 +36,16 @@ def isolated_env():
 
 
 @step(name="my_step", version="1")
-def my_step(content):
-    return content.lower()
+def my_step(params):
+    return params["content"].lower()
 
 
 def test_staging_cleanup_on_error():
     # We patch _commit_materialization to raise an unexpected Exception.
     # This will trigger the exception handler in _commit_execution_result,
     # and the finally block should clean up staging.
-    
-    pipe = pipeline(id="p1", name="p1", folder=TEST_FOLDER, steps=[my_step])
+
+    pipe = pipeline(id="p1", name="p1", steps=[my_step])
 
     
     # We intercept stage_and_commit just to mock a failure during the DB commit phase.
@@ -65,7 +65,7 @@ def test_staging_cleanup_on_error():
         raise ValueError("Simulated failure during stage_and_commit")
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
-        summary = run(pipe)
+        summary = run(pipe, params={"content": "A"})
         
     assert summary.failed_count == 1
     
@@ -74,7 +74,7 @@ def test_staging_cleanup_on_error():
     assert not os.path.exists(run_staging)
 
 def test_staging_cleanup_on_commit_error():
-    pipe = pipeline(id="p2", name="p2", folder=TEST_FOLDER, steps=[my_step])
+    pipe = pipeline(id="p2", name="p2", steps=[my_step])
     
     def mock_commit():
         raise RuntimeError("DB commit failed")
@@ -82,7 +82,7 @@ def test_staging_cleanup_on_commit_error():
     # Patch session.commit inside ledger's _commit_execution_result context
     # It's tricky to patch just one commit, so we patch _commit_materialization to fail.
     with patch("rubedo.ledger._commit_materialization", side_effect=RuntimeError("Simulated DB failure")):
-        summary = run(pipe)
+        summary = run(pipe, params={"content": "A"})
         
     assert summary.failed_count == 1
     

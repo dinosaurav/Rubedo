@@ -58,47 +58,59 @@ def setup_teardown():
         shutil.rmtree(TEST_FOLDER)
 
 
+@step(name="scan", version="9", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
 def test_selection_version_range():
     # 1. Run with version 1.0.0
-    @step(name="dummy", version="1.0.0")
-    def step_v1(content): return content
+    @step(name="dummy", version="1.0.0", depends_on=["scan"])
+    def step_v1(scan): return scan["text"]
 
-    p1 = pipeline(id="p-test", name="T", folder=TEST_FOLDER, steps=[step_v1])
+    p1 = pipeline(id="p-test", name="T", steps=[scan, step_v1])
     run(p1, workers=1)
-    
+
     # 2. Run with version 2.1.0 on a modified file
     with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
         f.write("b-mod")
-        
-    @step(name="dummy", version="2.1.0")
-    def step_v2(content): return content
-    
-    p2 = pipeline(id="p-test", name="T", folder=TEST_FOLDER, steps=[step_v2])
+
+    @step(name="dummy", version="2.1.0", depends_on=["scan"])
+    def step_v2(scan): return scan["text"]
+
+    p2 = pipeline(id="p-test", name="T", steps=[scan, step_v2])
     run(p2, workers=1)
-    
+
     # 3. Run with unparseable version on another file
     with open(os.path.join(TEST_FOLDER, "c.txt"), "w") as f:
         f.write("c-mod")
-        
-    @step(name="dummy", version="legacy-v1")
-    def step_legacy(content): return content
-    
-    p3 = pipeline(id="p-test", name="T", folder=TEST_FOLDER, steps=[step_legacy])
+
+    @step(name="dummy", version="legacy-v1", depends_on=["scan"])
+    def step_legacy(scan): return scan["text"]
+
+    p3 = pipeline(id="p-test", name="T", steps=[scan, step_legacy])
     run(p3, workers=1)
-    
+
     # We now have materializations with versions: 1.0.0, 2.1.0, legacy-v1
+    # (plus scan's own child lanes, version "1" throughout — untouched by
+    # the version:<2.0 selection below).
     # Let's invalidate version:<2.0
     sel = Selection.parse("version:<2.0")
     res = invalidate(sel, "invalidate old")
-    
+
     # It should invalidate the 1.0.0 materializations (which are for a.txt, and the old b.txt and c.txt)
     # Wait, the first run created 3 materializations for a, b, c.
     # Second run created 1 for b (since only b changed).
     # Third run created 1 for c.
     # So there are 3 mats with version 1.0.0, 1 with 2.1.0, 1 with legacy-v1.
-    
+
     assert res["invalidated_count"] == 3
-    
+
     with get_session() as session:
         mats = session.query(Materialization).filter(Materialization.id.in_(res["materialization_ids"])).all()
         for m in mats:

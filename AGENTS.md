@@ -127,6 +127,36 @@ with StaticPool. Steps are defined inline with `@step`; hold the
 `pipeline(...)` return value and pass it to `run(pipe)` — there are no
 string ids. `.test_*/` is gitignored.
 
+Ingestion has no separate concept (TODO 14): there is no `folder=` pipeline
+kwarg. A test folder is scanned by a root `@step(shape="expand")` — the
+folder recipe from `docs/concepts/sources.md` — that the downstream step
+`depends_on`:
+
+```python
+@step(name="scan", version="1", shape="expand")
+def scan():
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+@step(name="extract", version="1", depends_on=["scan"])
+def extract(scan: dict):
+    text = scan["text"]
+    ...
+
+pipeline(id="ix", name="ix", steps=[scan, extract])
+```
+
+Two consequences worth knowing before writing an assertion: lanes are
+content-addressed (`row-<hash>`, not the relative path), so a test that
+needs to identify *which* file a lane came from indexes the `path` field
+(`@step(index=["path"])`) and looks it up rather than asserting a
+`"a.txt"`-shaped coordinate; and every run outcome count (`created_count`/
+`reused_count`/…) is one step deeper than before — a single-file fixture
+through a one-step chain now reports 2 (the `scan` lane *and* the
+downstream lane), not 1.
+
 ## Known sharp edges
 
 - Redefining a step function with the same version in one test triggers the

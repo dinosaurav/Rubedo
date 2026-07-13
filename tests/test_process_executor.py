@@ -37,15 +37,25 @@ def isolated_env():
         if os.path.exists(d):
             shutil.rmtree(d)
 
+# Folder recipe: walk TEST_FOLDER, yield each file's content — the
+# replacement for the old folder=TEST_FOLDER source sugar (TODO 14). Must
+# also be module-level since it's shared across process-executor pipelines.
+@step(name="scan", version="1", shape="expand")
+def scan():
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
 # Process executor steps must be module-level
-def process_ok(content):
+def process_ok(scan):
     import time
     time.sleep(0.1) # tiny sleep to ensure concurrency doesn't blow up
-    return content.lower()
+    return scan["text"].lower()
 
 # Counter for retries - file based so it works across processes
-def process_fail(content):
-    basename = os.path.basename(content)
+def process_fail(scan):
+    basename = scan["path"]
     counter_file = os.path.join(os.path.abspath(TEST_FOLDER), f"fail_count_{basename}")
     count = 0
     if os.path.exists(counter_file):
@@ -63,39 +73,42 @@ def process_fail(content):
 
 def test_process_executor_basic():
     # Register steps
-    step1 = step(name="ok", version="1", executor="process")(process_ok)
-    
-    pipe = pipeline(id="p1", name="p1", folder=TEST_FOLDER, steps=[step1])
+    step1 = step(name="ok", version="1", executor="process", depends_on=["scan"])(process_ok)
+
+    pipe = pipeline(id="p1", name="p1", steps=[scan, step1])
     summary = run(pipe, workers=2)
-    
-    assert summary.created_count == 2
+
+    # 2 scan lanes + 2 "ok" lanes
+    assert summary.created_count == 4
     assert summary.reused_count == 0
-    
+
     # Check that they can be reused
     summary2 = run(pipe, workers=2)
     assert summary2.created_count == 0
-    assert summary2.reused_count == 2
+    assert summary2.reused_count == 4
 
 def test_process_executor_closure_ok():
     # Local closure should work fine with loky + cloudpickle
     prefix = "Closure: "
-    def my_local_func(content):
-        return prefix + content
-        
-    step_local = step(name="local", version="1", executor="process")(my_local_func)
-    pipe = pipeline(id="p4", name="p4", folder=TEST_FOLDER, steps=[step_local])
+    def my_local_func(scan):
+        return prefix + scan["text"]
+
+    step_local = step(name="local", version="1", executor="process", depends_on=["scan"])(my_local_func)
+    pipe = pipeline(id="p4", name="p4", steps=[scan, step_local])
     summary = run(pipe, workers=2)
-    assert summary.created_count == 2
+    # 2 scan lanes + 2 "local" lanes
+    assert summary.created_count == 4
     assert summary.failed_count == 0
-        
+
 def test_process_executor_retries():
     # Retries happen in the parent thread pool and submit to process pool
-    step_fail = step(name="fail", version="1", executor="process", retries=2)(process_fail)
-    
-    pipe = pipeline(id="p2", name="p2", folder=TEST_FOLDER, steps=[step_fail])
+    step_fail = step(name="fail", version="1", executor="process", retries=2, depends_on=["scan"])(process_fail)
+
+    pipe = pipeline(id="p2", name="p2", steps=[scan, step_fail])
     summary = run(pipe, workers=2)
-    
-    assert summary.created_count == 2
+
+    # 2 scan lanes + 2 "fail" lanes
+    assert summary.created_count == 4
     assert summary.failed_count == 0
     
     # Read the counter files to ensure they actually retried
@@ -108,14 +121,15 @@ class Unpicklable:
     def __reduce__(self):
         raise TypeError("Cannot pickle me")
 
-def process_unpicklable(content):
+def process_unpicklable(scan):
     return Unpicklable()
 
 def test_process_executor_pickling_error():
     # If the process pool cannot pickle the return value, it should surface as a step failure.
-    step_unpicklable = step(name="unpicklable", version="1", executor="process")(process_unpicklable)
-    pipe = pipeline(id="p3", name="p3", folder=TEST_FOLDER, steps=[step_unpicklable])
-    
+    step_unpicklable = step(name="unpicklable", version="1", executor="process", depends_on=["scan"])(process_unpicklable)
+    pipe = pipeline(id="p3", name="p3", steps=[scan, step_unpicklable])
+
     summary = run(pipe, workers=2)
     assert summary.failed_count == 2
-    assert summary.created_count == 0
+    # scan's 2 lanes still materialize fine; only "unpicklable" fails.
+    assert summary.created_count == 2

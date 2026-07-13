@@ -71,13 +71,26 @@ class MyParams(BaseModel):
     my_val: int = 7
 
 
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+
 def make_pipeline():
-    @step(name="my-step", version="v1", params_model=MyParams, retries=2)
-    def my_proc(path: str, params: MyParams):
+    @step(
+        name="my-step", version="v1", params_model=MyParams, retries=2,
+        depends_on=["scan"],
+    )
+    def my_proc(scan: dict, params: MyParams):
         return {"val": params.my_val}
 
     return pipeline(
-        id="test-proc", name="Test Proc", folder=TEST_FOLDER, steps=[my_proc], params_model=MyParams
+        id="test-proc", name="Test Proc", steps=[scan, my_proc], params_model=MyParams
     )
 
 
@@ -101,12 +114,14 @@ def test_run_pipeline_appears_with_definition_snapshot():
     (item,) = res.json()
     assert item["id"] == "test-proc"
     assert item["run_count"] == 2
-    assert item["source_id"] == f"folder:{TEST_FOLDER}"
+    # source_id is now the sorted, comma-joined names of the pipeline's root
+    # steps — here a single "scan" root (TODO 14).
+    assert item["source_id"] == "scan"
     assert item["last_run_at"] is not None
 
     definition = item["definition"]
     assert definition["name"] == "Test Proc"
-    (step_def,) = definition["steps"]
+    (step_def,) = [s for s in definition["steps"] if s["name"] == "my-step"]
     assert step_def["name"] == "my-step"
     assert step_def["version"] == "v1"
     assert step_def["retries"] == 2
@@ -119,7 +134,9 @@ def test_describe_renders_dag_without_running():
 
     text = describe(pipe)
     assert "test-proc" in text
-    assert "my-step (v1) (root)" in text
+    # "scan" is the root now; "my-step" depends on it.
+    assert "scan (1) (root)" in text
+    assert "my-step (v1) <- scan" in text
     assert "retries=2" in text
 
     mermaid = describe(pipe, format="mermaid")

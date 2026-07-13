@@ -1,3 +1,4 @@
+import csv
 import os
 import shutil
 import uuid
@@ -6,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import CsvSource, run, step, pipeline
+from rubedo import run, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -65,6 +66,21 @@ def write_csv(name, text):
         f.write(text)
 
 
+def csv_source(name):
+    """CSV recipe (TODO 14): a root expand step yielding each row dict —
+    the replacement for the old CSV-source-class sugar. `name` is both the
+    step name and the `<name>.csv` file under DATA."""
+    path = os.path.join(DATA, f"{name}.csv")
+
+    @step(name=name, version="1", shape="expand")
+    def _scan():
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                yield row
+
+    return _scan
+
+
 def assert_run(pipe, **kw):
     summary = run(pipe, workers=1, **kw)
     if summary.failed_count > 0:
@@ -97,13 +113,16 @@ def test_two_way_equijoin():
     write_csv("orders.csv", "oid,cust\no1,c1\no2,c1\no3,c2\n")
     write_csv("customers.csv", "cid,name\nc1,Alice\nc2,Bob\n")
 
-    @step(name="order", version="1", source="orders", index=["cust"])
-    def order(row):
-        return {"oid": row["oid"], "cust": row["cust"]}
+    orders_src = csv_source("orders")
+    customers_src = csv_source("customers")
 
-    @step(name="customer", version="1", source="customers", index=["cid"])
-    def customer(row):
-        return {"cid": row["cid"], "name": row["name"]}
+    @step(name="order", version="1", depends_on=["orders"], index=["cust"])
+    def order(orders):
+        return {"oid": orders["oid"], "cust": orders["cust"]}
+
+    @step(name="customer", version="1", depends_on=["customers"], index=["cid"])
+    def customer(customers):
+        return {"cid": customers["cid"], "name": customers["name"]}
 
     @step(
         name="enrich", version="1", shape="join",
@@ -115,11 +134,7 @@ def test_two_way_equijoin():
 
     pipe = pipeline(
         id="j", name="j",
-        sources={
-            "orders": CsvSource(os.path.join(DATA, "orders.csv")),
-            "customers": CsvSource(os.path.join(DATA, "customers.csv")),
-        },
-        steps=[order, customer, enrich],
+        steps=[orders_src, customers_src, order, customer, enrich],
     )
     assert_run(pipe)
 
@@ -145,16 +160,21 @@ def test_two_way_equijoin():
 
 def test_four_way_star_join():
     # four sources all keyed by the same uid value
-    for src in ("a", "b", "c", "d"):
+    for src in ("s_a", "s_b", "s_c", "s_d"):
         write_csv(f"{src}.csv", f"uid,v\nu1,{src}1\nu2,{src}2\n")
 
-    def loader(name):
-        @step(name=name, version="1", source=name, index=["uid"])
-        def load(row):
+    def loader(src_name, step_name):
+        @step(name=step_name, version="1", depends_on=[src_name], index=["uid"])
+        def load(**kwargs):
+            row = kwargs[src_name]
             return {"uid": row["uid"], "v": row["v"]}
         return load
 
-    a, b, c, d = (loader(n) for n in ("a", "b", "c", "d"))
+    srcs = [csv_source(n) for n in ("s_a", "s_b", "s_c", "s_d")]
+    a, b, c, d = (
+        loader(src_name, step_name)
+        for src_name, step_name in zip(("s_a", "s_b", "s_c", "s_d"), ("a", "b", "c", "d"))
+    )
 
     @step(
         name="merge", version="1", shape="join",
@@ -166,31 +186,30 @@ def test_four_way_star_join():
 
     pipe = pipeline(
         id="star", name="star",
-        sources={
-            n: CsvSource(os.path.join(DATA, f"{n}.csv"))
-            for n in ("a", "b", "c", "d")
-        },
-        steps=[a, b, c, d, merge],
+        steps=[*srcs, a, b, c, d, merge],
     )
     assert_run(pipe)
 
     outs = _outputs("merge")
     # one merged lane per shared uid (u1, u2)
-    assert sorted(outs.values()) == ["a1b1c1d1", "a2b2c2d2"]
+    assert sorted(outs.values()) == ["s_a1s_b1s_c1s_d1", "s_a2s_b2s_c2s_d2"]
 
 def test_join_failed_parent_lane():
-    write_csv("a.csv", "id,val\n1,A\n2,B\n3,fail\n")
-    write_csv("b.csv", "id,val\n1,X\n2,Y\n3,Z\n")
+    write_csv("a_csv.csv", "id,val\n1,A\n2,B\n3,fail\n")
+    write_csv("b_csv.csv", "id,val\n1,X\n2,Y\n3,Z\n")
 
-    @step(name="a", version="1", source="a", index=["id"])
-    def load_a(row):
-        if row["val"] == "fail":
+    a_src = csv_source("a_csv")
+    b_src = csv_source("b_csv")
+
+    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    def load_a(a_csv):
+        if a_csv["val"] == "fail":
             raise ValueError("bad data")
-        return {"id": row["id"], "v": row["val"]}
+        return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", version="1", source="b", index=["id"])
-    def load_b(row):
-        return {"id": row["id"], "v": row["val"]}
+    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    def load_b(b_csv):
+        return {"id": b_csv["id"], "v": b_csv["val"]}
 
     @step(
         name="merge", version="1", shape="join",
@@ -202,8 +221,7 @@ def test_join_failed_parent_lane():
 
     pipe = pipeline(
         id="join_fail", name="join_fail",
-        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
-        steps=[load_a, load_b, merge],
+        steps=[a_src, b_src, load_a, load_b, merge],
     )
     s1 = run(pipe, workers=1)
     
@@ -216,18 +234,21 @@ def test_join_failed_parent_lane():
         assert "a:row-" in status.metadata_json
 
 def test_join_failed_parent_lane_use_passed():
-    write_csv("a.csv", "id,val\n1,A\n2,B\n3,fail\n")
-    write_csv("b.csv", "id,val\n1,X\n2,Y\n3,Z\n")
+    write_csv("a_csv.csv", "id,val\n1,A\n2,B\n3,fail\n")
+    write_csv("b_csv.csv", "id,val\n1,X\n2,Y\n3,Z\n")
 
-    @step(name="a", version="1", source="a", index=["id"])
-    def load_a(row):
-        if row["val"] == "fail":
+    a_src = csv_source("a_csv")
+    b_src = csv_source("b_csv")
+
+    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    def load_a(a_csv):
+        if a_csv["val"] == "fail":
             raise ValueError("bad data")
-        return {"id": row["id"], "v": row["val"]}
+        return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", version="1", source="b", index=["id"])
-    def load_b(row):
-        return {"id": row["id"], "v": row["val"]}
+    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    def load_b(b_csv):
+        return {"id": b_csv["id"], "v": b_csv["val"]}
 
     @step(
         name="merge", version="1", shape="join",
@@ -238,15 +259,15 @@ def test_join_failed_parent_lane_use_passed():
 
     pipe = pipeline(
         id="join_fail_pass", name="join_fail_pass",
-        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
-        steps=[load_a, load_b, merge],
+        steps=[a_src, b_src, load_a, load_b, merge],
     )
     s1 = run(pipe, workers=1)
-    
+
     assert s1.failed_count == 1
     assert s1.blocked_count == 0
-    assert s1.created_count == 7 # 2 a + 3 b + 2 merge
-    
+    # 3 a_csv + 2 a (1 fails) + 3 b_csv + 3 b + 2 merge
+    assert s1.created_count == 13
+
     outs = _outputs("merge")
     assert sorted(outs.values()) == ["AX", "BY"]
 
@@ -274,16 +295,19 @@ def test_join_on_must_match_depends_on():
         )(lambda a, b: None)
 
 def test_join_empty():
-    write_csv("a.csv", "id,val\n1,A\n")
-    write_csv("b.csv", "id,val\n2,B\n")
+    write_csv("a_csv.csv", "id,val\n1,A\n")
+    write_csv("b_csv.csv", "id,val\n2,B\n")
 
-    @step(name="a", version="1", source="a", index=["id"])
-    def load_a(row):
-        return {"id": row["id"], "v": row["val"]}
+    a_src = csv_source("a_csv")
+    b_src = csv_source("b_csv")
 
-    @step(name="b", version="1", source="b", index=["id"])
-    def load_b(row):
-        return {"id": row["id"], "v": row["val"]}
+    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    def load_a(a_csv):
+        return {"id": a_csv["id"], "v": a_csv["val"]}
+
+    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    def load_b(b_csv):
+        return {"id": b_csv["id"], "v": b_csv["val"]}
 
     @step(
         name="merge", version="1", shape="join",
@@ -294,12 +318,11 @@ def test_join_empty():
 
     pipe = pipeline(
         id="join_empty", name="join_empty",
-        sources={"a": CsvSource(os.path.join(DATA, "a.csv")), "b": CsvSource(os.path.join(DATA, "b.csv"))},
-        steps=[load_a, load_b, merge],
+        steps=[a_src, b_src, load_a, load_b, merge],
     )
     s1 = run(pipe, workers=1)
-    
+
     assert s1.failed_count == 0
     assert s1.blocked_count == 0
-    assert s1.created_count == 2 # 1 a + 1 b
+    assert s1.created_count == 4  # 1 a_csv + 1 a + 1 b_csv + 1 b
     assert _outputs("merge") == {}

@@ -20,7 +20,11 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, run, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, RunCoordinateStatus
+from rubedo.models import (
+    Materialization,
+    MaterializationIndexEntry,
+    RunCoordinateStatus,
+)
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_schedule_data"
@@ -78,12 +82,51 @@ def create_file(name, content):
         f.write(content)
 
 
-def _chain_pipe(pid: str):
-    """The 3-step map chain used by the equivalence tests."""
+@step(name="scan", version="1", shape="expand", index=["path"])
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder=TEST_FOLDER sugar.
+    Indexed on `path` so tests can find "the lane for x.txt" without the
+    coordinate being that literal string."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-    @step(name="s1", version="1")
-    def s1(path):
-        return open(path).read().strip()
+
+def coord_for_path(filename):
+    """The coordinate scan minted for `filename` — coordinates are
+    row-<hash>, not the filename. A dependent 1:1 map step shares its
+    ancestor's coordinate unchanged."""
+    with get_session() as session:
+        rows = (
+            session.query(RunCoordinateStatus)
+            .filter_by(step_name="scan")
+            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .all()
+        )
+        for rc in rows:
+            hit = (
+                session.query(MaterializationIndexEntry)
+                .filter_by(
+                    materialization_id=rc.materialization_id,
+                    field="path",
+                    value=filename,
+                )
+                .first()
+            )
+            if hit:
+                return rc.coordinate
+    return None
+
+
+def _chain_pipe(pid: str):
+    """The 4-step chain (scan + 3-step map chain) used by the equivalence
+    tests."""
+
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        return scan["text"].strip()
 
     @step(name="s2", version="1", depends_on=["s1"])
     def s2(s1):
@@ -93,7 +136,7 @@ def _chain_pipe(pid: str):
     def s3(s2):
         return s2 + "!"
 
-    return pipeline(id=pid, name=pid, folder=TEST_FOLDER, steps=[s1, s2, s3])
+    return pipeline(id=pid, name=pid, steps=[scan, s1, s2, s3])
 
 
 def _status_rows(run_id):
@@ -133,7 +176,7 @@ def test_mode_equivalence_fresh_stores():
     hashes_deep = _mat_hashes()
 
     assert s_broad.status == s_deep.status == "completed"
-    assert (s_broad.created_count, s_deep.created_count) == (9, 9)
+    assert (s_broad.created_count, s_deep.created_count) == (12, 12)  # 3 files x (scan+s1+s2+s3)
     assert facts_broad == facts_deep
     assert hashes_broad == hashes_deep
 
@@ -146,9 +189,9 @@ def test_broad_then_deep_reuses_everything():
     home = os.path.join(os.path.abspath(ENV_FOLDER), "homeC")
 
     s1 = run(pipe, home=home, schedule="broad")
-    assert (s1.created_count, s1.reused_count) == (6, 0)
+    assert (s1.created_count, s1.reused_count) == (8, 0)  # 2 files x 4 steps
     s2 = run(pipe, home=home, schedule="deep")
-    assert (s2.created_count, s2.reused_count) == (0, 6)
+    assert (s2.created_count, s2.reused_count) == (0, 8)
 
 
 def test_deep_then_broad_reuses_everything():
@@ -158,9 +201,9 @@ def test_deep_then_broad_reuses_everything():
     home = os.path.join(os.path.abspath(ENV_FOLDER), "homeD")
 
     s1 = run(pipe, home=home, schedule="deep")
-    assert (s1.created_count, s1.reused_count) == (6, 0)
+    assert (s1.created_count, s1.reused_count) == (8, 0)
     s2 = run(pipe, home=home, schedule="broad")
-    assert (s2.created_count, s2.reused_count) == (0, 6)
+    assert (s2.created_count, s2.reused_count) == (0, 8)
 
 
 # (c) Deep actually pipelines: step1(B) can only finish if step2(A) runs
@@ -172,14 +215,14 @@ def test_deep_pipelines_lanes_across_steps():
     create_file("b.txt", "B")
     gate = threading.Event()
 
-    @step(name="s1", version="1")
-    def s1(path):
-        if os.path.basename(path) == "b.txt":
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        if scan["path"] == "b.txt":
             if not gate.wait(timeout=30):
                 raise RuntimeError(
                     "gate never opened: s2(a) did not run while s1(b) was in flight"
                 )
-        return os.path.basename(path)
+        return scan["path"]
 
     @step(name="s2", version="1", depends_on=["s1"])
     def s2(s1):
@@ -187,13 +230,14 @@ def test_deep_pipelines_lanes_across_steps():
             gate.set()  # proves s2(A) ran before s1(B) completed
         return s1.upper()
 
-    pipe = pipeline(id="deep_pipe", name="deep_pipe", folder=TEST_FOLDER, steps=[s1, s2])
+    pipe = pipeline(id="deep_pipe", name="deep_pipe", steps=[scan, s1, s2])
     summary = run(pipe, schedule="deep")
 
     assert gate.is_set()
     assert summary.status == "completed"
+    # scan is a barrier (expand root) under deep; s1/s2 pipeline through it.
     assert (summary.created_count, summary.failed_count, summary.blocked_count) == (
-        4,
+        6,  # 2 files x (scan + s1 + s2)
         0,
         0,
     )
@@ -210,9 +254,9 @@ def test_broad_stages_whole_steps():
     create_file("b.txt", "2")
     s1_finished, s2_started = [], []
 
-    @step(name="s1", version="1")
-    def s1(path):
-        out = open(path).read()
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        out = scan["text"]
         s1_finished.append(time.monotonic())
         return out
 
@@ -221,10 +265,10 @@ def test_broad_stages_whole_steps():
         s2_started.append(time.monotonic())
         return s1 * 2
 
-    pipe = pipeline(id="staged", name="staged", folder=TEST_FOLDER, steps=[s1, s2])
+    pipe = pipeline(id="staged", name="staged", steps=[scan, s1, s2])
     summary = run(pipe)  # broad is the default
 
-    assert summary.created_count == 4
+    assert summary.created_count == 6  # 2 files x (scan + s1 + s2)
     assert len(s1_finished) == 2 and len(s2_started) == 2
     assert max(s1_finished) < min(s2_started)
 
@@ -235,9 +279,9 @@ def test_deep_failure_cascades_to_downstream_cells():
     create_file("a.txt", "good")
     create_file("b.txt", "boom")
 
-    @step(name="s1", version="1")
-    def s1(path):
-        text = open(path).read()
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        text = scan["text"]
         if text == "boom":
             raise ValueError("bad lane")
         return text
@@ -250,24 +294,27 @@ def test_deep_failure_cascades_to_downstream_cells():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(id="cascade", name="cascade", folder=TEST_FOLDER, steps=[s1, s2, s3])
+    pipe = pipeline(id="cascade", name="cascade", steps=[scan, s1, s2, s3])
     summary = run(pipe, schedule="deep")
 
     assert summary.status == "completed_with_failures"
+    # scan(a) + scan(b) + s1(a) + s2(a) + s3(a); s1(b) fails, s2/s3(b) block.
     assert (summary.created_count, summary.failed_count, summary.blocked_count) == (
-        3,
+        5,
         1,
         2,
     )
+    coord_a = coord_for_path("a.txt")
+    coord_b = coord_for_path("b.txt")
     by_cell = {
         (s, c): status for (s, c, _, status) in _status_rows(summary.run_id)
     }
-    assert by_cell[("s1", "b.txt")] == "failed"
-    assert by_cell[("s2", "b.txt")] == "blocked"
-    assert by_cell[("s3", "b.txt")] == "blocked"
-    assert by_cell[("s1", "a.txt")] == "created"
-    assert by_cell[("s2", "a.txt")] == "created"
-    assert by_cell[("s3", "a.txt")] == "created"
+    assert by_cell[("s1", coord_b)] == "failed"
+    assert by_cell[("s2", coord_b)] == "blocked"
+    assert by_cell[("s3", coord_b)] == "blocked"
+    assert by_cell[("s1", coord_a)] == "created"
+    assert by_cell[("s2", coord_a)] == "created"
+    assert by_cell[("s3", coord_a)] == "created"
 
 
 # (e) Filtered mid-chain under deep: the verdict stops that lane with
@@ -276,9 +323,9 @@ def test_deep_filtered_mid_chain():
     create_file("a.txt", "keep")
     create_file("b.txt", "drop")
 
-    @step(name="s1", version="1")
-    def s1(path):
-        return open(path).read()
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        return scan["text"]
 
     @step(name="s2", version="1", depends_on=["s1"])
     def s2(s1):
@@ -290,18 +337,21 @@ def test_deep_filtered_mid_chain():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(id="filt", name="filt", folder=TEST_FOLDER, steps=[s1, s2, s3])
+    pipe = pipeline(id="filt", name="filt", steps=[scan, s1, s2, s3])
     summary = run(pipe, schedule="deep")
 
     assert summary.status == "completed"
-    assert (summary.created_count, summary.filtered_count) == (4, 2)
+    # scan(a)+scan(b)+s1(a)+s1(b) [s1 never filters] + s2(a) + s3(a)
+    assert (summary.created_count, summary.filtered_count) == (6, 2)
+    coord_a = coord_for_path("a.txt")
+    coord_b = coord_for_path("b.txt")
     by_cell = {
         (s, c): status for (s, c, _, status) in _status_rows(summary.run_id)
     }
-    assert by_cell[("s2", "b.txt")] == "filtered"
-    assert by_cell[("s3", "b.txt")] == "filtered"
-    assert by_cell[("s2", "a.txt")] == "created"
-    assert by_cell[("s3", "a.txt")] == "created"
+    assert by_cell[("s2", coord_b)] == "filtered"
+    assert by_cell[("s3", coord_b)] == "filtered"
+    assert by_cell[("s2", coord_a)] == "created"
+    assert by_cell[("s3", coord_a)] == "created"
 
 
 # (f) Barrier correctness under deep: the reduce sees every lane — deep
@@ -311,9 +361,9 @@ def test_deep_reduce_barrier_receives_all_lanes():
     create_file("b.txt", "2")
     create_file("c.txt", "3")
 
-    @step(name="parse", version="1")
-    def parse(path):
-        return int(open(path).read())
+    @step(name="parse", version="1", depends_on=["scan"])
+    def parse(scan):
+        return int(scan["text"])
 
     @step(name="dbl", version="1", depends_on=["parse"])
     def dbl(parse):
@@ -323,11 +373,11 @@ def test_deep_reduce_barrier_receives_all_lanes():
     def total(dbl):
         return {"n": len(dbl), "total": sum(dbl.values())}
 
-    pipe = pipeline(id="barrier", name="barrier", folder=TEST_FOLDER, steps=[parse, dbl, total])
+    pipe = pipeline(id="barrier", name="barrier", steps=[scan, parse, dbl, total])
     summary = run(pipe, schedule="deep")
 
     assert summary.status == "completed"
-    assert summary.created_count == 7  # 3 parse + 3 dbl + 1 total
+    assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
     with get_session() as session:
         mat = (
             session.query(Materialization)
@@ -347,9 +397,9 @@ def test_deep_shared_rate_limiter_paces_across_lanes():
     create_file("c.txt", "3")
     starts: list = []  # appended post-acquire, at step-fn entry
 
-    @step(name="fetch", version="1", workers=4)
-    def fetch(path):
-        return open(path).read()
+    @step(name="fetch", version="1", depends_on=["scan"], workers=4)
+    def fetch(scan):
+        return scan["text"]
 
     # 2/s → min_interval 0.5s between permitted starts.
     @step(name="enrich", version="1", depends_on=["fetch"], rate_limit="2/s", workers=4)
@@ -357,7 +407,7 @@ def test_deep_shared_rate_limiter_paces_across_lanes():
         starts.append(time.monotonic())
         return fetch * 2
 
-    pipe = pipeline(id="paced", name="paced", folder=TEST_FOLDER, steps=[fetch, enrich])
+    pipe = pipeline(id="paced", name="paced", steps=[scan, fetch, enrich])
     summary = run(pipe, schedule="deep")
 
     assert summary.status == "completed"
@@ -381,9 +431,9 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
     create_file("c.txt", "3")
     mid_starts, post_starts = [], []
 
-    @step(name="src", version="1", workers=4)
-    def src(path):
-        return open(path).read()
+    @step(name="src", version="1", depends_on=["scan"], workers=4)
+    def src(scan):
+        return scan["text"]
 
     @step(name="mid", version="1", depends_on=["src"], rate_limit="2/s", workers=4)
     def mid(src):
@@ -395,7 +445,7 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
         post_starts.append(time.monotonic())
         return mid + "!"
 
-    pipe = pipeline(id="overlap", name="overlap", folder=TEST_FOLDER, steps=[src, mid, post])
+    pipe = pipeline(id="overlap", name="overlap", steps=[scan, src, mid, post])
     summary = run(pipe, schedule="deep")
 
     assert summary.status == "completed"
@@ -411,10 +461,10 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
 def test_invalid_schedule_raises():
     create_file("a.txt", "x")
 
-    @step(name="s1", version="1")
-    def s1(path):
-        return open(path).read()
+    @step(name="s1", version="1", depends_on=["scan"])
+    def s1(scan):
+        return scan["text"]
 
-    pipe = pipeline(id="bad", name="bad", folder=TEST_FOLDER, steps=[s1])
+    pipe = pipeline(id="bad", name="bad", steps=[scan, s1])
     with pytest.raises(ValueError, match="schedule"):
         run(pipe, schedule="sideways")

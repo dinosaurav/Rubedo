@@ -73,12 +73,24 @@ def create_file(name, content):
         f.write(content)
 
 
-def make_pipeline():
-    """extract (indexed) -> summarize -> total (reduce): a 3-step chain."""
+@step(name="scan", version="1", shape="expand")
+def scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder=TEST_FOLDER sugar. This is
+    now the lineage root: extract's own upstream, where none existed
+    before."""
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-    @step(name="extract", version="1", index=["company"])
-    def extract(path):
-        company, amount = open(path).read().strip().split(",")
+
+def make_pipeline():
+    """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
+
+    @step(name="extract", version="1", depends_on=["scan"], index=["company"])
+    def extract(scan):
+        company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
 
     @step(name="summarize", version="1", depends_on=["extract"])
@@ -89,9 +101,7 @@ def make_pipeline():
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 
-    return pipeline(
-        id="tr", name="tr", folder=TEST_FOLDER, steps=[extract, summarize, total]
-    )
+    return pipeline(id="tr", name="tr", steps=[scan, extract, summarize, total])
 
 
 def _by_step(result):
@@ -106,18 +116,22 @@ def test_trace_downstream_from_indexed_seed():
     result = trace(Selection(index={"company": "acme"}))
 
     steps = _by_step(result)
-    # Seeded at extract; downstream reaches acme's summarize and the reduce.
+    # Seeded at extract; downstream reaches acme's summarize and the reduce,
+    # and upstream reaches acme's scan lane (TODO 14: scan is now extract's
+    # own upstream, where none existed before).
     assert [n.relation for n in steps["extract"]] == ["seed"]
     assert [n.relation for n in steps["summarize"]] == ["downstream"]
     assert [n.relation for n in steps["total"]] == ["downstream"]
+    assert [n.relation for n in steps["scan"]] == ["upstream"]
     assert steps["summarize"][0].depth == 1
     assert steps["total"][0].depth == 2
-    # globex's extract/summarize lanes are not connected to the acme seed
-    # except through the reduce — they must not appear.
-    assert len(result.nodes) == 3
+    # globex's scan/extract/summarize lanes are not connected to the acme
+    # seed except through the reduce — they must not appear.
+    assert len(result.nodes) == 4
     assert all(n.is_live for n in result.nodes)
-    # Edges cover the two hops.
-    assert len(result.edges) == 2
+    # Edges cover the three hops (scan->extract, extract->summarize,
+    # summarize->total).
+    assert len(result.edges) == 3
 
 
 def test_trace_upstream_resolves_root_payload():
@@ -128,11 +142,15 @@ def test_trace_upstream_resolves_root_payload():
 
     steps = _by_step(result)
     assert [n.relation for n in steps["extract"]] == ["upstream"]
-    root = steps["extract"][0]
+    # scan (not extract) is the lineage root now — extract has its own
+    # upstream (TODO 14), so it no longer resolves a root payload itself.
+    assert [n.relation for n in steps["scan"]] == ["upstream"]
+    root = steps["scan"][0]
     # Root resolution reads the stored payload — no auto-indexing involved.
-    assert root.root_value == {"company": "acme", "amount": 10}
+    assert root.root_value == {"path": "a.txt", "text": "acme,10"}
     # Non-roots don't carry payloads.
     assert steps["summarize"][0].root_value is None
+    assert steps["extract"][0].root_value is None
 
 
 def test_trace_live_only_seeding_and_include_superseded():
@@ -158,5 +176,9 @@ def test_trace_coordinates_present():
 
     result = trace(Selection(index={"company": "acme"}))
     coords = {n.step_name: n.coordinate for n in result.nodes}
-    assert coords["extract"] == "a.txt"
+    # Coordinates are content-addressed (row-<hash>), not "a.txt" — but a
+    # 1:1 map chain propagates its parent's coordinate unchanged, so
+    # scan/extract/summarize all share one lane coordinate.
+    assert coords["extract"] == coords["scan"]
+    assert coords["extract"].startswith("row-")
     assert coords["total"] == "@all"

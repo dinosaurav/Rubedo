@@ -102,11 +102,20 @@ def test_completed_run_stores_terminal_status_and_heartbeat():
     with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("hello")
 
-    @step(name="upper", version="1")
-    def upper(path):
-        return {"text": open(path).read().upper()}
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        """Folder recipe: walk TEST_FOLDER, yield each file's content — the
+        replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
 
-    summary = run(pipeline(id="lv", name="lv", folder=TEST_FOLDER, steps=[upper]))
+    @step(name="upper", version="1", depends_on=["scan"])
+    def upper(scan):
+        return {"text": scan["text"].upper()}
+
+    summary = run(pipeline(id="lv", name="lv", steps=[scan, upper]))
     assert summary.status == "completed"
 
     with get_session() as session:

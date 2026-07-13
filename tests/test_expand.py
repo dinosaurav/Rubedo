@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import FolderSource, run, source, step, pipeline
+from rubedo import run, source, step, pipeline
 from rubedo.runner import plan
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
@@ -81,11 +81,25 @@ def assert_run(pipe):
     return summary
 
 
-# read (map) -> split (expand, one lane per line) -> shout (map)
+def _scan():
+    """Folder recipe (TODO 14): a root expand step yielding each file's
+    content — the replacement for the old folder-source-class sugar."""
+
+    @step(name="scan", version="1", shape="expand")
+    def scan():
+        for name in sorted(os.listdir(TEST_FOLDER)):
+            path = os.path.join(TEST_FOLDER, name)
+            if os.path.isfile(path):
+                yield {"path": name, "text": open(path).read()}
+
+    return scan
+
+
+# scan (root expand) -> read (map) -> split (expand, one lane per line) -> shout (map)
 def _read():
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
+    @step(name="read", version="1", depends_on=["scan"])
+    def read(scan):
+        return scan["text"]
 
     return read
 
@@ -111,8 +125,7 @@ def make_pipe():
     return pipeline(
         id="x",
         name="x",
-        source=FolderSource(TEST_FOLDER),
-        steps=[_read(), _split(), _shout()],
+        steps=[_scan(), _read(), _split(), _shout()],
     )
 
 
@@ -122,8 +135,8 @@ def test_expand_mints_child_lanes_and_chains_downstream():
 
     pipe = make_pipe()
     s1 = assert_run(pipe)
-    # read: 2 files, split: 3 minted lines, shout: 3 lines
-    assert (s1.created_count, s1.reused_count) == (8, 0)
+    # scan: 2 files, read: 2 files, split: 3 minted lines, shout: 3 lines
+    assert (s1.created_count, s1.reused_count) == (10, 0)
 
     with get_session() as session:
         shout = (
@@ -138,8 +151,8 @@ def test_expand_mints_child_lanes_and_chains_downstream():
         }
         assert values == {"ALPHA", "BETA", "GAMMA"}
 
-        # Lineage: 3 read->split edges + 3 split->shout edges
-        assert session.query(MaterializationEdge).count() == 6
+        # Lineage: 2 scan->read edges + 3 read->split edges + 3 split->shout edges
+        assert session.query(MaterializationEdge).count() == 8
 
 
 def test_expand_reruns_but_reuses_identical_children():
@@ -152,16 +165,12 @@ def test_expand_reruns_but_reuses_identical_children():
     # Nothing changed: expand re-executes (no MVP caching) but yields identical
     # bytes, so every materialization is reused.
     s2 = assert_run(pipe)
-    assert (s2.created_count, s2.reused_count) == (0, 8)
+    assert (s2.created_count, s2.reused_count) == (0, 10)
 
 
 def test_expand_caches_anchor_and_skips_fn_on_rerun():
     create_file("a.txt", "alpha\nbeta")
     calls = []
-
-    @step(name="read", version="1")
-    def read(path):
-        return open(path).read()
 
     @step(name="split", version="1", depends_on=["read"], shape="expand")
     def split(read):
@@ -174,7 +183,7 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
         return split["line"].upper()
 
     pipe = pipeline(
-        id="c", name="c", source=FolderSource(TEST_FOLDER), steps=[read, split, shout]
+        id="c", name="c", steps=[_scan(), _read(), split, shout]
     )
     assert_run(pipe)
     assert len(calls) == 1  # scraped once
@@ -182,8 +191,8 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
     # Unchanged parent: the anchor cache-hits, children replay, fn NOT re-run.
     s2 = assert_run(pipe)
     assert len(calls) == 1
-    # read(1) + 2 split children + 2 shout children, all reused
-    assert (s2.created_count, s2.reused_count) == (0, 5)
+    # scan(1) + read(1) + 2 split children + 2 shout children, all reused
+    assert (s2.created_count, s2.reused_count) == (0, 6)
 
     # Change the parent: anchor address moves, so the expand re-runs.
     create_file("a.txt", "alpha\nGAMMA")
@@ -198,12 +207,12 @@ def test_expand_reacts_to_a_changed_source_lane():
     pipe = make_pipe()
     assert_run(pipe)
 
-    # Edit b.txt: only b's lane recomputes (read + its one minted line + shout);
-    # a's two lanes stay reused.
+    # Edit b.txt: only b's lane recomputes (scan(b) + read(b) + its one
+    # minted line + shout); a's lanes stay reused.
     create_file("b.txt", "GAMMA")
     s = assert_run(pipe)
-    assert s.created_count == 3  # read(b), split child b/0, shout b/0
-    assert s.reused_count == 5  # read(a), a/0, a/1 for split and shout
+    assert s.created_count == 4  # scan(b), read(b), split child b/0, shout b/0
+    assert s.reused_count == 6  # scan(a), read(a), a/0, a/1 for split and shout
 
 
 def test_expand_plan_marks_downstream_pending():
@@ -225,7 +234,7 @@ def test_expand_identical_payloads_collapse():
         yield {"v": 2}
 
     pipe = pipeline(
-        id="d", name="d", source=FolderSource(TEST_FOLDER), steps=[_read(), dup]
+        id="d", name="d", steps=[_scan(), _read(), dup]
     )
     assert_run(pipe)
     with get_session() as session:
