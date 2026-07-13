@@ -30,6 +30,16 @@ from .spec import source as _source_decorator
 from .spec import step as _step_decorator
 
 
+def _step_origin(s: StepSpec) -> str:
+    """Where a step's function was defined, for duplicate-name errors —
+    `module.qualname`, falling back to the step's own name if `fn` somehow
+    lacks one (e.g. a wrapped callable)."""
+    fn = s.fn
+    module = getattr(fn, "__module__", None) or "?"
+    qualname = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", s.name)
+    return f"{module}.{qualname}"
+
+
 def _build_spec(
     name: str,
     steps: List[StepSpec],
@@ -56,13 +66,32 @@ def _build_spec(
     retention itself is validated eagerly in `Pipeline.__init__` (it doesn't
     depend on the accumulated step list, so it fails fast at construction
     rather than waiting for the first verb call).
+
+    Duplicate step names are checked here rather than only deep in
+    `topological_sort` (planning.py keeps its own copy of this check too, as
+    a backstop for anyone building a `PipelineSpec` directly): with `@step`'s
+    name defaulting to the function name (TODO 16), two steps built from
+    same-named functions in different modules is the realistic collision, so
+    the error names both functions' `module.qualname` — not just the shared
+    step name — so it's obvious *where* the collision came from.
     """
+    seen: Dict[str, StepSpec] = {}
+    for s in steps:
+        prior = seen.get(s.name)
+        if prior is not None:
+            raise ValueError(
+                f"Duplicate step name {s.name!r}: defined by both "
+                f"{_step_origin(prior)} and {_step_origin(s)} — pass name= "
+                "to one of them to disambiguate"
+            )
+        seen[s.name] = s
+
     roots = [s for s in steps if not s.depends_on]
     if not roots:
         raise ValueError("pipeline has no root step to originate lanes")
 
     consumed = {dep for s in steps for dep in s.depends_on}
-    name_to_step = {s.name: s for s in steps}
+    name_to_step = seen  # already validated unique above
     for s in steps:
         if s.skip_cache and s.name not in consumed:
             raise ValueError(

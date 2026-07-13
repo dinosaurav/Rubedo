@@ -106,8 +106,10 @@ def _hash_source(fn: Callable) -> Optional[str]:
 
 
 def step(
-    name: str,
-    version: str,
+    fn: Optional[Callable] = None,
+    *,
+    name: Optional[str] = None,
+    version: str = "0",
     depends_on: Optional[List[str]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     workers: int = 4,
@@ -128,11 +130,23 @@ def step(
     assertions: Optional[List[Callable[[Any], None]]] = None,
     on_failed: Literal["use_passed", "block"] = "use_passed",
 ):
-    """Declare a step.
+    """Declare a step. Works bare (`@step`) or called (`@step()`,
+    `@step(version="2")`, ...) — both mint the same StepSpec.
 
-    version is the step's semantic identity — bump it for deliberate
-    behavior changes (also the escape hatch for edits code hashing can't
-    see, like helpers the step calls).
+    name defaults to the decorated function's `__name__` (same precedent as
+    `@source`); pass it explicitly only when two steps would otherwise
+    collide (two functions named the same across modules) or when the
+    function name isn't the name you want in the ledger. Two steps that
+    resolve to the same name — whether given explicitly or defaulted from
+    the function — fail loudly at pipeline-construction time, naming both
+    functions so you can tell where the collision came from.
+
+    version defaults to "0". It's the step's semantic identity — bump it
+    for deliberate behavior changes (also the escape hatch for edits code
+    hashing can't see, like helpers the step calls). `code="warn"` (the
+    default either way) means an unbumped version never silently
+    recomputes on a code edit — it warns instead (see below) — so leaving
+    version at its default is exactly as safe as pinning it to "1" by hand.
 
     code decides what a *source edit* means, independently of version:
       - "warn" (default): edits never recompute; reusing an output whose
@@ -180,93 +194,95 @@ def step(
     for one dep still runs, receiving an empty dict for that kwarg — declare
     on_failed="block" if every parent must contribute.
     """
-    if code not in ("warn", "auto"):
-        raise ValueError(f"Step '{name}': code must be 'warn' or 'auto', got {code!r}")
-    if shape not in ("map", "reduce", "expand", "join"):
-        raise ValueError(
-            f"Step '{name}': shape must be 'map', 'reduce', 'expand', or 'join', "
-            f"got {shape!r}"
-        )
-    if shape == "join":
-        if not join_on:
-            raise ValueError(
-                f"Step '{name}': shape='join' requires join_on={{parent: field}}"
-            )
-        if len(depends_on or []) < 2:
-            raise ValueError(
-                f"Step '{name}': shape='join' requires at least two parents in "
-                "depends_on (N-way star join on a shared value)"
-            )
-        if set(join_on) != set(depends_on or []):
-            raise ValueError(
-                f"Step '{name}': join_on keys {sorted(join_on)} must match "
-                f"depends_on {sorted(depends_on or [])}"
-            )
-    if join_on is not None and shape != "join":
-        raise ValueError(f"Step '{name}': join_on requires shape='join'")
-    if shape == "expand" and skip_cache:
-        raise ValueError(
-            f"Step '{name}': skip_cache is not supported with shape='expand'"
-        )
-    if shape == "expand" and len(depends_on or []) > 1:
-        raise ValueError(
-            f"Step '{name}': shape='expand' takes at most one parent — none = a "
-            "root (a source that yields the initial lanes); two+ would be a join"
-        )
-    if executor not in ("thread", "process"):
-        raise ValueError(f"Step '{name}': executor must be 'thread' or 'process', got {executor!r}")
-    if shape == "reduce" and skip_cache:
-        raise ValueError(f"Step '{name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
-    if shape == "reduce" and not depends_on:
-        raise ValueError(f"Step '{name}': shape='reduce' requires at least one parent in depends_on")
-    if group_key is not None and shape != "reduce":
-        raise ValueError(
-            f"Step '{name}': group_key requires shape='reduce' (it partitions a "
-            "reduction's input lanes by an indexed field)"
-        )
-    if version == "auto":
-        raise ValueError(
-            f"Step '{name}': version is a semantic label; use code='auto' "
-            "to derive cache identity from the source instead"
-        )
-    if retries < 0:
-        raise ValueError(f"Step '{name}': retries must be >= 0")
-    if skip_cache and stale_after is not None:
-        raise ValueError(
-            f"Step '{name}': stale_after is meaningless with skip_cache — "
-            "nothing is stored to expire"
-        )
-    if skip_cache and index:
-        raise ValueError(
-            f"Step '{name}': index is meaningless with skip_cache — "
-            "nothing is stored to search"
-        )
-    if on_failed not in ("use_passed", "block"):
-        raise ValueError(
-            f"Step '{name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
-        )
-    if isinstance(retry_on, type) and issubclass(retry_on, BaseException):
-        retry_on = (retry_on,)
-    parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
-    parsed_stale = parse_duration(stale_after) if stale_after else None
 
-    if assertions is not None:
-        if not isinstance(assertions, (list, tuple)) or not all(callable(a) for a in assertions):
-            raise ValueError(
-                f"Step '{name}': assertions must be a list of callables"
-            )
+    def decorator(f: Callable) -> StepSpec:
+        step_name = name if name is not None else f.__name__
 
-    def decorator(fn: Callable):
-        code_hash = _hash_source(fn)
+        if code not in ("warn", "auto"):
+            raise ValueError(f"Step '{step_name}': code must be 'warn' or 'auto', got {code!r}")
+        if shape not in ("map", "reduce", "expand", "join"):
+            raise ValueError(
+                f"Step '{step_name}': shape must be 'map', 'reduce', 'expand', or 'join', "
+                f"got {shape!r}"
+            )
+        if shape == "join":
+            if not join_on:
+                raise ValueError(
+                    f"Step '{step_name}': shape='join' requires join_on={{parent: field}}"
+                )
+            if len(depends_on or []) < 2:
+                raise ValueError(
+                    f"Step '{step_name}': shape='join' requires at least two parents in "
+                    "depends_on (N-way star join on a shared value)"
+                )
+            if set(join_on) != set(depends_on or []):
+                raise ValueError(
+                    f"Step '{step_name}': join_on keys {sorted(join_on)} must match "
+                    f"depends_on {sorted(depends_on or [])}"
+                )
+        if join_on is not None and shape != "join":
+            raise ValueError(f"Step '{step_name}': join_on requires shape='join'")
+        if shape == "expand" and skip_cache:
+            raise ValueError(
+                f"Step '{step_name}': skip_cache is not supported with shape='expand'"
+            )
+        if shape == "expand" and len(depends_on or []) > 1:
+            raise ValueError(
+                f"Step '{step_name}': shape='expand' takes at most one parent — none = a "
+                "root (a source that yields the initial lanes); two+ would be a join"
+            )
+        if executor not in ("thread", "process"):
+            raise ValueError(f"Step '{step_name}': executor must be 'thread' or 'process', got {executor!r}")
+        if shape == "reduce" and skip_cache:
+            raise ValueError(f"Step '{step_name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
+        if shape == "reduce" and not depends_on:
+            raise ValueError(f"Step '{step_name}': shape='reduce' requires at least one parent in depends_on")
+        if group_key is not None and shape != "reduce":
+            raise ValueError(
+                f"Step '{step_name}': group_key requires shape='reduce' (it partitions a "
+                "reduction's input lanes by an indexed field)"
+            )
+        if version == "auto":
+            raise ValueError(
+                f"Step '{step_name}': version is a semantic label; use code='auto' "
+                "to derive cache identity from the source instead"
+            )
+        if retries < 0:
+            raise ValueError(f"Step '{step_name}': retries must be >= 0")
+        if skip_cache and stale_after is not None:
+            raise ValueError(
+                f"Step '{step_name}': stale_after is meaningless with skip_cache — "
+                "nothing is stored to expire"
+            )
+        if skip_cache and index:
+            raise ValueError(
+                f"Step '{step_name}': index is meaningless with skip_cache — "
+                "nothing is stored to search"
+            )
+        if on_failed not in ("use_passed", "block"):
+            raise ValueError(
+                f"Step '{step_name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
+            )
+        resolved_retry_on = (retry_on,) if isinstance(retry_on, type) and issubclass(retry_on, BaseException) else retry_on
+        parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
+        parsed_stale = parse_duration(stale_after) if stale_after else None
+
+        if assertions is not None:
+            if not isinstance(assertions, (list, tuple)) or not all(callable(a) for a in assertions):
+                raise ValueError(
+                    f"Step '{step_name}': assertions must be a list of callables"
+                )
+
+        code_hash = _hash_source(f)
         if code == "auto" and code_hash is None:
             raise ValueError(
-                f"Step '{name}': code='auto' requires an inspectable "
+                f"Step '{step_name}': code='auto' requires an inspectable "
                 "function source"
             )
 
         return StepSpec(
-            name=name,
-            fn=fn,
+            name=step_name,
+            fn=f,
             version=version,
             depends_on=depends_on or [],
             params_model=params_model,
@@ -274,7 +290,7 @@ def step(
             code_hash=code_hash,
             code_mode=code,
             retries=retries,
-            retry_on=tuple(retry_on),
+            retry_on=tuple(resolved_retry_on),
             retry_delay=retry_delay,
             retry_backoff=retry_backoff,
             rate_limit=parsed_rate,
@@ -290,7 +306,7 @@ def step(
             on_failed=on_failed,
         )
 
-    return decorator
+    return decorator(fn) if fn is not None else decorator
 
 
 def source(fn=None, *, name=None, version="1", **step_kwargs):
