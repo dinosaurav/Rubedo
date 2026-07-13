@@ -99,22 +99,25 @@ function App() {
         <section id="quickstart" style={{ marginBottom: '5rem' }}>
           <h2 className="section-heading">Quickstart</h2>
           <p className="section-kicker">Pipelines are plain Python objects — define them wherever your code lives.</p>
-          <pre><code>{`from rubedo import ProcessResult, step, pipeline, run, plan, describe
+          <pre><code>{`from rubedo import ProcessResult, step, pipeline
 
-@step(name="read_lines", version="read-v1")
-def read_lines(path: str):
-    return {"lines": open(path).read().splitlines()}
+@step(name="scan", version="1", shape="expand")
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(read_lines["lines"])})
+@step(name="count_lines", version="count-v1", depends_on=["scan"])
+def count_lines(scan: dict) -> ProcessResult:
+    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(id="count-lines", name="Count Lines", folder="input",
-             steps=[read_lines, count_lines])
+p = pipeline(name="count-lines", steps=[scan, count_lines])
 
-print(describe(p))            # the DAG, before ever running
-print(plan(p))                # dry-run: what run() would do, and why
-summary = run(p)              # execute
+print(p.describe())           # the DAG, before ever running
+print(p.plan())                # dry-run: what p.run() would do, and why
+summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")`}</code></pre>
           <p style={{ fontSize: '0.9rem', opacity: 0.75, marginTop: '1rem' }}>
             See <a href={`${GITHUB_URL}/tree/main/examples/count_lines`} target="_blank" rel="noreferrer">examples/count_lines</a> in
@@ -175,7 +178,7 @@ print(f"created={summary.created_count} reused={summary.reused_count}")`}</code>
             <div style={{ borderTop: '2px solid var(--accent-primary)', paddingTop: '1rem' }}>
               <h3 style={{ fontSize: '1.2rem', marginBottom: '0.75rem' }}>Full lineage and observability</h3>
               <p style={{ fontSize: '0.95rem', opacity: 0.9 }}>
-                <code>plan()</code> is a read-only dry-run of what <code>run()</code> would do and why.{' '}
+                <code>p.plan()</code> is a read-only dry-run of what <code>p.run()</code> would do and why.{' '}
                 <code>trace()</code> follows lineage upstream to source items and downstream to everything
                 derived from them — recorded in an append-only ledger, no logging statements required.
               </p>
