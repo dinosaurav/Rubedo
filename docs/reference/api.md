@@ -17,8 +17,10 @@ the source wins — this pre-1.0 API moves fast (see
 
 ```python
 def step(
-    name: str,
-    version: str,
+    fn: Optional[Callable] = None,
+    *,
+    name: Optional[str] = None,
+    version: str = "0",
     depends_on: Optional[List[str]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     workers: int = 4,
@@ -43,12 +45,13 @@ def step(
 
 A decorator that turns a plain function into a `StepSpec`. The engine never
 imports your code — `@step` just builds a data object; nothing runs until
-`p.run()`.
+`p.run()`. Works bare (`@step`) or called (`@step()`, `@step(version="2")`,
+...) — both mint the same `StepSpec`.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | `str` | required | The step's identity within the pipeline; referenced by `depends_on`. |
-| `version` | `str` | required | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
+| `name` | `str` \| `None` | function's `__name__` | The step's identity within the pipeline; referenced by `depends_on`. Two steps that resolve to the same name (explicit or defaulted) fail loudly at pipeline-construction time, naming both functions. |
+| `version` | `str` | `"0"` | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
 | `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — `shape="expand"` yields the pipeline's initial lanes (ingestion is just this shape; see [Concepts: sources](../concepts/sources.md)), or a `shape="map"` root mints a single source-less `@root` lane from `params`. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model overriding the pipeline-level `params_model` for this step's own validation (rare; usually set on `pipeline()` instead). |
 | `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `p.run(workers=N)`. |
@@ -89,6 +92,14 @@ def check_price_positive(val: dict):
 )
 def enrich(row: dict) -> ProcessResult:
     ...
+```
+
+At the other extreme, a step that needs no explicit policy at all can drop
+`name=`/`version=` entirely:
+
+```python
+@step()
+def parse(row: dict): ...   # name="parse", version="0", code="warn"
 ```
 
 Parameter binding: a root step (source-less `map` or root `expand`) receives

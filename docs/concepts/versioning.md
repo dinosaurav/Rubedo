@@ -16,6 +16,26 @@ output address (`hash(step, version, input_hash, ...)` — see
 output. Nothing about a version bump is automatic: you decide when the old
 cached generation is no longer valid.
 
+`name` and `version` both have defaults: `name` defaults to the decorated
+function's `__name__`, and `version` defaults to `"0"`. Omitting them is
+fine to start — `code="warn"` (the default either way, see below) already
+means an unbumped default version never silently recomputes on a code
+edit, it warns instead — so `@step()` with nothing else is exactly as safe
+as spelling out `version="1"` by hand. Reach for an explicit `version=`
+the moment you make a deliberate behavior change, same as you always would.
+
+```python
+@step()
+def parse(row: dict): ...   # name="parse", version="0", code="warn"
+```
+
+Two steps whose names collide — most commonly two same-named functions
+defined in different modules — fail loudly at pipeline-construction time
+regardless of whether either name was explicit or defaulted; the error
+names both functions so you can tell the two apart. `@step` also works
+bare, with no parens, if every other argument is staying at its default
+(`@source` already worked this way).
+
 `version` is also the escape hatch for edits the engine has no way to see.
 If a step calls a helper function, imports different data, or depends on
 some external config that isn't hashed into its identity, changing that

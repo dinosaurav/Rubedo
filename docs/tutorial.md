@@ -45,7 +45,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
 
 
-@step(name="scan", version="v1", shape="expand")
+@step(shape="expand")
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -54,7 +54,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="classify", version="v1", depends_on=["scan"], index=["rating"])
+@step(depends_on=["scan"], index=["rating"])
 def classify(scan: dict) -> ProcessResult:
     words = scan["text"].lower().split()
     if len(words) < 3:
@@ -88,6 +88,12 @@ content-addressed lane. `classify` is an ordinary dependent `map` step.
 search index at commit time — that's what makes it queryable by content
 later, not just by which file produced it.
 
+Neither step passes `name=` or `version=`: `name` defaults to the
+function's name (so `scan` and `classify` are exactly what shows up
+below), and `version` defaults to `"0"` — see
+[Concepts: versioning](concepts/versioning.md) for when you'd bump it
+explicitly, which we do a few sections down.
+
 Run it:
 
 ```bash
@@ -96,8 +102,8 @@ uv run python pipeline.py
 
 ```text
 Pipeline 'reviews' — roots: scan
-  scan (v1) (root)
-  classify (v1) <- scan
+  scan (0) (root)
+  classify (0) <- scan
 
 Plan for 'reviews' over scan: 1 execute, 1 pending
   execute  scan                 @root
@@ -205,14 +211,15 @@ addresses — and everything that consumed them — are still valid.
 ## Bumping a step's version
 
 Widen the positive-word list and bump `classify`'s `version` to mark it a
-deliberate behavior change:
+deliberate behavior change — the first time this pipeline passes `version=`
+explicitly (it's defaulted to `"0"` until now):
 
 ```python
 POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent", "value"}
 ```
 
 ```python
-@step(name="classify", version="v2", depends_on=["scan"], index=["rating"])
+@step(version="v2", depends_on=["scan"], index=["rating"])
 ```
 
 ```bash
@@ -263,9 +270,10 @@ print(result)
     Rubedo never deletes a superseded or orphaned generation's ledger row —
     invalidation and version bumps are both liveness changes, not deletes
     (see [notes/invariants.md](notes/invariants.md)). After the version
-    bump above, both the old `v1` classify outputs *and* the new `v2` ones
-    are still live materializations, so a bare `rating:positive` selection
-    would match generations from both versions. Scoping the query with
+    bump above, both the old default-version (`"0"`) classify outputs *and*
+    the new `v2` ones are still live materializations, so a bare
+    `rating:positive` selection would match generations from both versions.
+    Scoping the query with
     `version:v2` selects only the current generation — a good habit any time
     a step has been bumped more than once.
 
