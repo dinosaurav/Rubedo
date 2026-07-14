@@ -8,6 +8,16 @@ output lanes — but each has a distinct planning and caching story worth
 knowing on its own. See [`../notes/producer-model.md`](../notes/producer-model.md)
 for the design behind the taxonomy.
 
+Most of the time you don't pass `shape=` at all: it's inferred from what
+the code already says — a generator function defaults to `"expand"`,
+`join_on=` defaults it to `"join"`, `group_key=` defaults it to `"reduce"`,
+and anything else is `"map"`. An explicit `shape=` always overrides the
+inference, and an explicit value that contradicts the code (a generator
+decorated `shape="map"`, say) raises rather than silently misbehaving. See
+[API reference: `@step`](../reference/api.md#shape-and-depends_on-inference)
+for the full inference rules, including how a step's `depends_on` is
+likewise inferred from its parameter names.
+
 ## `map` — 1:1 (the default)
 
 The default. One input lane in, one output lane out, same coordinate. This

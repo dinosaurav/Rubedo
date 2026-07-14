@@ -21,7 +21,7 @@ def step(
     *,
     name: Optional[str] = None,
     version: str = "0",
-    depends_on: Optional[List[str]] = None,
+    depends_on: Optional[Union[List[str], Dict[str, str]]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     workers: int = 4,
     code: str = "warn",
@@ -33,7 +33,7 @@ def step(
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
     index: Optional[List[str]] = None,
-    shape: str = "map",
+    shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
@@ -52,7 +52,7 @@ imports your code — `@step` just builds a data object; nothing runs until
 |---|---|---|---|
 | `name` | `str` \| `None` | function's `__name__` | The step's identity within the pipeline; referenced by `depends_on`. Two steps that resolve to the same name (explicit or defaulted) fail loudly at pipeline-construction time, naming both functions. |
 | `version` | `str` | `"0"` | Semantic identity — bump it for a deliberate behavior change. Folded into every lane's output address, so bumping recomputes the whole step regardless of `code=`. Cannot be the literal string `"auto"` (that's what `code="auto"` is for). |
-| `depends_on` | `list[str]` \| `None` | `None` | Parent step names. Empty/`None` makes this step a root — `shape="expand"` yields the pipeline's initial lanes (ingestion is just this shape; see [Concepts: sources](../concepts/sources.md)), or a `shape="map"` root mints a single source-less `@root` lane from `params`. |
+| `depends_on` | `list[str]` \| `dict[str, str]` \| `None` | `None` | Parent step names. When omitted entirely, it's *inferred* from `fn`'s signature (see below). Passed as a `list`, it's explicit and disables inference. Passed as a `dict` (`{"param_name": "step_name"}`), it's an *alias*: binds a parent's output to a differently-named parameter — also explicit, also disables inference. Either way, no parents makes this step a root — `shape="expand"` yields the pipeline's initial lanes (ingestion is just this shape; see [Concepts: sources](../concepts/sources.md)), or a `shape="map"` root mints a single source-less `@root` lane from `params`. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model overriding the pipeline-level `params_model` for this step's own validation (rare; usually set on `pipeline()` instead). |
 | `workers` | `int` | `4` | Thread/process pool size for this step, overridable per-run via `p.run(workers=N)`. |
 | `code` | `"warn"` \| `"auto"` | `"warn"` | What a source edit means. `"warn"`: edits never recompute, but reusing an output whose code has since changed logs a loud warning (in run output, event log, and `p.plan()`). `"auto"`: the function's source hash joins the cache identity, so any edit recomputes with no version bump — requires an inspectable function source. |
@@ -64,7 +64,7 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `stale_after` | `str` \| `None` | `None` | `"24h"`, `"30min"`, `"7d"` — a cached output older than this re-executes on the next run. Different bytes supersede the old generation (downstream recomputes); identical bytes just refresh the freshness clock. Parsed by `parse_duration`. |
 | `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, `stale_after`, and `index`. A `skip_cache` step must have at least one consumer. |
 | `index` | `list[str]` \| `None` | `None` | Dotted-path fields of the output *value* to extract into the search index at commit time (e.g. `["company", "meta.region"]`). List-valued fields index one entry per element. Never affects cache identity — only newly created materializations are indexed under a new declaration. Incompatible with `skip_cache`. |
-| `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` | `"map"` | See [Concepts: shapes](../concepts/shapes.md). |
+| `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
 | `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
 | `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys must exactly match `depends_on`. |
@@ -99,7 +99,7 @@ At the other extreme, a step that needs no explicit policy at all can drop
 
 ```python
 @step()
-def parse(row: dict): ...   # name="parse", version="0", code="warn"
+def parse(scan: dict): ...   # name="parse", version="0", code="warn"
 ```
 
 Parameter binding: a root step (source-less `map` or root `expand`) receives
@@ -112,6 +112,38 @@ additionally declare a `params` argument to receive the run's validated
 params (see [Concepts: model](../concepts/model.md)). A step returns
 either a plain JSON-serializable value, a `ProcessResult` (value +
 metadata), or `Filtered(reason=...)` to decline the lane.
+
+### Shape and `depends_on` inference
+
+Both of those are also inferred when not spelled out, since a decorated
+function's own shape already implies most of this:
+
+- `shape` defaults to `"expand"` for a generator function, `"join"`/
+  `"reduce"` when `join_on=`/`group_key=` is given, `"map"` otherwise. An
+  explicit `shape=` always wins; an explicit value that contradicts what
+  the code implies (say, a generator decorated `shape="map"`, or `join_on=`
+  on a step whose explicit shape isn't `"join"`) raises at decoration time
+  rather than misbehaving mid-run.
+- `depends_on`, left unset, is resolved once every step in the pipeline is
+  registered (`pipeline()`/`p.step()` — decoration time can't see sibling
+  steps yet): every parameter of the function other than `params` must
+  name a registered step, and becomes a dependency, in signature order —
+  `def parse(scan: dict)` above infers `depends_on=["scan"]` the moment
+  `parse` sits in a pipeline alongside a step named `scan`. An unmatched
+  parameter raises `ValueError` naming the step, the parameter, and the
+  available step names — a signature typo dies at build instead of a
+  call-time `TypeError` deep in a run. A function using `*args`/`**kwargs`
+  skips inference entirely (it's a root unless you pass `depends_on=`
+  explicitly). A step with no non-`params` parameter is a root.
+
+Passing `depends_on=` explicitly — as a `list` (unchanged) or as
+`{"param_name": "step_name"}` to bind a parent's output to a
+differently-named parameter — always disables inference for that step.
+Both forms build the exact same `StepSpec` inference would have, so
+`definition()` (and every cached address) is identical either way — reach
+for the explicit form once a pipeline has enough steps that inference stops
+reading as obvious, or when a parameter's name legitimately differs from
+the step it depends on.
 
 ### `@source`
 

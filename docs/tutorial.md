@@ -45,7 +45,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
 
 
-@step(shape="expand")
+@step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -54,7 +54,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(depends_on=["scan"], index=["rating"])
+@step(index=["rating"])
 def classify(scan: dict) -> ProcessResult:
     words = scan["text"].lower().split()
     if len(words) < 3:
@@ -80,19 +80,31 @@ if __name__ == "__main__":
 ```
 
 There's no `folder=` kwarg — ingestion is just a step. `scan` is a
-parentless `@step(shape="expand")`: it walks `./input` and `yield`s each
-file's own content (not just its path — the yielded payload is what gets
-hashed into the lane's identity), and each yield mints its own
-content-addressed lane. `classify` is an ordinary dependent `map` step.
-`index=["rating"]` extracts the `rating` field of its output into the
-search index at commit time — that's what makes it queryable by content
-later, not just by which file produced it.
+parentless step that walks `./input` and `yield`s each file's own content
+(not just its path — the yielded payload is what gets hashed into the
+lane's identity), and each yield mints its own content-addressed lane.
+`classify` is an ordinary dependent `map` step. `index=["rating"]` extracts
+the `rating` field of its output into the search index at commit time —
+that's what makes it queryable by content later, not just by which file
+produced it.
 
-Neither step passes `name=` or `version=`: `name` defaults to the
-function's name (so `scan` and `classify` are exactly what shows up
-below), and `version` defaults to `"0"` — see
-[Concepts: versioning](concepts/versioning.md) for when you'd bump it
-explicitly, which we do a few sections down.
+Neither step spells out much at all, and every dropped kwarg is inferred
+from the code rather than defaulted blindly: `scan` is a generator
+function, so its shape defaults to `"expand"` — a plain `def` would default
+to `"map"` instead. `classify`'s only parameter, `scan`, names a registered
+step, so it becomes a dependency (`depends_on=["scan"]`) without saying so;
+an unmatched parameter name would raise at build time instead of failing
+oddly the first time the step actually runs. Neither step passes `name=` or
+`version=` either: `name` defaults to the function's name (so `scan` and
+`classify` are exactly what shows up below), and `version` defaults to
+`"0"` — see [Concepts: versioning](concepts/versioning.md) for when you'd
+bump it explicitly, which we do a few sections down. Spelling everything
+out explicitly still works and is identical once built —
+`@step(shape="expand")` / `@step(depends_on=["scan"], index=["rating"])` —
+reach for it once a pipeline has enough steps that inference stops reading
+as obvious, or when a parameter's name legitimately differs from the step
+it depends on (`depends_on={"raw": "scan"}` binds a differently-named
+parameter to a parent's output).
 
 Run it:
 
@@ -219,7 +231,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent", "value
 ```
 
 ```python
-@step(version="v2", depends_on=["scan"], index=["rating"])
+@step(version="v2", index=["rating"])
 ```
 
 ```bash
