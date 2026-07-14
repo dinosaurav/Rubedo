@@ -201,6 +201,21 @@ a:hover { color: var(--accent-hover); }
 .hero .lede em { font-style: italic; color: var(--text-primary); }
 .lede-sub { font-size: 1rem; color: var(--text-muted); margin-bottom: 2rem; }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 3rem; }
+
+/* ---------- Hero graphic (SVG diamond + reuse block) ---------- */
+.hero-graphic {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 1.5rem;
+  align-items: center;
+}
+.diamond-frame {
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  background: #fff;
+  padding: 1rem;
+}
+.diamond-frame svg { display: block; width: 100%; height: auto; }
 .hero-reuse { max-width: 720px; }
 .snippet-label {
   font-size: 0.7rem;
@@ -208,8 +223,10 @@ a:hover { color: var(--accent-hover); }
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--accent-primary);
+  margin-top: 0.75rem;
   margin-bottom: 0.5rem;
 }
+.hero-reuse .snippet-label { margin-top: 0; }
 .hero-reuse .pre-block {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-md);
@@ -229,8 +246,18 @@ a:hover { color: var(--accent-hover); }
   margin: 0;
   background-color: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-strong);
+  padding: 4.5rem 2.5rem;
 }
-.block-tinted > * { max-width: 1040px; margin-left: auto; margin-right: auto; }
+.block-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.block-header-center {
+  text-align: center;
+  margin-bottom: 2.5rem;
+}
+.block-header-center .section-label { margin-bottom: 0.75rem; }
+.block-header-center .block-title { margin-bottom: 0; }
 .section-label {
   display: inline-block;
   font-size: 0.72rem;
@@ -276,25 +303,6 @@ a:hover { color: var(--accent-hover); }
   border: 1px solid rgba(255, 0, 51, 0.18);
 }
 
-/* ---------- Thesis band ---------- */
-.thesis {
-  margin-top: 2rem;
-  padding: 1.25rem 1.5rem;
-  border: 1px solid var(--border-strong);
-  border-left: 4px solid var(--accent-primary);
-  background-color: #fff;
-  color: var(--text-secondary);
-  font-size: 1rem;
-  line-height: 1.65;
-}
-.thesis strong { color: var(--text-primary); }
-.thesis code {
-  font-family: var(--font-mono);
-  font-size: 0.88em;
-  background-color: rgba(255, 0, 51, 0.06);
-  padding: 0.05em 0.35em;
-}
-
 /* ---------- Pillars ---------- */
 .pillars {
   display: grid;
@@ -313,27 +321,61 @@ a:hover { color: var(--accent-hover); }
   border: 1px solid rgba(255, 0, 51, 0.18);
 }
 
-/* ---------- Plan callout ---------- */
-.plan-callout {
-  margin-top: 2rem;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid var(--border-strong);
-  border-left: 4px solid var(--accent-primary);
-  background-color: #fff;
-  color: var(--text-secondary);
-  font-size: 0.95rem;
-  line-height: 1.55;
+/* ---------- Tooltip (paperclip-punk hover hints) ---------- */
+.tip {
+  position: relative;
+  display: inline;
+  cursor: help;
+  outline: none;
 }
-.plan-callout svg { color: var(--accent-primary); flex-shrink: 0; }
-.plan-callout strong { color: var(--text-primary); }
-.plan-callout code {
+.term {
+  border-bottom: 1px dashed var(--accent-primary);
+}
+.term-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.85em;
+  height: 0.85em;
+  margin-left: 0.1em;
+  font-size: 0.7em;
+  font-weight: 700;
   font-family: var(--font-mono);
-  font-size: 0.88em;
-  background-color: rgba(255, 0, 51, 0.06);
-  padding: 0.05em 0.35em;
+  color: #fff;
+  background-color: var(--accent-primary);
+  vertical-align: super;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+.tip:hover .term-dot,
+.tip:focus .term-dot { transform: scale(1.15); }
+.tip-card {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 0.85rem 1rem;
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+.tip-card::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border-strong);
 }
 
 /* ---------- Shapes grid (code + diagram) ---------- */
@@ -342,7 +384,7 @@ a:hover { color: var(--accent-hover); }
   grid-template-columns: 1.15fr 1fr;
   gap: 1.5rem;
   align-items: start;
-  margin-bottom: 2rem;
+  margin-bottom: 3rem;
 }
 .code-side, .diagram-side { display: flex; flex-direction: column; }
 .code-side .pre-block, .diagram-side .pre-block {
@@ -377,22 +419,12 @@ a:hover { color: var(--accent-hover); }
   color: #fff;
   letter-spacing: 0.02em;
 }
-.shape-notes { font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px; }
-.shape-notes code {
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  background-color: rgba(255, 0, 51, 0.06);
-  padding: 0.05em 0.35em;
-  border: 1px solid rgba(255, 0, 51, 0.18);
-}
-.shape-notes em { font-style: italic; color: var(--text-primary); }
-
 /* ---------- Two-column layout ---------- */
 .two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  align-items: start;
+  gap: 2rem;
+  align-items: center;
 }
 .two-col .pre-block {
   margin: 0;
@@ -400,7 +432,9 @@ a:hover { color: var(--accent-hover); }
   box-shadow: var(--shadow-md);
   line-height: 1.65;
 }
+.flaky-code-wrap { width: 100%; }
 .code-step { white-space: pre; }
+.flaky-row { margin: 2.5rem 0 0; }
 
 /* ---------- Feature list ---------- */
 .features { list-style: none; display: flex; flex-direction: column; gap: 1.25rem; }
@@ -469,6 +503,7 @@ a:hover { color: var(--accent-hover); }
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
   .shapes-grid { grid-template-columns: 1fr; }
+  .hero-graphic { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
   .two-col { grid-template-columns: 1fr; }
@@ -480,7 +515,6 @@ a:hover { color: var(--accent-hover); }
   .hero { padding: 3.5rem 1.25rem 3rem; }
   .block { padding: 3rem 1.25rem; }
   .block-tinted { padding-left: 1.25rem; padding-right: 1.25rem; }
-  .block-tinted > * { padding-left: 0; padding-right: 0; }
   .closing { padding: 3rem 1.25rem; }
   .landing-footer { padding: 2rem 1.25rem 2.5rem; }
 }
