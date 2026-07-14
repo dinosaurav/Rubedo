@@ -135,7 +135,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.source(name="scan", version="1")
+@p.step(name="scan", version="1")
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -151,11 +151,11 @@ count_lines_pipeline = p
 
 There's no `.build()` step: the underlying `PipelineSpec` is constructed and
 validated lazily the first time you call a verb (`.run()`/`.plan()`/
-`.describe()`), and cached from then on. `@p.source(...)` is sugar for a
-parentless `shape="expand"` root step (see [Shapes](concepts/shapes.md)),
-used by
+`.describe()`), and cached from then on. `scan` above is a parentless
+generator, so its `shape="expand"` is inferred automatically (see
+[Shapes](concepts/shapes.md)) — exactly the recipe
 [`examples/count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)
-itself.
+uses itself.
 
 ## Where to go next
 

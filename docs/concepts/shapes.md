@@ -149,19 +149,19 @@ An `expand` step with **no** `depends_on` is a root — it yields the
 pipeline's initial lanes and, having no parent to cache against, **always
 re-executes**, every run (no anchor is written or checked). This *is* how
 ingestion works — there's no separate source concept, just this shape used
-with no parent. `@source` is exactly this, spelled as a decorator:
+with no parent. A parentless generator function infers `shape="expand"`
+automatically:
 
 ```python
-from rubedo import source
+from rubedo import step
 
-@source(name="hn_top", version="1")
+@step(name="hn_top", version="1")
 def hn_top():
     for sid in fetch_top_ids():
         yield fetch_story(sid)
 ```
 
-which is sugar for `@step(shape="expand")` with no `depends_on`. Drop it
-straight into `pipeline(steps=[...])` — nothing else needed. See
+Drop it straight into `pipeline(steps=[...])` — nothing else needed. See
 [sources.md](sources.md) for the folder/CSV/table/cloud recipes.
 
 Reach for `expand` whenever the *number* of downstream items isn't known

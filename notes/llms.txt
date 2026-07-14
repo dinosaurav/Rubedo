@@ -4,9 +4,9 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 
 ## Concepts in 10 lines
 1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, index it (`@step(index=[...])`) and query — the lane key is never a human key.
-2. **Ingestion is a step, not a class:** there are no `Source` classes. A parentless `@step(shape="expand")` `yield`s one payload per item and mints a lane per yield — a folder scan is a three-line `os.listdir` generator, a CSV is a `csv.DictReader` loop, a SQL table is a plain `SELECT` loop. `@source` is sugar for exactly that (a parentless expand). A pipeline can declare several such roots (multi-source; `join` combines them). Or a source-less plain `map` root (no `depends_on`) mints a single `@root` lane from its `params`.
+2. **Ingestion is a step, not a class:** there are no `Source` classes. A parentless generator `@step` `yield`s one payload per item and mints a lane per yield — its `shape="expand"` is inferred automatically — a folder scan is a three-line `os.listdir` generator, a CSV is a `csv.DictReader` loop, a SQL table is a plain `SELECT` loop. A pipeline can declare several such roots (multi-source; `join` combines them). Or a source-less plain `map` root (no `depends_on`) mints a single `@root` lane from its `params`.
 3. **Steps:** plain functions decorated with `@step(...)`. `name` defaults to the function's `__name__`; `version` defaults to `"0"`.
-4. **Pipelines:** `p = pipeline(name="...")` returns a `Pipeline`. Attach steps either via `steps=[...]` or by decorating with `@p.step`/`@p.source` — both register on the same object, mix freely.
+4. **Pipelines:** `p = pipeline(name="...")` returns a `Pipeline`. Attach steps either via `steps=[...]` or by decorating with `@p.step` — both register on the same object, mix freely.
 5. **Execution:** the engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
 6. **Immutability:** results are content-addressed and saved in `.rubedo/objects`. Never mutate inputs; always return new data.
 7. **Identity:** a step's cache identity is defined by its inputs + `version` + `params` (+ source code, only under `code="auto"`).
@@ -71,7 +71,7 @@ Equivalent fluent form (register on the pipeline object instead of building a ba
 ```python
 p = pipeline(name="enrichment", params_model=EnrichParams)
 
-@p.source(name="screen")
+@p.step(name="screen", shape="expand")
 def screen(): ...
 
 @p.step(name="enrich", depends_on=["screen"])
@@ -121,4 +121,4 @@ print(summary.output_for("lines"))
 1. **Mutating inputs:** `row["new_field"] = "x"; return row`. BAD. This breaks content-addressing and JSON serialization guarantees. Always create a new dict: `return {**row, "new_field": "x"}`.
 2. **Missing version bumps:** Changing step logic without bumping `version` will cause the engine to reuse the old cache (and print a code-drift warning under the default `code="warn"`).
 3. **`skip_cache` on expensive steps:** Only use `skip_cache` for cheap data transformations. Never use it on LLM calls or network requests.
-4. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain `@step(shape="expand")` (or `@source`); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.
+4. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain parentless generator `@step` (its `shape="expand"` inferred automatically); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.

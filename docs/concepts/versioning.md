@@ -33,8 +33,7 @@ Two steps whose names collide — most commonly two same-named functions
 defined in different modules — fail loudly at pipeline-construction time
 regardless of whether either name was explicit or defaulted; the error
 names both functions so you can tell the two apart. `@step` also works
-bare, with no parens, if every other argument is staying at its default
-(`@source` already worked this way).
+bare, with no parens, if every other argument is staying at its default.
 
 `version` is also the escape hatch for edits the engine has no way to see.
 If a step calls a helper function, imports different data, or depends on

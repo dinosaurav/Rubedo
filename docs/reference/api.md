@@ -145,21 +145,13 @@ for the explicit form once a pipeline has enough steps that inference stops
 reading as obvious, or when a parameter's name legitimately differs from
 the step it depends on.
 
-### `@source`
+A parentless generator function is a source-shaped `expand` root, sugar-free
+— its `shape="expand"` is inferred automatically:
 
 ```python
-def source(fn=None, *, name=None, version="1", **step_kwargs)
-```
+from rubedo import step
 
-Sugar for a parentless `@step(shape="expand")` — a root that yields payloads,
-each becoming its own content-addressed lane. `name` defaults to the
-function's name; any other `@step` keyword (`index=`, `retries=`,
-`rate_limit=`, ...) forwards through.
-
-```python
-from rubedo import source
-
-@source
+@step
 def hn_top():
     for sid in fetch_top_ids():
         yield fetch_story(sid)
@@ -193,7 +185,7 @@ every run of the pipeline — `schedule=`, `home=`, `retention=`,
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | `str` | required | The pipeline's sole identity — recorded verbatim as the ledger's `pipeline_id` on every run. Renaming a pipeline orphans its history. |
-| `steps` | `list[StepSpec]` \| `None` | `None` | Steps built by `@step`/`@source`, if you already have them as a list. Steps can also be registered afterward via `@p.step(...)`/`@p.source(...)` — both forms compose freely. |
+| `steps` | `list[StepSpec]` \| `None` | `None` | Steps built by `@step`, if you already have them as a list. Steps can also be registered afterward via `@p.step(...)` — both forms compose freely. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `p.run(params={...})`/`p.plan(params={...})` validate against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
 | `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set — validated eagerly, at construction. See [Guide: retention](../guides/retention.md). |
 | `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* for every run of this pipeline — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `reduce`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. Validated eagerly. |
@@ -227,7 +219,7 @@ class:
 ```python
 p = pipeline(name="count-lines")
 
-@p.source(name="scan", version="1")
+@p.step(name="scan", version="1")
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -554,8 +546,9 @@ print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))
 ## Sources
 
 There is no `Source` class or protocol to implement — ingestion is a
-parentless `@step(shape="expand")` (`@source` is sugar for exactly that;
-see [`@source`](#source) above), and every lane it yields is
+parentless `@step(shape="expand")` (its shape inferred automatically from
+a bare generator function; see [Shape and `depends_on` inference](#shape-and-depends_on-inference)
+above), and every lane it yields is
 content-addressed (`row-<hash>`): identical payloads collapse to one lane,
 and an edited item reads as removed + created, so incrementality survives
 reordering, dedup, and appends for free. To find or track an item by a

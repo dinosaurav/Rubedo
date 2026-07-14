@@ -66,18 +66,20 @@ questions (declared with `@step(index=[...])`, extracted at commit — a label
 is just data someone chose to index).
 
 **Source:**
-Not a separate type — ingestion is a root step. `@source` (sugar for a
-parentless `expand`) is a generator that yields payloads; each becomes a
+Not a separate type — ingestion is a root step. A parentless generator
+function decorated `@step` (its `shape="expand"` inferred automatically)
+yields payloads; each becomes a
 content-addressed `row-<hash>` lane. A folder, a CSV, a SQL table are
 *recipes* (a `pathlib` walk, a `csv.DictReader` loop, a `SELECT` loop) —
 documented in `docs/concepts/sources.md`, not shipped as classes. A pipeline
-may declare several `@source` roots; `join` doesn't care that its parents
-are roots. Conceptually a source is the root **producer** — the same
+may declare several source-shaped roots; `join` doesn't care that its
+parents are roots. Conceptually a source is the root **producer** — the same
 lane-minting primitive as `expand`/`join` (see `producer-model.md`).
 
 **Root (head of a pipeline):**
 Any step with no `depends_on` originates lanes, and its `shape` sets how many:
-an `expand` root yields N (`@source`; re-runs every run — see below) or a
+an `expand` root yields N (a source-shaped root; re-runs every run — see
+below) or a
 `map` root mints a single `@root` lane whose input is its params (or a
 constant when it takes none). The map root is addressed by
 `hash(step, version, @root, params)`, so identical params reuse the cached

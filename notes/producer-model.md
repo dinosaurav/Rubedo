@@ -157,9 +157,10 @@ core must never leak into the simple case.
    unboundedly, deliberately past normal size constraints. No cap, no warn.
 4. **Multi-root pipeline API — RESOLVED: no pipeline-level API at all.** Item
    14 settled it: a root is just any step with no `depends_on`, and a
-   pipeline may declare as many as it likes (`@source` sugars a parentless
-   `expand` root). `join`/multi-parent steps `depends_on` whichever roots
-   they need — no dict, no per-step routing kwarg. See 4a below.
+   pipeline may declare as many as it likes (a parentless generator `@step`
+   infers a `shape="expand"` root automatically). `join`/multi-parent steps
+   `depends_on` whichever roots they need — no dict, no per-step routing
+   kwarg. See 4a below.
 5. **Reduce/join removal — RESOLVED: just orphan.** A group that empties or a
    pair whose match vanishes simply stops being emitted; its old
    materialization orphans (live, unreferenced), exactly like a vanished
@@ -245,9 +246,10 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    (`TODO.md` item 5) — keyed lanes stay legible so nothing regresses there.
    *(`sources.py` and its `CsvSource`/`TableSource` classes were later
    deleted wholesale by item 14 — the sources purge — and replaced by
-   `@source` recipes, `docs/concepts/sources.md`; the content-addressing
-   behavior described above is unchanged, just moved into plain generator
-   code.)*
+   bare-generator recipes, `docs/concepts/sources.md` (item 23 later
+   deleted the `@source` sugar itself, leaving a plain parentless
+   `@step`); the content-addressing behavior described above is unchanged,
+   just moved into plain generator code.)*
 1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
    yields bare payload values (no subkey, no pair); each distinct value mints
    a content-addressed `row-<hash>` lane with address `hash(step, version,
@@ -306,11 +308,11 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      and `@step(source="name")` routing) is gone: item 14 deleted the
      `Source` protocol entirely, and with it the routing kwarg. Today
      "multi-source" is just several parentless `@step(shape="expand")` roots
-     (`@source`) declared in the same pipeline — no pipeline-level kwarg, no
+     declared in the same pipeline — no pipeline-level kwarg, no
      per-root routing. A downstream step names whichever root(s) it needs in
      `depends_on`; coordinates never collide because `coord_step_mats` is
      keyed by `(coord, step)`. Live-verified in
-     `examples/newsroom/newsroom.py` (two `@source` roots joined on
+     `examples/newsroom/newsroom.py` (two source-shaped roots joined on
      publisher) and covered by `tests/test_join.py`.
    - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
      depends_on=[a, b, ...], join_on={a: field, b: field, ...})`: an **N-way**

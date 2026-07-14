@@ -73,7 +73,7 @@ Prefer a fluent style? Steps register on the same object via decorators, and it'
 ```python
 p = pipeline(name="count-lines")
 
-@p.source(name="scan", version="1")
+@p.step(name="scan", version="1", shape="expand")
 def scan(): ...
 
 @p.step(name="count_lines", version="count-v1", depends_on=["scan"])
@@ -82,7 +82,7 @@ def count_lines(scan): ...
 
 ## Ingestion is a step
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` (a `@source` for short) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
+There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` that `yield`s a payload per item (a bare generator function infers this shape automatically). Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
 
 ```python
 import csv

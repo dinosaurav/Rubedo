@@ -37,15 +37,15 @@ function Feature({ icon, title, children }) {
   )
 }
 
-const NEWSROOM_CODE = `from rubedo import pipeline, step, source
+const NEWSROOM_CODE = `from rubedo import pipeline, step
 import csv
 
-@source
+@step
 def feeds():
     with open("feeds.csv") as f:
         yield from csv.DictReader(f)
 
-@source
+@step
 def publishers():
     with open("publishers.csv") as f:
         yield from csv.DictReader(f)

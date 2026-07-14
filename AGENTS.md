@@ -43,7 +43,7 @@ accurate and load-bearing; keep them updated when behavior changes.
 ## Architecture map
 
 - `src/rubedo/spec.py` — pure data leaf: `StepSpec`/`PipelineSpec`
-  dataclasses plus `step()`, `source()`, and `definition()` (the JSON
+  dataclasses plus `step()` and `definition()` (the JSON
   snapshot each run records). No registry: the engine never imports user
   code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
   parent's surviving lanes; `group_key` partitions into one output per
@@ -51,21 +51,22 @@ accurate and load-bearing; keep them updated when behavior changes.
   yields payloads, minting content-addressed `row-<hash>` child lanes; **no
   `depends_on` = a root = a source** that yields the initial lanes and
   re-runs every run, so `pipeline(steps=[...])` needs no separate ingestion
-  concept — see `@source`) / `join` (N-way equijoin on
+  concept — a parentless generator `@step` infers this shape automatically)
+  / `join` (N-way equijoin on
   `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes). A
   **source-less `map` root** (no `depends_on`) mints a single `@root` lane
   whose input is its params (or a constant) — so a pipeline can begin with
   a plain step fed a value instead of scanning for one; same params reuse,
   changed params recompute (`ROOT_LANE` in `planning.py`). A pipeline may
-  declare several `@source` roots; `join` doesn't care that its parents are
-  roots. `executor` is `"thread"` (default) or `"process"` (a `loky` pool
+  declare several source-shaped roots; `join` doesn't care that its parents
+  are roots. `executor` is `"thread"` (default) or `"process"` (a `loky` pool
   serializing via `cloudpickle`, so closures are fine). **`spec.py` never
   imports `pipeline.py`/`runner.py`/`scheduler.py`** — the owner considers
   it a flagship human-readable file; validation and machinery live above it
   (TODO 15's whole point: rotate the dependency so no lazy imports are
   needed).
 - `src/rubedo/pipeline.py` — sits *above* the engine (imports `runner.py`):
-  `Pipeline` (steps register via `@p.step`/`@p.source` or `steps=[...]`;
+  `Pipeline` (steps register via `@p.step` or `steps=[...]`;
   verbs are methods — `.run()`/`.plan()`/`.describe()`/`.definition()`) and
   the `pipeline()` factory that constructs one. `_build_spec` does the
   validation the old free `pipeline()` builder did (at least one root,
