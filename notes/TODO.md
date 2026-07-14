@@ -11,9 +11,10 @@ shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
 the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
 ascii describe, **21** `secrets=`/`env=` + `rubedo check`, **22**
-shape & dependency inference, and **23** removing `@source` — shipped
-2026-07-13/14). **24** is next (independent but tiny), with **25**
-deferred (owner: queued, do not build until asked). The cloud
+shape & dependency inference, **23** removing `@source`, and **24**
+callable `StepSpec` + `describe()` TTY default — shipped 2026-07-13/14).
+**25** stays deferred (owner: queued, do not build until asked); **26**
+(auto-index + lazy index heal) is next, design-settled. The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently
 buildable (workers never touch the ledger/store; item 7 is its throughput
@@ -21,25 +22,6 @@ story, not a prerequisite), and **6 needs a respec post-14** (see its
 note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
 ideas live in **Parked** at the bottom — do not build those without a
 design session.
-
-## 24. Callable `StepSpec` + `describe()` TTY default  **[design settled 2026-07-14; independent quickie]**
-
-Two zero-concept ergonomics: (a) `StepSpec.__call__` delegates to
-`self.fn(*args, **kwargs)` so a decorated step is directly unit-testable
-(`extract(scan={"text": "hi"})`) — pure passthrough, the engine keeps
-calling `step.fn`, no behavior change anywhere else; (b) `describe()`
-picks `ascii` when no explicit `format=` is passed and stdout is a TTY,
-`text` otherwise (pipes, captures) — the existing >100-column
-ascii→text fallback stays, explicit `format=` always wins.
-
-**Trap:** pytest captures stdout (not a TTY), so test-suite default
-behavior must be unchanged without any test edits; don't make `Pipeline`
-callable — only the step.
-
-Acceptance: calling a decorated step invokes the underlying fn with the
-same args; `p.describe()` piped emits the `text` format byte-identically
-to today; in a real TTY it renders ascii (verify by hand, note it);
-explicit `format=` unchanged; full verification checklist green.
 
 ## 25. Did-you-mean suggestions  **[DEFERRED — owner 2026-07-14: queued, do not build until asked]**
 
@@ -508,6 +490,31 @@ the re-run heals.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-14 — callable `StepSpec` + `describe()` TTY default (item 24):**
+Two zero-concept ergonomics. (a) `StepSpec.__call__` is a three-line
+passthrough to `self.fn(*args, **kwargs)`, so a decorated step is directly
+unit-testable (`extract(scan={"text": "hi"})`) without touching the
+engine, store, or ledger — the engine itself keeps calling `step.fn`
+everywhere, zero behavior change; `Pipeline` deliberately stays
+non-callable. (b) `describe()`/`Pipeline.describe()` default `format=None`,
+which autodetects `"ascii"` when `sys.stdout.isatty()` and `"text"`
+otherwise (pipes, captures, redirects); explicit `format=` always wins;
+the existing >100-column ascii→text fallback is untouched. **Trap
+confirmed:** pytest captures stdout, so the whole suite's default-format
+behavior needed zero test edits — new tests instead monkeypatch
+`sys.stdout.isatty` to pin both branches explicitly, plus explicit-format
+precedence. Live-verified the TTY branch with a real pty (`script -q
+/tmp/out.txt .venv/bin/python3 script.py`, BSD `script` syntax): stdout
+reported `isatty()=True` inside it and `describe()` rendered the ascii
+boxes; piped/subprocess stdout (the normal case, matching pytest's
+capture) still renders the plain text format byte-identically to before.
+Docs: `docs/reference/api.md`'s `Pipeline.describe()` entry now documents
+the autodetect default, and gained a short unit-testing example next to
+`@step`'s parameter-binding docs. 263 tests passed (258 pre-existing + 5
+new: 2 callable-passthrough in `test_step_ergonomics.py`, 3 TTY-default/
+precedence in `test_describe_ascii.py`), ruff/mypy/`mkdocs build --strict`
+clean. Commits `d90cbf1` (engine + tests), `480d69b` (docs).
 
 **2026-07-14 — shape & dependency inference (item 22):** Kwargs that
 restate what the code already says now default from it — the engine,
