@@ -84,8 +84,9 @@ class PipelineSpec:
     """The static definition of a complete DAG pipeline.
 
     Ingestion has no separate concept: a root step (no `depends_on`) *is*
-    the source. A `shape="expand"` root yields the initial lanes (re-running
-    every run — see `@source`, sugar for exactly this); a `shape="map"` root
+    the source. A `shape="expand"` root yields the initial lanes, re-running
+    every run (a parentless generator function infers this shape
+    automatically — see `docs/concepts/sources.md`); a `shape="map"` root
     mints a single lane from its params (or a constant). A pipeline may
     declare several roots — `join` doesn't care that its parents are roots.
 
@@ -155,8 +156,8 @@ def step(
     """Declare a step. Works bare (`@step`) or called (`@step()`,
     `@step(version="2")`, ...) — both mint the same StepSpec.
 
-    name defaults to the decorated function's `__name__` (same precedent as
-    `@source`); pass it explicitly only when two steps would otherwise
+    name defaults to the decorated function's `__name__`; pass it
+    explicitly only when two steps would otherwise
     collide (two functions named the same across modules) or when the
     function name isn't the name you want in the ledger. Two steps that
     resolve to the same name — whether given explicitly or defaulted from
@@ -391,30 +392,6 @@ def step(
         )
 
     return decorator(fn) if fn is not None else decorator
-
-
-def source(fn=None, *, name=None, version="1", **step_kwargs):
-    """A root source: sugar for a parentless `expand` step.
-
-    Decorate a generator that yields payloads — each becomes a content-addressed
-    lane:
-
-        @source
-        def hn_top():
-            for sid in fetch_top_ids():
-                yield fetch_story(sid)
-
-    It is exactly `@step(shape="expand")` with no `depends_on`, so drop it
-    straight into `pipeline(steps=[...])`. `name` defaults to the function
-    name; other `@step` policies (`index=`, `retries=`, `rate_limit=`, …)
-    forward through.
-    """
-    def wrap(f):
-        return step(
-            name=name or f.__name__, version=version, shape="expand", **step_kwargs
-        )(f)
-
-    return wrap(fn) if fn is not None else wrap
 
 
 def definition(spec: PipelineSpec) -> Dict[str, Any]:

@@ -140,7 +140,7 @@ from rubedo import pipeline
 
 p = pipeline(name="x")
 
-@p.source(name="a", version="1")
+@p.step(name="a", version="1")
 def a():
     import os
     yield {"key": os.environ["TOKEN"]}

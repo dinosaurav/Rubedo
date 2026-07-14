@@ -228,8 +228,9 @@ def plan(
     "execute" means the step function would run for that coordinate;
     "pending" means the answer depends on an upstream execution whose output
     (and therefore this coordinate's address) is unknowable without running.
-    A root *expand* step (`@source`) always plans as one "execute" — it has
-    no parent to cache its enumeration against, so its lanes are unknowable
+    A root *expand* step (a parentless generator) always plans as one
+    "execute" — it has no parent to cache its enumeration against, so its
+    lanes are unknowable
     until it actually runs (a second `plan()` sees them via the expand
     anchor without re-running the generator).
 

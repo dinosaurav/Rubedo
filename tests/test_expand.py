@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import source, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
 from rubedo.store import init_store, read_materialization_output
@@ -247,9 +247,9 @@ def test_expand_identical_payloads_collapse():
 def test_source_decorator():
     calls = []
 
-    @source
+    @step(name="things", version="1")
     def things():
-        calls.append(1)  # a source re-scans each run
+        calls.append(1)  # a source-shaped root re-scans each run
         for x in ["a", "b", "c"]:
             yield {"x": x}
 
@@ -257,7 +257,7 @@ def test_source_decorator():
     def up(things):
         return things["x"].upper()
 
-    pipe = pipeline(name="s", steps=[things, up])  # no source=
+    pipe = pipeline(name="s", steps=[things, up])  # a bare @step root
     s = assert_run(pipe)
     assert (s.created_count, s.reused_count) == (6, 0)  # 3 things + 3 up
     assert calls == [1]

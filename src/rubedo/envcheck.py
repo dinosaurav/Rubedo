@@ -3,7 +3,7 @@
 Never imports the target file — same principle as server.py: read-only,
 purely static. Walks the AST looking for `pipeline(...)` calls (to collect
 the names declared in their `secrets=`/`env=` keyword arguments) and for
-`@step`/`@source`-decorated functions (to find `os.environ[...]`/
+`@step`-decorated functions (to find `os.environ[...]`/
 `os.getenv(...)` reads inside their bodies whose variable name isn't among
 the declared ones).
 
@@ -35,13 +35,13 @@ def _is_pipeline_call(func: ast.expr) -> bool:
 
 
 def _is_step_decorator(dec: ast.expr) -> bool:
-    """`@step`, `@step(...)`, `@source`, `@source(...)`, or the bound-method
-    forms `@p.step(...)`/`@p.source(...)` used on a `Pipeline` instance."""
+    """`@step`, `@step(...)`, or the bound-method form `@p.step(...)` used
+    on a `Pipeline` instance."""
     target = dec.func if isinstance(dec, ast.Call) else dec
     if isinstance(target, ast.Name):
-        return target.id in ("step", "source")
+        return target.id == "step"
     if isinstance(target, ast.Attribute):
-        return target.attr in ("step", "source")
+        return target.attr == "step"
     return False
 
 
@@ -95,7 +95,7 @@ def _env_var_name(node: ast.AST) -> Optional[str]:
 
 def check_source(source: str, filename: str = "<unknown>") -> List[EnvWarning]:
     """Parse `source` and return undeclared `os.environ`/`os.getenv` reads
-    found inside `@step`/`@source` function bodies.
+    found inside `@step` function bodies.
 
     Returns [] on a syntax error in `source` — best-effort, never raises for
     a file that doesn't parse.

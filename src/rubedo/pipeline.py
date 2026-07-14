@@ -7,8 +7,8 @@ coming here, the code is in the wrong module). All ledger writes still
 happen on the main thread; this module only orchestrates (see runner.py
 and scheduler.py for where that rule actually lives).
 
-`pipeline(name=...)` returns a `Pipeline`; steps register via `@p.step` /
-`@p.source` (decorators) or the `steps=[...]` kwarg — both stay. There is
+`pipeline(name=...)` returns a `Pipeline`; steps register via `@p.step`
+(decorator) or the `steps=[...]` kwarg — both stay. There is
 no `.build()`: the underlying `PipelineSpec` is constructed and validated
 lazily, on first access to a verb (`.run()`/`.plan()`/`.describe()`/
 `.definition()`), and cached — registering more steps after that first
@@ -28,7 +28,6 @@ from .runner import run as _run_pipeline
 from .scheduler import SCHEDULES
 from .spec import PipelineSpec, StepSpec
 from .spec import definition as _definition
-from .spec import source as _source_decorator
 from .spec import step as _step_decorator
 
 # Reserved for the engine's own env vars (RUBEDO_HOME, RUBEDO_DB_PATH, ...):
@@ -117,8 +116,9 @@ def _build_spec(
     """Validate the accumulated steps and construct the PipelineSpec.
 
     Ingestion is not a separate concept: the roots (steps with no
-    `depends_on`) *are* the source. A `shape="expand"` root (see `@source`)
-    yields the initial lanes and re-runs every run; a `shape="map"` root
+    `depends_on`) *are* the source. A `shape="expand"` root (a parentless
+    generator function, shape inferred automatically) yields the initial
+    lanes and re-runs every run; a `shape="map"` root
     mints a single lane whose input is its params (or a constant when it
     takes none) — same params reuse, changed params recompute. A pipeline
     may declare several roots; `join` doesn't care that its parents are
@@ -274,18 +274,6 @@ class Pipeline:
 
         return decorator
 
-    def source(self, fn=None, **kwargs):
-        """Decorate a generator to register it as a root source step on
-        this pipeline (see `rubedo.source`)."""
-
-        def wrap(f):
-            s = _source_decorator(**kwargs)(f)
-            self._steps.append(s)
-            self._spec = None
-            return s
-
-        return wrap(fn) if fn is not None else wrap
-
     @property
     def spec(self) -> PipelineSpec:
         """The validated `PipelineSpec`, built lazily on first access from
@@ -362,7 +350,7 @@ def pipeline(
     the pipeline's sole identity.
 
     Steps attach either via the `steps=[...]` kwarg or by decorating
-    functions with the returned object's `@p.step`/`@p.source` — both can
+    functions with the returned object's `@p.step` — both can
     be mixed freely, and validation (at least one root, skip_cache/join/
     group_key consistency) runs lazily on first `.run()`/`.plan()`/
     `.describe()`/`.definition()` call, not here.

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import source, step, pipeline
+from rubedo import step, pipeline
 from rubedo.db import init_db
 from rubedo.store import init_store
 
@@ -135,7 +135,7 @@ def test_root_lane_feeds_downstream_map():
 
 
 def test_headless_map_root_and_expand_root_coexist():
-    @source
+    @step(name="rows", version="1")
     def rows():
         yield {"v": 1}
         yield {"v": 2}

@@ -1,7 +1,7 @@
 """describe(format="ascii"): hand-rolled terminal DAG rendering.
 
 Pure spec-level tests — describe() never touches the ledger/store, so
-these build PipelineSpecs directly with @source/@step and skip the usual
+these build PipelineSpecs directly with @step and skip the usual
 DB/store fixture entirely.
 """
 
@@ -15,7 +15,7 @@ def _count_lines_shaped():
     examples/count_lines/count_lines.py's DAG shape."""
     p = pipeline(name="count-lines")
 
-    @p.source(name="input_files", version="1")
+    @p.step(name="input_files", version="1")
     def input_files():
         yield "a.txt"
 
@@ -39,11 +39,11 @@ def _newsroom_shaped():
     examples/newsroom/newsroom.py's DAG shape."""
     p = pipeline(name="newsroom")
 
-    @p.source(name="feeds", version="1")
+    @p.step(name="feeds", version="1")
     def feeds():
         yield {"feed_id": "f1", "publisher": "TechCorp"}
 
-    @p.source(name="publishers", version="1")
+    @p.step(name="publishers", version="1")
     def publishers():
         yield {"publisher": "TechCorp", "region": "US"}
 

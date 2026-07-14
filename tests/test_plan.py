@@ -100,7 +100,7 @@ def test_fresh_state_executes_source_and_pends_downstream():
     create_file("f1.txt", "hello")
 
     p = pipe.plan()
-    # One execute for the source (@source is a root expand — no parent to
+    # One execute for the source (a root expand step — no parent to
     # cache its enumeration against, so it always executes) and one
     # "pending" per downstream step, not per file: the individual file
     # lanes don't exist yet at plan time.
