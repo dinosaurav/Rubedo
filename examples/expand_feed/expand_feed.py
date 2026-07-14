@@ -32,7 +32,7 @@ def make_feed(folder):
 
 p = pipeline(name="expand-feed")
 
-@p.source(name="feed_files", version="1")
+@p.step(name="feed_files", version="1")
 def feed_files():
     folder = os.path.join(tempfile.gettempdir(), "rubedo_expand_feed")
     for name in os.listdir(folder):

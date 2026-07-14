@@ -33,7 +33,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file_
 
 p = pipeline(name="graphify")
 
-@p.source(name="src_files", version="1")
+@p.step(name="src_files", version="1")
 def src_files():
     folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
     for root, _, files in os.walk(folder):

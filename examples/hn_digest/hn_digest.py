@@ -21,7 +21,7 @@ expensive and non-idempotent. Each classification is cached by the story's
 content, so a second run reclassifies nothing and makes *zero* LLM calls —
 and a story that gets filtered out is decided once, not once per run.
 
-The `@p.source` root only yields a story's id — a stable coordinate that
+The `top_story` root only yields a story's id — a stable coordinate that
 never changes. `screen` (its only consumer) does the actual HN item fetch,
 so it only ever runs once per story: later runs reuse its cached output
 without refetching, which means a story's score drifting after that first
@@ -89,7 +89,7 @@ class Screen(BaseModel):
 p = pipeline(name="hn-digest")
 
 
-@p.source(name="top_story", version="1")
+@p.step(name="top_story", version="1")
 def top_story():
     """Root: today's top story ids. Just the id — a stable, score-independent
     coordinate — so `screen` (the actual fetch) runs at most once per story."""

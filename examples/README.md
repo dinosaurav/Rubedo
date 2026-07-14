@@ -22,14 +22,14 @@ that the second run recomputes only what actually changed.
 | Example | Service(s) | Shape | Shows off |
 |---|---|---|---|
 | [`count_lines`](count_lines/) | local files | map → reduce | the basics: `params_model`, a reduce step |
-| [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM reduce | a `@p.source` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
+| [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM reduce | a source-shaped `@p.step` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
 | [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, `ProcessResult`, reduce |
 | [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
 | [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
-| [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | a table recipe: a `@p.source` root doing a plain SELECT loop |
+| [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
 | [`expand_feed`](expand_feed/) | local files (self-contained) | expand | `shape="expand"` — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
-| [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple `@p.source` roots, N-way `shape="join"`, `shape="expand"`, and a `group_key` reduce |
+| [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple source-shaped `@p.step` roots, N-way `shape="join"`, `shape="expand"`, and a `group_key` reduce |
 | [`pdf_digest`](pdf_digest/) | a PDF + a vision & a text LLM | map root → expand → LLM → reduce → 2× LLM | a **source-less `map` root** (the PDF path is a param, no `Source`), a cheap vision LLM on figure pages, and a picture-aware vs text-only summary comparison |
 
 ## Keys

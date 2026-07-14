@@ -1,4 +1,4 @@
-"""Roll up orders straight from a SQL table with a @p.source recipe.
+"""Roll up orders straight from a SQL table with a bare @p.step recipe.
 
     orders table ─▶ classify ─▶ rollup (reduce)
                     (index)
@@ -51,7 +51,7 @@ def seed_db():
 
 p = pipeline(name="orders-rollup")
 
-@p.source(name="orders", version="1")
+@p.step(name="orders", version="1")
 def orders():
     engine = create_engine(DB_URL)
     with engine.connect() as conn:

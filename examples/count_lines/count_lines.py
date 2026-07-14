@@ -22,7 +22,7 @@ p = pipeline(
     params_model=CountLinesParams,
 )
 
-@p.source(name="input_files", version="1")
+@p.step(name="input_files", version="1")
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
