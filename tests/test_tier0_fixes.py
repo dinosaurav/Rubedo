@@ -78,8 +78,7 @@ def create_file(name, content):
 
 @step(name="scan", version="1", shape="expand")
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder=TEST_FOLDER sugar."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -221,7 +220,7 @@ def test_invalidate_scoped_to_pipeline():
 
 
 # --- B5: skip_cache parents of join/group_key are rejected (validated
-# lazily on first `.spec` access, TODO 15 — no eager .build() anymore) ---
+# lazily on first `.spec` access) ---
 
 
 def test_join_rejects_skip_cache_parent():
@@ -271,9 +270,9 @@ def test_expand_yields_bytes_and_reuses():
     path = create_file("a.txt", "alpha\nbeta")
 
     def make_pipe():
-        # A headless param-fed root (TODO 14): this test is about a
-        # downstream expand yielding bytes, not about folder scanning, so a
-        # single param-fed lane keeps it simple.
+        # A headless param-fed root: this test is about a downstream expand
+        # yielding bytes, not about folder scanning, so a single param-fed
+        # lane keeps it simple.
         @step(name="read", version="1")
         def read(params):
             return open(params["path"]).read()
@@ -338,8 +337,9 @@ def test_ephemeral_coords_compute_in_parallel():
     create_file("f1.txt", "a")
     create_file("f2.txt", "b")
 
-    # Both lanes must be inside the skip_cache producer at the same time;
-    # the old whole-memo lock serialized them and would break the barrier.
+    # Both lanes must be inside the skip_cache producer at the same time:
+    # the run memo's lock guards only the per-key state, not producer()
+    # itself, so different coordinates' producers must run concurrently.
     barrier = threading.Barrier(2, timeout=5)
 
     @step(name="read", version="1", depends_on=["scan"])

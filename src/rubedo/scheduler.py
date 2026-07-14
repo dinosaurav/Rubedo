@@ -2,9 +2,9 @@
 
 All ledger writes happen in the main thread — workers only run step
 functions (execution.py stays DB-free; planning/committing happen here,
-called back into from the completion loop below). This module is the
-segment half of the old runner.py split: run/plan orchestration stays in
-runner.py, which drives `_partition_segments`/`_run_segment` per run.
+called back into from the completion loop below). This module holds the
+segment machinery; run/plan orchestration stays in runner.py, which drives
+`_partition_segments`/`_run_segment` per run.
 
 A run is a set of (lane, step) cells driven segment by segment: the topo
 order is partitioned into segments (_partition_segments) and every segment

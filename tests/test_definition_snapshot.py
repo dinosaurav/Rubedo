@@ -1,15 +1,10 @@
-"""Pins definition() output byte-identical across the TODO-15 rotation.
+"""Pins definition() output byte-identical.
 
-Recorded *before* the rotation (one Pipeline object, verbs as methods):
-the JSON snapshot below is `definition()`'s exact output for a pipeline
+The JSON snapshot below is `definition()`'s exact output for a pipeline
 exercising a representative slice of step policies (expand root, retries,
 rate_limit, stale_after, a reduce with group_key, pipeline-level retention).
-After the rotation, `pipeline(...)` returns a `Pipeline` instead of a bare
-`PipelineSpec` — this test's construction lines change to match (`.spec` /
-`.definition()`), but the pinned JSON string itself must not, proving the
-rotation is a pure API reshuffle with no effect on what the ledger records
-(history and the dashboard read definition_json; a fork there would be a
-silent data format change, not just an API change).
+History and the dashboard read definition_json, so any change to this
+snapshot would be a silent data format change, not just an API change.
 """
 import json
 
@@ -67,10 +62,7 @@ class Params(BaseModel):
 
 
 def _build_snapshot_spec():
-    """The pipeline whose definition() is pinned above. Kept as a plain
-    spec-builder function so both the pre- and post-rotation test bodies
-    can share it — only the last line (how a PipelineSpec is obtained from
-    `pipeline(...)`) differs across the rotation."""
+    """The pipeline whose definition() is pinned above."""
 
     @step(name="scan", version="1", shape="expand")
     def scan():

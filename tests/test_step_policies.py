@@ -148,7 +148,7 @@ def test_rate_limit_paces_execution():
         create_file(f"f{i}.txt", f"content-{i}")
 
     # Needs genuine multi-lane parallelism, so a folder-scan expand root
-    # (TODO 14) rather than a single param-fed lane.
+    # rather than a single param-fed lane.
     @step(name="scan", version="1", shape="expand")
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):

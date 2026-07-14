@@ -79,8 +79,7 @@ def create_file(name, content):
 
 @step(name="scan", version="1", shape="expand")
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
-    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -89,7 +88,7 @@ def scan():
 
 def coordinate_for_path(step_name, path_value):
     """The migrated coordinate is a content hash (row-<hash>), not the
-    literal filename (TODO 14). Recover it by scanning that step's live
+    literal filename. Recover it by scanning that step's live
     materializations for the one whose payload carries this path."""
     with get_session() as session:
         for rc in session.query(RunCoordinateStatus).filter_by(step_name=step_name).all():
@@ -139,10 +138,10 @@ def test_linear_dag():
         # 2 files * 3 steps (scan, read, upper) — scan's own lanes now count
         assert len(statuses) == 6
 
-        # Check outputs. Coordinates are content hashes, not "f1.txt"
-        # (TODO 14) — recover f1.txt's coordinate via its scan payload, then
-        # reuse it: a simple map chain propagates the parent's coordinate
-        # unchanged (see planning.py's `_plan_step`).
+        # Check outputs. Coordinates are content hashes, not "f1.txt" —
+        # recover f1.txt's coordinate via its scan payload, then reuse it: a
+        # simple map chain propagates the parent's coordinate unchanged (see
+        # planning.py's `_plan_step`).
         coord_f1 = coordinate_for_path("scan", "f1.txt")
         assert coord_f1 is not None
 

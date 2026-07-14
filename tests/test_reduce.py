@@ -82,10 +82,9 @@ def assert_run(pipe):
 
 @step(name="scan", version="1", shape="expand", index=["path"])
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder=TEST_FOLDER sugar.
-    Indexed on `path` so tests can find "the lane for x.txt" without the
-    coordinate being that literal string."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
+    `path` so tests can find "the lane for x.txt" without the coordinate
+    being that literal string."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -321,7 +320,7 @@ def test_reduce_plan():
     p1 = pipe.plan()
     # scan (a root expand) always plans as "execute"; everything downstream
     # of it — including the reduce — is unknowable without running the
-    # generator, so it plans "pending" (TODO 14 Trap point 1).
+    # generator, so it plans "pending".
     sum_items = [i for i in p1.items if i.step_name == "sum"]
     assert any(i.action == "pending" for i in sum_items)
 

@@ -1,6 +1,5 @@
 """Orchestration: run()/plan(), the internals `Pipeline.run()`/`Pipeline.plan()`
-delegate to (pipeline.py sits above this module and is the public surface —
-see notes/TODO.md item 15).
+delegate to (pipeline.py sits above this module and is the public surface).
 
 The phases live in their own modules — planning.py (decide what to do),
 execution.py (run step functions), ledger.py (persist what happened),
@@ -110,9 +109,9 @@ def _resolve_invocation(pipeline: PipelineSpec, params):
 def _post_run_retention(
     session, pipeline: PipelineSpec, ctx: _RunContext, summary: RunSummary
 ) -> None:
-    """End-of-run retention (TODO 10b): auto-prune when retention= is set,
-    else a cheap warn-threshold check. Never raises — storage hygiene must not
-    fail a successful run.
+    """End-of-run retention: auto-prune when retention= is set, else a cheap
+    warn-threshold check. Never raises — storage hygiene must not fail a
+    successful run.
 
     The auto-prune runs only after a successful run (failed runs may have an
     incomplete keep-set) and *skips* — never errors — if another run's
@@ -235,7 +234,7 @@ def plan(
     anchor without re-running the generator).
 
     home, if given, points the ledger/object store at a custom root instead
-    of the default `.rubedo`/RUBEDO_HOME (see notes/TODO.md item 1).
+    of the default `.rubedo`/RUBEDO_HOME.
     """
     from .planning import _code_drift_message
 
@@ -307,8 +306,7 @@ def run(
 
     Params are validated against the pipeline's params_model whenever
     one is declared. home, if given, points the ledger/object store at a
-    custom root instead of the default `.rubedo`/RUBEDO_HOME (see
-    notes/TODO.md item 1).
+    custom root instead of the default `.rubedo`/RUBEDO_HOME.
 
     schedule picks the execution order (never the results — cache identity
     is order-independent): "broad" (default) completes each step across all

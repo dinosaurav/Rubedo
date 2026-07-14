@@ -7,8 +7,8 @@ consecutive 1:1 (map) steps as soon as its own inputs commit; reduce/join
 synchronize on all lanes. Ledger rows — statuses, addresses, lifecycle —
 must be identical across modes.
 
-schedule=/home= are Pipeline construction-time settings (TODO 15): a
-cross-mode comparison builds two Pipeline wrappers over the *same*
+schedule=/home= are Pipeline construction-time settings: a cross-mode
+comparison builds two Pipeline wrappers over the *same*
 underlying step objects (identical addresses/hashes) rather than reusing
 one Pipeline instance with different settings per call.
 """
@@ -89,10 +89,9 @@ def create_file(name, content):
 
 @step(name="scan", version="1", shape="expand", index=["path"])
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder=TEST_FOLDER sugar.
-    Indexed on `path` so tests can find "the lane for x.txt" without the
-    coordinate being that literal string."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
+    `path` so tests can find "the lane for x.txt" without the coordinate
+    being that literal string."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -471,8 +470,8 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
     )
 
 
-# (g) Anything but broad/deep is rejected loudly — now at pipeline()
-# construction time (schedule= moved off run(), see TODO 15).
+# (g) Anything but broad/deep is rejected loudly at pipeline() construction
+# time.
 def test_invalid_schedule_raises():
     @step(name="s1", version="1", depends_on=["scan"])
     def s1(scan):

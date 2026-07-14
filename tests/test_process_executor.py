@@ -37,8 +37,7 @@ def isolated_env():
         if os.path.exists(d):
             shutil.rmtree(d)
 
-# Folder recipe: walk TEST_FOLDER, yield each file's content — the
-# replacement for the old folder=TEST_FOLDER source sugar (TODO 14). Must
+# Folder recipe: walk TEST_FOLDER, yield each file's content. Must
 # also be module-level since it's shared across process-executor pipelines.
 @step(name="scan", version="1", shape="expand")
 def scan():

@@ -65,8 +65,7 @@ def setup_teardown():
 
 @step(name="scan", version="1", shape="expand", index=["path"])
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder="input" sugar. Indexed on
+    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
     `path` so tests can find "the lane for x.txt" without the coordinate
     being that literal string."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -80,10 +79,10 @@ def coord_for_path(filename, run_id=None):
     row-<hash>, not the filename. A dependent 1:1 map step shares its
     ancestor's coordinate unchanged.
 
-    An edited file mints a brand new lane (TODO 14 Trap point 2): the old
-    lane's materialization stays live (a different address, not
-    superseded), so without a run_id filter this could resolve to a stale
-    generation's coordinate — scope to a specific run when that matters.
+    An edited file mints a brand new lane: the old lane's materialization
+    stays live (a different address, not superseded), so without a run_id
+    filter this could resolve to a stale generation's coordinate — scope to
+    a specific run when that matters.
     """
     with get_session() as session:
         q = session.query(RunCoordinateStatus).filter_by(step_name="scan")
@@ -199,7 +198,7 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
     input_dir = setup_teardown
     res1 = p_dummy.run(workers=1)
 
-    # get old address (the "dummy" step's, matching the old single-step intent)
+    # get old address (the "dummy" step's)
     coord_a = coord_for_path("a.txt")
     with get_session() as session:
         old_mat_a = (

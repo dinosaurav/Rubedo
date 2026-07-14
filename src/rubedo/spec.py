@@ -86,10 +86,10 @@ class PipelineSpec:
     name: str
     steps: List[StepSpec]
     params_model: Optional[Type[BaseModel]] = None
-    # Retention policy (TODO 10b): keep only this pipeline's last N *terminal*
-    # runs' outputs; older, no-longer-referenced generations are pruned. None =
-    # keep everything. Rides the definition() snapshot each run records, so the
-    # ops path (rubedo gc) reads it without importing user code.
+    # Retention policy: keep only this pipeline's last N *terminal* runs'
+    # outputs; older, no-longer-referenced generations are pruned. None = keep
+    # everything. Rides the definition() snapshot each run records, so the ops
+    # path (rubedo gc) reads it without importing user code.
     retention: Optional[int] = None
 
 
@@ -337,9 +337,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
     """JSON-safe snapshot of a pipeline's structure and policies.
 
     Recorded on every Run row so the ledger knows what DAG produced each
-    run's outputs, and rendered by describe(). The "id" key is retained
-    (mirroring "name") for schema stability across the TODO 15 rotation —
-    `id` as a concept separate from `name` no longer exists.
+    run's outputs, and rendered by describe(). The "id" key mirrors "name"
+    for schema stability with existing definition() consumers.
     """
     steps = []
     for s in spec.steps:

@@ -1,4 +1,4 @@
-"""Retention GC (TODO 10b): demote by run recency, sweep unreferenced bytes.
+"""Retention GC: demote by run recency, sweep unreferenced bytes.
 
 Fixture shape copied from tests/test_index.py: per-test .test_gc_data (scanned)
 and .test_gc_env (object store) dirs, never nested; an in-memory shared-cache
@@ -91,8 +91,8 @@ def write(name, content, folder=TEST_FOLDER):
 
 
 def _shout(folder=TEST_FOLDER):
-    # Single-step expand root (TODO 14: no folder-source-class sugar) that
-    # reads and transforms in the same generator — retention/gc keys off
+    # Single-step expand root that reads and transforms in the same
+    # generator — retention/gc keys off
     # "which of the pipeline's last N runs referenced this materialization",
     # not off address stability, so a plain content-addressed expand root
     # (no separate scan step) is enough here.
@@ -107,7 +107,7 @@ def _shout(folder=TEST_FOLDER):
 
 
 def _norm_chain(folder=TEST_FOLDER):
-    """scan -> norm: a two-step chain (TODO 14), needed (not the single-step
+    """scan -> norm: a two-step chain, needed (not the single-step
     _shout() shape above) so pre-strip bytes — not post-strip text — drive
     the address. Same as test_du.py's shared-object case: two inputs that
     differ before the transform ("SHARED" vs "SHARED ") but normalize to
@@ -387,8 +387,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 
 
 def _scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder-source-class sugar."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
     @step(name="scan", version="1", shape="expand")
     def scan():

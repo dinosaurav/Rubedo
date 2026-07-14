@@ -159,7 +159,6 @@ def test_bare_pipeline_with_no_source_and_no_root_is_rejected():
         return ghost
 
     # Validation (at least one root) runs lazily on first verb/`.spec`
-    # access, not at pipeline() construction time (TODO 15: no eager
-    # .build() anymore).
+    # access, not at pipeline() construction time.
     with pytest.raises(ValueError):
         pipeline(name="empty", steps=[leaf]).spec

@@ -1,4 +1,4 @@
-"""TODO 16: @step auto-names from the function and defaults version to "0".
+"""@step auto-names from the function and defaults version to "0".
 
 Bare `@step` and called `@step()` both mint the same StepSpec; duplicate
 step names (whether explicit or defaulted from the function) still die

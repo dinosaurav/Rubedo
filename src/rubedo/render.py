@@ -69,7 +69,7 @@ def describe(spec: PipelineSpec, format: str = "text") -> str:
 #
 # No new dependencies (networkx in the dev group is for tests, not layout).
 # Not-graphviz-quality: legible up to ~20 steps, naive edge crossings
-# allowed. Determinism is load-bearing (see the TODO 20 trap): every
+# allowed. Determinism is load-bearing: every
 # ordering decision below comes from `topo` (itself derived from spec
 # order — see `topological_sort`) or from plain list iteration, never from
 # dict/set iteration order, so the same spec always renders byte-identical.
@@ -155,7 +155,7 @@ def _describe_ascii(spec: PipelineSpec, topo: List[StepSpec]) -> str:
     """Render `topo` as layered boxes joined by box-drawing edges.
 
     Falls back to format="text" when a layer is too wide to draw legibly —
-    never emits garbage, never crashes on a legal DAG (the TODO 20 trap).
+    never emits garbage, never crashes on a legal DAG.
     """
     if not topo:
         return describe(spec, format="text")

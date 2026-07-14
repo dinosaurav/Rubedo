@@ -18,11 +18,10 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
 
 
-# Folder recipe (TODO 14): a root expand step that walks "test_input" and
-# yields each file's content — the replacement for the old
-# folder="test_input" source sugar. Indexed on `path` so tests can still
-# find "the lane for a.txt" without the coordinate being that literal
-# string (coordinates are content-addressed: row-<hash>).
+# Folder recipe: a root expand step that walks "test_input" and yields each
+# file's content. Indexed on `path` so tests can still find "the lane for
+# a.txt" without the coordinate being that literal string (coordinates are
+# content-addressed: row-<hash>).
 @step(name="scan", version="1", shape="expand", index=["path"])
 def scan():
     for name in sorted(os.listdir("test_input")):

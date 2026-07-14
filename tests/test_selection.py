@@ -60,8 +60,7 @@ def setup_teardown():
 
 @step(name="scan", version="9", shape="expand")
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
-    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):

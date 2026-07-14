@@ -36,8 +36,8 @@ def isolated_env():
             shutil.rmtree(d)
 
 
-# A headless map root (TODO 14: no folder= source sugar) fed one file's
-# content via params — content, not path, is what these tests race on, and
+# A headless map root fed one file's content via params — content, not
+# path, is what these tests race on, and
 # a param-fed root gives a single, plan()-visible "@root" lane whose
 # output_address is knowable up front (unlike an expand root's children).
 @step(name="my_step", version="1")

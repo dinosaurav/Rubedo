@@ -71,11 +71,11 @@ def create_file(name, content):
 
 
 # Module-level step bodies so tests can register "the same step, edited". A
-# single file, fed by path via params to a headless map root (TODO 14: no
-# folder= source sugar) — no folder-scanning multiplicity is needed here,
-# just one lane whose identity tracks code/version, so a param-fed root
-# keeps plan()'s per-lane visibility (an expand root's downstream lanes are
-# opaque to plan(), see test_plan.py).
+# single file, fed by path via params to a headless map root — no
+# folder-scanning multiplicity is needed here, just one lane whose identity
+# tracks code/version, so a param-fed root keeps plan()'s per-lane
+# visibility (an expand root's downstream lanes are opaque to plan(), see
+# test_plan.py).
 
 
 def body_v1(params):

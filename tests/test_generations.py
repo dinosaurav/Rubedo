@@ -77,8 +77,8 @@ def create_file(name, content):
 
 # These tests are all single-file, and genuine "generations" (repeat
 # recomputes landing on the *same* address) require a stable lane — an
-# expand root's own address tracks its yielded content (TODO 14: "identical
-# rows collapse"), so a non-deterministic root would mint a fresh address
+# expand root's own address tracks its yielded content ("identical rows
+# collapse"), so a non-deterministic root would mint a fresh address
 # every run, which is exactly the instability these tests must NOT have.
 # A headless param-fed root (see test_headless_root.py) keeps the "@root"
 # lane's address stable across recomputes; only the step's params/version

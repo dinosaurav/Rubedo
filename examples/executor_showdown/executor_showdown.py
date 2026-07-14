@@ -211,7 +211,6 @@ def run_variant(executor: str, force: bool) -> float:
                 "cost and see the executor difference)"
             )
 
-    # We no longer need _fetch_result, we can use output_for directly
     result_dict = summary.output_for(f"combine_{executor}")
     result = result_dict.get("@all") if result_dict else None
     

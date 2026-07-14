@@ -81,8 +81,7 @@ def assert_run(pipe):
 
 
 def _scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder-source-class sugar."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
     @step(name="scan", version="1", shape="expand")
     def scan():

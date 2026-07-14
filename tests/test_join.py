@@ -67,9 +67,8 @@ def write_csv(name, text):
 
 
 def csv_source(name):
-    """CSV recipe (TODO 14): a root expand step yielding each row dict —
-    the replacement for the old CSV-source-class sugar. `name` is both the
-    step name and the `<name>.csv` file under DATA."""
+    """CSV recipe: a root expand step yielding each row dict. `name` is
+    both the step name and the `<name>.csv` file under DATA."""
     path = os.path.join(DATA, f"{name}.csv")
 
     @step(name=name, version="1", shape="expand")

@@ -60,8 +60,7 @@ def setup_teardown():
 
 @step(name="scan", version="1", shape="expand")
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder="input" sugar."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):

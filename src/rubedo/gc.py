@@ -1,4 +1,4 @@
-"""Retention GC (TODO 10b): the byte-deleting garbage collector.
+"""Retention GC: the byte-deleting garbage collector.
 
 In steady state nearly everything is live (current generations are live;
 orphans stay live by producer-model.md Q2), so a classic mark-and-sweep of

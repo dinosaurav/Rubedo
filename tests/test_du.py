@@ -74,11 +74,10 @@ def create_file(name, content):
 
 
 def make_shout_pipeline():
-    # Single-step expand root (TODO 14: no folder= source sugar) that reads
-    # and transforms in the same generator — this keeps the step's own
-    # output content-address exactly hand-countable (no extra scan-step
-    # materialization inflating the byte totals below), matching the old
-    # single-step-over-a-source shape byte for byte.
+    # Single-step expand root that reads and transforms in the same
+    # generator — this keeps the step's own output content-address exactly
+    # hand-countable (no extra scan-step materialization inflating the byte
+    # totals below).
     @step(name="shout", version="1", shape="expand")
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
@@ -258,8 +257,8 @@ def test_reclaimed_object_reported_separately_from_missing():
     from rubedo.gc import gc
 
     # Three distinct-content runs -> three distinct content-addressed
-    # lanes/materializations (TODO 14: an edited file is removed+added, not
-    # a generation of a stable coordinate) -> no retention configured, so
+    # lanes/materializations (an edited file is removed+added, not a
+    # generation of a stable coordinate) -> no retention configured, so
     # nothing auto-pruned.
     for content in ("alpha", "beta", "gamma"):
         create_file("a.txt", content)

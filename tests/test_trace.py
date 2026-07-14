@@ -75,10 +75,8 @@ def create_file(name, content):
 
 @step(name="scan", version="1", shape="expand")
 def scan():
-    """Folder recipe (TODO 14): a root expand step yielding each file's
-    content — the replacement for the old folder=TEST_FOLDER sugar. This is
-    now the lineage root: extract's own upstream, where none existed
-    before."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content. scan is
+    the lineage root: extract's own upstream."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -117,8 +115,8 @@ def test_trace_downstream_from_indexed_seed():
 
     steps = _by_step(result)
     # Seeded at extract; downstream reaches acme's summarize and the reduce,
-    # and upstream reaches acme's scan lane (TODO 14: scan is now extract's
-    # own upstream, where none existed before).
+    # and upstream reaches acme's scan lane (scan is extract's own
+    # upstream).
     assert [n.relation for n in steps["extract"]] == ["seed"]
     assert [n.relation for n in steps["summarize"]] == ["downstream"]
     assert [n.relation for n in steps["total"]] == ["downstream"]
@@ -142,8 +140,8 @@ def test_trace_upstream_resolves_root_payload():
 
     steps = _by_step(result)
     assert [n.relation for n in steps["extract"]] == ["upstream"]
-    # scan (not extract) is the lineage root now — extract has its own
-    # upstream (TODO 14), so it no longer resolves a root payload itself.
+    # scan (not extract) is the lineage root — extract has its own upstream,
+    # so it doesn't resolve a root payload itself.
     assert [n.relation for n in steps["scan"]] == ["upstream"]
     root = steps["scan"][0]
     # Root resolution reads the stored payload — no auto-indexing involved.

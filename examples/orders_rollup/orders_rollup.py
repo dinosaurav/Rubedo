@@ -6,11 +6,10 @@
 This one is self-contained: it creates a small SQLite "orders" database in your
 temp dir, then runs a Rubedo pipeline over it. Each row is a coordinate.
 
-The `orders` source is a plain SELECT loop (TODO 14: no source class, no
-batch_size streaming mode — a table recipe is just a root
+The `orders` source is a plain SELECT loop: a table recipe is just a root
 `@step(shape="expand")` yielding one dict per row, buffered like any other
-expand for v1; see docs/concepts/sources.md for the pattern on a table too
-big to pull in one query).
+expand (no batch_size streaming mode yet; see docs/concepts/sources.md for
+the pattern on a table too big to pull in one query).
 
 Run it:
 

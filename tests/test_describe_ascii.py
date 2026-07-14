@@ -1,4 +1,4 @@
-"""describe(format="ascii"): hand-rolled terminal DAG rendering (TODO 20).
+"""describe(format="ascii"): hand-rolled terminal DAG rendering.
 
 Pure spec-level tests — describe() never touches the ledger/store, so
 these build PipelineSpecs directly with @source/@step and skip the usual

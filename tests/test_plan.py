@@ -69,11 +69,10 @@ def create_file(name, content):
 
 
 def make_pipeline(pipe_id="pl"):
-    # Folder recipe (TODO 14): a root expand step yields each file's
-    # content — the replacement for the old folder=TEST_FOLDER sugar. A
-    # root expand has no parent to cache its enumeration against, so it
-    # always plans as "execute": plan() can never preview what it will
-    # yield without actually running it (see the tests below).
+    # Folder recipe: walk TEST_FOLDER, yield each file's content. A root
+    # expand has no parent to cache its enumeration against, so it always
+    # plans as "execute": plan() can never preview what it will yield
+    # without actually running it (see the tests below).
     @step(name="scan", version="1", shape="expand")
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
@@ -104,8 +103,7 @@ def test_fresh_state_executes_source_and_pends_downstream():
     # One execute for the source (@source is a root expand — no parent to
     # cache its enumeration against, so it always executes) and one
     # "pending" per downstream step, not per file: the individual file
-    # lanes don't exist yet at plan time (TODO 14 Trap point 1 — a
-    # deliberate UX change from the old eager-scan-at-plan-time behavior).
+    # lanes don't exist yet at plan time.
     assert actions(p) == {
         ("@root", "scan"): "execute",
         ("@root", "read"): "pending",
@@ -151,12 +149,10 @@ def test_invalidation_does_not_change_the_coarse_plan_shape():
 
 
 def test_plan_cannot_preview_effect_of_a_deleted_file():
-    """Unlike the pre-14 eager-scan-at-plan-time behavior (where a deleted
-    file's coordinate simply vanished from plan()'s output), plan() can no
-    longer see individual files at all — deleting one changes nothing
-    about the coarse execute+pending shape. The real behavior (a run
-    simply not touching the vanished file's lane) is covered at the run()
-    level by test_engine.py::test_logical_deletion."""
+    """plan() can't see individual files at all — deleting one changes
+    nothing about the coarse execute+pending shape. The real behavior (a
+    run simply not touching the vanished file's lane) is covered at the
+    run() level by test_engine.py::test_logical_deletion."""
     pipe = make_pipeline()
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")

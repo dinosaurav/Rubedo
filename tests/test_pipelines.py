@@ -73,8 +73,7 @@ class MyParams(BaseModel):
 
 @step(name="scan", version="1", shape="expand")
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content — the
-    replacement for the old folder=TEST_FOLDER source sugar (TODO 14)."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -112,8 +111,8 @@ def test_run_pipeline_appears_with_definition_snapshot():
     (item,) = res.json()
     assert item["id"] == "test-proc"
     assert item["run_count"] == 2
-    # source_id is now the sorted, comma-joined names of the pipeline's root
-    # steps — here a single "scan" root (TODO 14).
+    # source_id is the sorted, comma-joined names of the pipeline's root
+    # steps — here a single "scan" root.
     assert item["source_id"] == "scan"
     assert item["last_run_at"] is not None
 

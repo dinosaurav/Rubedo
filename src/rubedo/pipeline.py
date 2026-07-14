@@ -70,7 +70,7 @@ def _build_spec(
     Duplicate step names are checked here rather than only deep in
     `topological_sort` (planning.py keeps its own copy of this check too, as
     a backstop for anyone building a `PipelineSpec` directly): with `@step`'s
-    name defaulting to the function name (TODO 16), two steps built from
+    name defaulting to the function name, two steps built from
     same-named functions in different modules is the realistic collision, so
     the error names both functions' `module.qualname` — not just the shared
     step name — so it's obvious *where* the collision came from.
@@ -126,8 +126,7 @@ class Pipeline:
 
     Construct with `pipeline(name=...)`. `name` is the pipeline's sole
     identity (there is no separate `id`) — the ledger's `pipeline_id`
-    column stores it verbatim; renaming a pipeline orphans its history,
-    same as changing `id` used to.
+    column stores it verbatim; renaming a pipeline orphans its history.
 
     Settings that apply to every run of this pipeline live here at
     construction (`schedule=`, `home=`, alongside `retention=` and
