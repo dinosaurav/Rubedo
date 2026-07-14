@@ -91,6 +91,17 @@ class PipelineSpec:
     # everything. Rides the definition() snapshot each run records, so the ops
     # path (rubedo gc) reads it without importing user code.
     retention: Optional[int] = None
+    # secrets=/env= (TODO 21): declarations only, executable documentation of
+    # what this pipeline needs from its environment — secrets are vault-
+    # injected/log-masked in cloud, env is deploy-config-injected/visible.
+    # Locally both still come from the shell/.env exactly as before; these
+    # names have zero effect on execution or cache identity (validated and
+    # stored here, never hashed into any step's address — see
+    # `planning.py`'s address computation, which only ever reads StepSpec).
+    # `rubedo check` reads them statically off a file's `pipeline(...)` call
+    # without importing it.
+    secrets: Tuple[str, ...] = ()
+    env: Tuple[str, ...] = ()
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -384,6 +395,11 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         "id": spec.name,
         "name": spec.name,
         "steps": steps,
+        # Emitted unconditionally (even empty): these are declarations, not
+        # policy toggles, and dashboards/tooling read definition_json as the
+        # authoritative list of a pipeline's environment surface.
+        "secrets": list(spec.secrets),
+        "env": list(spec.env),
     }
     if spec.retention is not None:
         # The ops path (rubedo gc / auto-prune) reads each pipeline's policy from

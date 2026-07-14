@@ -14,7 +14,7 @@ lazily, on first access to a verb (`.run()`/`.plan()`/`.describe()`/
 `.definition()`), and cached — registering more steps after that first
 verb call invalidates the cache so it rebuilds on next access.
 """
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type
 
 from pydantic import BaseModel
 
@@ -28,6 +28,43 @@ from .spec import PipelineSpec, StepSpec
 from .spec import definition as _definition
 from .spec import source as _source_decorator
 from .spec import step as _step_decorator
+
+# Reserved for the engine's own env vars (RUBEDO_HOME, RUBEDO_DB_PATH, ...):
+# see store.py/db.py. secrets=/env= may not declare a RUBEDO_*-prefixed name.
+_RESERVED_ENV_PREFIX = "RUBEDO_"
+
+
+def _validate_env_declarations(
+    pipeline_name: str, secrets: Sequence[str], env: Sequence[str]
+) -> None:
+    """secrets=/env= are step-independent (they don't read the accumulated
+    step list), so — like schedule=/retention= — they're validated eagerly
+    at construction rather than waiting for the first verb call.
+
+    Rules: every name is a non-empty string; names are unique across the
+    *combined* list (this also covers "no overlap between the two lists" —
+    a name in both is a duplicate of itself); no name may start with
+    RUBEDO_ (reserved for the engine's own env vars).
+    """
+    combined = list(secrets) + list(env)
+    for n in combined:
+        if not n:
+            raise ValueError(
+                f"pipeline '{pipeline_name}': secrets=/env= names must be "
+                "non-empty strings"
+            )
+        if n.startswith(_RESERVED_ENV_PREFIX):
+            raise ValueError(
+                f"pipeline '{pipeline_name}': {n!r} is reserved — RUBEDO_* "
+                "env vars are the engine's own and can't be declared in "
+                "secrets=/env="
+            )
+    dupes = sorted({n for n in combined if combined.count(n) > 1})
+    if dupes:
+        raise ValueError(
+            f"pipeline '{pipeline_name}': secrets=/env= names must be unique "
+            f"(and not appear in both lists), duplicated: {dupes}"
+        )
 
 
 def _step_origin(s: StepSpec) -> str:
@@ -45,6 +82,8 @@ def _build_spec(
     steps: List[StepSpec],
     params_model: Optional[Type[BaseModel]],
     retention: Optional[int],
+    secrets: Tuple[str, ...] = (),
+    env: Tuple[str, ...] = (),
 ) -> PipelineSpec:
     """Validate the accumulated steps and construct the PipelineSpec.
 
@@ -65,7 +104,10 @@ def _build_spec(
 
     retention itself is validated eagerly in `Pipeline.__init__` (it doesn't
     depend on the accumulated step list, so it fails fast at construction
-    rather than waiting for the first verb call).
+    rather than waiting for the first verb call). secrets=/env= are
+    likewise validated eagerly in `Pipeline.__init__`
+    (`_validate_env_declarations`) for the same reason — by the time
+    `_build_spec` runs, they're already-validated tuples.
 
     Duplicate step names are checked here rather than only deep in
     `topological_sort` (planning.py keeps its own copy of this check too, as
@@ -118,6 +160,8 @@ def _build_spec(
         steps=steps,
         params_model=params_model,
         retention=retention,
+        secrets=secrets,
+        env=env,
     )
 
 
@@ -131,6 +175,16 @@ class Pipeline:
     Settings that apply to every run of this pipeline live here at
     construction (`schedule=`, `home=`, alongside `retention=` and
     `params_model=`); `run()`/`plan()` keep only per-invocation things.
+
+    secrets=/env= declare the pipeline's environment surface — executable
+    documentation of what it needs to run, and (for a future cloud worker)
+    what to inject at deploy time. secrets= names vault-injected, log-masked
+    values (API keys); env= names deploy-config-injected, visible values
+    (log levels). Locally both still come from the shell/`.env` exactly as
+    before — the declaration changes nothing about execution, and neither
+    list enters any step's cache identity. `rubedo check <file.py>` lints a
+    pipeline's step bodies for `os.environ`/`os.getenv` reads that aren't
+    declared in either list (advisory only, never blocks).
     """
 
     def __init__(
@@ -141,6 +195,8 @@ class Pipeline:
         retention: Optional[int] = None,
         schedule: str = "broad",
         home: Optional[str] = None,
+        secrets: Optional[List[str]] = None,
+        env: Optional[List[str]] = None,
     ):
         if schedule not in SCHEDULES:
             raise ValueError(f"schedule must be one of {SCHEDULES}, got {schedule!r}")
@@ -151,11 +207,16 @@ class Pipeline:
                 f"pipeline '{name}': retention must be an integer >= 1 (runs to keep), "
                 f"got {retention!r}"
             )
+        secrets_t: Tuple[str, ...] = tuple(secrets or [])
+        env_t: Tuple[str, ...] = tuple(env or [])
+        _validate_env_declarations(name, secrets_t, env_t)
         self.name = name
         self.params_model = params_model
         self.retention = retention
         self.schedule = schedule
         self.home = home
+        self.secrets = secrets_t
+        self.env = env_t
         self._steps: List[StepSpec] = list(steps or [])
         self._spec: Optional[PipelineSpec] = None
 
@@ -189,7 +250,12 @@ class Pipeline:
         the steps registered so far, and cached."""
         if self._spec is None:
             self._spec = _build_spec(
-                self.name, self._steps, self.params_model, self.retention
+                self.name,
+                self._steps,
+                self.params_model,
+                self.retention,
+                self.secrets,
+                self.env,
             )
         return self._spec
 
@@ -247,6 +313,8 @@ def pipeline(
     retention: Optional[int] = None,
     schedule: str = "broad",
     home: Optional[str] = None,
+    secrets: Optional[List[str]] = None,
+    env: Optional[List[str]] = None,
 ) -> Pipeline:
     """Construct a pipeline. `name` is the only required argument and is
     the pipeline's sole identity.
@@ -269,6 +337,10 @@ def pipeline(
 
     retention=N keeps only this pipeline's last N terminal runs' outputs
     (see `Pipeline`/`_build_spec` for the full retention semantics).
+
+    secrets=/env= declare this pipeline's environment surface (see
+    `Pipeline`'s docstring) — pure documentation locally, validated eagerly
+    at construction, and never part of any step's cache identity.
     """
     return Pipeline(
         name=name,
@@ -277,4 +349,6 @@ def pipeline(
         retention=retention,
         schedule=schedule,
         home=home,
+        secrets=secrets,
+        env=env,
     )

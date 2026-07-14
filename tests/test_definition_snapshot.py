@@ -5,6 +5,13 @@ exercising a representative slice of step policies (expand root, retries,
 rate_limit, stale_after, a reduce with group_key, pipeline-level retention).
 History and the dashboard read definition_json, so any change to this
 snapshot would be a silent data format change, not just an API change.
+
+TODO 21 added the pipeline-level "secrets"/"env" keys, emitted
+unconditionally (even empty, as here) since they're declarations rather
+than policy toggles — that's the one legitimate reason this pin moved: the
+dashboard only ever reads definitions, so additive JSON here is harmless,
+unlike the byte-identity this pin actually guards (the TODO-15 hashing
+rotation).
 """
 import json
 
@@ -15,9 +22,11 @@ from rubedo.spec import definition
 
 PINNED_DEFINITION_JSON = """\
 {
+  "env": [],
   "id": "snap-fixture",
   "name": "snap-fixture",
   "retention": 5,
+  "secrets": [],
   "steps": [
     {
       "code": "warn",
