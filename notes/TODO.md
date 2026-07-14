@@ -328,7 +328,7 @@ the re-run heals.
   `notes/private/cloud-control-plane.md` (gitignored, owner-local —
   services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
   engine-side slice (item 21, `pipeline(secrets=, env=)` + `rubedo check`)
-  shipped 2026-07-15. Remaining sessions before building: vault
+  shipped 2026-07-14. Remaining sessions before building: vault
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
 
@@ -404,7 +404,7 @@ the re-run heals.
 
 ## Done (compressed changelog — context for the above; git log has the detail)
 
-**2026-07-15 — `pipeline(secrets=, env=)` + `rubedo check` (item 21):**
+**2026-07-14 — `pipeline(secrets=, env=)` + `rubedo check` (item 21):**
 `PipelineSpec` grows `secrets`/`env` tuple fields — declarations only, zero
 effect on execution locally, never entering any step's cache identity
 (verified live: two `Pipeline`s differing only in `secrets=`/`env=` produce
