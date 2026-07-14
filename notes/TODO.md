@@ -11,7 +11,7 @@ shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
 the invariants rewrite, **18** notes hygiene, **19** comment cleanup, and
 ascii describe — shipped 2026-07-13/14). Order below is the recommended
-build order: **20** (`secrets=`/`env=` + `rubedo check`) is the open
+build order: **21** (`secrets=`/`env=` + `rubedo check`) is the open
 engine item. The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
@@ -318,7 +318,7 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 20. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/private/cloud-control-plane.md (gitignored, owner-local)]**
+## 21. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/private/cloud-control-plane.md (gitignored, owner-local)]**
 
 Declares a pipeline's environment surface so step code is byte-identical
 local and cloud: `secrets=` names vault-injected, log-masked values (API
@@ -364,7 +364,7 @@ passes once declared; full verification checklist green.
   Spine ratified 2026-07-13; full design in
   `notes/private/cloud-control-plane.md` (gitignored, owner-local —
   services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
-  engine-side slice is item 20. Remaining sessions before building: vault
+  engine-side slice is item 21. Remaining sessions before building: vault
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
 
