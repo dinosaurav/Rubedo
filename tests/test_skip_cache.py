@@ -289,7 +289,7 @@ def test_registration_validations():
             pass
 
     @step(name="orphan", version="1", skip_cache=True)
-    def orphan(path):
+    def orphan():
         pass
 
     # skip_cache-has-no-consumer validation runs lazily on first `.spec`

@@ -131,6 +131,15 @@ class ExecutionOutcome:
     is_anchor: bool = False
 
 
+def _dep_kwarg(step: StepSpec, dep: str) -> str:
+    """The parameter name a parent's value binds to when calling `step.fn`
+    — the step (dependency) name itself, unless `depends_on={"param":
+    "step"}` (the dict alias form) renamed it."""
+    if step.depends_on_aliases:
+        return step.depends_on_aliases.get(dep, dep)
+    return dep
+
+
 def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     """
     Resolve the output value of a parent step, computing it lazily if ephemeral.
@@ -161,7 +170,7 @@ def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo
             {}
             if not step.depends_on
             else {
-                dep: _resolve_parent_value(ref.parent_refs[dep], params, memo)
+                _dep_kwarg(step, dep): _resolve_parent_value(ref.parent_refs[dep], params, memo)
                 for dep in step.depends_on
             }
         )
@@ -234,7 +243,7 @@ def _process_decision(
             kwargs = {}
         elif step.shape == "reduce":
             kwargs = {
-                dep: {
+                _dep_kwarg(step, dep): {
                     lane: _resolve_parent_value(ref, params, memo)
                     for lane, ref in decision.parent_mats[dep].items()
                 }
@@ -242,7 +251,7 @@ def _process_decision(
             }
         else:
             kwargs = {
-                dep: _resolve_parent_value(
+                _dep_kwarg(step, dep): _resolve_parent_value(
                     decision.parent_mats[dep], params, memo
                 )
                 for dep in step.depends_on

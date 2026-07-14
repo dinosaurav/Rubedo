@@ -1,0 +1,299 @@
+"""TODO 22: shape & dependency inference.
+
+Three inferences, all resolving to the same explicit StepSpec the API
+already builds — the engine, planner, and ledger never know inference
+existed:
+  - a generator function defaults to shape="expand"
+  - join_on=/group_key= default shape to "join"/"reduce"
+  - an omitted depends_on= is inferred from fn's parameter names once every
+    sibling step is known (`pipeline.py::_build_spec`), each non-`params`
+    parameter naming a registered step (signature order); *args/**kwargs
+    skip inference; an explicit depends_on= (list or {"param": "step"}
+    alias dict) always disables it.
+"""
+
+import os
+import shutil
+import uuid
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
+
+from rubedo import pipeline, step
+from rubedo.db import init_db
+from rubedo.spec import definition
+from rubedo.store import init_store
+
+TEST_FOLDER = ".test_shape_dep_inference_data"
+ENV_FOLDER = ".test_shape_dep_inference_env"
+
+
+@pytest.fixture(autouse=True)
+def isolated_env():
+    abs_test_folder = os.path.abspath(TEST_FOLDER)
+    abs_env_folder = os.path.abspath(ENV_FOLDER)
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+
+    import rubedo.store
+
+    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
+    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
+
+    os.environ["RUBEDO_DB_PATH"] = (
+        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
+    )
+    init_db()
+
+    import rubedo.db
+
+    if rubedo.db.engine is not None:
+        rubedo.db.engine.dispose()
+
+    from rubedo.models import Base
+    from sqlalchemy.orm import sessionmaker
+
+    rubedo.db.engine = create_engine(
+        os.environ["RUBEDO_DB_PATH"],
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=rubedo.db.engine)
+    rubedo.db.SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=rubedo.db.engine
+    )
+
+    init_store()
+
+    yield
+
+    for d in (abs_test_folder, abs_env_folder):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+
+
+# ---------- shape inference (decoration time) ----------
+
+
+def test_generator_function_infers_expand_shape():
+    @step()
+    def rows():
+        yield {"v": 1}
+        yield {"v": 2}
+
+    assert rows.shape == "expand"
+    assert rows.depends_on == []
+
+
+def test_explicit_non_expand_shape_on_generator_raises():
+    with pytest.raises(ValueError, match="generator function must use shape='expand'"):
+
+        @step(shape="map")
+        def rows():
+            yield 1
+
+
+def test_join_on_infers_join_shape_without_explicit_shape():
+    s = step(depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(lambda a, b: None)
+    assert s.shape == "join"
+
+
+def test_group_key_infers_reduce_shape_without_explicit_shape():
+    s = step(depends_on=["a"], group_key="g")(lambda a: None)
+    assert s.shape == "reduce"
+
+
+def test_conflicting_explicit_shape_with_join_on_raises():
+    with pytest.raises(ValueError, match="join_on requires shape='join'"):
+        step(shape="map", depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(
+            lambda a, b: None
+        )
+
+
+def test_conflicting_explicit_shape_with_group_key_raises():
+    with pytest.raises(ValueError, match="group_key requires shape='reduce'"):
+        step(shape="map", depends_on=["a"], group_key="g")(lambda a: None)
+
+
+# ---------- depends_on inference (build time — pipeline.py::_build_spec) ----------
+
+
+def test_param_name_infers_depends_on():
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    @step()
+    def extract(scan):
+        return scan
+
+    p = pipeline(name="infer", steps=[scan, extract])
+    assert p.spec.steps[1].depends_on == ["scan"]
+
+
+def test_parentless_generator_behaves_as_a_source_with_zero_kwargs():
+    @step()
+    def rows():
+        yield {"v": 1}
+        yield {"v": 2}
+
+    p = pipeline(name="root-src", steps=[rows])
+    assert p.spec.steps[0].depends_on == []
+    assert p.spec.steps[0].shape == "expand"
+
+    summary = p.run()
+    assert summary.created_count == 2
+
+
+def test_unmatched_parameter_raises_naming_step_parameter_and_candidates():
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    @step()
+    def extract(nope):
+        return nope
+
+    p = pipeline(name="bad-param", steps=[scan, extract])
+    with pytest.raises(ValueError) as exc_info:
+        p.spec
+
+    msg = str(exc_info.value)
+    assert "extract" in msg
+    assert "nope" in msg
+    assert "scan" in msg
+
+
+def test_varargs_signature_skips_inference():
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    @step()
+    def sink(*args, **kwargs):
+        return None
+
+    p = pipeline(name="varargs", steps=[scan, sink])
+    # Ambiguous signature: inference is skipped entirely, so `sink` falls
+    # out as its own (unrelated) root rather than raising.
+    assert p.spec.steps[1].depends_on == []
+
+
+def test_explicit_depends_on_disables_inference_even_when_matching():
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    # Explicit depends_on=[] on a step whose parameter *would* match a
+    # sibling step name if inferred: explicit always wins, so this step
+    # stays a (second, independent) root.
+    @step(depends_on=[])
+    def extract(scan):
+        return scan
+
+    p = pipeline(name="explicit-wins", steps=[scan, extract])
+    assert p.spec.steps[1].depends_on == []
+
+
+# ---------- depends_on dict alias form ----------
+
+
+def test_depends_on_dict_alias_binds_execution_kwarg():
+    @step(shape="expand")
+    def scan():
+        yield {"v": 1}
+
+    @step(depends_on={"raw": "scan"})
+    def extract(raw):
+        return {"got": raw["v"]}
+
+    p = pipeline(name="alias", steps=[scan, extract])
+    assert p.spec.steps[1].depends_on == ["scan"]
+    assert p.spec.steps[1].depends_on_aliases == {"scan": "raw"}
+
+    summary = p.run()
+    values = list(summary.output_for("extract").values())
+    assert values == [{"got": 1}]
+
+
+# ---------- traps: byte-identical definition(), untouched addresses ----------
+
+
+def test_inferred_pipeline_definition_is_byte_identical_to_explicit_twin():
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    @step()
+    def extract(scan):
+        return scan
+
+    inferred = pipeline(name="twin", steps=[scan, extract])
+
+    @step(name="scan", version="0", shape="expand")
+    def scan_explicit():
+        yield {"v": 1}
+
+    @step(name="extract", version="0", depends_on=["scan"])
+    def extract_explicit(scan):
+        return scan
+
+    explicit = pipeline(name="twin", steps=[scan_explicit, extract_explicit])
+
+    assert inferred.definition() == explicit.definition()
+    assert definition(inferred.spec) == definition(explicit.spec)
+
+
+def test_rerun_over_existing_store_fully_reuses():
+    @step()
+    def scan():
+        yield {"v": 1}
+        yield {"v": 2}
+
+    @step()
+    def extract(scan):
+        return {"doubled": scan["v"] * 2}
+
+    p = pipeline(name="reuse-check", steps=[scan, extract])
+    first = p.run()
+    assert first.created_count == 4  # 2 scan lanes + 2 extract lanes
+    assert first.reused_count == 0
+
+    second = p.run()
+    assert second.created_count == 0
+    assert second.reused_count == 4
+
+
+@pytest.mark.filterwarnings("ignore:Step 'extract' source code changed")
+def test_explicit_twin_reuses_the_inferred_pipelines_store():
+    """Addresses are untouched by inference: a pipeline built with explicit
+    shape=/depends_on= matching an inferred pipeline's resolved values reads
+    back the same store with zero recomputation."""
+
+    @step()
+    def scan():
+        yield {"v": 1}
+
+    @step()
+    def extract(scan):
+        return {"doubled": scan["v"] * 2}
+
+    inferred = pipeline(name="same-store", steps=[scan, extract])
+    first = inferred.run()
+    assert first.created_count == 2
+
+    @step(name="scan", version="0", shape="expand")
+    def scan_explicit():
+        yield {"v": 1}
+
+    @step(name="extract", version="0", depends_on=["scan"])
+    def extract_explicit(scan):
+        return {"doubled": scan["v"] * 2}
+
+    explicit = pipeline(name="same-store", steps=[scan_explicit, extract_explicit])
+    second = explicit.run()
+    assert second.created_count == 0
+    assert second.reused_count == 2

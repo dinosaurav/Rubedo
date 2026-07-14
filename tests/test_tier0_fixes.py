@@ -225,7 +225,7 @@ def test_invalidate_scoped_to_pipeline():
 
 def test_join_rejects_skip_cache_parent():
     @step(name="left", version="1", index=["k"])
-    def left(path):
+    def left():
         return {"k": "x"}
 
     @step(name="right", version="1", depends_on=["left"], skip_cache=True)
@@ -248,7 +248,7 @@ def test_join_rejects_skip_cache_parent():
 
 def test_group_key_rejects_skip_cache_parent():
     @step(name="src", version="1")
-    def src(path):
+    def src():
         return {"g": "a"}
 
     @step(name="u", version="1", depends_on=["src"], skip_cache=True)

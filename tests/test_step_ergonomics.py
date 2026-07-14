@@ -127,7 +127,10 @@ def test_version_auto_still_rejected_with_default_name():
 
 
 def _make_parse_from_a():
-    @step()
+    # depends_on=[] disables signature inference (TODO 22): "row" is a
+    # placeholder param, not a sibling step name, for these duplicate-name
+    # fixtures.
+    @step(depends_on=[])
     def parse(row: dict):
         return row
 
@@ -135,7 +138,7 @@ def _make_parse_from_a():
 
 
 def _make_parse_from_b():
-    @step()
+    @step(depends_on=[])
     def parse(row: dict):
         return {"doubled": row}
 
@@ -173,7 +176,7 @@ def test_duplicate_explicit_names_still_error():
 def test_no_duplicate_error_for_distinct_names():
     a = _make_parse_from_a()
 
-    @step()
+    @step(depends_on=[])
     def other(row: dict):
         return row
 

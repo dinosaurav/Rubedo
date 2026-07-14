@@ -1,8 +1,9 @@
 """
 Pipeline and step specification definitions.
 """
+import inspect
 import re
-from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal
+from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal, Union
 from pydantic import BaseModel
 from dataclasses import dataclass
 
@@ -47,6 +48,16 @@ class StepSpec:
     fn: Callable
     version: str
     depends_on: List[str]
+    # False when `step()` was called with no explicit `depends_on=` — the
+    # signal `_build_spec` (pipeline.py) uses to infer `depends_on` from
+    # `fn`'s parameter names once every sibling step's name is known (it
+    # can't happen here at decoration time). Any explicit `depends_on=`
+    # (list or dict alias form) sets this True and disables inference.
+    depends_on_explicit: bool = True
+    # Set only by the dict alias form (`depends_on={"param": "step"}`):
+    # step name -> the parameter name its output binds to, for steps whose
+    # signature spells a parent under a different name than the step itself.
+    depends_on_aliases: Optional[Dict[str, str]] = None
     params_model: Optional[Type[BaseModel]] = None
     workers: int = 4
     code_hash: Optional[str] = None
@@ -121,7 +132,7 @@ def step(
     *,
     name: Optional[str] = None,
     version: str = "0",
-    depends_on: Optional[List[str]] = None,
+    depends_on: Optional[Union[List[str], Dict[str, str]]] = None,
     params_model: Optional[Type[BaseModel]] = None,
     workers: int = 4,
     code: str = "warn",
@@ -133,7 +144,7 @@ def step(
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
     index: Optional[List[str]] = None,
-    shape: str = "map",
+    shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
@@ -151,6 +162,30 @@ def step(
     resolve to the same name — whether given explicitly or defaulted from
     the function — fail loudly at pipeline-construction time, naming both
     functions so you can tell where the collision came from.
+
+    shape, depends_on, join_on, and group_key restate what the code already
+    implies, so each has an inferred default (any explicit value always
+    wins, and an explicit value that contradicts what the code implies
+    raises):
+      - A generator function defaults to `shape="expand"` — it's a fan-out
+        by construction. An explicit non-"expand" shape on a generator
+        raises (a generator under map/reduce/join is already broken; better
+        to fail at decoration than mid-run).
+      - `join_on=` defaults `shape` to "join"; `group_key=` defaults it to
+        "reduce". A plain `@all` reduce (no `group_key`) still needs an
+        explicit `shape="reduce"` — nothing else implies it.
+      - `depends_on` (when omitted entirely) is inferred at pipeline-build
+        time (`_build_spec`, once every sibling step's name is known, not
+        here): every parameter of the decorated function other than
+        `params` must name a registered step and becomes a dependency, in
+        signature order. An unmatched parameter raises `ValueError` naming
+        the step, the parameter, and the available step names. A signature
+        using `*args`/`**kwargs` skips inference entirely (pass `depends_on=`
+        explicitly if such a step has parents). A step with no non-`params`
+        parameters is a root. Passing `depends_on=` explicitly — as a list
+        (unchanged) or as `{"param_name": "step_name"}` to bind a parent's
+        output to a differently-named parameter — disables inference for
+        that step.
 
     version defaults to "0". It's the step's semantic identity — bump it
     for deliberate behavior changes (also the escape hatch for edits code
@@ -209,46 +244,82 @@ def step(
     def decorator(f: Callable) -> StepSpec:
         step_name = name if name is not None else f.__name__
 
+        # depends_on: list form is unchanged; dict form ({"param": "step"})
+        # is an alias — the step name (for depends_on/planning, everywhere
+        # else in the engine) plus a reverse param-name mapping execution
+        # uses to bind the parent's value to the right kwarg. Either form,
+        # or an empty list, is "explicit" and disables signature inference
+        # (which happens later, in `pipeline.py::_build_spec`, once sibling
+        # step names are known).
+        depends_on_explicit = depends_on is not None
+        if isinstance(depends_on, dict):
+            depends_on_list = list(depends_on.values())
+            depends_on_aliases = {step: param for param, step in depends_on.items()}
+        else:
+            depends_on_list = list(depends_on) if depends_on is not None else []
+            depends_on_aliases = None
+
+        # shape: explicit always wins. Otherwise a generator function is a
+        # fan-out by construction (shape="expand"); join_on=/group_key=
+        # otherwise imply "join"/"reduce"; anything else is a plain "map".
+        is_generator = inspect.isgeneratorfunction(f)
+        resolved_shape = shape
+        if resolved_shape is None:
+            if join_on is not None:
+                resolved_shape = "join"
+            elif group_key is not None:
+                resolved_shape = "reduce"
+            elif is_generator:
+                resolved_shape = "expand"
+            else:
+                resolved_shape = "map"
+        if is_generator and resolved_shape != "expand":
+            raise ValueError(
+                f"Step '{step_name}': a generator function must use "
+                f"shape='expand' (got shape={resolved_shape!r}) — a generator "
+                "under any other shape never runs to completion as intended"
+            )
+
         if code not in ("warn", "auto"):
             raise ValueError(f"Step '{step_name}': code must be 'warn' or 'auto', got {code!r}")
-        if shape not in ("map", "reduce", "expand", "join"):
+        if resolved_shape not in ("map", "reduce", "expand", "join"):
             raise ValueError(
                 f"Step '{step_name}': shape must be 'map', 'reduce', 'expand', or 'join', "
-                f"got {shape!r}"
+                f"got {resolved_shape!r}"
             )
-        if shape == "join":
+        if resolved_shape == "join":
             if not join_on:
                 raise ValueError(
                     f"Step '{step_name}': shape='join' requires join_on={{parent: field}}"
                 )
-            if len(depends_on or []) < 2:
+            if len(depends_on_list) < 2:
                 raise ValueError(
                     f"Step '{step_name}': shape='join' requires at least two parents in "
                     "depends_on (N-way star join on a shared value)"
                 )
-            if set(join_on) != set(depends_on or []):
+            if set(join_on) != set(depends_on_list):
                 raise ValueError(
                     f"Step '{step_name}': join_on keys {sorted(join_on)} must match "
-                    f"depends_on {sorted(depends_on or [])}"
+                    f"depends_on {sorted(depends_on_list)}"
                 )
-        if join_on is not None and shape != "join":
+        if join_on is not None and resolved_shape != "join":
             raise ValueError(f"Step '{step_name}': join_on requires shape='join'")
-        if shape == "expand" and skip_cache:
+        if resolved_shape == "expand" and skip_cache:
             raise ValueError(
                 f"Step '{step_name}': skip_cache is not supported with shape='expand'"
             )
-        if shape == "expand" and len(depends_on or []) > 1:
+        if resolved_shape == "expand" and len(depends_on_list) > 1:
             raise ValueError(
                 f"Step '{step_name}': shape='expand' takes at most one parent — none = a "
                 "root (a source that yields the initial lanes); two+ would be a join"
             )
         if executor not in ("thread", "process"):
             raise ValueError(f"Step '{step_name}': executor must be 'thread' or 'process', got {executor!r}")
-        if shape == "reduce" and skip_cache:
+        if resolved_shape == "reduce" and skip_cache:
             raise ValueError(f"Step '{step_name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
-        if shape == "reduce" and not depends_on:
+        if resolved_shape == "reduce" and not depends_on_list:
             raise ValueError(f"Step '{step_name}': shape='reduce' requires at least one parent in depends_on")
-        if group_key is not None and shape != "reduce":
+        if group_key is not None and resolved_shape != "reduce":
             raise ValueError(
                 f"Step '{step_name}': group_key requires shape='reduce' (it partitions a "
                 "reduction's input lanes by an indexed field)"
@@ -295,7 +366,9 @@ def step(
             name=step_name,
             fn=f,
             version=version,
-            depends_on=depends_on or [],
+            depends_on=depends_on_list,
+            depends_on_explicit=depends_on_explicit,
+            depends_on_aliases=depends_on_aliases,
             params_model=params_model,
             workers=workers,
             code_hash=code_hash,
@@ -308,7 +381,7 @@ def step(
             stale_after=parsed_stale,
             skip_cache=skip_cache,
             index=tuple(index or ()),
-            shape=shape,
+            shape=resolved_shape,
             executor=executor,
             group_key=group_key,
             join_on=join_on,
@@ -360,6 +433,10 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             "workers": s.workers,
             "code": s.code_mode,
         }
+        if s.depends_on_aliases:
+            # Only the dict alias form produces this — additive, so the
+            # common (list-form or inferred) case's snapshot is unchanged.
+            entry["depends_on_aliases"] = dict(s.depends_on_aliases)
         if s.skip_cache:
             entry["skip_cache"] = True
         if s.retries:

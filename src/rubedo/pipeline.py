@@ -14,7 +14,9 @@ lazily, on first access to a verb (`.run()`/`.plan()`/`.describe()`/
 `.definition()`), and cached — registering more steps after that first
 verb call invalidates the cache so it rebuilds on next access.
 """
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type
+import inspect
+from dataclasses import replace
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Type
 
 from pydantic import BaseModel
 
@@ -65,6 +67,33 @@ def _validate_env_declarations(
             f"pipeline '{pipeline_name}': secrets=/env= names must be unique "
             f"(and not appear in both lists), duplicated: {dupes}"
         )
+
+
+def _infer_depends_on(s: StepSpec, step_names: Set[str]) -> List[str]:
+    """Signature -> depends_on for a step declared with no explicit
+    `depends_on=` — the parameter list *is* the dependency declaration
+    (parents already bind as kwargs keyed by step name, execution.py), in
+    signature order. `params` is reserved and never a dependency. A
+    signature with `*args`/`**kwargs` is ambiguous — skip inference
+    entirely (an empty result, i.e. a root; pass `depends_on=` explicitly
+    if such a step actually has parents). A step with no non-`params`
+    parameter is a root, cleanly, with no special-casing.
+    """
+    deps: List[str] = []
+    for param in inspect.signature(s.fn).parameters.values():
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            return []
+        if param.name == "params":
+            continue
+        if param.name not in step_names:
+            raise ValueError(
+                f"Step '{s.name}': parameter '{param.name}' doesn't match any "
+                f"registered step name (available: {sorted(step_names)}) — "
+                "pass depends_on= explicitly if this parameter isn't meant "
+                "as a dependency"
+            )
+        deps.append(param.name)
+    return deps
 
 
 def _step_origin(s: StepSpec) -> str:
@@ -127,6 +156,19 @@ def _build_spec(
                 "to one of them to disambiguate"
             )
         seen[s.name] = s
+
+    # Param-name -> depends_on inference: only now, with every sibling
+    # step's name known, can an omitted depends_on= be resolved. Builds a
+    # fresh, resolved step list rather than mutating the StepSpec objects
+    # the decorators handed back to the caller (which may be reused
+    # elsewhere). Steps with an explicit depends_on= (list or dict alias
+    # form) pass through untouched.
+    step_names = set(seen)
+    steps = [
+        s if s.depends_on_explicit else replace(s, depends_on=_infer_depends_on(s, step_names))
+        for s in steps
+    ]
+    seen = {s.name: s for s in steps}
 
     roots = [s for s in steps if not s.depends_on]
     if not roots:
