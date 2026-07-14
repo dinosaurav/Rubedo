@@ -7,12 +7,12 @@ criteria. Read `CLAUDE.md` first for conventions, and `notes/invariants.md`
 for vocabulary. One item = one (or a few) commits.
 
 Items keep their historical numbers for stable cross-references (gaps are
-shipped/retired items — see the Done changelog). Order below is the
-recommended build order: the editorial item **19** slots anywhere
-(**16** step ergonomics shipped 2026-07-13, **15** the rotation shipped
-2026-07-13, **14** sources purge shipped 2026-07-13, **20** ascii describe
-shipped 2026-07-13, **18** notes hygiene shipped 2026-07-13, **17** the
-invariants rewrite shipped 2026-07-13 — see the Done changelog). The cloud
+shipped/retired items — see the Done changelog; the simplification arc —
+**14** sources purge, **15** the rotation, **16** step ergonomics, **17**
+the invariants rewrite, **18** notes hygiene, **19** comment cleanup, and
+ascii describe — shipped 2026-07-13/14). Order below is the recommended
+build order: **20** (`secrets=`/`env=` + `rubedo check`) is the open
+engine item. The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently buildable (workers never
 touch the ledger/store; item 7 is its throughput story, not a
@@ -318,18 +318,6 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 19. Comment cleanup pass  **[editorial; owner drives style]**
-
-A pass over `src/`, `tests/`, and `examples/` replacing process-note
-comments (what changed, which TODO item shipped it, why the diff was
-correct) with code-truth comments (constraints the code can't show).
-Known instances: `spec.py:91` ("TODO 10b"), `du.py:82`. The owner will
-set the rewrite style on first contact; don't batch-rewrite ahead of that.
-
-Acceptance: no comment in `src/` references a TODO item number or narrates
-a past change; constraint comments (invariant references, trap guards)
-stay.
-
 ## 20. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/private/cloud-control-plane.md (gitignored, owner-local)]**
 
 Declares a pipeline's environment surface so step code is byte-identical
@@ -451,6 +439,16 @@ passes once declared; full verification checklist green.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-14 — comment cleanup pass (item 19):** src/, tests/, and
+examples/ comments no longer reference TODO item numbers or narrate past
+changes; constraint content (trap warnings, ordering requirements,
+cross-file contracts) stays, minus its process tags, and a few
+narration-shaped comments were rewritten as current-state facts (verified
+against the code they describe). Owner set the style — strip tags, keep
+constraints — and reviewed the full diff before it landed. Comment-only:
+no example step bodies touched, so no code-drift warnings. Commit
+`159e008`.
 
 **2026-07-13 — invariants rewrite, values-first (item 17):**
 `notes/invariants.md` restructured under four core promises — *never pay
