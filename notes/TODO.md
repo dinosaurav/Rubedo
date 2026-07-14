@@ -10,11 +10,10 @@ Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
 the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
-ascii describe, **21** `secrets=`/`env=` + `rubedo check`, and **22**
-shape & dependency inference — shipped 2026-07-13/14). Order below is the
-recommended build order: **23** → **24** (23 needs 22's yield-detection,
-now shipped; 24 is independent but tiny), with **25** deferred (owner:
-queued, do not build until asked). The cloud
+ascii describe, **21** `secrets=`/`env=` + `rubedo check`, **22**
+shape & dependency inference, and **23** removing `@source` — shipped
+2026-07-13/14). **24** is next (independent but tiny), with **25**
+deferred (owner: queued, do not build until asked). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently
 buildable (workers never touch the ledger/store; item 7 is its throughput
@@ -22,28 +21,6 @@ story, not a prerequisite), and **6 needs a respec post-14** (see its
 note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
 ideas live in **Parked** at the bottom — do not build those without a
 design session.
-
-## 23. Remove `@source`  **[design settled 2026-07-14; needs 22]**
-
-After 22, `@source`'s entire content (`shape="expand"`) is inferred from
-`yield`, leaving a decorator whose honest description is "same as
-`@step`". Ruthless simplification says delete it: `source()` leaves
-`spec.py` and `rubedo.__init__` (ImportError, not aliased — the `run()`
-precedent), `@p.source` leaves `Pipeline`. "Source" survives as
-vocabulary for parentless roots (docs keep the word; the recipes in
-`docs/concepts/sources.md` become bare `@step` generators).
-`definition()`'s `source_id` (sorted root step names) is untouched.
-
-**Trap:** the docs/tests/examples sweep changes decorator lines, and
-`_hash_source` may include them (same check as item 22 trap 3) — if code
-hashes move, prefer sweeping tests (per-test stores, harmless) and docs
-while leaving shipped examples' decorators for a deliberate follow-up,
-noting the drift-warning consequence either way.
-
-Acceptance: `from rubedo import source` raises ImportError; `rg "@source"
-src tests examples docs README.md` → zero hits (prose uses of the word
-"source" are fine); docs build clean; full verification checklist green;
-`examples/count_lines` fully reuses its store.
 
 ## 24. Callable `StepSpec` + `describe()` TTY default  **[design settled 2026-07-14; independent quickie]**
 
@@ -502,6 +479,37 @@ Reused: 22 — and the tutorial's demo pipeline re-run step by step against
 a fresh folder, every printed block unchanged from before the edit. 258
 tests passed (243 pre-existing + 15 new), ruff/mypy/`mkdocs build --strict`
 clean. Commits `8c482db` (engine + tests), `ba5b9bc` (docs).
+
+**2026-07-14 — remove `@source` (item 23):** After item 22, `@source`'s
+entire content (`shape="expand"` inferred from `yield`) made it an honest
+synonym for `@step` — deleted. `source()` is gone from `spec.py` and its
+export from `rubedo.__init__` (`from rubedo import source` now
+`ImportError`, not aliased — the `run()` precedent from item 15);
+`Pipeline.source`/`@p.source` is gone from `pipeline.py`. "Source"
+survives as prose vocabulary for a parentless root; `envcheck.py`'s AST
+lint no longer special-cases a `"source"` decorator name alongside
+`"step"`. Full sweep: tests (`test_expand.py`, `test_headless_root.py`,
+`test_describe_ascii.py`, `test_plan.py`, `test_envcheck.py`), all nine
+`@p.source`-using examples (`count_lines`, `newsroom`, `expand_feed`,
+`github_health`, `orders_rollup`, `executor_showdown`,
+`weather_advisory`, `gutenberg_stats`, `graphify`), and prose across
+`README.md`, `docs/`, `AGENTS.md`, `notes/llms.txt`,
+`notes/invariants.md`, `notes/producer-model.md`, and
+`marketing/src/App.jsx`. **Trap resolved, surprising result:** the
+decorator-line edit does move a step's `code_hash` (`_hash_source`
+hashes decorator and all, confirmed by diffing a stored
+`Materialization.code_hash` against a fresh hash of the edited
+`count_lines.py::input_files`), but the sweep produced *zero*
+code-drift warnings anywhere — `@source` only ever decorated root
+`expand` steps, and a root's planning decision is unconditionally
+`"execute"` (`planning.py::_plan_step`: "Root expand = source: no
+parent to cache against, so it always executes"); the code-drift check
+only ever fires on a `"reuse"` decision, which a root never produces.
+Live-verified: `examples/count_lines` run twice against its existing,
+already-populated store — both runs `Created: 0, Reused: 22`, no
+warnings. 258 tests passed, ruff/mypy/`mkdocs build --strict`/`npm run
+build` (marketing) clean. Commits `c27faa1` (core + tests), `cf59bc1`
+(examples), `36a2cb9` (docs/notes/marketing).
 
 **2026-07-14 — `pipeline(secrets=, env=)` + `rubedo check` (item 21):**
 `PipelineSpec` grows `secrets`/`env` tuple fields — declarations only, zero
