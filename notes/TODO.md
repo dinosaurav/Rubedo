@@ -10,11 +10,11 @@ Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
 the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
-ascii describe, and **21** `secrets=`/`env=` + `rubedo check` — shipped
-2026-07-13/14). Order below is the recommended build order: the inference
-chain **22** → **23** → **24** (23 needs 22's yield-detection; 24 is
-independent but tiny), with **25** deferred (owner: queued, do not build
-until asked). The cloud
+ascii describe, **21** `secrets=`/`env=` + `rubedo check`, and **22**
+shape & dependency inference — shipped 2026-07-13/14). Order below is the
+recommended build order: **23** → **24** (23 needs 22's yield-detection,
+now shipped; 24 is independent but tiny), with **25** deferred (owner:
+queued, do not build until asked). The cloud
 chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
 demand is real — though **8** is independently
 buildable (workers never touch the ledger/store; item 7 is its throughput
@@ -22,69 +22,6 @@ story, not a prerequisite), and **6 needs a respec post-14** (see its
 note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
 ideas live in **Parked** at the bottom — do not build those without a
 design session.
-
-## 22. Shape & dependency inference  **[design settled 2026-07-14; ⚠️ subtle]**
-
-Kwargs that restate what the code already says become inferred defaults.
-Three inferences, all resolving to the same explicit `StepSpec` the
-current API builds — the engine, planner, and ledger never know inference
-existed.
-
-**Settled decisions (owner design session 2026-07-14 — do not re-litigate):**
-
-- **Generator fn ⇒ `shape="expand"`.** `inspect.isgeneratorfunction(fn)`
-  at decoration time (same spirit as the auto-`name` default). Explicit
-  `shape=` wins; an explicit *non-expand* shape on a generator fn raises
-  `ValueError` (a generator under map/reduce/join is already broken —
-  make it loud and early).
-- **`join_on=` ⇒ `shape="join"`; `group_key=` ⇒ `shape="reduce"`.** Pure
-  implication — each kwarg uniquely determines its shape. Explicit
-  consistent shape stays fine; explicit conflicting shape raises. The
-  plain `@all` reduce (no `group_key`) still needs `shape="reduce"` —
-  nothing else signals it.
-- **Param names ⇒ `depends_on`.** Parents are already passed as kwargs
-  keyed by step name (`execution.py`) and `params` is reserved, so the
-  signature *is* the dependency declaration. At `_build_spec` (all steps
-  known — inference cannot run at decoration), a step with no explicit
-  `depends_on`: every non-`params` parameter must match a registered step
-  name and becomes a dependency (signature order). A parameter matching
-  no step raises `ValueError` at build, naming the step, the parameter,
-  and the available step names — this strictness is the safety of the
-  whole feature (a signature typo dies at build; today it dies later as
-  a call-time TypeError). **No fuzzy suggestions** — that's item 25,
-  deferred. Signatures with `*args`/`**kwargs` skip inference and require
-  explicit `depends_on`. Roots fall out cleanly: a root is a step whose
-  signature has no non-`params` parameters.
-- **`depends_on` dict form = aliases.** `depends_on={"raw": "scan"}`
-  binds parameter `raw` to step `scan`'s output (execution kwargs use the
-  mapping). List form unchanged. Explicit `depends_on` (either form)
-  disables signature inference for that step.
-
-**Trap (part of the spec):** (1) `definition()` must record the
-*resolved* shape and `depends_on` — an inferred pipeline and its fully
-explicit twin must produce **byte-identical** definition snapshots (list
-`depends_on` snapshots as today; the dict/alias form may introduce a new
-representation, but only when actually used). Addresses are untouched
-either way — an existing store fully reuses. (2) Verify the headless-root
-patterns (`tests/test_headless_root.py`) really are params-only
-signatures before relying on the root rule. (3) `_hash_source` includes
-decorator lines: check whether simplifying an example's decorator changes
-its code hash — if so, sweeping examples to the terse style triggers
-code-drift warnings on the owner's stores; teach the terse style in
-docs/tutorial, but leave shipped examples' decorators alone unless the
-hash proves stable (say what you found).
-
-Acceptance: `@p.step\ndef extract(scan): ...` with zero kwargs infers
-`depends_on=["scan"]`; a parentless generator step behaves as a source
-(expand root) with no kwargs at all; `join_on=`/`group_key=` without
-`shape=` build the right shapes; a generator with `shape="map"` and a
-conflicting explicit shape with `join_on=` both raise; an unmatched
-parameter name raises at build naming step + parameter + candidates;
-`definition()` of an inferred pipeline is byte-identical to its explicit
-twin (pin with a test); a re-run over an existing store fully reuses;
-full verification checklist green; docs teach the terse style with the
-explicit kwargs introduced right after (mirroring how item 16's docs
-handle `name=`/`version=`).
 
 ## 23. Remove `@source`  **[design settled 2026-07-14; needs 22]**
 
@@ -517,6 +454,54 @@ the re-run heals.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-14 — shape & dependency inference (item 22):** Kwargs that
+restate what the code already says now default from it — the engine,
+planner, and ledger never know inference existed, since all three resolve
+to the same explicit `StepSpec` the API already built. A generator
+function defaults `shape="expand"` (`inspect.isgeneratorfunction`); an
+explicit non-`"expand"` shape on a generator raises. `join_on=`/
+`group_key=` otherwise default `shape` to `"join"`/`"reduce"`; an explicit
+conflicting shape still raises via the existing consistency checks (now
+checked against the resolved shape). An omitted `depends_on` is inferred
+in `pipeline.py::_build_spec` — the one place every sibling step's name is
+known, which decoration time (`spec.py::step()`) can't see: every
+non-`params` parameter of the function must name a registered step and
+becomes a dependency, in signature order; an unmatched parameter raises
+`ValueError` naming the step, the parameter, and the available step names
+(no fuzzy suggestions — item 25, still deferred); `*args`/`**kwargs`
+signatures skip inference entirely (root by default); a step with no
+non-`params` parameters is a root, with no special-casing. `depends_on`
+also grows a dict alias form, `{"param_name": "step_name"}`, binding a
+parent's output to a differently-named parameter — execution-only
+(`execution.py`'s new `_dep_kwarg`), never touching planning/addressing,
+which still key everything on step names. Either explicit form (including
+an explicit empty list) disables inference for that step.
+`_build_spec` builds a fresh resolved step list (`dataclasses.replace`)
+rather than mutating the `StepSpec` objects `@step`/`@source` handed back
+to callers. **Trap finding:** `_hash_source` does include decorator
+lines (verified empirically: a multi-line `@step(...)` call is captured by
+`inspect.getsource`), so simplifying a shipped example's decorator would
+move its code hash and warn on the owner's existing stores — the terse
+style is taught in docs only (`tutorial.md`, `reference/api.md`,
+`concepts/shapes.md`); every shipped example keeps its explicit kwargs
+untouched, `docs/concepts/sources.md`'s `@source` recipes included (that
+sweep is item 23's job). Five pre-existing test fixtures used stray,
+never-bound parameter names on otherwise-root steps that the new inference
+correctly rejects as unmatched — fixed by dropping the unused parameter or
+declaring `depends_on=[]` (`test_group_key.py`, `test_skip_cache.py`,
+`test_step_ergonomics.py`, `test_tier0_fixes.py`). New
+`tests/test_shape_dependency_inference.py` pins: shape inference
+(generator/`join_on=`/`group_key=`, explicit conflicts), `depends_on`
+inference (param-name matching, root detection, the unmatched-parameter
+error, `*args`/`**kwargs` skip), the dict alias form's execution-time
+binding, `definition()` byte-identical between an inferred pipeline and
+its fully explicit twin, and a full-reuse re-run over an existing store.
+Live-verified: store wiped, `count_lines` run twice — Created: 22, then
+Reused: 22 — and the tutorial's demo pipeline re-run step by step against
+a fresh folder, every printed block unchanged from before the edit. 258
+tests passed (243 pre-existing + 15 new), ruff/mypy/`mkdocs build --strict`
+clean. Commits `8c482db` (engine + tests), `ba5b9bc` (docs).
 
 **2026-07-14 — `pipeline(secrets=, env=)` + `rubedo check` (item 21):**
 `PipelineSpec` grows `secrets`/`env` tuple fields — declarations only, zero
