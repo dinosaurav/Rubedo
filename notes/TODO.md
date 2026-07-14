@@ -1,8 +1,8 @@
 # TODO
 
 Each open item below is a self-contained spec: the design decisions are
-settled (owner design sessions 2026-07-10/11/12 — do not re-litigate; flag
-genuine contradictions), with file pointers, gotchas, and acceptance
+settled (owner design sessions 2026-07-10/11/12/14 — do not re-litigate;
+flag genuine contradictions), with file pointers, gotchas, and acceptance
 criteria. Read `CLAUDE.md` first for conventions, and `notes/invariants.md`
 for vocabulary. One item = one (or a few) commits.
 
@@ -11,14 +11,128 @@ shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
 the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
 ascii describe, and **21** `secrets=`/`env=` + `rubedo check` — shipped
-2026-07-13/15). Order below is the recommended build order: the cloud
-chain (**6** → **7**+**7b** → **8** → **13**) is the only open work, and it
-builds when multi-machine demand is real — though **8** is independently
+2026-07-13/14). Order below is the recommended build order: the inference
+chain **22** → **23** → **24** (23 needs 22's yield-detection; 24 is
+independent but tiny), with **25** deferred (owner: queued, do not build
+until asked). The cloud
+chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
+demand is real — though **8** is independently
 buildable (workers never touch the ledger/store; item 7 is its throughput
 story, not a prerequisite), and **6 needs a respec post-14** (see its
 note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
 ideas live in **Parked** at the bottom — do not build those without a
 design session.
+
+## 22. Shape & dependency inference  **[design settled 2026-07-14; ⚠️ subtle]**
+
+Kwargs that restate what the code already says become inferred defaults.
+Three inferences, all resolving to the same explicit `StepSpec` the
+current API builds — the engine, planner, and ledger never know inference
+existed.
+
+**Settled decisions (owner design session 2026-07-14 — do not re-litigate):**
+
+- **Generator fn ⇒ `shape="expand"`.** `inspect.isgeneratorfunction(fn)`
+  at decoration time (same spirit as the auto-`name` default). Explicit
+  `shape=` wins; an explicit *non-expand* shape on a generator fn raises
+  `ValueError` (a generator under map/reduce/join is already broken —
+  make it loud and early).
+- **`join_on=` ⇒ `shape="join"`; `group_key=` ⇒ `shape="reduce"`.** Pure
+  implication — each kwarg uniquely determines its shape. Explicit
+  consistent shape stays fine; explicit conflicting shape raises. The
+  plain `@all` reduce (no `group_key`) still needs `shape="reduce"` —
+  nothing else signals it.
+- **Param names ⇒ `depends_on`.** Parents are already passed as kwargs
+  keyed by step name (`execution.py`) and `params` is reserved, so the
+  signature *is* the dependency declaration. At `_build_spec` (all steps
+  known — inference cannot run at decoration), a step with no explicit
+  `depends_on`: every non-`params` parameter must match a registered step
+  name and becomes a dependency (signature order). A parameter matching
+  no step raises `ValueError` at build, naming the step, the parameter,
+  and the available step names — this strictness is the safety of the
+  whole feature (a signature typo dies at build; today it dies later as
+  a call-time TypeError). **No fuzzy suggestions** — that's item 25,
+  deferred. Signatures with `*args`/`**kwargs` skip inference and require
+  explicit `depends_on`. Roots fall out cleanly: a root is a step whose
+  signature has no non-`params` parameters.
+- **`depends_on` dict form = aliases.** `depends_on={"raw": "scan"}`
+  binds parameter `raw` to step `scan`'s output (execution kwargs use the
+  mapping). List form unchanged. Explicit `depends_on` (either form)
+  disables signature inference for that step.
+
+**Trap (part of the spec):** (1) `definition()` must record the
+*resolved* shape and `depends_on` — an inferred pipeline and its fully
+explicit twin must produce **byte-identical** definition snapshots (list
+`depends_on` snapshots as today; the dict/alias form may introduce a new
+representation, but only when actually used). Addresses are untouched
+either way — an existing store fully reuses. (2) Verify the headless-root
+patterns (`tests/test_headless_root.py`) really are params-only
+signatures before relying on the root rule. (3) `_hash_source` includes
+decorator lines: check whether simplifying an example's decorator changes
+its code hash — if so, sweeping examples to the terse style triggers
+code-drift warnings on the owner's stores; teach the terse style in
+docs/tutorial, but leave shipped examples' decorators alone unless the
+hash proves stable (say what you found).
+
+Acceptance: `@p.step\ndef extract(scan): ...` with zero kwargs infers
+`depends_on=["scan"]`; a parentless generator step behaves as a source
+(expand root) with no kwargs at all; `join_on=`/`group_key=` without
+`shape=` build the right shapes; a generator with `shape="map"` and a
+conflicting explicit shape with `join_on=` both raise; an unmatched
+parameter name raises at build naming step + parameter + candidates;
+`definition()` of an inferred pipeline is byte-identical to its explicit
+twin (pin with a test); a re-run over an existing store fully reuses;
+full verification checklist green; docs teach the terse style with the
+explicit kwargs introduced right after (mirroring how item 16's docs
+handle `name=`/`version=`).
+
+## 23. Remove `@source`  **[design settled 2026-07-14; needs 22]**
+
+After 22, `@source`'s entire content (`shape="expand"`) is inferred from
+`yield`, leaving a decorator whose honest description is "same as
+`@step`". Ruthless simplification says delete it: `source()` leaves
+`spec.py` and `rubedo.__init__` (ImportError, not aliased — the `run()`
+precedent), `@p.source` leaves `Pipeline`. "Source" survives as
+vocabulary for parentless roots (docs keep the word; the recipes in
+`docs/concepts/sources.md` become bare `@step` generators).
+`definition()`'s `source_id` (sorted root step names) is untouched.
+
+**Trap:** the docs/tests/examples sweep changes decorator lines, and
+`_hash_source` may include them (same check as item 22 trap 3) — if code
+hashes move, prefer sweeping tests (per-test stores, harmless) and docs
+while leaving shipped examples' decorators for a deliberate follow-up,
+noting the drift-warning consequence either way.
+
+Acceptance: `from rubedo import source` raises ImportError; `rg "@source"
+src tests examples docs README.md` → zero hits (prose uses of the word
+"source" are fine); docs build clean; full verification checklist green;
+`examples/count_lines` fully reuses its store.
+
+## 24. Callable `StepSpec` + `describe()` TTY default  **[design settled 2026-07-14; independent quickie]**
+
+Two zero-concept ergonomics: (a) `StepSpec.__call__` delegates to
+`self.fn(*args, **kwargs)` so a decorated step is directly unit-testable
+(`extract(scan={"text": "hi"})`) — pure passthrough, the engine keeps
+calling `step.fn`, no behavior change anywhere else; (b) `describe()`
+picks `ascii` when no explicit `format=` is passed and stdout is a TTY,
+`text` otherwise (pipes, captures) — the existing >100-column
+ascii→text fallback stays, explicit `format=` always wins.
+
+**Trap:** pytest captures stdout (not a TTY), so test-suite default
+behavior must be unchanged without any test edits; don't make `Pipeline`
+callable — only the step.
+
+Acceptance: calling a decorated step invokes the underlying fn with the
+same args; `p.describe()` piped emits the `text` format byte-identically
+to today; in a real TTY it renders ascii (verify by hand, note it);
+explicit `format=` unchanged; full verification checklist green.
+
+## 25. Did-you-mean suggestions  **[DEFERRED — owner 2026-07-14: queued, do not build until asked]**
+
+`difflib.get_close_matches` on the loud errors: item 22's unmatched
+parameter names, unknown `depends_on`/`join_on` step names, unknown
+`Selection` fields, CLI step/pipeline arguments. Small, self-contained;
+waits for the owner's go.
 
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
 
