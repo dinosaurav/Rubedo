@@ -9,16 +9,16 @@ for vocabulary. One item = one (or a few) commits.
 Items keep their historical numbers for stable cross-references (gaps are
 shipped/retired items — see the Done changelog; the simplification arc —
 **14** sources purge, **15** the rotation, **16** step ergonomics, **17**
-the invariants rewrite, **18** notes hygiene, **19** comment cleanup, and
-ascii describe — shipped 2026-07-13/14). Order below is the recommended
-build order: **21** (`secrets=`/`env=` + `rubedo check`) is the open
-engine item. The cloud
-chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
-demand is real — though **8** is independently buildable (workers never
-touch the ledger/store; item 7 is its throughput story, not a
-prerequisite), and **6 needs a respec post-14** (see its note). (**10b**
-retention GC shipped — see the Done changelog.) Unsettled ideas live in
-**Parked** at the bottom — do not build those without a design session.
+the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
+ascii describe, and **21** `secrets=`/`env=` + `rubedo check` — shipped
+2026-07-13/15). Order below is the recommended build order: the cloud
+chain (**6** → **7**+**7b** → **8** → **13**) is the only open work, and it
+builds when multi-machine demand is real — though **8** is independently
+buildable (workers never touch the ledger/store; item 7 is its throughput
+story, not a prerequisite), and **6 needs a respec post-14** (see its
+note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
+ideas live in **Parked** at the bottom — do not build those without a
+design session.
 
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
 
@@ -318,43 +318,6 @@ filtering step behaves identically under refs and hub routing; `expand`
 pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
 the re-run heals.
 
-## 21. `pipeline(secrets=, env=)` + `rubedo check` env lint  **[design settled 2026-07-13; engine-side slice of notes/private/cloud-control-plane.md (gitignored, owner-local)]**
-
-Declares a pipeline's environment surface so step code is byte-identical
-local and cloud: `secrets=` names vault-injected, log-masked values (API
-keys); `env=` names deploy-config-injected, visible values (log levels).
-Locally both come from the shell/`.env` as today — the declaration changes
-nothing about execution; a cloud worker populates the env from it. Useful
-standalone as executable documentation of what a pipeline needs to run.
-
-- `pipeline(secrets: list[str] = [], env: list[str] = [])`, stored as
-  fields on `PipelineSpec`. Validation lives in `pipeline.py`'s
-  `_build_spec` with the existing checks — **not** in `spec.py` (data
-  leaf): names non-empty and unique, no overlap between the two lists, no
-  reserved `RUBEDO_*` names. `definition()` serializes both (plain string
-  lists).
-- Config that changes step outputs stays in `params_model` (already
-  hashed into per-step identity); `secrets=`/`env=` are for credentials
-  and operational config only. The docs state this; the lint nudges it.
-- `rubedo check <file.py>`: best-effort AST walk, no import of user code —
-  find `@step`-decorated functions and `pipeline(...)` calls in the file,
-  warn on `os.environ[...]`/`os.getenv(...)` reads inside step bodies
-  whose variable name isn't declared in `secrets=`/`env=`. Warning-only;
-  skip silently on parse failure or dynamic names.
-
-**Trap:** the lint is advisory forever — dynamic names and indirection
-make inference untrustworthy, so it must never block, never gate deploy,
-and never be treated as authoritative by other tooling. And the
-declarations must not leak into per-step cache identity: two pipelines
-differing only in `secrets=` reuse each other's materializations.
-
-Acceptance: `pipeline(secrets=["OPENAI_API_KEY"], env=["LOG_LEVEL"])`
-validates (overlap, duplicates, and `RUBEDO_*` names raise);
-`definition()` includes both lists; a run's reuse behavior is identical
-with and without the declarations; `rubedo check` warns naming the
-undeclared variable on an undeclared `os.environ` read in a step and
-passes once declared; full verification checklist green.
-
 ──────────────────────────────────────────────────────────────────────
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
@@ -364,7 +327,8 @@ passes once declared; full verification checklist green.
   Spine ratified 2026-07-13; full design in
   `notes/private/cloud-control-plane.md` (gitignored, owner-local —
   services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
-  engine-side slice is item 21. Remaining sessions before building: vault
+  engine-side slice (item 21, `pipeline(secrets=, env=)` + `rubedo check`)
+  shipped 2026-07-15. Remaining sessions before building: vault
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
 
@@ -439,6 +403,36 @@ passes once declared; full verification checklist green.
 ──────────────────────────────────────────────────────────────────────
 
 ## Done (compressed changelog — context for the above; git log has the detail)
+
+**2026-07-15 — `pipeline(secrets=, env=)` + `rubedo check` (item 21):**
+`PipelineSpec` grows `secrets`/`env` tuple fields — declarations only, zero
+effect on execution locally, never entering any step's cache identity
+(verified live: two `Pipeline`s differing only in `secrets=`/`env=` produce
+identical reuse on the second run). Validation is eager, in
+`Pipeline.__init__`, matching the `schedule=`/`retention=` precedent rather
+than `_build_spec` — both are step-independent checks, so failing fast at
+construction fits the same reasoning already applied to `retention`: names
+non-empty, unique across the combined list (which also catches overlap
+between the two lists as a self-duplicate), never `RUBEDO_*`-prefixed.
+`definition()` now emits `"secrets"`/`"env"` unconditionally, even empty —
+unlike `retention`, these are declarations rather than a policy toggle —
+which moved `tests/test_definition_snapshot.py`'s pinned fixture (a
+legitimate, additive change; the pin guards the TODO-15 hashing rotation's
+byte-identity, not this). New `src/rubedo/envcheck.py` holds `rubedo
+check <file.py>`'s AST logic: a best-effort walk (no import of user code,
+same principle as `server.py`) that finds `pipeline(...)` calls' declared
+names and `@step`/`@source`-decorated functions' `os.environ[...]`/
+`os.getenv(...)` reads, warning on anything undeclared; dynamic names and
+reads reached only through a helper function are silently skipped. Advisory
+forever — always exits 0, never blocks or gates. Live-verified against a
+scratch file: warns naming the undeclared variable, passes clean once
+declared into `secrets=`/`env=`; also checked against
+`examples/hn_digest.py`, which passes clean because its `os.environ` reads
+live in helper functions (`_chat`/`_get`), not directly in a step body — the
+static approach's known limitation, not a bug. `tests/
+test_env_declarations.py`, `tests/test_envcheck.py`. Commits `b5276f8`
+(engine fields + validation + definition), `7aa53b9` (`rubedo check` +
+envcheck.py).
 
 **2026-07-14 — comment cleanup pass (item 19):** src/, tests/, and
 examples/ comments no longer reference TODO item numbers or narrate past
