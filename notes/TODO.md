@@ -48,6 +48,83 @@ parameter names, unknown `depends_on`/`join_on` step names, unknown
 `Selection` fields, CLI step/pipeline arguments. Small, self-contained;
 waits for the owner's go.
 
+## 26. Auto-index + lazy index heal  **[design settled 2026-07-14; ⚠️ subtle]**
+
+Declaring a join or grouping should be enough: fields named in
+`join_on=`/`group_key=` are indexed on the parent automatically, and
+`run()` backfills index rows for lanes materialized *before* the field
+was declared — reading bytes the store already holds, never recomputing.
+This serves *never pay twice*: `index=` is deliberately not part of cache
+identity, so adding metadata to a long-lived store must neither force
+re-execution nor dead-end in the planner's "add index=" error. The heal
+also fixes the pre-existing manual version of the hole (adding `index=`
+to an already-run step today strands its reused lanes rowless) — it
+covers every declared index field, injected or hand-written.
+
+**Settled decisions (owner design session 2026-07-14 — do not re-litigate):**
+
+- **Injection at `_build_spec`**, where item 22 already builds resolved
+  step copies: each `join_on={parent: field}` injects `field` into that
+  parent's resolved `index`; a reduce's `group_key` injects into its
+  single parent. `definition()` snapshots the resolved index —
+  previously-correct pipelines already declared these fields manually, so
+  their snapshots must not move (pin one). Manual `index=` remains for
+  query-only fields.
+- **The heal runs inside `run()` only** — main thread (the
+  all-ledger-writes rule), after the `Run` row exists (its event needs a
+  run id), strictly before the plan phase. `plan()` stays read-only and
+  value-free: on a gapped store it keeps erroring; the asymmetry has
+  precedent (plan() never previews an expand root's enumeration — item 14
+  finding, pinned in `test_plan.py`). Reword the join planner's
+  missing-value error to name the real causes: the payload may lack the
+  field, and `plan()` cannot backfill — `run()` will.
+- **Heal = the same extraction, later.** For each of the run's steps with
+  declared index fields, one cheap query finds live materializations
+  missing rows for a declared field; each gap gets its stored bytes read,
+  the SAME extraction helper commit-time indexing uses (import it — the
+  item-13 one-hasher discipline), and the missing
+  `MaterializationIndexEntry` rows inserted. Planning semantics are
+  untouched: the heal writes only rows commit-time extraction would have
+  written. Zero gaps ⇒ zero object reads — steady state is one cheap
+  query per indexed step.
+- **Absent fields skip, never fail.** A payload genuinely lacking the
+  field gets no row (identical to commit-time behavior); bytes missing
+  from the store are skipped and counted (du's missing discipline, never
+  a crash). The heal appends one run event summarizing counts (healed /
+  lacked-field / unreadable). No lifecycle rows: index entries are
+  projections of stored bytes, not liveness transitions — the pairing
+  guard is not in play, and inserts don't touch the immutability guards.
+- **No new ops surface.** No `rubedo reindex` command, no disable knob —
+  the heal is idempotent (a crash mid-heal just heals less; the next run
+  finishes the job) and free when there's nothing to do.
+
+**Trap (part of the spec):** (1) **Exclude expand anchors** from the gap
+query — an anchor is a live materialization with zero
+`RunCoordinateStatus` refs (`gc.py` detects exactly this shape) whose
+payload is a child-hash list, not a step output; a naive heal would
+"extract" from garbage. Reuse gc's structural detection and pin with a
+test that an expand step's anchor is never read by the heal. (2) The
+extraction helper must be imported, never copied — multi-valued index
+fields (one lane, several values) must behave identically healed or
+fresh. (3) Materializations are shared across pipelines by address: the
+gap query scopes by the run's step names, but a healed row benefits every
+pipeline sharing the address — fine; never widen the scope to the whole
+store. (4) The join planner's missing-value `ValueError` survives —
+post-auto-index its one honest cause is "this lane's payload lacks the
+field," and the reworded message must say exactly that.
+
+Acceptance: a pipeline whose store predates any join gains one new step
+with `join_on=` and NO manual `index=` on the parent — the next `run()`
+backfills (index rows exist afterward), the join plans and executes, and
+every cached parent lane is reused (nothing recomputes); a second run
+heals nothing (event counts zero — and zero object reads, assert by
+instrumentation); `plan()` before that first `run()` errors with the new
+message (pinned); a payload lacking the field is skipped, the event
+records it, and planning behaves exactly as a fresh store would; an
+expand anchor is never read (pinned); `group_key` over a reduce gets the
+identical treatment; a previously-explicit pipeline's `definition()`
+snapshot is byte-identical; full verification checklist green.
+
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
 
 > **2026-07-12:** item 14 deletes the `Source` protocol this spec subclasses.
