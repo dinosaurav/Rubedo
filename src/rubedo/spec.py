@@ -78,6 +78,12 @@ class StepSpec:
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Pure passthrough to `fn` — lets a decorated step be called
+        directly in a unit test (`extract(scan={"text": "hi"})`) without
+        touching the engine. The engine itself always calls `step.fn`."""
+        return self.fn(*args, **kwargs)
+
 
 @dataclass
 class PipelineSpec:

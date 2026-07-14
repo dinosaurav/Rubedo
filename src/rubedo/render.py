@@ -4,6 +4,7 @@ Sits above spec.py and planning.py (both imported at module level — no
 lazy imports, no cycles): rendering needs topological order, which
 belongs to planning, and it operates on the pure data spec.py defines.
 """
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -11,14 +12,24 @@ from .planning import topological_sort
 from .spec import PipelineSpec, StepSpec
 
 
-def describe(spec: PipelineSpec, format: str = "text") -> str:
+def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
     """Render a pipeline's DAG before ever running it.
+
+    format=None (the default) autodetects: "ascii" when stdout is a real
+    terminal, "text" otherwise — piped output, captured output (pytest),
+    and redirects to a file all count as "otherwise", so scripted/test
+    consumers keep getting the same text they always have without passing
+    format= explicitly. Passing format= always wins over autodetection.
 
     format="text" prints steps in dependency order with their policies;
     format="mermaid" emits a Mermaid graph for markdown viewers; format="ascii"
     draws topo-layered boxes connected by unicode box-drawing edges, for
-    reading the DAG shape directly in a terminal.
+    reading the DAG shape directly in a terminal (falling back to "text"
+    when a layer is too wide to draw legibly).
     """
+    if format is None:
+        format = "ascii" if sys.stdout.isatty() else "text"
+
     topo = topological_sort(spec)
 
     if format == "mermaid":

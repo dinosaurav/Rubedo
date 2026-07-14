@@ -321,12 +321,14 @@ class Pipeline:
         """Dry-run: what would `run()` do, and why — without writing anything."""
         return _plan_pipeline(self.spec, params=params, force=force, home=self.home)
 
-    def describe(self, format: str = "text") -> str:
+    def describe(self, format: Optional[str] = None) -> str:
         """Render this pipeline's DAG before ever running it.
 
-        format="text" (default) prints steps in dependency order with
-        their policies; format="mermaid" emits a Mermaid graph; format=
-        "ascii" draws a terminal DAG.
+        format=None (the default) autodetects: "ascii" in a real terminal,
+        "text" otherwise (pipes, captures, redirects) — pass format=
+        explicitly to always win over autodetection. format="text" prints
+        steps in dependency order with their policies; format="mermaid"
+        emits a Mermaid graph; format="ascii" draws a terminal DAG.
         """
         return _describe(self.spec, format=format)
 

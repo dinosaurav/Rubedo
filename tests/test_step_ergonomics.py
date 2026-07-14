@@ -123,6 +123,31 @@ def test_version_auto_still_rejected_with_default_name():
             return row
 
 
+# ---------- callable StepSpec (TODO 24): direct unit-testability ----------
+
+
+def test_callable_step_passes_through_args_and_kwargs():
+    @step(depends_on=[])
+    def extract(scan: dict, upper: bool = False):
+        text = scan["text"]
+        return text.upper() if upper else text
+
+    # Positional.
+    assert extract({"text": "hi"}) == "hi"
+    # Keyword, same as the engine's own calling convention.
+    assert extract(scan={"text": "hi"}) == "hi"
+    # Extra kwarg passes through too.
+    assert extract(scan={"text": "hi"}, upper=True) == "HI"
+
+
+def test_callable_step_returns_the_same_value_as_calling_fn_directly():
+    @step(depends_on=[])
+    def double(row: dict):
+        return {"n": row["n"] * 2}
+
+    assert double(row={"n": 3}) == double.fn(row={"n": 3}) == {"n": 6}
+
+
 # ---------- duplicate names ----------
 
 

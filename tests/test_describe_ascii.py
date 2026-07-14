@@ -173,3 +173,32 @@ def test_unknown_format_raises_and_lists_all_three():
     pipe = _count_lines_shaped()
     with pytest.raises(ValueError, match="expected 'text', 'mermaid', or 'ascii'"):
         pipe.describe(format="bogus")
+
+
+# ---------- format=None: TTY-vs-piped default (TODO 24) ----------
+#
+# pytest captures stdout, so sys.stdout.isatty() is already False in this
+# whole suite — describe() with no format= has always exercised the
+# "piped" branch here, which is exactly the behavior these tests pin down
+# explicitly (and why no other test in the suite needed to change).
+
+
+def test_default_format_is_text_when_stdout_is_not_a_tty(monkeypatch):
+    pipe = _count_lines_shaped()
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert pipe.describe() == pipe.describe(format="text")
+
+
+def test_default_format_is_ascii_when_stdout_is_a_tty(monkeypatch):
+    pipe = _count_lines_shaped()
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    assert pipe.describe() == pipe.describe(format="ascii") == COUNT_LINES_ASCII
+
+
+def test_explicit_format_wins_over_tty_autodetection(monkeypatch):
+    pipe = _count_lines_shaped()
+    # Even when stdout *looks* like a TTY, an explicit format= always wins.
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    assert pipe.describe(format="text") != COUNT_LINES_ASCII
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert pipe.describe(format="ascii") == COUNT_LINES_ASCII
