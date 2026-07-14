@@ -268,6 +268,38 @@ def cmd_gc(args):
         )
 
 
+def cmd_check(args):
+    from .envcheck import check_file
+
+    try:
+        warnings = check_file(args.file)
+    except OSError as e:
+        console.print(f"[red]rubedo check: cannot read {args.file}: {e}[/red]")
+        sys.exit(1)
+
+    if not warnings:
+        console.print(
+            f"[green]rubedo check:[/green] {args.file} — no undeclared "
+            "environment reads found"
+        )
+        return
+
+    for w in warnings:
+        console.print(
+            f"[yellow]warning:[/yellow] step '{w.step_name}' reads env var "
+            f"{w.var_name!r} via os.environ/os.getenv, not declared in "
+            "pipeline(secrets=[...]) or env=[...]"
+        )
+    console.print(
+        f"[dim]{len(warnings)} undeclared environment read(s) — advisory "
+        "only, this never blocks or affects exit code. Best-effort static "
+        "check; dynamic names and indirection through helper functions "
+        "aren't traced.[/dim]"
+    )
+    # No sys.exit(1) here: the lint is advisory forever (notes/TODO.md item
+    # 21's Trap) — it must never gate or block, so exit code stays 0.
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rubedo Read-Only Ops CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -328,6 +360,14 @@ def main():
         "nothing and prints exactly what --delete would do)",
     )
     parser_gc.set_defaults(func=cmd_gc)
+
+    parser_check = subparsers.add_parser(
+        "check",
+        help="Lint a pipeline file for os.environ/os.getenv reads undeclared "
+        "in secrets=/env= (advisory only — never blocks, never affects exit code)",
+    )
+    parser_check.add_argument("file", help="Path to the .py file defining the pipeline")
+    parser_check.set_defaults(func=cmd_check)
 
     args = parser.parse_args()
     args.func(args)
