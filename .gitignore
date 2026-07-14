@@ -61,6 +61,7 @@ lerna-debug.log*
 
 # Private notes (owner-only strategy docs, never published)
 notes/private/
+private/
 
 # Environments and Secrets
 .env
