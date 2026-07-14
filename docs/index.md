@@ -8,18 +8,19 @@ It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid 
 
 ```python
 import csv
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="leads", version="v1", shape="expand")
+p = pipeline(name="summarize")
+
+@p.step
 def leads():
     with open("leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="summarize", version="v1", depends_on=["leads"])
+@p.step
 def summarize(leads: dict):
     return {"summary": call_llm(leads["notes"])}   # runs once per distinct row — ever
 
-p = pipeline(name="summarize", steps=[leads, summarize])
 p.run()   # second run: created=0, reused=everything
 ```
 
