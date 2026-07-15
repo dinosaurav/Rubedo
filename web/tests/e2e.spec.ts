@@ -48,8 +48,7 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(tmpdir, 'input/b.txt'), 'hello\n');
   fs.writeFileSync(path.join(tmpdir, 'pipeline.py'), pipelineScript);
 
-  const pythonExe = process.env.CI ? 'python' : path.join(projectRoot, '.venv', 'bin', 'python');
-  const uvRun = process.env.CI ? ['python'] : ['uv', 'run', 'python'];
+  const uvRun = ['uv', 'run', 'python'];
 
   execSync(`${uvRun.join(' ')} ${path.join(tmpdir, 'pipeline.py')}`, {
     cwd: projectRoot,
