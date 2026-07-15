@@ -356,6 +356,17 @@ class Pipeline:
         exactly what gets recorded on every `Run` row."""
         return _definition(self.spec)
 
+    def declare(self) -> str:
+        """Register this pipeline's definition in the ledger without running.
+
+        Writes a Run row with kind='declaration' so the pipeline and its
+        DAG (including step source code) are visible in the web dashboard
+        and `rubedo ls` before any execution. Returns the declaration run ID.
+        """
+        from .runner import declare_pipeline
+
+        return declare_pipeline(self.spec, home=self.home)
+
 
 def pipeline(
     name: str,

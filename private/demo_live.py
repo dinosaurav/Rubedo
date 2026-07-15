@@ -97,10 +97,17 @@ def report(merge: dict):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Demo pipeline for live progress UI")
     parser.add_argument("--force", action="store_true", help="Force re-execution of all steps")
+    parser.add_argument("--declare", action="store_true", help="Only declare the pipeline (visible in dashboard without running)")
     args = parser.parse_args()
 
     print(p.describe())
     print()
-    summary = p.run(force=args.force)
-    print(f"\nRun ID: {summary.run_id}")
-    print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
+
+    if args.declare:
+        decl_id = p.declare()
+        print(f"Declared pipeline: {decl_id}")
+        print("Visible in dashboard now — run with: rubedo serve")
+    else:
+        summary = p.run(force=args.force)
+        print(f"\nRun ID: {summary.run_id}")
+        print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")

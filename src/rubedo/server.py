@@ -526,7 +526,7 @@ async def invalidate_selection(request: Request):
 
 @app.get("/api/pipelines", response_model=List[PipelineOut])
 def get_pipelines_api():
-    """Ledger-derived: a pipeline exists here once it has run."""
+    """Ledger-derived: a pipeline appears here once declared or run."""
     with get_session() as session:
         latest_subq = (
             session.query(
@@ -534,7 +534,7 @@ def get_pipelines_api():
                 func.max(Run.started_at).label("last_run_at"),
                 func.count(Run.id).label("run_count"),
             )
-            .filter(Run.pipeline_id.isnot(None), Run.kind == "process")
+            .filter(Run.pipeline_id.isnot(None), Run.kind.in_(["process", "declaration"]))
             .group_by(Run.pipeline_id)
             .subquery()
         )

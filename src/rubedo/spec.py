@@ -134,6 +134,16 @@ def _hash_source(fn: Callable) -> Optional[str]:
         return None
 
 
+def _get_source(fn: Callable) -> Optional[str]:
+    """Extract the raw source text of a function, for the definition snapshot."""
+    import inspect
+
+    try:
+        return inspect.getsource(fn).strip()
+    except (OSError, TypeError):
+        return None
+
+
 def step(
     fn: Optional[Callable] = None,
     *,
@@ -423,6 +433,9 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             "workers": s.workers,
             "code": s.code_mode,
         }
+        source = _get_source(s.fn) if s.fn is not None else None
+        if source:
+            entry["source"] = source
         if s.depends_on_aliases:
             # Only the dict alias form produces this — additive, so the
             # common (list-form or inferred) case's snapshot is unchanged.

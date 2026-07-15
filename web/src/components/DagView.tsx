@@ -21,6 +21,12 @@ interface StepDef {
   params_schema?: any;
   code?: string;
   shape?: string;
+  source?: string;
+  executor?: string;
+  group_key?: string;
+  join_on?: Record<string, string>;
+  on_failed?: string;
+  workers?: number;
 }
 
 type StepCounts = Record<string, Record<string, number>>;
@@ -123,6 +129,8 @@ function computeStepState(
   return allParentsDone ? 'active' : 'waiting';
 }
 
+import { useState } from 'react';
+
 export default function DagView({
   steps,
   stepCounts,
@@ -134,6 +142,7 @@ export default function DagView({
   isLive?: boolean;
   onStepClick?: (stepName: string) => void;
 }) {
+  const [selectedStep, setSelectedStep] = useState<string | null>(null);
   if (!steps?.length) return null;
   const hasCounts = !!stepCounts;
   const nodeH = NODE_H + (hasCounts ? COUNTS_H + PROGRESS_H : 0);
@@ -250,8 +259,14 @@ export default function DagView({
 
           return (
             <g key={s.name} data-step={s.name}
-               onClick={() => onStepClick && onStepClick(s.name)}
-               style={{ cursor: onStepClick ? 'pointer' : 'default', opacity: state === 'waiting' ? 0.45 : 1, transition: 'opacity 0.3s ease' }}>
+               onClick={() => {
+                 if (onStepClick) {
+                   onStepClick(s.name);
+                 } else {
+                   setSelectedStep((prev) => (prev === s.name ? null : s.name));
+                 }
+               }}
+               style={{ cursor: 'pointer', opacity: state === 'waiting' ? 0.45 : 1, transition: 'opacity 0.3s ease' }}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
                     stroke={s.skip_cache ? 'var(--text-muted)' : stateColor}
@@ -306,6 +321,72 @@ export default function DagView({
           );
         })}
       </svg>
+
+      {selectedStep && byName[selectedStep] && (
+        <StepDetail step={byName[selectedStep]} />
+      )}
+    </div>
+  );
+}
+
+function StepDetail({ step }: { step: StepDef }) {
+  const specs: { label: string; value: string }[] = [
+    { label: 'name', value: step.name },
+    { label: 'version', value: step.version },
+    { label: 'shape', value: step.shape ?? 'map' },
+    { label: 'depends_on', value: step.depends_on.length ? step.depends_on.join(', ') : '(root)' },
+    { label: 'workers', value: String(step.workers) },
+    { label: 'code', value: step.code ?? 'warn' },
+  ];
+  if (step.skip_cache) specs.push({ label: 'skip_cache', value: 'true' });
+  if (step.retries) specs.push({ label: 'retries', value: String(step.retries) });
+  if (step.rate_limit) specs.push({ label: 'rate_limit', value: step.rate_limit });
+  if (step.stale_after_seconds !== undefined) specs.push({ label: 'stale_after', value: `${step.stale_after_seconds}s` });
+  if (step.executor && step.executor !== 'thread') specs.push({ label: 'executor', value: step.executor });
+  if (step.group_key) specs.push({ label: 'group_key', value: step.group_key });
+  if (step.join_on) specs.push({ label: 'join_on', value: JSON.stringify(step.join_on) });
+  if (step.on_failed && step.on_failed !== 'use_passed') specs.push({ label: 'on_failed', value: step.on_failed });
+
+  return (
+    <div style={{
+      marginTop: '0.75rem',
+      padding: '0.75rem 1rem',
+      background: 'var(--bg-tertiary)',
+      border: '1px solid var(--border-color)',
+      borderRadius: '8px',
+      fontSize: '0.85rem',
+    }}>
+      <div style={{ fontWeight: 600, marginBottom: '0.5rem', fontFamily: 'ui-monospace, monospace' }}>
+        {step.name}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.25rem 1rem', marginBottom: step.source ? '0.75rem' : 0 }}>
+        {specs.map((s) => (
+          <div key={s.label} style={{ display: 'contents' }}>
+            <span style={{ color: 'var(--text-muted)' }}>{s.label}</span>
+            <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8rem' }}>{s.value}</span>
+          </div>
+        ))}
+      </div>
+      {step.source && (
+        <details>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.25rem' }}>
+            source code
+          </summary>
+          <pre style={{
+            marginTop: '0.5rem',
+            padding: '0.75rem',
+            background: 'var(--bg-secondary, #0f172a)',
+            borderRadius: '6px',
+            overflow: 'auto',
+            fontSize: '0.8rem',
+            fontFamily: 'ui-monospace, monospace',
+            color: 'var(--text-primary)',
+            lineHeight: 1.5,
+          }}>
+            <code>{step.source}</code>
+          </pre>
+        </details>
+      )}
     </div>
   );
 }

@@ -33,6 +33,7 @@ PINNED_DEFINITION_JSON = """\
       "depends_on": [],
       "name": "scan",
       "shape": "expand",
+      "source": "@step(name=\\"scan\\", version=\\"1\\", shape=\\"expand\\")\\n    def scan():\\n        yield {\\"path\\": \\"a.txt\\", \\"text\\": \\"hi\\"}",
       "version": "1",
       "workers": 4
     },
@@ -47,6 +48,7 @@ PINNED_DEFINITION_JSON = """\
       "retry_on": [
         "Exception"
       ],
+      "source": "@step(\\n        name=\\"enrich\\", version=\\"2\\", depends_on=[\\"scan\\"], retries=2,\\n        rate_limit=\\"10/min\\", stale_after=\\"24h\\", index=[\\"path\\"],\\n    )\\n    def enrich(scan: dict):\\n        return scan",
       "stale_after_seconds": 86400.0,
       "version": "2",
       "workers": 4
@@ -59,6 +61,7 @@ PINNED_DEFINITION_JSON = """\
       "group_key": "path",
       "name": "rollup",
       "shape": "reduce",
+      "source": "@step(\\n        name=\\"rollup\\", version=\\"1\\", shape=\\"reduce\\", depends_on=[\\"enrich\\"],\\n        group_key=\\"path\\",\\n    )\\n    def rollup(enrich):\\n        return enrich",
       "version": "1",
       "workers": 4
     }

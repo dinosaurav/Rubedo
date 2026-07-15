@@ -296,8 +296,17 @@ def test_inferred_pipeline_definition_is_byte_identical_to_explicit_twin():
 
     explicit = pipeline(name="twin", steps=[scan_explicit, extract_explicit])
 
-    assert inferred.definition() == explicit.definition()
-    assert definition(inferred.spec) == definition(explicit.spec)
+    inferred_def = inferred.definition()
+    explicit_def = explicit.definition()
+    for s in inferred_def["steps"] + explicit_def["steps"]:
+        s.pop("source", None)
+    assert inferred_def == explicit_def
+
+    inf_spec_def = definition(inferred.spec)
+    exp_spec_def = definition(explicit.spec)
+    for s in inf_spec_def["steps"] + exp_spec_def["steps"]:
+        s.pop("source", None)
+    assert inf_spec_def == exp_spec_def
 
 
 def test_rerun_over_existing_store_fully_reuses():

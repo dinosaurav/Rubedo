@@ -329,6 +329,51 @@ def run(
     )
 
 
+def declare_pipeline(
+    pipeline: PipelineSpec,
+    home: Optional[str] = None,
+) -> str:
+    """Write a pipeline's definition snapshot to the ledger without running.
+
+    Creates a Run row with kind='declaration', status='completed', and the
+    full definition_json (including step source code) so the pipeline is
+    visible in the dashboard and CLI before any execution. Returns the
+    declaration run ID.
+    """
+    if home is not None:
+        _init_home(home)
+
+    init_db()
+    init_store()
+
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    now = utcnow_iso()
+    source_id = _run_source_id(pipeline)
+
+    with get_session() as session:
+        session.add(
+            Run(
+                id=run_id,
+                kind="declaration",
+                pipeline_id=pipeline.name,
+                source_id=source_id,
+                params_json=json.dumps({}, sort_keys=True),
+                definition_json=json.dumps(definition(pipeline)),
+                started_at=now,
+                finished_at=now,
+                last_heartbeat_at=now,
+                status="completed",
+                summary_json=json.dumps({
+                    "created": 0, "reused": 0, "failed": 0,
+                    "blocked": 0, "filtered": 0, "by_step": {},
+                }),
+            )
+        )
+        session.commit()
+
+    return run_id
+
+
 def run_pipeline(
     pipeline: PipelineSpec,
     workers: Optional[int] = None,
