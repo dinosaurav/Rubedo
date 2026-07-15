@@ -1,12 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { fetchRun, API_URL } from '../api';
 import { fmtTime, fmtDuration, durationMs, runStatusClass } from '../format';
 import DagView from './DagView';
 
-export default function LiveRunCard({ runId }: { runId: string }) {
+export default function LiveRunCard({
+  runId,
+  onDismiss,
+}: {
+  runId: string;
+  onDismiss: () => void;
+}) {
   const [run, setRun] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,39 +66,69 @@ export default function LiveRunCard({ runId }: { runId: string }) {
   if (!run) return <div className="card">Loading live run…</div>;
 
   const isRunning = run.status === 'running';
+  const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
-    <div className="card" style={{ marginBottom: '1.5rem', border: isRunning ? '1px solid var(--accent-primary)' : undefined, boxShadow: isRunning ? '0 0 12px rgba(59,130,246,0.15)' : undefined }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem' }}>
-          <Link to={`/runs/${run.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-primary)' }}>
+    <div className="card" style={{
+      marginBottom: '1rem',
+      border: isRunning ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+      boxShadow: isRunning ? '0 0 12px rgba(59,130,246,0.15)' : undefined,
+      transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+    }}>
+      {/* Header — always visible, click to expand/collapse */}
+      <div
+        onClick={() => setExpanded((e) => !e)}
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <Chevron size={18} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+          <Link
+            to={`/runs/${run.id}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--accent-primary)' }}
+          >
             {run.id}
           </Link>
           <span style={{ fontWeight: 600 }}>{run.pipeline_id ?? '—'}</span>
           <span className={`badge badge-${runStatusClass(run.status)}`}>{run.status}</span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            {isRunning
+              ? `started ${fmtTime(run.started_at)}`
+              : run.finished_at
+                ? `${fmtDuration(durationMs(run.started_at, run.finished_at))} · ${run.created_count} created`
+                : fmtTime(run.started_at)}
+          </span>
         </div>
-        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          started {fmtTime(run.started_at)}
-          {!isRunning && run.finished_at && ` · ${fmtDuration(durationMs(run.started_at, run.finished_at))}`}
-        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          title="Hide"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0.25rem', display: 'flex', alignItems: 'center' }}
+        >
+          <X size={16} />
+        </button>
       </div>
 
-      <div className="stats-grid" style={{ marginBottom: '1rem' }}>
-        {[
-          ['Created', run.created_count, 'var(--status-success)'],
-          ['Reused', run.reused_count, 'var(--status-info)'],
-          ['Failed', run.failed_count, 'var(--status-error)'],
-          ['Blocked', run.blocked_count, 'var(--status-warning)'],
-        ].map(([label, val, color]) => (
-          <div key={label as string} className="card stat-card" style={{ padding: '0.5rem 0.75rem' }}>
-            <div className="stat-label">{label}</div>
-            <div className="stat-value" style={{ color: color as string, fontSize: '1.1rem' }}>{val as number}</div>
+      {/* Expanded view — DAG + stats */}
+      {expanded && (
+        <div style={{ marginTop: '0.75rem' }}>
+          <div className="stats-grid" style={{ marginBottom: '1rem' }}>
+            {[
+              ['Created', run.created_count, 'var(--status-success)'],
+              ['Reused', run.reused_count, 'var(--status-info)'],
+              ['Failed', run.failed_count, 'var(--status-error)'],
+              ['Blocked', run.blocked_count, 'var(--status-warning)'],
+            ].map(([label, val, color]) => (
+              <div key={label as string} className="card stat-card" style={{ padding: '0.5rem 0.75rem' }}>
+                <div className="stat-label">{label}</div>
+                <div className="stat-value" style={{ color: color as string, fontSize: '1.1rem' }}>{val as number}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {run.definition?.steps?.length > 0 && (
-        <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={isRunning} />
+          {run.definition?.steps?.length > 0 && (
+            <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={isRunning} />
+          )}
+        </div>
       )}
     </div>
   );

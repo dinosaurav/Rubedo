@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchRuns } from '../api';
 import { DataTable, TruncatedText } from '../components/DataTable';
@@ -13,6 +13,8 @@ export default function Runs() {
   const [runs, setRuns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const liveSectionIds = useRef<Set<string>>(new Set());
 
   const load = useCallback(() => {
     fetchRuns()
@@ -25,8 +27,17 @@ export default function Runs() {
     load();
   }, [load]);
 
-  const liveRuns = runs.filter((r) => r.status === 'running');
-  const hasLive = liveRuns.length > 0;
+  // Track run IDs that we've seen as running. They stay in the live
+  // section (as completed cards) until the user dismisses them.
+  useEffect(() => {
+    for (const r of runs) {
+      if (r.status === 'running' && !dismissedIds.has(r.id)) {
+        liveSectionIds.current.add(r.id);
+      }
+    }
+  }, [runs, dismissedIds]);
+
+  const hasLive = runs.some((r) => r.status === 'running' && !dismissedIds.has(r.id));
 
   // Always poll: fast when live runs exist, slower when idle so new
   // runs are detected without a manual refresh.
@@ -35,8 +46,17 @@ export default function Runs() {
     return () => clearInterval(id);
   }, [hasLive, load]);
 
+  const dismissRun = useCallback((id: string) => {
+    setDismissedIds((prev) => new Set(prev).add(id));
+  }, []);
+
   if (loading) return <div>Loading runs...</div>;
   if (error) return <div>API unreachable: {error}</div>;
+
+  // Cards to show: tracked IDs that aren't dismissed, ordered newest first.
+  const cardIds = runs
+    .filter((r) => liveSectionIds.current.has(r.id) && !dismissedIds.has(r.id))
+    .map((r) => r.id);
 
   const columns: ColumnDef<any, any>[] = [
     {
@@ -78,14 +98,10 @@ export default function Runs() {
         <h1 className="page-title">Runs</h1>
       </div>
 
-      {hasLive && (
+      {cardIds.length > 0 && (
         <div style={{ marginBottom: '1.5rem' }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--accent-primary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span className="badge badge-info badge-running">live</span>
-            {liveRuns.length} running {liveRuns.length === 1 ? 'run' : 'runs'}
-          </h2>
-          {liveRuns.map((r) => (
-            <LiveRunCard key={r.id} runId={r.id} />
+          {cardIds.map((id) => (
+            <LiveRunCard key={id} runId={id} onDismiss={() => dismissRun(id)} />
           ))}
         </div>
       )}
