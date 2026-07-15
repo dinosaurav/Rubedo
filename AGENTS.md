@@ -144,19 +144,26 @@ are no string ids, and `name` is the pipeline's sole identity (no `id=`
 kwarg — TODO 15). `.test_*/` is gitignored.
 
 Ingestion has no separate concept (TODO 14): there is no `folder=` pipeline
-kwarg. A test folder is scanned by a root `@step(shape="expand")` — the
-folder recipe from `docs/concepts/sources.md` — that the downstream step
-`depends_on`:
+kwarg. A test folder is scanned by a bare-`@step` root — a parentless
+generator infers `shape="expand"` (the folder recipe from
+`docs/concepts/sources.md`) — and the downstream step's parameter name is
+its dependency declaration. Tests use this terse form throughout: no
+`name=`/`version=`/`shape=`/`depends_on=` unless the kwarg is the test's
+subject (version bumps, drift, validation errors), the name genuinely
+differs from the function's, or the shape can't be inferred — a plain
+`@all` reduce keeps `shape="reduce"`, and reduce/join steps keep an
+explicit `depends_on=` (parent counts validate at decoration time, before
+build-time inference runs):
 
 ```python
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@step(name="extract", version="1", depends_on=["scan"])
+@step
 def extract(scan: dict):
     text = scan["text"]
     ...
