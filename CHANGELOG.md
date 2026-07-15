@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-15
+
+### Fixed
+- Web UI assets now actually ship in the published wheel. The publish
+  workflow was running `uv build` without first building the web assets
+  (which are gitignored), so every PyPI wheel had an empty
+  `web_static/` and `rubedo serve` showed "web UI not built." The
+  workflow now runs `npm ci && npm run build` before `uv build`.
+
 ## [0.2.5] - 2026-07-15
 
 ### Fixed
