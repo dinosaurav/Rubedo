@@ -18,9 +18,11 @@ Pipelines are plain Python objects — define them wherever your code lives,
 no project scaffolding required:
 
 ```python
-from rubedo import ProcessResult, step, pipeline
+from rubedo import ProcessResult, pipeline
 
-@step(name="scan", version="1", shape="expand")
+p = pipeline(name="count-lines")
+
+@p.step()
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -28,11 +30,9 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["scan"])
+@p.step()
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
-
-p = pipeline(name="count-lines", steps=[scan, count_lines])
 
 print(p.describe())           # the DAG, before ever running (also: format="mermaid")
 print(p.plan())                # dry-run: what would p.run() do to my data, and why
@@ -41,9 +41,11 @@ print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
 There's no `folder=` kwarg — ingestion is just a step: `scan` is a
-parentless `@step(shape="expand")` that walks `./input` and `yield`s each
-file's own content (not just its path — the yielded payload is what gets
-hashed into the lane's identity). `p.describe()` renders the DAG before
+parentless generator that walks `./input` and `yield`s each file's own
+content (not just its path — the yielded payload is what gets hashed into
+the lane's identity), so its `shape="expand"` is inferred; `count_lines`'s
+parameter names the `scan` step, so its dependency is inferred too (see
+[Shapes](concepts/shapes.md)). `p.describe()` renders the DAG before
 anything runs; `p.plan()` is a read-only dry-run of what `p.run()` would do to
 every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
 `p.run()` actually executes it and returns a `RunSummary`.
@@ -123,19 +125,18 @@ store (`objects/`). It's created automatically and gitignored automatically
     also takes a `home=` keyword (`pipeline(name=..., home="/var/lib/myproject/.rubedo")`)
     that wins over both env vars for every run/plan of that pipeline.
 
-## Registering steps with decorators
+## Registering steps as a list
 
-`pipeline(steps=[...])` takes an explicit list; the same `Pipeline` object
-also accumulates steps via decorators, which reads better once a pipeline
-has more than a couple of steps — there's no separate builder class, just
-one object either way:
+The `@p.step()` decorators above accumulate steps on the `Pipeline` object;
+`pipeline(steps=[...])` takes an explicit list of `@step`-decorated
+functions instead, which suits steps defined away from the pipeline that
+uses them — there's no separate builder class, just one object either way,
+and both forms compose freely:
 
 ```python
-from rubedo import pipeline
+from rubedo import step, pipeline
 
-p = pipeline(name="count-lines")
-
-@p.step(name="scan", version="1")
+@step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -143,17 +144,17 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step(name="count_lines", version="count-v1", depends_on=["scan"])
+@step
 def count_lines(scan: dict): ...
 
-count_lines_pipeline = p
+p = pipeline(name="count-lines", steps=[scan, count_lines])
 ```
 
 There's no `.build()` step: the underlying `PipelineSpec` is constructed and
 validated lazily the first time you call a verb (`.run()`/`.plan()`/
 `.describe()`), and cached from then on. `scan` above is a parentless
 generator, so its `shape="expand"` is inferred automatically (see
-[Shapes](concepts/shapes.md)) — exactly the recipe
+[Shapes](concepts/shapes.md)) — the same recipe
 [`examples/count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)
 uses itself.
 
