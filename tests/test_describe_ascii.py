@@ -15,19 +15,19 @@ def _count_lines_shaped():
     examples/count_lines/count_lines.py's DAG shape."""
     p = pipeline(name="count-lines")
 
-    @p.step(name="input_files", version="1")
+    @p.step()
     def input_files():
         yield "a.txt"
 
-    @p.step(name="read_lines", version="v1", depends_on=["input_files"])
+    @p.step()
     def read_lines(input_files):
         return {"lines": []}
 
-    @p.step(name="count_lines", version="v1", depends_on=["read_lines"])
+    @p.step()
     def count_lines(read_lines):
         return {}
 
-    @p.step(name="total_lines", version="v1", depends_on=["count_lines"], shape="reduce")
+    @p.step(depends_on=["count_lines"], shape="reduce")
     def total_lines(count_lines):
         return 0
 
@@ -39,41 +39,34 @@ def _newsroom_shaped():
     examples/newsroom/newsroom.py's DAG shape."""
     p = pipeline(name="newsroom")
 
-    @p.step(name="feeds", version="1")
+    @p.step()
     def feeds():
         yield {"feed_id": "f1", "publisher": "TechCorp"}
 
-    @p.step(name="publishers", version="1")
+    @p.step()
     def publishers():
         yield {"publisher": "TechCorp", "region": "US"}
 
-    @p.step(name="feed", version="1", depends_on=["feeds"], index=["publisher"])
+    @p.step(index=["publisher"])
     def feed(feeds):
         return feeds
 
-    @p.step(name="publisher", version="1", depends_on=["publishers"], index=["publisher"])
+    @p.step(index=["publisher"])
     def publisher(publishers):
         return publishers
 
     @p.step(
-        name="feed_meta", version="1", shape="join",
         depends_on=["feed", "publisher"],
         join_on={"feed": "publisher", "publisher": "publisher"},
     )
     def feed_meta(feed, publisher):
         return {}
 
-    @p.step(
-        name="articles", version="1", depends_on=["feed_meta"],
-        shape="expand", index=["region"],
-    )
+    @p.step(index=["region"])
     def articles(feed_meta):
         yield {}
 
-    @p.step(
-        name="digest", version="1", depends_on=["articles"],
-        shape="reduce", group_key="region",
-    )
+    @p.step(depends_on=["articles"], group_key="region")
     def digest(articles):
         return {}
 
@@ -156,7 +149,7 @@ def test_ascii_falls_back_to_text_when_a_layer_is_too_wide():
     pipe = pipeline(name="wide")
     for i in range(15):
         def _make(i):
-            @pipe.step(name=f"step_number_{i:02d}", version="1")
+            @pipe.step(name=f"step_number_{i:02d}")
             def s(**kwargs):
                 return {}
             return s

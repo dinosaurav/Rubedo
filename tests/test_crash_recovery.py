@@ -58,7 +58,7 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -67,7 +67,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="dummy", version="v1", depends_on=["scan"])
+@step(name="dummy")
 def dummy_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
@@ -77,7 +77,7 @@ p_dummy = pipeline(name="p-dummy", steps=[scan, dummy_processor])
 
 def test_crash_before_processing(setup_teardown):
     # Simulate a crash during the actual processing function
-    @step(name="crashing", version="v1", depends_on=["scan"])
+    @step(name="crashing")
     def crashing_processor(scan: dict) -> str:
         raise Exception("Crash before processing completes!")
 

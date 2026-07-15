@@ -40,7 +40,7 @@ def isolated_env():
 # path, is what these tests race on, and
 # a param-fed root gives a single, plan()-visible "@root" lane whose
 # output_address is knowable up front (unlike an expand root's children).
-@step(name="my_step", version="1")
+@step
 def my_step(params):
     return params["content"].lower()
 

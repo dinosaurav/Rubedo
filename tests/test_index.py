@@ -68,7 +68,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -78,7 +78,7 @@ def scan():
 
 
 def make_pipeline():
-    @step(name="extract", version="1", depends_on=["scan"], index=["company", "contacts", "meta.region"])
+    @step(index=["company", "contacts", "meta.region"])
     def extract(scan: dict):
         text = scan["text"].strip()
         company, region, *contacts = text.split(",")
@@ -158,7 +158,7 @@ def test_reuse_does_not_duplicate_entries():
 def test_missing_fields_are_skipped():
     create_file("a.txt", "acme,east")
 
-    @step(name="extract", version="1", depends_on=["scan"], index=["company", "nonexistent", "meta.nope"])
+    @step(index=["company", "nonexistent", "meta.nope"])
     def extract(scan: dict):
         return {"company": "acme", "meta": {}}
 
@@ -194,7 +194,7 @@ def test_index_declaration_is_not_cache_identity():
 def test_skip_cache_rejects_index():
     with pytest.raises(ValueError, match="index is meaningless"):
 
-        @step(name="u", version="1", skip_cache=True, index=["x"])
+        @step(skip_cache=True, index=["x"])
         def u(path):
             pass
 

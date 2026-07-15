@@ -16,7 +16,7 @@ client = TestClient(app)
 TEST_FOLDER = "test_input"
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -25,7 +25,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="count-lines", version="v1", depends_on=["scan"], index=["path"])
+@step(name="count-lines", index=["path"])
 def count_lines(scan: dict) -> ProcessResult:
     text = scan["text"]
     lines = text.split("\n")
