@@ -76,7 +76,7 @@ def create_file(name, content):
     return path
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -89,15 +89,15 @@ def scan():
 
 
 def test_disjoint_parent_lanes_raise_clear_error():
-    @step(name="a", version="1", shape="expand")
+    @step
     def a():
         yield {"x": 1}
 
-    @step(name="b", version="1", shape="expand")
+    @step
     def b():
         yield {"y": 2}
 
-    @step(name="combine", version="1", depends_on=["a", "b"])
+    @step
     def combine(a, b):
         return {"a": a, "b": b}
 
@@ -109,15 +109,15 @@ def test_disjoint_parent_lanes_raise_clear_error():
 def test_diamond_parents_still_run():
     create_file("a.txt", "Hello")
 
-    @step(name="upper", version="1", depends_on=["scan"])
+    @step
     def upper(scan):
         return scan["text"].upper()
 
-    @step(name="lower", version="1", depends_on=["scan"])
+    @step
     def lower(scan):
         return scan["text"].lower()
 
-    @step(name="both", version="1", depends_on=["upper", "lower"])
+    @step
     def both(upper, lower):
         return {"u": upper, "l": lower}
 
@@ -134,7 +134,7 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     create_file("a.txt", "1")
     create_file("b.txt", "2")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
@@ -170,7 +170,7 @@ def test_selection_ids_unique_across_runs():
     create_file("a.txt", "1")
     create_file("b.txt", "2")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
@@ -196,11 +196,11 @@ def test_selection_parse_pipeline_term():
 def test_invalidate_scoped_to_pipeline():
     create_file("a.txt", "1")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step(name="read", version="1")
     def read_v1(scan):
         return scan["text"]
 
-    @step(name="read", version="2", depends_on=["scan"])
+    @step(name="read", version="2")
     def read_v2(scan):
         return scan["text"]
 
@@ -224,19 +224,16 @@ def test_invalidate_scoped_to_pipeline():
 
 
 def test_join_rejects_skip_cache_parent():
-    @step(name="left", version="1", index=["k"])
+    @step(index=["k"])
     def left():
         return {"k": "x"}
 
-    @step(name="right", version="1", depends_on=["left"], skip_cache=True)
+    @step(skip_cache=True)
     def right(left):
         return left
 
     @step(
-        name="j",
-        version="1",
         depends_on=["left", "right"],
-        shape="join",
         join_on={"left": "k", "right": "k"},
     )
     def j(left, right):
@@ -247,15 +244,15 @@ def test_join_rejects_skip_cache_parent():
 
 
 def test_group_key_rejects_skip_cache_parent():
-    @step(name="src", version="1")
+    @step
     def src():
         return {"g": "a"}
 
-    @step(name="u", version="1", depends_on=["src"], skip_cache=True)
+    @step(skip_cache=True)
     def u(src):
         return src
 
-    @step(name="r", version="1", depends_on=["u"], shape="reduce", group_key="g")
+    @step(depends_on=["u"], group_key="g")
     def r(u):
         return {}
 
@@ -273,16 +270,16 @@ def test_expand_yields_bytes_and_reuses():
         # A headless param-fed root: this test is about a downstream expand
         # yielding bytes, not about folder scanning, so a single param-fed
         # lane keeps it simple.
-        @step(name="read", version="1")
+        @step
         def read(params):
             return open(params["path"]).read()
 
-        @step(name="chunks", version="1", depends_on=["read"], shape="expand")
+        @step
         def chunks(read):
             for line in read.splitlines():
                 yield line.encode("utf-8")
 
-        @step(name="size", version="1", depends_on=["chunks"])
+        @step
         def size(chunks):
             assert isinstance(chunks, bytes)
             return len(chunks)
@@ -317,7 +314,7 @@ def test_failed_plus_filtered_run_is_completed_with_failures():
     create_file("good.txt", "keep")
     create_file("bad.txt", "explode")
 
-    @step(name="gate", version="1", depends_on=["scan"])
+    @step
     def gate(scan):
         if scan["text"] == "explode":
             raise RuntimeError("boom")
@@ -342,16 +339,16 @@ def test_ephemeral_coords_compute_in_parallel():
     # itself, so different coordinates' producers must run concurrently.
     barrier = threading.Barrier(2, timeout=5)
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
-    @step(name="util", version="1", depends_on=["read"], skip_cache=True)
+    @step(skip_cache=True)
     def util(read):
         barrier.wait()
         return read
 
-    @step(name="out", version="1", depends_on=["util"])
+    @step
     def out(util):
         return util
 

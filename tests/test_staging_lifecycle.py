@@ -35,7 +35,7 @@ def isolated_env():
             shutil.rmtree(d)
 
 
-@step(name="my_step", version="1")
+@step
 def my_step(params):
     return params["content"].lower()
 

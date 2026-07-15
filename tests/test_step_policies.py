@@ -77,7 +77,7 @@ def test_retries_until_success():
     path = create_file("f1.txt", "hello")
     calls = {"n": 0}
 
-    @step(name="flaky", version="1", retries=2, retry_on=TimeoutError)
+    @step(retries=2, retry_on=TimeoutError)
     def flaky(params):
         calls["n"] += 1
         if calls["n"] < 3:
@@ -107,7 +107,7 @@ def test_retries_until_success():
 def test_retries_exhausted_records_failure():
     path = create_file("f1.txt", "hello")
 
-    @step(name="doomed", version="1", retries=1, retry_on=TimeoutError)
+    @step(retries=1, retry_on=TimeoutError)
     def doomed(params):
         raise TimeoutError("always")
 
@@ -131,7 +131,7 @@ def test_retry_on_filters_exception_types():
     path = create_file("f1.txt", "hello")
     calls = {"n": 0}
 
-    @step(name="buggy", version="1", retries=5, retry_on=TimeoutError)
+    @step(retries=5, retry_on=TimeoutError)
     def buggy(params):
         calls["n"] += 1
         raise ValueError("deterministic bug — retrying just multiplies cost")
@@ -149,14 +149,14 @@ def test_rate_limit_paces_execution():
 
     # Needs genuine multi-lane parallelism, so a folder-scan expand root
     # rather than a single param-fed lane.
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(name="polite", version="1", depends_on=["scan"], rate_limit="10/s")
+    @step(rate_limit="10/s")
     def polite(scan):
         return "done"
 
@@ -184,7 +184,7 @@ def test_rate_limit_parsing():
 def test_bad_rate_limit_rejected_at_registration():
     with pytest.raises(ValueError, match="Invalid rate_limit"):
 
-        @step(name="x", version="1", rate_limit="oops")
+        @step(rate_limit="oops")
         def x(params):
             pass
 
@@ -219,7 +219,7 @@ def backdate_materializations(iso_timestamp):
 def test_fresh_output_is_reused():
     path = create_file("f1.txt", "hello")
 
-    @step(name="scrape", version="1", stale_after="1h")
+    @step(stale_after="1h")
     def scrape(params):
         return open(params["path"]).read()
 
@@ -235,7 +235,7 @@ def test_expired_deterministic_output_is_refreshed():
 
     path = create_file("f1.txt", "hello")
 
-    @step(name="scrape", version="1", stale_after="1h")
+    @step(stale_after="1h")
     def scrape(params):
         return open(params["path"]).read()
 
@@ -271,7 +271,7 @@ def test_expired_nondeterministic_output_is_superseded():
     path = create_file("f1.txt", "hello")
     counter = itertools.count()
 
-    @step(name="scrape", version="1", stale_after="1h")
+    @step(stale_after="1h")
     def scrape(params):
         return {"attempt": next(counter)}
 
@@ -293,7 +293,7 @@ def test_expired_nondeterministic_output_is_superseded():
 def test_staleness_visible_in_plan():
     path = create_file("f1.txt", "hello")
 
-    @step(name="scrape", version="1", stale_after="1h")
+    @step(stale_after="1h")
     def scrape(params):
         return open(params["path"]).read()
 
