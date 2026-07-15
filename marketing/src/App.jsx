@@ -37,51 +37,49 @@ function Feature({ icon, title, children }) {
   )
 }
 
-const NEWSROOM_CODE = `from rubedo import pipeline, step
+const NEWSROOM_CODE = `from rubedo import pipeline
 import csv
 
-@step
+p = pipeline(name="newsroom")
+
+@p.step()
 def feeds():
     with open("feeds.csv") as f:
         yield from csv.DictReader(f)
 
-@step
+@p.step()
 def publishers():
     with open("publishers.csv") as f:
         yield from csv.DictReader(f)
 
-@step(depends_on=["feeds"], index=["publisher"])
+@p.step(index=["publisher"])
 def feed(feeds: dict) -> dict:
     return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
 
-@step(depends_on=["publishers"], index=["publisher"])
+@p.step(index=["publisher"])
 def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
 # two sources meet — one lane per matched pair
-@step(shape="join", depends_on=["feed", "publisher"],
-      join_on={"feed": "publisher", "publisher": "publisher"})
+@p.step(depends_on=["feed", "publisher"],
+        join_on={"feed": "publisher", "publisher": "publisher"})
 def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
 
 # fan out: a lane per article. cached against its parent,
 # so a re-run re-scrapes nothing. this is the flaky one.
-@step(depends_on=["feed_meta"], shape="expand", index=["region"],
-      retries=3, retry_on=(TimeoutError, ConnectionError),
-      retry_backoff=2, rate_limit="30/min", stale_after="24h")
+@p.step(index=["region"], retries=3,
+        retry_on=(TimeoutError, ConnectionError),
+        retry_backoff=2, rate_limit="30/min", stale_after="24h")
 def articles(feed_meta: dict):
     for title in scrape(feed_meta["feed_id"]):
         yield {"title": title, "region": feed_meta["region"]}
 
 # fold back: one digest per region
-@step(depends_on=["articles"], shape="reduce", group_key="region")
+@p.step(depends_on=["articles"], group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
-    return {"count": len(titles), "headlines": titles}
-
-p = pipeline(name="newsroom",
-             steps=[feeds, publishers, feed, publisher,
-                    feed_meta, articles, digest])`
+    return {"count": len(titles), "headlines": titles}`
 
 const DIAGRAM_CODE = `Pipeline 'newsroom'
 ┌────────────────┐  ┌─────────────────────┐
@@ -105,24 +103,27 @@ const DIAGRAM_CODE = `Pipeline 'newsroom'
 │ digest [reduce] │
 └─────────────────┘`
 
-const RETRY_CODE = `@step(retries=3, retry_on=(TimeoutError, ConnectionError),
-      retry_backoff=2, rate_limit="30/min",
-      stale_after="24h",
-      assertions=[check_price_positive])
+const RETRY_CODE = `@p.step(retries=3, retry_on=(TimeoutError, ConnectionError),
+        retry_backoff=2, rate_limit="30/min",
+        stale_after="24h",
+        assertions=[check_price_positive])
 def enrich(row: dict): ...`
 
-const START_CODE = `from rubedo import step, pipeline
+const START_CODE = `import os
+from rubedo import pipeline
 
-@step(shape="expand")
+p = pipeline(name="count-lines")
+
+@p.step()
 def scan():
     for name in sorted(os.listdir("input")):
-        yield {"path": name, "text": open(name).read()}
+        path = os.path.join("input", name)
+        yield {"path": name, "text": open(path).read()}
 
-@step(depends_on=["scan"])
+@p.step()
 def count_lines(scan: dict):
     return {"line_count": len(scan["text"].splitlines())}
 
-p = pipeline(name="count-lines", steps=[scan, count_lines])
 print(p.plan())      # dry-run: what would run, and why
 summary = p.run()    # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")`
@@ -321,8 +322,8 @@ function App() {
         </div>
         <p className="block-lede">
           Ingestion is a parentless{' '}
-          <Tooltip text="A step with no depends_on is a root. shape='expand' means it yields multiple payloads — each row mints its own content-addressed lane. A folder scan, a csv.DictReader loop, a SQL SELECT all start this way.">
-            <code>@step(shape="expand")</code>
+          <Tooltip text="A step whose parameters name no other step is a root, and a generator root infers shape='expand': it yields multiple payloads, each minting its own content-addressed lane. A folder scan, a csv.DictReader loop, a SQL SELECT all start this way.">
+            <code>@p.step</code> generator
           </Tooltip>{' '}
           that yields a payload per item: a folder scan, a <code>csv.DictReader</code> loop, a SQL{' '}
           <code>SELECT</code>. Each row mints its own content-addressed lane. To find it later by a human field,{' '}
