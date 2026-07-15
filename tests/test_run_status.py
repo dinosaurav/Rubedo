@@ -63,7 +63,7 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 
-@step(name="scan", version="1", shape="expand", index=["path"])
+@step(index=["path"])
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
     `path` so tests can find "the lane for x.txt" without the coordinate
@@ -104,7 +104,7 @@ def coord_for_path(filename, run_id=None):
     return None
 
 
-@step(name="dummy", version="v1", depends_on=["scan"])
+@step(name="dummy")
 def dummy_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
@@ -112,7 +112,7 @@ def dummy_processor(scan: dict) -> str:
 p_dummy = pipeline(name="p-dummy", steps=[scan, dummy_processor])
 
 
-@step(name="failing", version="v1", depends_on=["scan"])
+@step(name="failing")
 def failing_processor(scan: dict) -> str:
     if scan["path"] == "b.txt":
         raise Exception("Failed on b.txt")

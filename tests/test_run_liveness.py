@@ -102,7 +102,7 @@ def test_completed_run_stores_terminal_status_and_heartbeat():
     with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("hello")
 
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         """Folder recipe: walk TEST_FOLDER, yield each file's content."""
         for name in sorted(os.listdir(TEST_FOLDER)):
@@ -110,7 +110,7 @@ def test_completed_run_stores_terminal_status_and_heartbeat():
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(name="upper", version="1", depends_on=["scan"])
+    @step
     def upper(scan):
         return {"text": scan["text"].upper()}
 

@@ -39,7 +39,7 @@ def isolated_env():
 
 # Folder recipe: walk TEST_FOLDER, yield each file's content. Must
 # also be module-level since it's shared across process-executor pipelines.
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
@@ -72,7 +72,7 @@ def process_fail(scan):
 
 def test_process_executor_basic():
     # Register steps
-    step1 = step(name="ok", version="1", executor="process", depends_on=["scan"])(process_ok)
+    step1 = step(name="ok", executor="process")(process_ok)
 
     pipe = pipeline(name="p1", steps=[scan, step1])
     summary = pipe.run(workers=2)
@@ -92,7 +92,7 @@ def test_process_executor_closure_ok():
     def my_local_func(scan):
         return prefix + scan["text"]
 
-    step_local = step(name="local", version="1", executor="process", depends_on=["scan"])(my_local_func)
+    step_local = step(name="local", executor="process")(my_local_func)
     pipe = pipeline(name="p4", steps=[scan, step_local])
     summary = pipe.run(workers=2)
     # 2 scan lanes + 2 "local" lanes
@@ -101,7 +101,7 @@ def test_process_executor_closure_ok():
 
 def test_process_executor_retries():
     # Retries happen in the parent thread pool and submit to process pool
-    step_fail = step(name="fail", version="1", executor="process", retries=2, depends_on=["scan"])(process_fail)
+    step_fail = step(name="fail", executor="process", retries=2)(process_fail)
 
     pipe = pipeline(name="p2", steps=[scan, step_fail])
     summary = pipe.run(workers=2)
@@ -125,7 +125,7 @@ def process_unpicklable(scan):
 
 def test_process_executor_pickling_error():
     # If the process pool cannot pickle the return value, it should surface as a step failure.
-    step_unpicklable = step(name="unpicklable", version="1", executor="process", depends_on=["scan"])(process_unpicklable)
+    step_unpicklable = step(name="unpicklable", executor="process")(process_unpicklable)
     pipe = pipeline(name="p3", steps=[scan, step_unpicklable])
 
     summary = pipe.run(workers=2)

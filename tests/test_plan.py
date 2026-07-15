@@ -73,18 +73,18 @@ def make_pipeline(pipe_id="pl"):
     # expand has no parent to cache its enumeration against, so it always
     # plans as "execute": plan() can never preview what it will yield
     # without actually running it (see the tests below).
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].strip()
 
-    @step(name="upper", version="1", depends_on=["read"])
+    @step
     def upper(read):
         return read.upper()
 

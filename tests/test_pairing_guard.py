@@ -74,7 +74,7 @@ def isolated_env():
             shutil.rmtree(d)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -84,7 +84,7 @@ def scan():
 
 
 def seed_pipeline():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].strip()
 
