@@ -40,6 +40,24 @@ accurate and load-bearing; keep them updated when behavior changes.
 - **Ruthless simplification** is a project value: prefer deleting a concept
   to adding a knob.
 
+## Release process
+
+Cutting a release is four steps, and **all four must be done before
+building/publishing** — PyPI rejects file-name reuse, so a stale version
+or a tag pointing at the wrong commit wastes a publish attempt:
+
+1. **Bump `version` in `pyproject.toml`** to the new release number.
+2. **Update `CHANGELOG.md`**: move entries from `[Unreleased]` into a
+   new `## [X.Y.Z] - YYYY-MM-DD` section. Every shipped tag needs a
+   changelog entry — no skipping.
+3. **Commit both, push to `main`.**
+4. **Tag the version-bump commit** (not an earlier one): `git tag vX.Y.Z
+   <sha> && git push origin vX.Y.Z`. The tag must point at a commit where
+   `pyproject.toml` already has the new version — otherwise a build from
+   the tag produces the old wheel name and PyPI rejects it. If you tagged
+   too early, `git tag -d vX.Y.Z && git tag vX.Y.Z <correct-sha> && git
+   push origin vX.Y.Z --force` to retag.
+
 ## Architecture map
 
 - `src/rubedo/spec.py` — pure data leaf: `StepSpec`/`PipelineSpec`
