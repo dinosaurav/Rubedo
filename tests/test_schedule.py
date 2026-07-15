@@ -87,7 +87,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand", index=["path"])
+@step(index=["path"])
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
     `path` so tests can find "the lane for x.txt" without the coordinate
@@ -128,15 +128,15 @@ def _chain_steps():
     """The 3-step map chain (on top of the module-level `scan` root) used
     by the equivalence tests."""
 
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         return scan["text"].strip()
 
-    @step(name="s2", version="1", depends_on=["s1"])
+    @step
     def s2(s1):
         return s1.upper()
 
-    @step(name="s3", version="1", depends_on=["s2"])
+    @step
     def s3(s2):
         return s2 + "!"
 
@@ -228,7 +228,7 @@ def test_deep_pipelines_lanes_across_steps():
     create_file("b.txt", "B")
     gate = threading.Event()
 
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         if scan["path"] == "b.txt":
             if not gate.wait(timeout=30):
@@ -237,7 +237,7 @@ def test_deep_pipelines_lanes_across_steps():
                 )
         return scan["path"]
 
-    @step(name="s2", version="1", depends_on=["s1"])
+    @step
     def s2(s1):
         if s1 == "a.txt":
             gate.set()  # proves s2(A) ran before s1(B) completed
@@ -267,13 +267,13 @@ def test_broad_stages_whole_steps():
     create_file("b.txt", "2")
     s1_finished, s2_started = [], []
 
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         out = scan["text"]
         s1_finished.append(time.monotonic())
         return out
 
-    @step(name="s2", version="1", depends_on=["s1"])
+    @step
     def s2(s1):
         s2_started.append(time.monotonic())
         return s1 * 2
@@ -292,18 +292,18 @@ def test_deep_failure_cascades_to_downstream_cells():
     create_file("a.txt", "good")
     create_file("b.txt", "boom")
 
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         text = scan["text"]
         if text == "boom":
             raise ValueError("bad lane")
         return text
 
-    @step(name="s2", version="1", depends_on=["s1"])
+    @step
     def s2(s1):
         return s1.upper()
 
-    @step(name="s3", version="1", depends_on=["s2"])
+    @step
     def s3(s2):
         return s2 + "!"
 
@@ -336,17 +336,17 @@ def test_deep_filtered_mid_chain():
     create_file("a.txt", "keep")
     create_file("b.txt", "drop")
 
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         return scan["text"]
 
-    @step(name="s2", version="1", depends_on=["s1"])
+    @step
     def s2(s1):
         if s1 == "drop":
             return Filtered("not wanted")
         return s1.upper()
 
-    @step(name="s3", version="1", depends_on=["s2"])
+    @step
     def s3(s2):
         return s2 + "!"
 
@@ -374,15 +374,15 @@ def test_deep_reduce_barrier_receives_all_lanes():
     create_file("b.txt", "2")
     create_file("c.txt", "3")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         return int(scan["text"])
 
-    @step(name="dbl", version="1", depends_on=["parse"])
+    @step
     def dbl(parse):
         return parse * 2
 
-    @step(name="total", version="1", depends_on=["dbl"], shape="reduce")
+    @step(depends_on=["dbl"], shape="reduce")
     def total(dbl):
         return {"n": len(dbl), "total": sum(dbl.values())}
 
@@ -410,12 +410,12 @@ def test_deep_shared_rate_limiter_paces_across_lanes():
     create_file("c.txt", "3")
     starts: list = []  # appended post-acquire, at step-fn entry
 
-    @step(name="fetch", version="1", depends_on=["scan"], workers=4)
+    @step(workers=4)
     def fetch(scan):
         return scan["text"]
 
     # 2/s → min_interval 0.5s between permitted starts.
-    @step(name="enrich", version="1", depends_on=["fetch"], rate_limit="2/s", workers=4)
+    @step(rate_limit="2/s", workers=4)
     def enrich(fetch):
         starts.append(time.monotonic())
         return fetch * 2
@@ -444,16 +444,16 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
     create_file("c.txt", "3")
     mid_starts, post_starts = [], []
 
-    @step(name="src", version="1", depends_on=["scan"], workers=4)
+    @step(workers=4)
     def src(scan):
         return scan["text"]
 
-    @step(name="mid", version="1", depends_on=["src"], rate_limit="2/s", workers=4)
+    @step(rate_limit="2/s", workers=4)
     def mid(src):
         mid_starts.append(time.monotonic())
         return src * 2
 
-    @step(name="post", version="1", depends_on=["mid"], workers=4)
+    @step(workers=4)
     def post(mid):
         post_starts.append(time.monotonic())
         return mid + "!"
@@ -473,7 +473,7 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
 # (g) Anything but broad/deep is rejected loudly at pipeline() construction
 # time.
 def test_invalid_schedule_raises():
-    @step(name="s1", version="1", depends_on=["scan"])
+    @step
     def s1(scan):
         return scan["text"]
 

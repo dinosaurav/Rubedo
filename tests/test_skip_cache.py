@@ -72,7 +72,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -84,16 +84,16 @@ def scan():
 def build_pipeline(calls, util_version="1"):
     """read (materialized) -> parse (skip_cache util) -> report (materialized)."""
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
-    @step(name="parse", version=util_version, depends_on=["read"], skip_cache=True)
+    @step(version=util_version, skip_cache=True)
     def parse(read):
         calls.append("parse")
         return read.strip().lower()
 
-    @step(name="report", version="1", depends_on=["parse"])
+    @step
     def report(parse):
         return f"report: {parse}"
 
@@ -164,20 +164,20 @@ def test_util_shared_by_two_consumers_runs_once():
     calls = []
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
-    @step(name="norm", version="1", depends_on=["read"], skip_cache=True)
+    @step(skip_cache=True)
     def norm(read):
         calls.append("norm")
         return read.strip()
 
-    @step(name="upper", version="1", depends_on=["norm"])
+    @step
     def upper(norm):
         return norm.upper()
 
-    @step(name="length", version="1", depends_on=["norm"])
+    @step
     def length(norm):
         return {"len": len(norm)}
 
@@ -191,15 +191,15 @@ name="fan", steps=[scan, read, norm, upper, length])
 def test_util_failure_fails_the_consumer():
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
-    @step(name="boom", version="1", depends_on=["read"], skip_cache=True)
+    @step(skip_cache=True)
     def boom(read):
         raise RuntimeError("util exploded")
 
-    @step(name="use", version="1", depends_on=["boom"])
+    @step
     def use(boom):
         return boom
 
@@ -217,15 +217,15 @@ name="fail", steps=[scan, read, boom, use])
 def test_blocked_propagates_through_util():
     create_file("f1.txt", "hello")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         raise ValueError("root fails")
 
-    @step(name="mid", version="1", depends_on=["read"], skip_cache=True)
+    @step(skip_cache=True)
     def mid(read):
         return read
 
-    @step(name="use", version="1", depends_on=["mid"])
+    @step
     def use(mid):
         return mid
 
@@ -242,19 +242,19 @@ name="blk", steps=[scan, read, mid, use])
 def test_chained_utils():
     create_file("f1.txt", "  HELLO  ")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
-    @step(name="strip", version="1", depends_on=["read"], skip_cache=True)
+    @step(skip_cache=True)
     def strip(read):
         return read.strip()
 
-    @step(name="lower", version="1", depends_on=["strip"], skip_cache=True)
+    @step(skip_cache=True)
     def lower(strip):
         return strip.lower()
 
-    @step(name="out", version="1", depends_on=["lower"])
+    @step
     def out(lower):
         return lower
 
@@ -284,11 +284,11 @@ def test_plan_omits_utils():
 def test_registration_validations():
     with pytest.raises(ValueError, match="stale_after is meaningless"):
 
-        @step(name="x", version="1", skip_cache=True, stale_after="1h")
+        @step(skip_cache=True, stale_after="1h")
         def x(path):
             pass
 
-    @step(name="orphan", version="1", skip_cache=True)
+    @step(skip_cache=True)
     def orphan():
         pass
 

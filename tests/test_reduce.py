@@ -80,7 +80,7 @@ def assert_run(pipe):
     return summary
 
 
-@step(name="scan", version="1", shape="expand", index=["path"])
+@step(index=["path"])
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
     `path` so tests can find "the lane for x.txt" without the coordinate
@@ -122,11 +122,11 @@ def test_reduce_basic_and_lineage():
     create_file("b.txt", "20")
     create_file("c.txt", "30")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -146,11 +146,11 @@ def test_reduce_caching():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -183,14 +183,14 @@ def test_reduce_filtered_lane():
     create_file("a.txt", "keep:10")
     create_file("b.txt", "drop:20")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         text = scan["text"].strip()
         if text.startswith("drop"):
             return Filtered("dropped")
         return int(text.split(":")[1])
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         # a.txt (10) is always present; b.txt (20) only when un-filtered.
         # Coordinates are content-addressed (row-<hash>), not "a.txt"/
@@ -225,14 +225,14 @@ def test_reduce_failed_parent_lane():
     create_file("a.txt", "10")
     create_file("b.txt", "fail")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         text = scan["text"].strip()
         if text == "fail":
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce", on_failed="block")
+    @step(name="sum", depends_on=["parse"], shape="reduce", on_failed="block")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -254,14 +254,14 @@ def test_reduce_failed_parent_lane_use_passed():
     create_file("b.txt", "fail")
     create_file("c.txt", "20")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         text = scan["text"].strip()
         if text == "fail":
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -282,15 +282,15 @@ def test_reduce_failed_parent_lane_use_passed():
 def test_reduce_downstream_map():
     create_file("a.txt", "10")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
-    @step(name="format", version="1", depends_on=["sum"])
+    @step(name="format")
     def format_val(sum):
         return f"Total: {sum}"
 
@@ -307,11 +307,11 @@ def test_reduce_downstream_map():
 def test_reduce_plan():
     create_file("a.txt", "10")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -335,17 +335,17 @@ def test_reduce_plan():
 
 def test_registration_errors():
     with pytest.raises(ValueError, match="skip_cache is meaningless with shape='reduce'"):
-        @step(name="sum", version="1", depends_on=["x"], shape="reduce", skip_cache=True)
+        @step(name="sum", depends_on=["x"], shape="reduce", skip_cache=True)
         def sum_v1(x):
             pass
 
     with pytest.raises(ValueError, match="shape must be 'map', 'reduce', 'expand', or 'join'"):
-        @step(name="sum", version="1", shape="banana")
+        @step(name="sum", shape="banana")
         def sum_v2(x):
             pass
 
     with pytest.raises(ValueError, match="requires at least one parent"):
-        @step(name="sum", version="1", shape="reduce")
+        @step(name="sum", shape="reduce")
         def sum_v3():
             pass
 
@@ -353,12 +353,12 @@ def test_reduce_all_filtered():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
-    @step(name="parse", version="1", depends_on=["scan"])
+    @step
     def parse(scan):
         from rubedo import Filtered
         return Filtered("reason")
 
-    @step(name="sum", version="1", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], shape="reduce")
     def sum_values(parse):
         return sum(parse.values())
 
