@@ -43,14 +43,16 @@ def _get(path: str):
 
 p = pipeline(name="repo-health")
 
-@p.step(name="repos", version="1")
+
+@p.step()
 def repos():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "repos.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
-@p.step(name="fetch_repo", version="1", depends_on=["repos"], retries=3, retry_delay=2, rate_limit="20/min")
+
+@p.step(retries=3, retry_delay=2, rate_limit="20/min")
 def fetch_repo(repos: dict) -> dict:
     """Repo metadata. row['repo'] is 'owner/name' from repos.csv."""
     row = repos
@@ -63,7 +65,7 @@ def fetch_repo(repos: dict) -> dict:
     }
 
 
-@p.step(name="activity", version="1", depends_on=["fetch_repo"], retries=3, rate_limit="20/min")
+@p.step(retries=3, rate_limit="20/min")
 def activity(fetch_repo: dict) -> dict:
     """Commits in the last 30 days — a cheap liveness signal."""
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -71,7 +73,7 @@ def activity(fetch_repo: dict) -> dict:
     return {"commits_30d": len(commits)}
 
 
-@p.step(name="score", version="1", depends_on=["fetch_repo", "activity"], index=["language"])
+@p.step(index=["language"])
 def score(fetch_repo: dict, activity: dict) -> ProcessResult:
     """A naive health score: reward stars and recent commits, penalize open issues."""
     health = (
@@ -89,7 +91,7 @@ def score(fetch_repo: dict, activity: dict) -> ProcessResult:
     )
 
 
-@p.step(name="report", version="1", depends_on=["score"], shape="reduce")
+@p.step(depends_on=["score"], shape="reduce")
 def report(score: dict) -> str:
     """Fan in every repo's score into one ranked table."""
     rows = sorted(score.values(), key=lambda s: s["health"], reverse=True)
@@ -102,11 +104,10 @@ def report(score: dict) -> str:
 
 
 def main():
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
     try:
-        summary = pipe.run()
+        summary = p.run()
     except urllib.error.HTTPError as e:
         if e.code == 403:
             print("GitHub rate-limited you — set GITHUB_TOKEN and try again.")

@@ -36,14 +36,16 @@ def _get(url: str, params: dict):
 
 p = pipeline(name="weather-advisory")
 
-@p.step(name="cities", version="1")
+
+@p.step()
 def cities():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "cities.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
-@p.step(name="geocode", version="1", depends_on=["cities"], retries=3, retry_delay=1, rate_limit="60/min")
+
+@p.step(retries=3, retry_delay=1, rate_limit="60/min")
 def geocode(cities: dict) -> dict | Filtered:
     """City name -> coordinates. Unknown cities decline the lane."""
     row = cities
@@ -56,9 +58,6 @@ def geocode(cities: dict) -> dict | Filtered:
 
 
 @p.step(
-    name="forecast",
-    version="1",
-    depends_on=["geocode"],
     stale_after="3h",  # weather goes stale — re-fetch past this TTL
     retries=3,
     rate_limit="60/min",
@@ -79,7 +78,7 @@ def forecast(geocode: dict) -> dict:
     }
 
 
-@p.step(name="advice", version="1", depends_on=["forecast"], index=["outlook"])
+@p.step(index=["outlook"])
 def advice(forecast: dict) -> dict:
     """Turn the numbers into a one-word outlook and a suggestion."""
     if forecast["precip"] >= 1:
@@ -93,7 +92,7 @@ def advice(forecast: dict) -> dict:
     return {**forecast, "outlook": outlook, "tip": tip}
 
 
-@p.step(name="briefing", version="1", depends_on=["advice"], shape="reduce")
+@p.step(depends_on=["advice"], shape="reduce")
 def briefing(advice: dict) -> str:
     """Fan every city's advice into one morning briefing."""
     rows = sorted(advice.values(), key=lambda a: a["tmax"], reverse=True)
@@ -106,10 +105,9 @@ def briefing(advice: dict) -> str:
 
 
 def main():
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
-    summary = pipe.run()
+    summary = p.run()
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"

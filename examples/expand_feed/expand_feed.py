@@ -1,12 +1,13 @@
-"""Fan one feed into a lane per article with shape="expand".
+"""Fan one feed into a lane per article with an expand step.
 
     tech.json ─▶ fetch ─▶ articles (expand) ─▶ headline (map)
                           1:N — a lane per article
 
-`expand` is the 1:N shape: the step yields (subkey, value) pairs and each pair
-becomes its own downstream lane. The whole expansion is cached against its
-parent — a "fetch"/scrape runs once — so a re-run re-headlines nothing (notice
-no "fetching" line the second time).
+`expand` is the 1:N shape: the step yields payloads and each one mints its own
+content-addressed downstream lane — `articles` is a generator, so the shape is
+inferred. The whole expansion is cached against its parent — a "fetch"/scrape
+runs once — so a re-run re-headlines nothing (notice no "fetching" line the
+second time).
 
 Run it:
 
@@ -32,7 +33,8 @@ def make_feed(folder):
 
 p = pipeline(name="expand-feed")
 
-@p.step(name="feed_files", version="1")
+
+@p.step()
 def feed_files():
     folder = os.path.join(tempfile.gettempdir(), "rubedo_expand_feed")
     for name in os.listdir(folder):
@@ -40,19 +42,20 @@ def feed_files():
         if os.path.isfile(path):
             yield path
 
-@p.step(name="fetch", version="1", depends_on=["feed_files"])
+
+@p.step()
 def fetch(feed_files: str) -> list:
     print(f"  fetching {os.path.basename(feed_files)} ...")  # runs once, then cached
     return json.load(open(feed_files))
 
 
-@p.step(name="articles", version="1", depends_on=["fetch"], shape="expand")
+@p.step()
 def articles(fetch: list):
     for art in fetch:  # 1:N — yield a payload per article; content-addressed lanes
         yield art
 
 
-@p.step(name="headline", version="1", depends_on=["articles"])
+@p.step()
 def headline(articles: dict) -> str:
     return articles["title"].upper()
 
@@ -62,13 +65,12 @@ def main():
     os.makedirs(folder, exist_ok=True)
     make_feed(folder)
 
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
 
-    s1 = pipe.run()
+    s1 = p.run()
     print(f"run 1: created={s1.created_count} reused={s1.reused_count}")
-    s2 = pipe.run()
+    s2 = p.run()
     print(f"run 2: created={s2.created_count} reused={s2.reused_count}  (fetch was cached)")
     
     print("\n--- Final Output (headline) ---")

@@ -6,10 +6,10 @@
 This one is self-contained: it creates a small SQLite "orders" database in your
 temp dir, then runs a Rubedo pipeline over it. Each row is a coordinate.
 
-The `orders` source is a plain SELECT loop: a table recipe is just a root
-`@step(shape="expand")` yielding one dict per row, buffered like any other
-expand (no batch_size streaming mode yet; see docs/concepts/sources.md for
-the pattern on a table too big to pull in one query).
+The `orders` source is a plain SELECT loop: a table recipe is just a
+parentless generator `@p.step` yielding one dict per row, buffered like any
+other expand (no batch_size streaming mode yet; see docs/concepts/sources.md
+for the pattern on a table too big to pull in one query).
 
 Run it:
 
@@ -51,7 +51,8 @@ def seed_db():
 
 p = pipeline(name="orders-rollup")
 
-@p.step(name="orders", version="1")
+
+@p.step()
 def orders():
     engine = create_engine(DB_URL)
     with engine.connect() as conn:
@@ -59,7 +60,8 @@ def orders():
         for row in res.mappings():
             yield dict(row)
 
-@p.step(name="classify", version="1", depends_on=["orders"], index=["tier"])
+
+@p.step(index=["tier"])
 def classify(orders: dict) -> ProcessResult:
     """Bucket each order by size."""
     row = orders
@@ -71,7 +73,7 @@ def classify(orders: dict) -> ProcessResult:
     )
 
 
-@p.step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
+@p.step(depends_on=["classify"], shape="reduce")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
     totals: dict[str, tuple[int, float]] = {}
@@ -88,10 +90,9 @@ def rollup(classify: dict) -> str:
 
 def main():
     seed_db()
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
-    summary = pipe.run()
+    summary = p.run()
     print(f"created={summary.created_count} reused={summary.reused_count}")
     print("\n--- Final Output (rollup) ---")
     import json

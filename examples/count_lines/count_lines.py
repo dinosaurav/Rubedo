@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from rubedo import ProcessResult, pipeline
 
 
-
 class CountLinesParams(BaseModel):
     min_lines: int = Field(
         default=0,
@@ -17,12 +16,10 @@ class CountLinesParams(BaseModel):
     )
 
 
-p = pipeline(
-    name="count-lines",
-    params_model=CountLinesParams,
-)
+p = pipeline(name="count-lines", params_model=CountLinesParams)
 
-@p.step(name="input_files", version="1")
+
+@p.step()
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
@@ -31,7 +28,7 @@ def input_files():
             yield path
 
 
-@p.step(name="read_lines", version="read-v1", depends_on=["input_files"])
+@p.step()
 def read_lines(input_files: str, params: dict):
     # params arrive as the params_model-validated dict (the same form that
     # is hashed into the cache key), not as a model instance.
@@ -40,7 +37,7 @@ def read_lines(input_files: str, params: dict):
     return {"lines": lines, "params": params}
 
 
-@p.step(name="count_lines", version="count-v1", depends_on=["read_lines"])
+@p.step()
 def count_lines(read_lines: dict) -> ProcessResult:
     lines = read_lines["lines"]
     params = CountLinesParams(**read_lines["params"])
@@ -64,22 +61,19 @@ def count_lines(read_lines: dict) -> ProcessResult:
     )
 
 
-@p.step(name="total_lines", version="total-v1", depends_on=["count_lines"], shape="reduce")
+@p.step(depends_on=["count_lines"], shape="reduce")
 def total_lines(count_lines: dict):
     return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
 
-count_lines_pipeline = p
 
 if __name__ == "__main__":
-    print(count_lines_pipeline.describe())
+    print(p.describe())
     print()
 
-    summary = count_lines_pipeline.run(
-        params={"min_lines": 0, "include_text_preview": False},
-    )
+    summary = p.run(params={"min_lines": 0, "include_text_preview": False})
     print(f"\nRun ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
-    
+
     print("\n--- Final Output (total_lines) ---")
     import json
     print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))

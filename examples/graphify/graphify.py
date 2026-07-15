@@ -33,7 +33,8 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file_
 
 p = pipeline(name="graphify")
 
-@p.step(name="src_files", version="1")
+
+@p.step()
 def src_files():
     folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
     for root, _, files in os.walk(folder):
@@ -41,9 +42,7 @@ def src_files():
             yield os.path.join(root, name)
 
 
-
-
-@p.step(name="extract_code_nodes", version="v4", depends_on=["src_files"])
+@p.step()
 def extract_code_nodes(src_files: str) -> ProcessResult:
     """Extract classes, functions, and import edges using Tree-sitter."""
     path = src_files
@@ -103,7 +102,7 @@ def extract_code_nodes(src_files: str) -> ProcessResult:
 
     return ProcessResult(value={"nodes": nodes, "edges": edges, "file_id": file_id})
 
-@p.step(name="extract_semantic_nodes", version="v4", depends_on=["src_files"], retries=2, rate_limit="1000/min")
+@p.step(retries=2, rate_limit="1000/min")
 def extract_semantic_nodes(src_files: str) -> ProcessResult:
     """Use an LLM to generate a semantic summary of the file."""
     path = src_files
@@ -134,7 +133,7 @@ def extract_semantic_nodes(src_files: str) -> ProcessResult:
 
     return ProcessResult(value={"file_id": file_id, "summary": summary})
 
-@p.step(name="build_networkx_graph", version="v4", depends_on=["extract_code_nodes", "extract_semantic_nodes"], shape="reduce")
+@p.step(depends_on=["extract_code_nodes", "extract_semantic_nodes"], shape="reduce")
 def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict) -> ProcessResult:
     """Fan-in all the nodes and edges, merging semantic summaries into the Graph."""
     G = nx.DiGraph()
@@ -188,7 +187,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
     # Rubedo serializes outputs to JSON, so we must return node_link_data, not the DiGraph object.
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="detect_communities", version="v4", depends_on=["build_networkx_graph"])
+@p.step()
 def detect_communities(build_networkx_graph) -> ProcessResult:
     """Run Louvain clustering to find architectural boundaries."""
     data = build_networkx_graph.value if isinstance(build_networkx_graph, ProcessResult) else build_networkx_graph
@@ -206,7 +205,7 @@ def detect_communities(build_networkx_graph) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="find_god_nodes", version="v7", depends_on=["detect_communities"])
+@p.step()
 def find_god_nodes(detect_communities) -> ProcessResult:
     """Find central 'God nodes' using PageRank, excluding external libraries."""
     data = detect_communities.value if isinstance(detect_communities, ProcessResult) else detect_communities
@@ -228,7 +227,7 @@ def find_god_nodes(detect_communities) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step(name="export_graph", version="v7", depends_on=["find_god_nodes"])
+@p.step()
 def export_graph(find_god_nodes) -> ProcessResult:
     """Export the fully enriched graph to JSON."""
     data = find_god_nodes.value if isinstance(find_god_nodes, ProcessResult) else find_god_nodes
@@ -244,10 +243,9 @@ def export_graph(find_god_nodes) -> ProcessResult:
     )
 
 def main():
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
-    summary = pipe.run()
+    summary = p.run()
     print(f"Run ID: {summary.run_id}")
     print(f"Created: {summary.created_count}, Reused: {summary.reused_count}")
     

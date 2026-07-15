@@ -32,14 +32,16 @@ GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
 
 p = pipeline(name="gutenberg-stats")
 
-@p.step(name="books", version="1")
+
+@p.step()
 def books():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "books.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
-@p.step(name="fetch", version="1", depends_on=["books"], retries=3, retry_delay=2, rate_limit="10/min")
+
+@p.step(retries=3, retry_delay=2, rate_limit="10/min")
 def fetch(books: dict) -> dict:
     """Download one book. row is {id, title} from books.csv."""
     row = books
@@ -50,7 +52,7 @@ def fetch(books: dict) -> dict:
     return {"title": row["title"], "text": text}
 
 
-@p.step(name="clean", version="1", depends_on=["fetch"], skip_cache=True)
+@p.step(skip_cache=True)
 def clean(fetch: dict) -> dict:
     """Strip the *** START/END *** Gutenberg boilerplate. Quick, pure, inline."""
     text = fetch["text"]
@@ -60,13 +62,7 @@ def clean(fetch: dict) -> dict:
     return {"title": fetch["title"], "text": body}
 
 
-@p.step(
-    name="analyze",
-    version="1",
-    depends_on=["clean"],
-    executor="process",
-    index=["longest_word"],
-)
+@p.step(executor="process", index=["longest_word"])
 def analyze(clean: dict) -> dict:
     """CPU-bound token crunching, run in a worker process."""
     words = re.findall(r"[a-zA-Z']+", clean["text"].lower())
@@ -84,7 +80,7 @@ def analyze(clean: dict) -> dict:
     }
 
 
-@p.step(name="report", version="1", depends_on=["analyze"], shape="reduce")
+@p.step(depends_on=["analyze"], shape="reduce")
 def report(analyze: dict) -> str:
     """Rank books by lexical diversity."""
     rows = sorted(analyze.values(), key=lambda s: s["lexical_diversity"], reverse=True)
@@ -97,10 +93,9 @@ def report(analyze: dict) -> str:
 
 
 def main():
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
-    summary = pipe.run()
+    summary = p.run()
     print(f"created={summary.created_count} reused={summary.reused_count}")
     print("\n--- Final Output (report) ---")
     import json

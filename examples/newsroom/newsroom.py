@@ -51,30 +51,32 @@ FOLDER = os.path.join(tempfile.gettempdir(), "rubedo_newsroom")
 
 p = pipeline(name="newsroom")
 
-@p.step(name="feeds", version="1")
+
+@p.step()
 def feeds():
     with open(os.path.join(FOLDER, "feeds.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
-@p.step(name="publishers", version="1")
+
+@p.step()
 def publishers():
     with open(os.path.join(FOLDER, "publishers.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
-@p.step(name="feed", version="1", depends_on=["feeds"], index=["publisher"])
+
+@p.step(index=["publisher"])
 def feed(feeds: dict) -> dict:
     return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
 
 
-@p.step(name="publisher", version="1", depends_on=["publishers"], index=["publisher"])
+@p.step(index=["publisher"])
 def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
 
 @p.step(
-    name="feed_meta", version="1", shape="join",
     depends_on=["feed", "publisher"],
     join_on={"feed": "publisher", "publisher": "publisher"},
 )
@@ -83,10 +85,7 @@ def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
 
 
-@p.step(
-    name="articles", version="1", depends_on=["feed_meta"],
-    shape="expand", index=["region"],
-)
+@p.step(index=["region"])
 def articles(feed_meta: dict):
     fid = feed_meta["feed_id"]
     print(f"  scraping feed {fid} ...")  # runs once per feed, then cached
@@ -94,38 +93,26 @@ def articles(feed_meta: dict):
         yield {"title": title, "region": feed_meta["region"]}  # yield payloads
 
 
-@p.step(
-    name="digest", version="1", depends_on=["articles"],
-    shape="reduce", group_key="region",
-)
+@p.step(depends_on=["articles"], group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
     return {"count": len(titles), "headlines": titles}
 
 
-def make_pipeline(folder):
-    write_csv(os.path.join(folder, "feeds.csv"), ["feed_id", "publisher"], FEEDS)
-    write_csv(os.path.join(folder, "publishers.csv"), ["publisher", "region"], PUBLISHERS)
-    return p
-
-
-
-
-
 def main():
     os.makedirs(FOLDER, exist_ok=True)
-    pipe = make_pipeline(FOLDER)
+    write_csv(os.path.join(FOLDER, "feeds.csv"), ["feed_id", "publisher"], FEEDS)
+    write_csv(os.path.join(FOLDER, "publishers.csv"), ["publisher", "region"], PUBLISHERS)
 
-    print(pipe.describe())
+    print(p.describe())
     print()
 
-    s1 = pipe.run()
+    s1 = p.run()
     print(f"\nrun 1: created={s1.created_count} reused={s1.reused_count}")
 
-
-    s2 = pipe.run()
+    s2 = p.run()
     print(f"\nrun 2: created={s2.created_count} reused={s2.reused_count}  (no feed re-scraped)")
-    
+
     print("\n--- Final Output (digest) ---")
     import json
     print(json.dumps(s2.output_for("digest"), indent=2, default=str))

@@ -5,7 +5,7 @@
      params=pdf                  LLM on     ordered) ─▶ summary_textonly
                                  images)               (text LLM)
 
-The head, `load_pdf`, takes **no source and no expand** — it is a `shape="map"`
+The head, `load_pdf`, takes **no source and no expand** — it is a plain map
 root. It reads the PDF path from `params` and mints a single '@root' lane (the
 chunk manifest). That is the feature this example exists to show: a pipeline
 can begin with an ordinary step whose input is its params. Same params reuse
@@ -43,7 +43,7 @@ import urllib.request
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-from rubedo import pipeline, step
+from rubedo import pipeline
 
 load_dotenv()
 
@@ -103,7 +103,10 @@ class PdfParams(BaseModel):
     pdf: str = Field(description="Path to the PDF to digest")
 
 
-@step(name="load_pdf", version="1")
+p = pipeline(name="pdf-digest", params_model=PdfParams)
+
+
+@p.step()
 def load_pdf(params: dict) -> list[dict]:
     """HEADLESS MAP ROOT — no source, no expand. Reads the PDF path from
     params and mints one '@root' lane: an ordered manifest of chunks.
@@ -126,7 +129,7 @@ def load_pdf(params: dict) -> list[dict]:
     return chunks
 
 
-@step(name="split_chunks", version="1", depends_on=["load_pdf"], shape="expand")
+@p.step()
 def split_chunks(load_pdf: list[dict]):
     """Fan the manifest into one content-addressed lane per ordered chunk.
 
@@ -136,10 +139,7 @@ def split_chunks(load_pdf: list[dict]):
         yield chunk
 
 
-@step(
-    name="caption",
-    version="1",
-    depends_on=["split_chunks"],
+@p.step(
     params_model=PdfParams,
     retries=3,
     retry_delay=2,
@@ -165,7 +165,7 @@ def caption(split_chunks: dict, params: PdfParams) -> dict:
     return {"index": chunk["index"], "kind": "image", "content": caption_text}
 
 
-@step(name="rejoin", version="1", depends_on=["caption"], shape="reduce")
+@p.step(depends_on=["caption"], shape="reduce")
 def rejoin(caption: dict) -> dict:
     """Fan the captioned chunks back into reading order and build two docs:
     picture-aware (figures -> captions) and text-only (figures dropped)."""
@@ -193,30 +193,16 @@ def _summarize(doc: str) -> str:
     ).strip()
 
 
-@step(name="summary_visual", version="1", depends_on=["rejoin"])
+@p.step()
 def summary_visual(rejoin: dict) -> str:
     """Summary that CAN see the figures (their captions are in the text)."""
     return _summarize(rejoin["visual"])
 
 
-@step(name="summary_textonly", version="1", depends_on=["rejoin"])
+@p.step()
 def summary_textonly(rejoin: dict) -> str:
     """Summary of the same document with the figures removed — the control."""
     return _summarize(rejoin["textonly"])
-
-
-pdf_digest_pipeline = pipeline(
-    name="pdf-digest",
-    params_model=PdfParams,
-    steps=[
-        load_pdf,
-        split_chunks,
-        caption,
-        rejoin,
-        summary_visual,
-        summary_textonly,
-    ],
-)
 
 
 def _make_sample_pdf(path: str) -> None:
@@ -284,10 +270,10 @@ def main():
             print(f"No --pdf given; generating a sample at {pdf_path}")
             _make_sample_pdf(pdf_path)
 
-    print(pdf_digest_pipeline.describe())
+    print(p.describe())
     print()
 
-    summary = pdf_digest_pipeline.run(params={"pdf": pdf_path})
+    summary = p.run(params={"pdf": pdf_path})
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"failed={summary.failed_count}"

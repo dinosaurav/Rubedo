@@ -89,7 +89,7 @@ class Screen(BaseModel):
 p = pipeline(name="hn-digest")
 
 
-@p.step(name="top_story", version="1")
+@p.step()
 def top_story():
     """Root: today's top story ids. Just the id — a stable, score-independent
     coordinate — so `screen` (the actual fetch) runs at most once per story."""
@@ -97,7 +97,7 @@ def top_story():
         yield {"id": story_id}
 
 
-@p.step(name="screen", version="1", depends_on=["top_story"], params_model=Screen)
+@p.step(params_model=Screen)
 def screen(top_story: dict, params: Screen) -> dict | Filtered:
     """Fetch the story and drop low-signal ones before spending any tokens."""
     story = _get(f"{HN}/item/{top_story['id']}.json") or {}
@@ -109,9 +109,6 @@ def screen(top_story: dict, params: Screen) -> dict | Filtered:
 
 
 @p.step(
-    name="classify",
-    version="1",
-    depends_on=["screen"],
     retries=3,
     retry_delay=2,
     rate_limit="30/min",
@@ -135,7 +132,7 @@ def classify(screen: dict) -> dict:
     }
 
 
-@p.step(name="digest", version="1", depends_on=["classify"], shape="reduce")
+@p.step(depends_on=["classify"], shape="reduce")
 def digest(classify: dict) -> str:
     """Fan in every classified story and let the LLM write the editor's note."""
     stories = sorted(classify.values(), key=lambda s: s["score"], reverse=True)
@@ -149,10 +146,9 @@ def digest(classify: dict) -> str:
 
 
 def main():
-    pipe = p
-    print(pipe.describe())
+    print(p.describe())
     print()
-    summary = pipe.run(params={"min_score": 100})
+    summary = p.run(params={"min_score": 100})
     print(
         f"created={summary.created_count} reused={summary.reused_count} "
         f"filtered={summary.filtered_count}"
