@@ -61,8 +61,7 @@ def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
 # two sources meet — one lane per matched pair
-@p.step(
-        join_on={"feed": "publisher", "publisher": "publisher"})
+@p.step(join_on={"feed": "publisher", "publisher": "publisher"})
 def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
 
