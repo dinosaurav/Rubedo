@@ -42,12 +42,12 @@ import csv
 
 p = pipeline(name="newsroom")
 
-@p.step()
+@p.step
 def feeds():
     with open("feeds.csv") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def publishers():
     with open("publishers.csv") as f:
         yield from csv.DictReader(f)
@@ -61,7 +61,7 @@ def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
 # two sources meet — one lane per matched pair
-@p.step(depends_on=["feed", "publisher"],
+@p.step(
         join_on={"feed": "publisher", "publisher": "publisher"})
 def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
@@ -76,7 +76,7 @@ def articles(feed_meta: dict):
         yield {"title": title, "region": feed_meta["region"]}
 
 # fold back: one digest per region
-@p.step(depends_on=["articles"], group_key="region")
+@p.step(group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
     return {"count": len(titles), "headlines": titles}`
@@ -114,13 +114,13 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step()
+@p.step
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
         yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def count_lines(scan: dict):
     return {"line_count": len(scan["text"].splitlines())}
 

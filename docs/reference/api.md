@@ -67,7 +67,7 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
 | `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
-| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys must exactly match `depends_on`. |
+| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
 | `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
 | `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
 | `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
@@ -228,7 +228,7 @@ class:
 ```python
 p = pipeline(name="count-lines")
 
-@p.step()
+@p.step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -236,7 +236,7 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def read_lines(scan: dict):
     return {"lines": scan["text"].splitlines()}
 

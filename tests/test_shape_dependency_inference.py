@@ -219,6 +219,59 @@ def test_depends_on_dict_alias_binds_execution_kwarg():
     assert values == [{"got": 1}]
 
 
+def test_depends_on_dict_alias_on_join():
+    @step(shape="expand")
+    def orders_src():
+        yield {"oid": 1, "cust": "a"}
+
+    @step(shape="expand")
+    def customers_src():
+        yield {"cid": "a", "name": "Acme"}
+
+    @step(index=["cust"])
+    def order(orders_src):
+        return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
+
+    @step(index=["cid"])
+    def customer(customers_src):
+        return {"cid": customers_src["cid"], "name": customers_src["name"]}
+
+    # dict alias binds the parent step names to the function's param names
+    @step(
+        depends_on={"o": "order", "c": "customer"},
+        join_on={"order": "cust", "customer": "cid"},
+    )
+    def enrich(o, c):
+        return {"oid": o["oid"], "name": c["name"]}
+
+    p = pipeline(name="join-alias", steps=[orders_src, customers_src, order, customer, enrich])
+    assert p.spec.steps[-1].depends_on == ["order", "customer"]
+    assert p.spec.steps[-1].depends_on_aliases == {"order": "o", "customer": "c"}
+
+    summary = p.run()
+    values = list(summary.output_for("enrich").values())
+    assert values == [{"oid": 1, "name": "Acme"}]
+
+
+def test_depends_on_dict_alias_on_reduce():
+    @step(shape="expand")
+    def scan():
+        yield {"v": 1}
+        yield {"v": 2}
+
+    @step(depends_on={"raw": "scan"}, shape="reduce")
+    def total(raw):
+        return {"sum": sum(v["v"] for v in raw.values())}
+
+    p = pipeline(name="reduce-alias", steps=[scan, total])
+    assert p.spec.steps[-1].depends_on == ["scan"]
+    assert p.spec.steps[-1].depends_on_aliases == {"scan": "raw"}
+
+    summary = p.run()
+    values = list(summary.output_for("total").values())
+    assert values == [{"sum": 3}]
+
+
 # ---------- traps: byte-identical definition(), untouched addresses ----------
 
 

@@ -15,7 +15,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 10. **Shapes — mostly inferred:** a generator function is `expand`; `join_on=` implies `join`; `group_key=` implies `reduce`; everything else is `map` (1:1, the default). Only the plain `@all` reduce (no `group_key`) still needs `shape="reduce"` spelled out. Semantics: `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across independent roots, matched on indexed fields).
 
 ## Step Contract
-- A step's parameters name its parents: with no `depends_on=`, every parameter other than `params` must match a registered step's name and becomes a dependency in signature order (parents bind as kwargs keyed by step name; an unmatched parameter raises at pipeline-build time). Passing `depends_on=[...]` explicitly disables inference; the dict form `depends_on={"param": "step"}` binds a parent's output to a differently-named parameter. **Exception:** `reduce` (including `group_key=`) and `join` steps must pass `depends_on=` explicitly — those shapes are validated at decoration time, before inference runs. A root step (`map` or `expand` with no parents) takes no payload argument at all — it mints its own lane(s).
+- A step's parameters name its parents: with no `depends_on=`, every parameter other than `params` must match a registered step's name and becomes a dependency in signature order (parents bind as kwargs keyed by step name; an unmatched parameter raises at pipeline-build time). Passing `depends_on=[...]` explicitly disables inference; the dict form `depends_on={"param": "step"}` binds a parent's output to a differently-named parameter. A root step (`map` or `expand` with no parents) takes no payload argument at all — it mints its own lane(s).
 - A parameter literally named `params` (any position) receives the pipeline's run params: validated against `pipeline(params_model=...)` when declared (as a plain `dict`, not a model instance — see `params.model_dump()` under the hood), else whatever dict was passed to `.run(params=...)`. It participates in the cache key only for steps that declare it. `params` is never treated as a dependency.
 - A step returns a JSON-serializable value (commonly a `dict`), or `ProcessResult(value=..., metadata=...)`, or `Filtered("reason")`.
 
@@ -32,8 +32,8 @@ A step's output is cached based on:
 - `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step. Not allowed on `expand` or `reduce` steps.
 - `assertions=[callable, ...]`: A list of callables that take the output value. If any raise an exception, the step fails.
 - `executor="process"`: run this step's lanes in a `loky` process pool (via `cloudpickle`) instead of the default thread pool — for CPU-bound work.
-- `shape="reduce"` (the only shape you still write out, for the plain `@all` reduce; needs explicit `depends_on=`): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (an indexed field of the parent; implies the reduce, so drop `shape=`) emits one output per group instead of one over `@all`.
-- `join_on={parent: field, ...}` (implies `shape="join"`; needs explicit `depends_on=` with 2+ parents): N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
+- `shape="reduce"` (the only shape you still write out, for the plain `@all` reduce): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (an indexed field of the parent; implies the reduce, so drop `shape=`) emits one output per group instead of one over `@all`.
+- `join_on={parent: field, ...}` (implies `shape="join"`): N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
 - A generator function is `shape="expand"` automatically: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records, or ingestion (a parentless expand = a source).
 
 ## Complete Worked Example
@@ -60,7 +60,7 @@ def enrich(screen: dict, params: dict):
         return Filtered("No URL")
     return ProcessResult(value={"company": screen["company"], "summary": f"...{params['prompt_mode']}"})
 
-@p.step(depends_on=["enrich"], shape="reduce")
+@p.step(shape="reduce")
 def summarize(enrich: dict) -> dict:
     return {"total": len(enrich), "data": list(enrich.values())}
 
@@ -102,7 +102,7 @@ def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cus
 @p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@p.step(depends_on=["order", "customer"],
+@p.step(
         join_on={"order": "cust", "customer": "cid"})  # match order.cust == customer.cid
 def enrich(order, customer): return {"oid": order["oid"], "name": customer["name"]}
 
@@ -127,5 +127,4 @@ print(summary.output_for("lines"))
 2. **Missing version bumps:** Changing step logic without bumping `version` will cause the engine to reuse the old cache (and print a code-drift warning under the default `code="warn"`).
 3. **`skip_cache` on expensive steps:** Only use `skip_cache` for cheap data transformations. Never use it on LLM calls or network requests.
 4. **Positional arguments to `@p.step`:** the decorator takes keyword arguments only — `@p.step(retries=3)`, never `@p.step("name")`. (Bare `@p.step` and `@p.step()` are both fine.)
-5. **Omitting `depends_on=` on a reduce or join:** shape validation runs at decoration time, before dependency inference — a `group_key=`/`shape="reduce"`/`join_on=` step without an explicit `depends_on=` raises immediately. Map and expand steps are where parameter-name inference applies.
-6. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain parentless generator step (its `shape="expand"` inferred automatically); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.
+5. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain parentless generator step (its `shape="expand"` inferred automatically); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.

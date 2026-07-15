@@ -344,10 +344,15 @@ def test_registration_errors():
         def sum_v2(x):
             pass
 
+    # A parentless reduce (no params, no depends_on) can't be caught at
+    # decoration time — the parent-count check moved to build time so that
+    # a reduce omitting depends_on= can get its parent from signature
+    # inference. It raises when the pipeline is built:
+    @step(name="sum", shape="reduce")
+    def sum_v3():
+        pass
     with pytest.raises(ValueError, match="requires at least one parent"):
-        @step(name="sum", shape="reduce")
-        def sum_v3():
-            pass
+        pipeline(name="pe", steps=[sum_v3]).spec
 
 def test_reduce_all_filtered():
     create_file("a.txt", "10")

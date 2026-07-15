@@ -92,7 +92,7 @@ def advice(forecast: dict) -> dict:
     return {**forecast, "outlook": outlook, "tip": tip}
 
 
-@p.step(depends_on=["advice"], shape="reduce")
+@p.step(shape="reduce")
 def briefing(advice: dict) -> str:
     """Fan every city's advice into one morning briefing."""
     rows = sorted(advice.values(), key=lambda a: a["tmax"], reverse=True)

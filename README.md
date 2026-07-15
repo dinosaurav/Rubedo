@@ -40,7 +40,7 @@ from rubedo import ProcessResult, pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step()
+@p.step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -48,7 +48,7 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
@@ -94,12 +94,12 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step()
+@p.step
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
@@ -143,12 +143,12 @@ By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan
 ```python
 p = pipeline(name="enrich")
 
-@p.step()
+@p.step
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -159,7 +159,7 @@ def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cus
 @p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@p.step(depends_on=["order", "customer"],
+@p.step(
         join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
@@ -170,7 +170,7 @@ Multiple sources are just multiple `expand`-shaped roots in the same pipeline �
 A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `p.run(params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
 
 ```python
-@p.step()                                    # no parents, not a generator
+@p.step                                    # no parents, not a generator
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 ```
 

@@ -73,7 +73,7 @@ def classify(orders: dict) -> ProcessResult:
     )
 
 
-@p.step(depends_on=["classify"], shape="reduce")
+@p.step(shape="reduce")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
     totals: dict[str, tuple[int, float]] = {}

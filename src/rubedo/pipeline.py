@@ -170,6 +170,17 @@ def _build_spec(
     ]
     seen = {s.name: s for s in steps}
 
+    # Post-inference validation: a reduce step must have at least one parent.
+    # Checked here (not at decoration time) because a reduce that omits
+    # depends_on= gets its parent from signature inference above — the
+    # decoration-time check would fire before inference runs.
+    for s in steps:
+        if s.shape == "reduce" and not s.depends_on:
+            raise ValueError(
+                f"Step '{s.name}': shape='reduce' requires at least one parent "
+                "in depends_on (or a parameter naming a parent step)"
+            )
+
     roots = [s for s in steps if not s.depends_on]
     if not roots:
         raise ValueError("pipeline has no root step to originate lanes")

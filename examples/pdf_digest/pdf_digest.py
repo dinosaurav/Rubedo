@@ -165,7 +165,7 @@ def caption(split_chunks: dict, params: PdfParams) -> dict:
     return {"index": chunk["index"], "kind": "image", "content": caption_text}
 
 
-@p.step(depends_on=["caption"], shape="reduce")
+@p.step(shape="reduce")
 def rejoin(caption: dict) -> dict:
     """Fan the captioned chunks back into reading order and build two docs:
     picture-aware (figures -> captions) and text-only (figures dropped)."""

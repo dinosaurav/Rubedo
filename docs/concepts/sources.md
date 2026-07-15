@@ -12,12 +12,12 @@ from rubedo import pipeline
 
 p = pipeline(name="doubler")
 
-@p.step()
+@p.step
 def rows():
     yield {"n": 1}
     yield {"n": 2}
 
-@p.step()
+@p.step
 def double(rows):
     return rows["n"] * 2
 ```
@@ -45,14 +45,14 @@ from rubedo import pipeline
 
 p = pipeline(name="docs")
 
-@p.step()
+@p.step
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def process(scan):
     return scan["text"].upper()
 ```
@@ -72,12 +72,12 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step()
+@p.step
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
@@ -92,14 +92,14 @@ from rubedo import pipeline
 
 p = pipeline(name="orders-rollup")
 
-@p.step()
+@p.step
 def orders():
     engine = create_engine("postgresql://...")
     with engine.connect() as conn:
         for row in conn.execute(text("SELECT * FROM orders")).mappings():
             yield dict(row)
 
-@p.step()
+@p.step
 def classify(orders: dict): ...
 ```
 
@@ -126,7 +126,7 @@ from rubedo import pipeline
 
 p = pipeline(name="ingest")
 
-@p.step()
+@p.step
 def objects():
     client = boto3.client("s3")
     paginator = client.get_paginator("list_objects_v2")
@@ -134,7 +134,7 @@ def objects():
         for obj in page.get("Contents", []):
             yield {"key": obj["Key"], "etag": obj["ETag"], "size": obj["Size"]}
 
-@p.step()
+@p.step
 def fetch(objects: dict) -> bytes:
     client = boto3.client("s3")
     return client.get_object(Bucket="my-bucket", Key=objects["key"])["Body"].read()
@@ -200,12 +200,12 @@ is just another parentless generator step; nothing extra to declare:
 ```python
 p = pipeline(name="enrich")
 
-@p.step()
+@p.step
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -216,7 +216,7 @@ def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cus
 @p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@p.step(depends_on=["order", "customer"],
+@p.step(
         join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}

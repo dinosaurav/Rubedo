@@ -133,7 +133,7 @@ def extract_semantic_nodes(src_files: str) -> ProcessResult:
 
     return ProcessResult(value={"file_id": file_id, "summary": summary})
 
-@p.step(depends_on=["extract_code_nodes", "extract_semantic_nodes"], shape="reduce")
+@p.step(shape="reduce")
 def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict) -> ProcessResult:
     """Fan-in all the nodes and edges, merging semantic summaries into the Graph."""
     G = nx.DiGraph()

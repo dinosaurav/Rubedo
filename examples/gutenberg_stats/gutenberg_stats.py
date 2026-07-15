@@ -80,7 +80,7 @@ def analyze(clean: dict) -> dict:
     }
 
 
-@p.step(depends_on=["analyze"], shape="reduce")
+@p.step(shape="reduce")
 def report(analyze: dict) -> str:
     """Rank books by lexical diversity."""
     rows = sorted(analyze.values(), key=lambda s: s["lexical_diversity"], reverse=True)

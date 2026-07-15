@@ -91,7 +91,7 @@ def score(fetch_repo: dict, activity: dict) -> ProcessResult:
     )
 
 
-@p.step(depends_on=["score"], shape="reduce")
+@p.step(shape="reduce")
 def report(score: dict) -> str:
     """Fan in every repo's score into one ranked table."""
     rows = sorted(score.values(), key=lambda s: s["health"], reverse=True)

@@ -61,7 +61,7 @@ def count_lines(read_lines: dict) -> ProcessResult:
     )
 
 
-@p.step(depends_on=["count_lines"], shape="reduce")
+@p.step(shape="reduce")
 def total_lines(count_lines: dict):
     return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
 

@@ -266,6 +266,15 @@ def step(
             depends_on_list = list(depends_on) if depends_on is not None else []
             depends_on_aliases = None
 
+        # join_on keys name the parents (they ARE the depends_on set — the
+        # set-equality check below is a tautology when both come from
+        # join_on), so a join that omits depends_on= can be validated at
+        # decoration time by borrowing join_on's keys. Build-time signature
+        # inference (pipeline.py::_build_spec) will then confirm the
+        # function's parameters actually name those parents.
+        if depends_on is None and join_on is not None:
+            depends_on_list = list(join_on.keys())
+
         # shape: explicit always wins. Otherwise a generator function is a
         # fan-out by construction (shape="expand"); join_on=/group_key=
         # otherwise imply "join"/"reduce"; anything else is a plain "map".
@@ -324,8 +333,6 @@ def step(
             raise ValueError(f"Step '{step_name}': executor must be 'thread' or 'process', got {executor!r}")
         if resolved_shape == "reduce" and skip_cache:
             raise ValueError(f"Step '{step_name}': skip_cache is meaningless with shape='reduce' (reductions must be materialized)")
-        if resolved_shape == "reduce" and not depends_on_list:
-            raise ValueError(f"Step '{step_name}': shape='reduce' requires at least one parent in depends_on")
         if group_key is not None and resolved_shape != "reduce":
             raise ValueError(
                 f"Step '{step_name}': group_key requires shape='reduce' (it partitions a "

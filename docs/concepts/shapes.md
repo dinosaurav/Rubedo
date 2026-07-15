@@ -28,7 +28,7 @@ from rubedo import ProcessResult, pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step()
+@p.step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -36,7 +36,7 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
@@ -56,7 +56,7 @@ A root (`no depends_on`) is usually `shape="expand"` — the ingestion shape
 ```python
 p = pipeline(name="pdf")
 
-@p.step()                                    # no parents, not a generator
+@p.step                                    # no parents, not a generator
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
 p.run(params={"pdf": "report.pdf"})
@@ -78,15 +78,14 @@ receives every lane as one `{coordinate: value}` dict and returns a single
 output at the fixed coordinate `@all`:
 
 ```python
-@p.step(depends_on=["count_lines"], shape="reduce")
+@p.step(shape="reduce")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 ```
 
-(A fan-in step spells out `depends_on=` — `reduce` and `join` validate
-their parent count at decoration time, before parameter-name inference
-gets a chance to run. A plain `@all` reduce is also the one shape that's
-always explicit: nothing in the code implies it.)
+(A plain `@all` reduce is the one shape that's always explicit: nothing
+in the code implies it. The parent comes from the parameter name, like
+any other step.)
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of an indexed field, read from
@@ -94,7 +93,7 @@ output per distinct value of an indexed field, read from
 `group_key=` implies `shape="reduce"` on its own:
 
 ```python
-@p.step(depends_on=["articles"], group_key="region")
+@p.step(group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
     return {"count": len(titles), "headlines": titles}
@@ -125,12 +124,12 @@ value mints its own content-addressed downstream lane
 like a source row:
 
 ```python
-@p.step()
+@p.step
 def articles(fetch: list):
     for art in fetch:      # 1:N — one lane per article
         yield art
 
-@p.step()
+@p.step
 def headline(articles: dict) -> str:
     return articles["title"].upper()
 ```
@@ -188,12 +187,12 @@ tuple — coordinate `a|b|…`, the members' coordinates joined by `|`:
 ```python
 p = pipeline(name="enrich")
 
-@p.step()
+@p.step
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step()
+@p.step
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -204,18 +203,19 @@ def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cus
 @p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@p.step(depends_on=["order", "customer"],
+@p.step(
         join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 ```
 
-(`join_on=` implies `shape="join"`; like `reduce`, a join spells out
-`depends_on=` explicitly.)
+(`join_on=` implies `shape="join"`; the parents are the `join_on` keys,
+confirmed by the function's parameters at build time.)
 
 Every side named in `join_on` must be indexed on the field it's matched by
-(`@step(index=[...])`), and `join_on`'s keys must exactly match
-`depends_on`. `join` accepts two or more parents — `join_on={a:"uid",
+(`@step(index=[...])`), and `join_on`'s keys must exactly match the
+function's parameter names (which become the parents). `join` accepts two
+or more parents — `join_on={a:"uid",
 b:"uid", c:"uid"}` is a valid N-way star, all matched on the same field
 name. Sides joined on *different* pairwise keys compose by chaining `join`
 steps; an arbitrary pair predicate isn't part of `join` itself — express it

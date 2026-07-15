@@ -77,7 +77,6 @@ def publisher(publishers: dict) -> dict:
 
 
 @p.step(
-    depends_on=["feed", "publisher"],
     join_on={"feed": "publisher", "publisher": "publisher"},
 )
 def feed_meta(feed: dict, publisher: dict) -> dict:
@@ -93,7 +92,7 @@ def articles(feed_meta: dict):
         yield {"title": title, "region": feed_meta["region"]}  # yield payloads
 
 
-@p.step(depends_on=["articles"], group_key="region")
+@p.step(group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
     return {"count": len(titles), "headlines": titles}
