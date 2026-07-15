@@ -1,21 +1,38 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchRuns } from '../api';
 import { DataTable, TruncatedText } from '../components/DataTable';
 import { fmtTime, durationMs, fmtDuration, runStatusClass } from '../format';
+import LiveRunCard from '../components/LiveRunCard';
 import type { ColumnDef } from '@tanstack/react-table';
+
+const POLL_MS = 3000;
 
 export default function Runs() {
   const [runs, setRuns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetchRuns()
       .then(setRuns)
-      .catch(e => setError(String(e)))
+      .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const liveRuns = runs.filter((r) => r.status === 'running');
+  const hasLive = liveRuns.length > 0;
+
+  // Poll for updates while there are live runs
+  useEffect(() => {
+    if (!hasLive) return;
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [hasLive, load]);
 
   if (loading) return <div>Loading runs...</div>;
   if (error) return <div>API unreachable: {error}</div>;
@@ -59,6 +76,19 @@ export default function Runs() {
       <div className="page-header">
         <h1 className="page-title">Runs</h1>
       </div>
+
+      {hasLive && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--accent-primary)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="badge badge-info badge-running">live</span>
+            {liveRuns.length} running {liveRuns.length === 1 ? 'run' : 'runs'}
+          </h2>
+          {liveRuns.map((r) => (
+            <LiveRunCard key={r.id} runId={r.id} />
+          ))}
+        </div>
+      )}
+
       <DataTable
         data={runs}
         columns={columns}

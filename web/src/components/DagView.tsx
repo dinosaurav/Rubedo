@@ -4,6 +4,10 @@
  * Layout: longest-path layering — each step sits one column right of its
  * deepest dependency. Pipelines here are small (a handful of steps), so no
  * crossing minimization is attempted.
+ *
+ * When stepCounts + isLive are provided, each node shows a live progress
+ * bar and is styled as waiting / active / done based on whether lanes have
+ * started flowing through it.
  */
 
 interface StepDef {
@@ -20,10 +24,12 @@ interface StepDef {
 }
 
 type StepCounts = Record<string, Record<string, number>>;
+type StepState = 'waiting' | 'active' | 'done';
 
 const NODE_W = 168;
 const NODE_H = 58;
 const COUNTS_H = 16;
+const PROGRESS_H = 6;
 const COL_GAP = 72;
 const ROW_GAP = 26;
 const PAD = 16;
@@ -35,6 +41,22 @@ const COUNT_COLORS: Record<string, string> = {
   blocked: 'var(--status-warning, #f59e0b)',
   filtered: 'var(--text-muted)',
 };
+
+const STATE_COLORS: Record<StepState, string> = {
+  waiting: 'var(--text-muted)',
+  active: 'var(--accent-primary)',
+  done: 'var(--status-success, #22c55e)',
+};
+
+function sumCounts(counts?: Record<string, number>): number {
+  if (!counts) return 0;
+  return Object.values(counts).reduce((a, b) => a + b, 0);
+}
+
+function survivingLanes(counts?: Record<string, number>): number {
+  if (!counts) return 0;
+  return (counts.created ?? 0) + (counts.reused ?? 0);
+}
 
 function countsLine(counts?: Record<string, number>): { label: string; color: string }[] {
   if (!counts) return [];
@@ -55,6 +77,52 @@ function policyBadges(s: StepDef): string[] {
   return badges;
 }
 
+function computeExpectedTotal(
+  step: StepDef,
+  stepCounts: StepCounts | undefined,
+  byName: Record<string, StepDef>,
+): number {
+  const parents = (step.depends_on ?? []).filter((d) => byName[d]);
+  if (parents.length === 0) {
+    if (step.shape === 'expand') return sumCounts(stepCounts?.[step.name]);
+    return 1;
+  }
+  if (step.shape === 'reduce') return 1;
+  return parents.reduce((total, p) => total + survivingLanes(stepCounts?.[p]), 0);
+}
+
+function computeStepState(
+  step: StepDef,
+  stepCounts: StepCounts | undefined,
+  isLive: boolean,
+  children: Record<string, StepDef[]>,
+  byName: Record<string, StepDef>,
+): StepState {
+  if (!isLive) return 'done';
+  if (!stepCounts) return 'waiting';
+
+  const finished = sumCounts(stepCounts[step.name]);
+  const kids = children[step.name] ?? [];
+  const allChildrenStarted =
+    kids.length > 0 && kids.every((c) => sumCounts(stepCounts[c.name]) > 0);
+
+  if (finished > 0 && allChildrenStarted) return 'done';
+  if (finished > 0) return 'active';
+
+  const parents = (step.depends_on ?? []).filter((d) => byName[d]);
+  if (parents.length === 0) return 'active';
+  const allParentsDone =
+    parents.length > 0 &&
+    parents.every((p) => {
+      const pFinished = sumCounts(stepCounts[p]);
+      const pKids = children[p] ?? [];
+      const pAllChildrenStarted =
+        pKids.length > 0 && pKids.every((c) => sumCounts(stepCounts[c.name]) > 0);
+      return pFinished > 0 && pAllChildrenStarted;
+    });
+  return allParentsDone ? 'active' : 'waiting';
+}
+
 export default function DagView({
   steps,
   stepCounts,
@@ -67,29 +135,48 @@ export default function DagView({
   onStepClick?: (stepName: string) => void;
 }) {
   if (!steps?.length) return null;
-  const nodeH = stepCounts ? NODE_H + COUNTS_H : NODE_H;
+  const hasCounts = !!stepCounts;
+  const nodeH = NODE_H + (hasCounts ? COUNTS_H + PROGRESS_H : 0);
+
+  // Build lookup tables
+  const byName: Record<string, StepDef> = {};
+  steps.forEach((s) => { byName[s.name] = s; });
+  const children: Record<string, StepDef[]> = {};
+  steps.forEach((s) => {
+    (s.depends_on ?? []).forEach((dep) => {
+      if (byName[dep]) (children[dep] ??= []).push(s);
+    });
+  });
+
+  // Compute per-step state and progress
+  const stepStates: Record<string, StepState> = {};
+  const stepPct: Record<string, number> = {};
+  steps.forEach((s) => {
+    stepStates[s.name] = computeStepState(s, stepCounts, !!isLive, children, byName);
+    const expected = computeExpectedTotal(s, stepCounts, byName);
+    const finished = sumCounts(stepCounts?.[s.name]);
+    stepPct[s.name] = expected > 0 ? Math.min(100, Math.round((finished / expected) * 100)) : 0;
+  });
 
   // Longest-path layering
   const layerOf: Record<string, number> = {};
-  const byName: Record<string, StepDef> = {};
-  steps.forEach(s => { byName[s.name] = s; });
   const layer = (name: string): number => {
     if (layerOf[name] !== undefined) return layerOf[name];
     const s = byName[name];
-    const deps = (s?.depends_on ?? []).filter(d => byName[d]);
+    const deps = (s?.depends_on ?? []).filter((d) => byName[d]);
     layerOf[name] = deps.length ? 1 + Math.max(...deps.map(layer)) : 0;
     return layerOf[name];
   };
-  steps.forEach(s => layer(s.name));
+  steps.forEach((s) => layer(s.name));
 
   const columns: StepDef[][] = [];
-  steps.forEach(s => {
+  steps.forEach((s) => {
     const l = layerOf[s.name];
     (columns[l] ??= []).push(s);
   });
 
   const pos: Record<string, { x: number; y: number }> = {};
-  const maxRows = Math.max(...columns.map(c => c.length));
+  const maxRows = Math.max(...columns.map((c) => c.length));
   const height = PAD * 2 + maxRows * nodeH + (maxRows - 1) * ROW_GAP;
   columns.forEach((col, ci) => {
     const colHeight = col.length * nodeH + (col.length - 1) * ROW_GAP;
@@ -111,16 +198,18 @@ export default function DagView({
                   markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--text-muted)" />
           </marker>
-          {isLive && (
-            <marker id="dag-arrow-live" viewBox="0 0 8 8" refX="7" refY="4"
-                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--accent-primary)" />
-            </marker>
-          )}
+          <marker id="dag-arrow-active" viewBox="0 0 8 8" refX="7" refY="4"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--accent-primary)" />
+          </marker>
+          <marker id="dag-arrow-done" viewBox="0 0 8 8" refX="7" refY="4"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 8 4 L 0 8 z" fill="var(--status-success, #22c55e)" />
+          </marker>
         </defs>
 
-        {steps.flatMap(s =>
-          (s.depends_on ?? []).filter(d => pos[d]).map(dep => {
+        {steps.flatMap((s) =>
+          (s.depends_on ?? []).filter((d) => pos[d]).map((dep) => {
             const from = pos[dep];
             const to = pos[s.name];
             const x1 = from.x + NODE_W;
@@ -128,34 +217,48 @@ export default function DagView({
             const x2 = to.x;
             const y2 = to.y + nodeH / 2;
             const mx = (x1 + x2) / 2;
+            const parentState = stepStates[dep] ?? 'waiting';
+            const stroke = STATE_COLORS[parentState];
+            const markerEnd =
+              parentState === 'done' ? 'url(#dag-arrow-done)'
+              : parentState === 'active' ? 'url(#dag-arrow-active)'
+              : 'url(#dag-arrow)';
+            const style =
+              parentState === 'active'
+                ? { animation: 'pulse-stroke 2s infinite', opacity: 0.7 }
+                : parentState === 'waiting'
+                ? { opacity: 0.3 }
+                : undefined;
             return (
               <path key={`${dep}->${s.name}`}
                     d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2 - 3} ${y2}`}
-                    fill="none" stroke={isLive ? "var(--accent-primary)" : "var(--text-muted)"} strokeWidth={isLive ? 2 : 1.5}
-                    markerEnd={isLive ? "url(#dag-arrow-live)" : "url(#dag-arrow)"}
-                    style={isLive ? { animation: 'pulse-stroke 2s infinite', opacity: 0.7 } : undefined} />
+                    fill="none" stroke={stroke} strokeWidth={parentState === 'waiting' ? 1 : 1.5}
+                    markerEnd={markerEnd}
+                    style={style} />
             );
           })
         )}
 
-        {steps.map(s => {
+        {steps.map((s) => {
           const p = pos[s.name];
           const badges = policyBadges(s);
-          const isNodeRunning = isLive;
-          const nodeClasses = `dag-node ${onStepClick ? 'clickable' : ''} ${isNodeRunning ? 'running' : ''}`;
-          
+          const state = stepStates[s.name] ?? 'waiting';
+          const pct = stepPct[s.name] ?? 0;
+          const stateColor = STATE_COLORS[state];
+          const finished = sumCounts(stepCounts?.[s.name]);
+          const expected = computeExpectedTotal(s, stepCounts, byName);
+
           return (
             <g key={s.name} data-step={s.name}
                onClick={() => onStepClick && onStepClick(s.name)}
-               className={nodeClasses}
-               style={{ cursor: onStepClick ? 'pointer' : 'default' }}>
+               style={{ cursor: onStepClick ? 'pointer' : 'default', opacity: state === 'waiting' ? 0.45 : 1, transition: 'opacity 0.3s ease' }}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
-                    stroke={s.skip_cache ? 'var(--text-muted)' : (s.shape === 'reduce' ? 'var(--status-warning)' : 'var(--accent-primary)')}
-                    strokeWidth={s.shape === 'reduce' ? 2 : 1.5}
-                    strokeDasharray={s.skip_cache ? '5 4' : undefined}
-                    className={isNodeRunning ? 'pulse-border' : ''}
-                    style={{ transition: 'height 0.3s ease, fill 0.3s ease, stroke 0.3s ease' }} />
+                    stroke={s.skip_cache ? 'var(--text-muted)' : stateColor}
+                    strokeWidth={state === 'done' ? 2 : 1.5}
+                    strokeDasharray={s.skip_cache ? '5 4' : state === 'waiting' ? '4 3' : undefined}
+                    className={state === 'active' ? 'pulse-border' : ''}
+                    style={{ transition: 'stroke 0.3s ease, opacity 0.3s ease' }} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
                     fontSize={13} fontWeight={600} fontFamily="ui-monospace, monospace">
                 {s.name}
@@ -168,14 +271,36 @@ export default function DagView({
                   {badges.join(' · ')}
                 </text>
               )}
-              {stepCounts && (
-                <text x={p.x + 12} y={p.y + NODE_H + 8} fontSize={10} style={{ transition: 'all 0.3s ease' }}>
-                  {countsLine(stepCounts[s.name]).map((c, i) => (
-                    <tspan key={c.label} dx={i === 0 ? 0 : 8} fill={c.color} style={{ transition: 'fill 0.3s ease' }}>
-                      {c.label}
-                    </tspan>
-                  ))}
-                </text>
+              {hasCounts && (
+                <>
+                  <text x={p.x + 12} y={p.y + NODE_H + 8} fontSize={10} style={{ transition: 'all 0.3s ease' }}>
+                    {countsLine(stepCounts![s.name]).map((c, i) => (
+                      <tspan key={c.label} dx={i === 0 ? 0 : 8} fill={c.color} style={{ transition: 'fill 0.3s ease' }}>
+                        {c.label}
+                      </tspan>
+                    ))}
+                  </text>
+                  {/* Progress bar */}
+                  <rect x={p.x + 8} y={p.y + nodeH - PROGRESS_H - 2} width={NODE_W - 16} height={4} rx={2}
+                        fill="var(--bg-secondary, #1e293b)" />
+                  <rect x={p.x + 8} y={p.y + nodeH - PROGRESS_H - 2}
+                        width={Math.max(0, (NODE_W - 16) * pct / 100)} height={4} rx={2}
+                        fill={stateColor}
+                        style={{ transition: 'width 0.5s ease, fill 0.3s ease' }} />
+                  {/* Percentage label */}
+                  {state === 'active' && expected > 0 && (
+                    <text x={p.x + NODE_W - 12} y={p.y + NODE_H + 8} fontSize={10} fontWeight={600}
+                          fill={stateColor} textAnchor="end">
+                      {finished}/{expected}
+                    </text>
+                  )}
+                  {state === 'done' && finished > 0 && (
+                    <text x={p.x + NODE_W - 12} y={p.y + NODE_H + 8} fontSize={10}
+                          fill="var(--text-muted)" textAnchor="end">
+                      {finished} {expected === 1 ? '' : `/${expected}`}
+                    </text>
+                  )}
+                </>
               )}
             </g>
           );
