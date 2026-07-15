@@ -15,6 +15,7 @@ export default function Runs() {
   const [error, setError] = useState<string | null>(null);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const liveSectionIds = useRef<Set<string>>(new Set());
+  const [pinnedRunId, setPinnedRunId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetchRuns()
@@ -68,7 +69,26 @@ export default function Runs() {
         </Link>
       ),
     },
-    { accessorKey: 'pipeline_id', header: 'Pipeline', cell: (info) => <TruncatedText value={info.getValue()} /> },
+    {
+      accessorKey: 'pipeline_id',
+      header: 'Pipeline',
+      cell: (info) => {
+        const val = info.getValue();
+        if (!val) return <TruncatedText value={val} />;
+        return (
+          <a
+            onClick={(e) => {
+              e.preventDefault();
+              setPinnedRunId((prev) => (prev === info.row.original.id ? null : info.row.original.id));
+            }}
+            style={{ cursor: 'pointer', color: 'var(--accent-primary)', textDecoration: 'none' }}
+            title="Click to expand pipeline DAG"
+          >
+            <TruncatedText value={val} />
+          </a>
+        );
+      },
+    },
     { accessorKey: 'source_id', header: 'Source', cell: (info) => <TruncatedText value={info.getValue()} maxWidth={200} /> },
     { accessorKey: 'kind', header: 'Kind', meta: { filterVariant: 'select' } },
     {
@@ -103,6 +123,12 @@ export default function Runs() {
           {cardIds.map((id) => (
             <LiveRunCard key={id} runId={id} onDismiss={() => dismissRun(id)} />
           ))}
+        </div>
+      )}
+
+      {pinnedRunId && !dismissedIds.has(pinnedRunId) && !liveSectionIds.current.has(pinnedRunId) && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <LiveRunCard runId={pinnedRunId} onDismiss={() => { setPinnedRunId(null); }} />
         </div>
       )}
 
