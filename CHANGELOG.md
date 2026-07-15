@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-15
+
+### Fixed
+- Web UI assets now build during `pip install` via a `setup.py` hook and
+  ship in the wheel. Previously `rubedo serve` showed "web UI not built"
+  because `web_static/` was gitignored and never included in the package.
+  End users installing from PyPI get the dashboard out of the box — no
+  npm required.
+
 ## [0.2.3] - 2026-07-15
 
 ### Added
