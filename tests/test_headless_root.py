@@ -69,7 +69,7 @@ def isolated_env():
 
 
 def test_param_fed_root_runs_once_then_reuses():
-    @step(name="head", version="1")
+    @step
     def head(params):
         return {"seen": params["n"]}
 
@@ -85,7 +85,7 @@ def test_param_fed_root_runs_once_then_reuses():
 
 
 def test_changed_params_recompute_and_old_params_still_cached():
-    @step(name="head", version="1")
+    @step
     def head(params):
         return {"seen": params["n"]}
 
@@ -101,7 +101,7 @@ def test_changed_params_recompute_and_old_params_still_cached():
 def test_root_with_no_params_is_a_constant():
     calls = {"n": 0}
 
-    @step(name="head", version="1")
+    @step
     def head():
         calls["n"] += 1
         return 42
@@ -119,11 +119,11 @@ def test_root_with_no_params_is_a_constant():
 
 
 def test_root_lane_feeds_downstream_map():
-    @step(name="head", version="1")
+    @step
     def head(params):
         return {"base": params["base"]}
 
-    @step(name="double", version="1", depends_on=["head"])
+    @step
     def double(head):
         return head["base"] * 2
 
@@ -135,12 +135,12 @@ def test_root_lane_feeds_downstream_map():
 
 
 def test_headless_map_root_and_expand_root_coexist():
-    @step(name="rows", version="1")
+    @step
     def rows():
         yield {"v": 1}
         yield {"v": 2}
 
-    @step(name="config", version="1")
+    @step
     def config():
         return {"scale": 10}
 
@@ -154,7 +154,7 @@ def test_headless_map_root_and_expand_root_coexist():
 
 
 def test_bare_pipeline_with_no_source_and_no_root_is_rejected():
-    @step(name="leaf", version="1", depends_on=["ghost"])
+    @step(depends_on=["ghost"])
     def leaf(ghost):
         return ghost
 

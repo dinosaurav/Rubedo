@@ -66,7 +66,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -110,14 +110,11 @@ def test_group_key_partitions_by_indexed_field():
     create_file("b.txt", "tech")
     create_file("c.txt", "biz")
 
-    @step(name="classify", version="1", depends_on=["scan"], index=["category"])
+    @step(index=["category"])
     def classify(scan):
         return {"category": scan["text"].strip()}
 
-    @step(
-        name="rollup", version="1", depends_on=["classify"],
-        shape="reduce", group_key="category",
-    )
+    @step(depends_on=["classify"], group_key="category")
     def rollup(classify):
         return {"n": len(classify)}
 
@@ -134,11 +131,11 @@ def test_group_key_none_is_one_all_group():
     create_file("a.txt", "tech")
     create_file("b.txt", "biz")
 
-    @step(name="classify", version="1", depends_on=["scan"], index=["category"])
+    @step(index=["category"])
     def classify(scan):
         return {"category": scan["text"].strip()}
 
-    @step(name="rollup", version="1", depends_on=["classify"], shape="reduce")
+    @step(depends_on=["classify"], shape="reduce")
     def rollup(classify):
         return {"n": len(classify)}
 
@@ -152,14 +149,11 @@ def test_group_key_none_is_one_all_group():
 def test_group_key_multivalue_joins_multiple_groups():
     create_file("a.txt", "solo")
 
-    @step(name="classify", version="1", depends_on=["scan"], index=["tag"])
+    @step(index=["tag"])
     def classify(scan):
         return {"tag": ["tech", "ai"]}
 
-    @step(
-        name="rollup", version="1", depends_on=["classify"],
-        shape="reduce", group_key="tag",
-    )
+    @step(depends_on=["classify"], group_key="tag")
     def rollup(classify):
         return {"n": len(classify)}
 
@@ -175,22 +169,16 @@ def test_group_key_multivalue_joins_multiple_groups():
 def test_group_key_reduce_after_expand():
     create_file("feed.txt", "tech\nbiz\ntech")
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].splitlines()
 
-    @step(
-        name="articles", version="1", depends_on=["read"],
-        shape="expand", index=["category"],
-    )
+    @step(index=["category"])
     def articles(read):
         for i, cat in enumerate(read):
             yield {"category": cat, "i": i}  # distinct payloads (i) so both "tech" survive
 
-    @step(
-        name="rollup", version="1", depends_on=["articles"],
-        shape="reduce", group_key="category",
-    )
+    @step(depends_on=["articles"], group_key="category")
     def rollup(articles):
         return {"n": len(articles)}
 
@@ -206,14 +194,11 @@ def test_group_key_reduce_after_expand():
 def test_group_key_unindexed_field_raises():
     create_file("a.txt", "hello")
 
-    @step(name="classify", version="1", depends_on=["scan"])  # category is NOT indexed
+    @step  # category is NOT indexed
     def classify(scan):
         return {"category": "tech"}
 
-    @step(
-        name="rollup", version="1", depends_on=["classify"],
-        shape="reduce", group_key="category",
-    )
+    @step(depends_on=["classify"], group_key="category")
     def rollup(classify):
         return {"n": len(classify)}
 

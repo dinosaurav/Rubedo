@@ -71,7 +71,7 @@ def csv_source(name):
     both the step name and the `<name>.csv` file under DATA."""
     path = os.path.join(DATA, f"{name}.csv")
 
-    @step(name=name, version="1", shape="expand")
+    @step(name=name)
     def _scan():
         with open(path, newline="") as f:
             for row in csv.DictReader(f):
@@ -115,16 +115,15 @@ def test_two_way_equijoin():
     orders_src = csv_source("orders")
     customers_src = csv_source("customers")
 
-    @step(name="order", version="1", depends_on=["orders"], index=["cust"])
+    @step(index=["cust"])
     def order(orders):
         return {"oid": orders["oid"], "cust": orders["cust"]}
 
-    @step(name="customer", version="1", depends_on=["customers"], index=["cid"])
+    @step(index=["cid"])
     def customer(customers):
         return {"cid": customers["cid"], "name": customers["name"]}
 
     @step(
-        name="enrich", version="1", shape="join",
         depends_on=["order", "customer"],
         join_on={"order": "cust", "customer": "cid"},
     )
@@ -163,7 +162,7 @@ def test_four_way_star_join():
         write_csv(f"{src}.csv", f"uid,v\nu1,{src}1\nu2,{src}2\n")
 
     def loader(src_name, step_name):
-        @step(name=step_name, version="1", depends_on=[src_name], index=["uid"])
+        @step(name=step_name, depends_on=[src_name], index=["uid"])
         def load(**kwargs):
             row = kwargs[src_name]
             return {"uid": row["uid"], "v": row["v"]}
@@ -176,7 +175,6 @@ def test_four_way_star_join():
     )
 
     @step(
-        name="merge", version="1", shape="join",
         depends_on=["a", "b", "c", "d"],
         join_on={"a": "uid", "b": "uid", "c": "uid", "d": "uid"},
     )
@@ -200,20 +198,19 @@ def test_join_failed_parent_lane():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    @step(name="a", index=["id"])
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    @step(name="b", index=["id"])
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
     @step(
-        name="merge", version="1", shape="join",
         depends_on=["a", "b"], join_on={"a": "id", "b": "id"},
-        on_failed="block"
+        on_failed="block",
     )
     def merge(a, b):
         return a["v"] + b["v"]
@@ -239,20 +236,17 @@ def test_join_failed_parent_lane_use_passed():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    @step(name="a", index=["id"])
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    @step(name="b", index=["id"])
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
-    @step(
-        name="merge", version="1", shape="join",
-        depends_on=["a", "b"], join_on={"a": "id", "b": "id"}
-    )
+    @step(depends_on=["a", "b"], join_on={"a": "id", "b": "id"})
     def merge(a, b):
         return a["v"] + b["v"]
 
@@ -273,7 +267,7 @@ def test_join_failed_parent_lane_use_passed():
 
 def test_join_requires_join_on():
     with pytest.raises(ValueError, match="requires join_on"):
-        step(name="bad", version="1", shape="join", depends_on=["a", "b"])(
+        step(name="bad", shape="join", depends_on=["a", "b"])(
             lambda a, b: None
         )
 
@@ -281,7 +275,7 @@ def test_join_requires_join_on():
 def test_join_needs_two_parents():
     with pytest.raises(ValueError, match="at least two parents"):
         step(
-            name="bad", version="1", shape="join",
+            name="bad", shape="join",
             depends_on=["a"], join_on={"a": "k"},
         )(lambda a: None)
 
@@ -289,7 +283,7 @@ def test_join_needs_two_parents():
 def test_join_on_must_match_depends_on():
     with pytest.raises(ValueError, match="must match depends_on"):
         step(
-            name="bad", version="1", shape="join",
+            name="bad", shape="join",
             depends_on=["a", "b"], join_on={"a": "k", "c": "k"},
         )(lambda a, b: None)
 
@@ -300,18 +294,15 @@ def test_join_empty():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", version="1", depends_on=["a_csv"], index=["id"])
+    @step(name="a", index=["id"])
     def load_a(a_csv):
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", version="1", depends_on=["b_csv"], index=["id"])
+    @step(name="b", index=["id"])
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
-    @step(
-        name="merge", version="1", shape="join",
-        depends_on=["a", "b"], join_on={"a": "id", "b": "id"}
-    )
+    @step(depends_on=["a", "b"], join_on={"a": "id", "b": "id"})
     def merge(a, b):
         return a["v"] + b["v"]
 

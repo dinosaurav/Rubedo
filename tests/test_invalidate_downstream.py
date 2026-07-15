@@ -76,7 +76,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -88,16 +88,16 @@ def scan():
 def make_pipeline():
     """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
 
-    @step(name="extract", version="1", depends_on=["scan"], index=["company"])
+    @step(index=["company"])
     def extract(scan):
         company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
 
-    @step(name="summarize", version="1", depends_on=["extract"])
+    @step
     def summarize(extract):
         return {"company": extract["company"], "double": extract["amount"] * 2}
 
-    @step(name="total", version="1", depends_on=["summarize"], shape="reduce")
+    @step(depends_on=["summarize"], shape="reduce")
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 
