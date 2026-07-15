@@ -210,12 +210,12 @@ invalidates the cache and it rebuilds.
 import csv
 from rubedo import step, pipeline
 
-@step(name="leads", version="v1", shape="expand")
+@step
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="enrich", version="v1", depends_on=["leads"])
+@step
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 
@@ -228,7 +228,7 @@ class:
 ```python
 p = pipeline(name="count-lines")
 
-@p.step(name="scan", version="1")
+@p.step()
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -236,7 +236,7 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step(name="read_lines", version="read-v1", depends_on=["scan"])
+@p.step()
 def read_lines(scan: dict):
     return {"lines": scan["text"].splitlines()}
 
@@ -499,7 +499,7 @@ attach metadata alongside the value.
 ```python
 from rubedo import ProcessResult
 
-@step(name="count_lines", version="count-v1", depends_on=["read_lines"])
+@step
 def count_lines(read_lines: dict) -> ProcessResult:
     return ProcessResult(
         value={"line_count": len(read_lines["lines"])},
@@ -522,7 +522,7 @@ expensive LLM-based filter runs once per input, not once per run.
 ```python
 from rubedo import Filtered
 
-@step(name="screen", version="v1", depends_on=["top_story"])
+@step
 def screen(top_story: dict):
     if top_story["score"] < 50:
         return Filtered(reason="score below threshold")
