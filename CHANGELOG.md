@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-15
+
+### Added
+- `rubedo serve` — one command starts the read-only FastAPI server with
+  the built web UI served at `/` (SPA fallback for client-side routes).
+  The web assets are bundled as package-data, so `pip install
+  "rubedo[server]"` ships the dashboard. Vite builds to
+  `src/rubedo/web_static/` and proxies `/api` to `:8000` in dev.
+- `Pipeline.declare()` — writes a `kind="declaration"` Run with the full
+  definition snapshot (including step source code) to the ledger without
+  executing. The pipeline appears in the dashboard and `rubedo ls` before
+  any run.
+- Live run progress UI: per-step completion states (waiting/active/done)
+  with progress bars and `finished/total` labels, animated topology on
+  the Runs page. Live run cards expand/collapse and stay visible after
+  completion (dismissible). The Runs page always polls (2s live, 5s idle)
+  so new runs appear without a manual refresh.
+- Clickable step detail panel in DagView: click any step node to see all
+  specs (name, version, shape, depends_on, workers, retries, rate_limit,
+  stale_after, executor, group_key, join_on, etc.) plus syntax-highlighted
+  source code (open by default). A "View materializations →" link appears
+  when a pipelineId is available.
+- Click a pipeline name in the runs table to expand its DAG inline.
+- `definition()` snapshot now includes a `source` field per step with the
+  raw `inspect.getsource()` text.
+- Playwright e2e specs (4 tests) spawning a backend with a temp
+  `RUBEDO_HOME`, verifying the SPA renders real ledger data. Added to CI.
+- `private/demo_live.py` — 7-step DAG with parallel branches and
+  `stale_after="3s"` for observing live progress (`--force` and
+  `--declare` flags).
+
+### Changed
+- SSE stream interval 1.0s → 0.3s for smoother live progress animation.
+- `/api/pipelines` now includes `kind="declaration"` runs, not just
+  `kind="process"`.
+- `web/src/api.ts` uses relative `/api` URL (same-origin in prod, proxied
+  by Vite in dev) instead of hardcoded `http://localhost:8000/api`.
+
+### Fixed
+- Playwright e2e: use `uv run python` in CI (bare `python` lacked venv
+  dependencies like pydantic).
+
 ## [0.2.2] - 2026-07-14
 
 ### Changed
