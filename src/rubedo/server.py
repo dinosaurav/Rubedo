@@ -128,7 +128,7 @@ async def stream_run(run_id: str):
                 if status != "running":
                     break
                     
-            time.sleep(1.0)
+            time.sleep(0.3)
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

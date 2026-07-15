@@ -6,7 +6,8 @@ import { fmtTime, durationMs, fmtDuration, runStatusClass } from '../format';
 import LiveRunCard from '../components/LiveRunCard';
 import type { ColumnDef } from '@tanstack/react-table';
 
-const POLL_MS = 3000;
+const LIVE_POLL_MS = 2000;
+const IDLE_POLL_MS = 5000;
 
 export default function Runs() {
   const [runs, setRuns] = useState<any[]>([]);
@@ -27,10 +28,10 @@ export default function Runs() {
   const liveRuns = runs.filter((r) => r.status === 'running');
   const hasLive = liveRuns.length > 0;
 
-  // Poll for updates while there are live runs
+  // Always poll: fast when live runs exist, slower when idle so new
+  // runs are detected without a manual refresh.
   useEffect(() => {
-    if (!hasLive) return;
-    const id = setInterval(load, POLL_MS);
+    const id = setInterval(load, hasLive ? LIVE_POLL_MS : IDLE_POLL_MS);
     return () => clearInterval(id);
   }, [hasLive, load]);
 

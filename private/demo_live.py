@@ -31,7 +31,7 @@ import time
 
 from rubedo import pipeline
 
-p = pipeline(name="demo-live")
+p = pipeline(name="demo-live", schedule="deep")
 
 
 @p.step
