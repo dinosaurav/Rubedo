@@ -35,21 +35,17 @@ Two things worth knowing about how this is built:
   pipelines with a same-named step over identical input would silently
   share one cached materialization, which would quietly break the timing
   comparison after the first run.
-- `analyze_chunk` is wired into a StepSpec via the call form
-  `step(...)(analyze_chunk)`, not the `@step` decorator — decorating in
-  place would rebind the module-level name `analyze_chunk` to the
-  StepSpec, and a process-executor step is pickled by looking up its
-  `module.qualname`. If that name no longer pointed at the function,
-  pickling `step.fn` would fail. Keeping the function and its StepSpec(s)
-  under different names (like `examples/gutenberg_stats/gutenberg_stats.py`
-  does with `analyze_book`/`analyze`) sidesteps that — needed twice over
-  here, since the same function is wrapped into two different StepSpecs.
+- `analyze_chunk` is wired into its StepSpecs via the call form
+  `p.step(...)(analyze_chunk)`, not by decorating it in place — the same
+  function is wrapped into two differently-named StepSpecs (one per
+  variant), so no single decoration could claim it. Same for
+  `combine_chunks`.
 
 The word list download happens once and is cached to a local file next to
 this script (gitignored) — different from every other example's "download
-inside a step" pattern, because Rubedo's own materialization cache only
-covers step outputs, not Source.scan() itself, and chunking has to happen
-before any step exists to cache anything.
+inside a step" pattern, because the root generator re-runs every run (an
+expand root never caches its own enumeration), so a download inside it
+would re-pay the network cost each time.
 """
 import os
 import sys
@@ -156,7 +152,7 @@ def build_pipeline(executor: str):
     docstring)."""
     p = pipeline(name=f"executor-showdown-{executor}")
 
-    @p.step(name="wordlist_chunks", version="1")
+    @p.step()
     def wordlist_chunks():
         words = _ensure_wordlist()
         chunk_size = -(-len(words) // NUM_CHUNKS)
@@ -165,17 +161,22 @@ def build_pipeline(executor: str):
             if chunk:
                 yield chunk
 
+    # name= is load-bearing here, not decorative: the two variants must not
+    # share a step name (see module docstring — a shared name would collide
+    # on one cached materialization). depends_on= is load-bearing too:
+    # analyze_chunk's parameter is named "words", not "wordlist_chunks", so
+    # the dict alias form binds the parent's output to it explicitly.
     p.step(
         name=f"analyze_{executor}",
-        version="1",
-        depends_on=["wordlist_chunks"],
+        depends_on={"words": "wordlist_chunks"},
         executor=executor,
         workers=NUM_CHUNKS,
     )(analyze_chunk)
 
+    # Same reasoning, plus combine_chunks takes **kwargs (shared by both
+    # variants), which by itself skips depends_on inference entirely.
     p.step(
         name=f"combine_{executor}",
-        version="1",
         depends_on=[f"analyze_{executor}"],
         shape="reduce",
     )(combine_chunks)
