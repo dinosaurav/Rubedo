@@ -46,18 +46,17 @@ Something that happened during execution, successful or not.
 **Coordinate (lane key):**
 The engine's dataflow key: within a run it matches a step's output to its
 consumers; across runs it decides "the same item." Unique within a scan,
-stable across scans. A coordinate is **content-addressed by default**
+stable across scans. A lane minted from a payload is **content-addressed**
 (`row-<hash>`, so identical rows collapse and an edit reads as removed +
-added); declare `key=` for a stable, legible coordinate (an edit then reads as
-"changed" — same coordinate, new hash — and a non-unique declared key is an
-error, not a silent suffix). It may also be **minted mid-DAG**: `expand`
+added, never "changed in place" — the declared-`key=` alternative left with
+the `Source` classes, item 14). It may also be **minted mid-DAG**: `expand`
 mints content-addressed `row-<hash>` child lanes, keyed on the child's own
 content rather than on parent+position — an edit to one child never
 renumbers its siblings, and identical children (even from different
 parents) collapse to one lane; `join` mints `a|b|…` pair lanes. It is *not*
 the identity of work (that is the content-addressed output address) and not
-the primary search handle (`index=`) — for file sources it merely coincides
-with the path.
+the primary search handle (`index=`) — to know *which file* a folder-recipe
+lane came from, index the payload's path field and query that.
 
 **Searching:**
 Two channels, one home each: lane keys for source-shaped questions
