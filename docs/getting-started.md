@@ -22,7 +22,7 @@ from rubedo import ProcessResult, pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step()
+@p.step
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -30,7 +30,7 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@p.step()
+@p.step
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
@@ -127,7 +127,7 @@ store (`objects/`). It's created automatically and gitignored automatically
 
 ## Registering steps as a list
 
-The `@p.step()` decorators above accumulate steps on the `Pipeline` object;
+The `@p.step` decorators above accumulate steps on the `Pipeline` object;
 `pipeline(steps=[...])` takes an explicit list of `@step`-decorated
 functions instead, which suits steps defined away from the pipeline that
 uses them — there's no separate builder class, just one object either way,
