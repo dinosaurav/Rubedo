@@ -52,7 +52,7 @@ def seed_db():
 p = pipeline(name="orders-rollup")
 
 
-@p.step()
+@p.step
 def orders():
     engine = create_engine(DB_URL)
     with engine.connect() as conn:

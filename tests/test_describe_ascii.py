@@ -15,15 +15,15 @@ def _count_lines_shaped():
     examples/count_lines/count_lines.py's DAG shape."""
     p = pipeline(name="count-lines")
 
-    @p.step()
+    @p.step
     def input_files():
         yield "a.txt"
 
-    @p.step()
+    @p.step
     def read_lines(input_files):
         return {"lines": []}
 
-    @p.step()
+    @p.step
     def count_lines(read_lines):
         return {}
 
@@ -39,11 +39,11 @@ def _newsroom_shaped():
     examples/newsroom/newsroom.py's DAG shape."""
     p = pipeline(name="newsroom")
 
-    @p.step()
+    @p.step
     def feeds():
         yield {"feed_id": "f1", "publisher": "TechCorp"}
 
-    @p.step()
+    @p.step
     def publishers():
         yield {"publisher": "TechCorp", "region": "US"}
 

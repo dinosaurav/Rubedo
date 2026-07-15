@@ -89,7 +89,7 @@ class Screen(BaseModel):
 p = pipeline(name="hn-digest")
 
 
-@p.step()
+@p.step
 def top_story():
     """Root: today's top story ids. Just the id — a stable, score-independent
     coordinate — so `screen` (the actual fetch) runs at most once per story."""

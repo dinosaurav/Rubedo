@@ -44,7 +44,7 @@ def _get(path: str):
 p = pipeline(name="repo-health")
 
 
-@p.step()
+@p.step
 def repos():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "repos.csv")) as f:

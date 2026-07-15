@@ -37,7 +37,7 @@ def _get(url: str, params: dict):
 p = pipeline(name="weather-advisory")
 
 
-@p.step()
+@p.step
 def cities():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "cities.csv")) as f:

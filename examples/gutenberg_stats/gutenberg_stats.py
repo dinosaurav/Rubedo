@@ -33,7 +33,7 @@ GUTENBERG = "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt"
 p = pipeline(name="gutenberg-stats")
 
 
-@p.step()
+@p.step
 def books():
     import csv
     with open(os.path.join(os.path.dirname(__file__), "books.csv")) as f:

@@ -152,7 +152,7 @@ def build_pipeline(executor: str):
     docstring)."""
     p = pipeline(name=f"executor-showdown-{executor}")
 
-    @p.step()
+    @p.step
     def wordlist_chunks():
         words = _ensure_wordlist()
         chunk_size = -(-len(words) // NUM_CHUNKS)

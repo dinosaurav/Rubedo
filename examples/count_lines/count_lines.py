@@ -19,7 +19,7 @@ class CountLinesParams(BaseModel):
 p = pipeline(name="count-lines", params_model=CountLinesParams)
 
 
-@p.step()
+@p.step
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
@@ -28,7 +28,7 @@ def input_files():
             yield path
 
 
-@p.step()
+@p.step
 def read_lines(input_files: str, params: dict):
     # params arrive as the params_model-validated dict (the same form that
     # is hashed into the cache key), not as a model instance.
@@ -37,7 +37,7 @@ def read_lines(input_files: str, params: dict):
     return {"lines": lines, "params": params}
 
 
-@p.step()
+@p.step
 def count_lines(read_lines: dict) -> ProcessResult:
     lines = read_lines["lines"]
     params = CountLinesParams(**read_lines["params"])

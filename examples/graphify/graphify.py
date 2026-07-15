@@ -34,7 +34,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file_
 p = pipeline(name="graphify")
 
 
-@p.step()
+@p.step
 def src_files():
     folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src")
     for root, _, files in os.walk(folder):
@@ -42,7 +42,7 @@ def src_files():
             yield os.path.join(root, name)
 
 
-@p.step()
+@p.step
 def extract_code_nodes(src_files: str) -> ProcessResult:
     """Extract classes, functions, and import edges using Tree-sitter."""
     path = src_files
@@ -187,7 +187,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
     # Rubedo serializes outputs to JSON, so we must return node_link_data, not the DiGraph object.
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step()
+@p.step
 def detect_communities(build_networkx_graph) -> ProcessResult:
     """Run Louvain clustering to find architectural boundaries."""
     data = build_networkx_graph.value if isinstance(build_networkx_graph, ProcessResult) else build_networkx_graph
@@ -205,7 +205,7 @@ def detect_communities(build_networkx_graph) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step()
+@p.step
 def find_god_nodes(detect_communities) -> ProcessResult:
     """Find central 'God nodes' using PageRank, excluding external libraries."""
     data = detect_communities.value if isinstance(detect_communities, ProcessResult) else detect_communities
@@ -227,7 +227,7 @@ def find_god_nodes(detect_communities) -> ProcessResult:
 
     return ProcessResult(value=nx.node_link_data(G))
 
-@p.step()
+@p.step
 def export_graph(find_god_nodes) -> ProcessResult:
     """Export the fully enriched graph to JSON."""
     data = find_god_nodes.value if isinstance(find_god_nodes, ProcessResult) else find_god_nodes

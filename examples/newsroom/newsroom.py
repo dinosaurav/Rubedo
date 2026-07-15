@@ -52,14 +52,14 @@ FOLDER = os.path.join(tempfile.gettempdir(), "rubedo_newsroom")
 p = pipeline(name="newsroom")
 
 
-@p.step()
+@p.step
 def feeds():
     with open(os.path.join(FOLDER, "feeds.csv")) as f:
         for row in csv.DictReader(f):
             yield row
 
 
-@p.step()
+@p.step
 def publishers():
     with open(os.path.join(FOLDER, "publishers.csv")) as f:
         for row in csv.DictReader(f):

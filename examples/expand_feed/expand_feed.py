@@ -34,7 +34,7 @@ def make_feed(folder):
 p = pipeline(name="expand-feed")
 
 
-@p.step()
+@p.step
 def feed_files():
     folder = os.path.join(tempfile.gettempdir(), "rubedo_expand_feed")
     for name in os.listdir(folder):
@@ -43,19 +43,19 @@ def feed_files():
             yield path
 
 
-@p.step()
+@p.step
 def fetch(feed_files: str) -> list:
     print(f"  fetching {os.path.basename(feed_files)} ...")  # runs once, then cached
     return json.load(open(feed_files))
 
 
-@p.step()
+@p.step
 def articles(fetch: list):
     for art in fetch:  # 1:N — yield a payload per article; content-addressed lanes
         yield art
 
 
-@p.step()
+@p.step
 def headline(articles: dict) -> str:
     return articles["title"].upper()
 

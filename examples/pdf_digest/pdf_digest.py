@@ -106,7 +106,7 @@ class PdfParams(BaseModel):
 p = pipeline(name="pdf-digest", params_model=PdfParams)
 
 
-@p.step()
+@p.step
 def load_pdf(params: dict) -> list[dict]:
     """HEADLESS MAP ROOT — no source, no expand. Reads the PDF path from
     params and mints one '@root' lane: an ordered manifest of chunks.
@@ -129,7 +129,7 @@ def load_pdf(params: dict) -> list[dict]:
     return chunks
 
 
-@p.step()
+@p.step
 def split_chunks(load_pdf: list[dict]):
     """Fan the manifest into one content-addressed lane per ordered chunk.
 
@@ -193,13 +193,13 @@ def _summarize(doc: str) -> str:
     ).strip()
 
 
-@p.step()
+@p.step
 def summary_visual(rejoin: dict) -> str:
     """Summary that CAN see the figures (their captions are in the text)."""
     return _summarize(rejoin["visual"])
 
 
-@p.step()
+@p.step
 def summary_textonly(rejoin: dict) -> str:
     """Summary of the same document with the figures removed — the control."""
     return _summarize(rejoin["textonly"])
