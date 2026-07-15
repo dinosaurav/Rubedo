@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from importlib.resources import files as _resource_files
 from typing import List
 from fastapi import FastAPI, HTTPException, Request, Query, Response
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
@@ -599,23 +598,16 @@ _STATIC_DIR = _web_static_dir()
 
 if _STATIC_DIR is not None:
     _static_dir: str = _STATIC_DIR
-    app.mount(
-        "/assets",
-        StaticFiles(directory=os.path.join(_static_dir, "assets")),
-        name="assets",
-    )
 
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
-        """Serve the SPA: any non-/api path falls back to index.html so
-        client-side routes (e.g. /runs/<id>) work on refresh. Unmatched
-        /api paths get a JSON 404, not the SPA shell."""
+        """Serve the SPA: static files from web_static/, or index.html for
+        client-side routes. Unmatched /api paths get a JSON 404."""
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(404, "Not found")
-        index = os.path.join(_static_dir, "index.html")
         if full_path:
             candidate = os.path.join(_static_dir, full_path)
             if os.path.isfile(candidate):
                 return FileResponse(candidate)
-        return FileResponse(index)
+        return FileResponse(os.path.join(_static_dir, "index.html"))
 
