@@ -83,7 +83,7 @@ def assert_run(pipe):
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -95,7 +95,7 @@ def _scan():
 
 # scan (root expand) -> read (map) -> split (expand, one lane per line) -> shout (map)
 def _read():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
@@ -103,7 +103,7 @@ def _read():
 
 
 def _split():
-    @step(name="split", version="1", depends_on=["read"], shape="expand")
+    @step
     def split(read):
         for line in read.splitlines():
             yield {"line": line}  # yield payloads; content-addressed lanes
@@ -112,7 +112,7 @@ def _split():
 
 
 def _shout():
-    @step(name="shout", version="1", depends_on=["split"])
+    @step
     def shout(split):
         return split["line"].upper()
 
@@ -169,13 +169,13 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
     create_file("a.txt", "alpha\nbeta")
     calls = []
 
-    @step(name="split", version="1", depends_on=["read"], shape="expand")
+    @step
     def split(read):
         calls.append(1)  # side effect proves whether the fn re-runs
         for line in read.splitlines():
             yield {"line": line}
 
-    @step(name="shout", version="1", depends_on=["split"])
+    @step
     def shout(split):
         return split["line"].upper()
 
@@ -224,7 +224,7 @@ def test_expand_plan_marks_downstream_pending():
 def test_expand_identical_payloads_collapse():
     create_file("a.txt", "x")
 
-    @step(name="dup", version="1", depends_on=["read"], shape="expand")
+    @step
     def dup(read):
         yield {"v": 1}
         yield {"v": 1}  # identical payload — collapses to one lane
@@ -247,13 +247,13 @@ def test_expand_identical_payloads_collapse():
 def test_source_decorator():
     calls = []
 
-    @step(name="things", version="1")
+    @step
     def things():
         calls.append(1)  # a source-shaped root re-scans each run
         for x in ["a", "b", "c"]:
             yield {"x": x}
 
-    @step(name="up", version="1", depends_on=["things"])
+    @step
     def up(things):
         return things["x"].upper()
 
@@ -279,22 +279,22 @@ def test_source_decorator():
 
 def test_expand_at_most_one_parent():
     # A parentless expand is valid now — it's a root (a source).
-    step(name="root", version="1", shape="expand")(lambda: None)
+    step(name="root", shape="expand")(lambda: None)
     # Two or more parents would be a join, not an expand.
     with pytest.raises(ValueError, match="at most one parent"):
-        step(name="bad", version="1", depends_on=["a", "b"], shape="expand")(
+        step(name="bad", depends_on=["a", "b"], shape="expand")(
             lambda a, b: None
         )
 
 
 def test_root_expand_is_a_source():
     # A root expand and no source= at all: the expand yields the initial lanes.
-    @step(name="rows", version="1", shape="expand")
+    @step
     def rows():
         for i in range(3):
             yield {"n": i}
 
-    @step(name="double", version="1", depends_on=["rows"])
+    @step
     def double(rows):
         return rows["n"] * 2
 
@@ -320,6 +320,6 @@ def test_root_expand_is_a_source():
 
 def test_expand_rejects_skip_cache():
     with pytest.raises(ValueError, match="skip_cache is not supported"):
-        step(name="bad", version="1", depends_on=["a"], shape="expand", skip_cache=True)(
+        step(name="bad", depends_on=["a"], shape="expand", skip_cache=True)(
             lambda a: None
         )

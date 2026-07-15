@@ -96,7 +96,7 @@ def _shout(folder=TEST_FOLDER):
     # "which of the pipeline's last N runs referenced this materialization",
     # not off address stability, so a plain content-addressed expand root
     # (no separate scan step) is enough here.
-    @step(name="shout", version="1", shape="expand")
+    @step
     def shout():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -114,14 +114,14 @@ def _norm_chain(folder=TEST_FOLDER):
     the same bytes get different addresses sharing one physical object,
     exactly the "same object, different address" case under test."""
 
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(name="norm", version="1", depends_on=["scan"])
+    @step
     def norm(scan):
         return scan["text"].strip()
 
@@ -389,7 +389,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step(name="scan", version="1", shape="expand")
+    @step
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -400,7 +400,7 @@ def _scan():
 
 
 def _read():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"]
 
@@ -411,7 +411,7 @@ _split_calls = {"n": 0}
 
 
 def _split():
-    @step(name="split", version="1", depends_on=["read"], shape="expand")
+    @step
     def split(read):
         _split_calls["n"] += 1
         for line in read.splitlines():
@@ -421,7 +421,7 @@ def _split():
 
 
 def _upper():
-    @step(name="upper", version="1", depends_on=["split"])
+    @step
     def upper(split):
         return split["line"].upper()
 

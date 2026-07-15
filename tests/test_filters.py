@@ -69,7 +69,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand", index=["path"])
+@step(index=["path"])
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
     `path` so tests can find "the lane for x.txt" without the coordinate
@@ -84,7 +84,7 @@ def build_pipeline(calls=None):
     """screen filters short files; summarize runs only on survivors."""
     calls = calls if calls is not None else []
 
-    @step(name="screen", version="1", depends_on=["scan"])
+    @step
     def screen(scan):
         calls.append(scan["path"])
         text = scan["text"]
@@ -92,7 +92,7 @@ def build_pipeline(calls=None):
             return Filtered(reason=f"too short ({len(text)} chars)")
         return text
 
-    @step(name="summarize", version="1", depends_on=["screen"])
+    @step
     def summarize(screen):
         return screen.upper()
 
@@ -215,14 +215,14 @@ def test_plan_shows_filtered_chain():
     param-fed "@root" lane keeps plan() able to preview screen's cached
     "reuse" and summarize's cascaded "filtered" verdict."""
 
-    @step(name="screen", version="1")
+    @step
     def screen(params):
         text = params["text"]
         if len(text) < 10:
             return Filtered(reason=f"too short ({len(text)} chars)")
         return text
 
-    @step(name="summarize", version="1", depends_on=["screen"])
+    @step
     def summarize(screen):
         return screen.upper()
 
@@ -239,11 +239,11 @@ def test_plan_shows_filtered_chain():
 def test_skip_cache_step_cannot_filter():
     create_file("f.txt", "anything")
 
-    @step(name="util", version="1", skip_cache=True, depends_on=["scan"])
+    @step(skip_cache=True)
     def util(scan):
         return Filtered("nope")
 
-    @step(name="use", version="1", depends_on=["util"])
+    @step
     def use(util):
         return util
 

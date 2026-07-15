@@ -89,11 +89,11 @@ def make_nondeterministic_pipeline(pipe_id="gen"):
     """Root step returns something different on every execution."""
     counter = itertools.count()
 
-    @step(name="generate", version="1")
+    @step
     def generate(params):
         return {"attempt": next(counter), "input": open(params["path"]).read()}
 
-    @step(name="summarize", version="1", depends_on=["generate"])
+    @step
     def summarize(generate):
         return f"attempt={generate['attempt']}"
 
@@ -190,7 +190,7 @@ def test_force_nondeterministic_supersedes_live_generation():
 
 
 def test_force_deterministic_reuses_live_row():
-    @step(name="stable", version="1")
+    @step
     def stable(params):
         return open(params["path"]).read().upper()
 
@@ -213,11 +213,11 @@ def test_params_are_part_of_cache_identity():
         threshold: int = 0
         path: str = ""
 
-    @step(name="score", version="1", params_model=Thresh)
+    @step(params_model=Thresh)
     def score(params: Thresh):
         return {"ok": len(open(params.path).read()) >= params.threshold}
 
-    @step(name="label", version="1", depends_on=["score"])
+    @step
     def label(score):
         return "pass" if score["ok"] else "fail"
 
@@ -250,7 +250,7 @@ def test_params_do_not_churn_param_free_pipelines():
     # No "params" argument at all -> _step_accepts_params is False, so this
     # step's identity never folds in params, no matter what run() is given
     # — the point of this test.
-    @step(name="upper", version="1")
+    @step
     def upper():
         return open(path).read().upper()
 
@@ -262,11 +262,11 @@ def test_params_do_not_churn_param_free_pipelines():
 
 
 def test_string_payload_round_trips_as_string():
-    @step(name="emit", version="1")
+    @step
     def emit(params):
         return "123"  # would come back as int 123 under JSON guessing
 
-    @step(name="check", version="1", depends_on=["emit"])
+    @step
     def check(emit):
         assert isinstance(emit, str), f"expected str, got {type(emit)}"
         return emit + "!"
@@ -281,11 +281,11 @@ def test_string_payload_round_trips_as_string():
 
 
 def test_bytes_payload_round_trips_as_bytes():
-    @step(name="emit_b", version="1")
+    @step
     def emit_b(params):
         return b"\x00\x01binary"
 
-    @step(name="check_b", version="1", depends_on=["emit_b"])
+    @step
     def check_b(emit_b):
         assert isinstance(emit_b, bytes)
         return {"length": len(emit_b)}
