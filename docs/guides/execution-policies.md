@@ -11,8 +11,7 @@ pipeline's runs: `schedule` and `Filtered`.
 ## Retries
 
 ```python
-@step(name="enrich", version="1.0.0",
-      retries=3, retry_on=(TimeoutError, ConnectionError),
+@step(retries=3, retry_on=(TimeoutError, ConnectionError),
       retry_delay=1, retry_backoff=2)
 def enrich(row: dict): ...
 ```
@@ -53,7 +52,7 @@ attempt it lands on) carries the attempt count too. `rubedo show <run_id>
 ## Rate limiting
 
 ```python
-@step(name="enrich", version="1.0.0", rate_limit="30/min")
+@step(rate_limit="30/min")
 def enrich(row: dict): ...
 ```
 
@@ -74,7 +73,7 @@ def check_price_positive(val: dict):
     if val["price"] < 0:
         raise ValueError("Negative price")
 
-@step(name="enrich", version="1.0.0", assertions=[check_price_positive])
+@step(assertions=[check_price_positive])
 def enrich(row: dict): ...
 ```
 
@@ -94,7 +93,7 @@ first created).
 ## Process pools for CPU-bound work
 
 ```python
-@step(name="parse_wordlist", version="1", executor="process")
+@step(executor="process")
 def parse_wordlist(text: str): ...
 ```
 
@@ -151,7 +150,7 @@ around.
 ```python
 from rubedo import Filtered
 
-@step(name="screen", version="1")
+@step
 def screen(row: dict):
     if not looks_relevant(row):
         return Filtered(reason="off-topic")
