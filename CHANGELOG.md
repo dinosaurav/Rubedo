@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-14
+
+### Changed
+- `depends_on=` is now inferred for `reduce` and `join` steps too: a
+  reduce step's parameter names its parent (like any map step), and a
+  join's `join_on` keys ARE the parents. The parent-count validation for
+  reduce moved from decoration time to build time so signature inference
+  runs first. Explicit `depends_on=` still works and disables inference.
+- `@p.step` (bare, no parens) now registers correctly — previously it
+  silently did nothing (the decorator was returned uncalled).
+- Swept all examples, docs, tests, and marketing to the terse step style:
+  bare `@step`/`@p.step` with inference instead of explicit `name=`/
+  `version=`/`shape=`/`depends_on=` that restate what the code already
+  says.
+
+### Added
+- `test_depends_on_dict_alias_on_join` and
+  `test_depends_on_dict_alias_on_reduce` — coverage for the `depends_on`
+  dict alias form (`{"param": "step"}`) on join and reduce steps.
+
+### Removed
+- `docs/llms.txt` — stale duplicate of the canonical `notes/llms.txt`.
+
+## [0.2.1] - 2026-07-13
+
+### Changed
+- The Pipeline rotation (TODO 15): one `Pipeline` object with verbs as
+  methods (`.run()`/`.plan()`/`.describe()`/`.definition()`); `name` is
+  the pipeline's sole identity (no `id=`); `pipeline()` is the sole
+  constructor. `@p.step` registers steps on it; `pipeline(steps=[...])`
+  takes an explicit list. `.build()` is gone — the spec is built lazily
+  on first verb access.
+- Step ergonomics (TODO 16): `@step` auto-names from the function name,
+  defaults `version` to `"0"`, and works bare (`@step`) or called
+  (`@step()`, `@step(version="2")`).
+- Ingestion is a step, not a class (TODO 14): no `Source` protocol or
+  `sources=` kwarg — a parentless generator `@step` infers `shape="expand"`
+  and yields the initial lanes. A source-less `map` root mints a single
+  `@root` lane from `params`.
+- `describe(format="ascii")` — hand-rolled terminal DAG rendering; TTY
+  autodetect picks ascii in a real terminal, text otherwise (TODO 20/24).
+- Rewrote `notes/invariants.md` values-first (TODO 17); swept
+  invariant-number references from docs/notes.
+- Comment cleanup: process-notes out of source, constraints stay
+  (TODO 19).
+- Marketing landing page: spacing, syntax highlighting, hover tooltips,
+  diamond-join rewrite.
+
+### Added
+- `pipeline(secrets=/env=)` declarations + `rubedo check` env lint
+  (TODO 20/21).
+- GitHub Pages workflow for the marketing site + docs.
+- `StepSpec` is callable — `s(params)` runs a step in isolation for
+  unit tests (TODO 24).
+
+### Fixed
+- `pipeline(retention=)` validated eagerly, not lazily.
+- Marketing preview 404.
+
+## [0.2.0] - 2026-07-12
+
+### Added
+- Retention GC (TODO 10b): `pipeline(retention=N)` auto-prunes a
+  pipeline's last N terminal runs; `rubedo gc [--max-bytes] [--delete]`
+  is a dry-run-by-default sweeper that demotes (paired `pruned`
+  lifecycle rows) then deletes bytes only when no live materialization
+  references them. `object_reclamations` table records every swept
+  object.
+- `schedule="broad"|"deep"` (TODO 9): broad completes each step across
+  all lanes before the next; deep lets each lane race ahead through
+  consecutive 1:1 map steps. Reduce/join/expand/multi-parent maps
+  synchronize either way.
+- Lane-level (downstream) invalidation — invalidating a lane
+  propagates to its descendants.
+- Source-less `map` root: a pipeline can begin with a plain step that
+  mints a single `@root` lane from `params` instead of scanning for one.
+- `examples/pdf_digest` — source-less map root feeding a vision→text DAG.
+
+### Fixed
+- `dist/*.gitignore` no longer leaks into GitHub release assets.
+
 ## [0.1.1] - 2026-07-09
 
 ### Added
