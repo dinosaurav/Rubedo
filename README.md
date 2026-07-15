@@ -246,9 +246,10 @@ Retention deletes **bytes, never facts**: a demoted generation keeps its ledger 
 The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors:
 
 ```bash
-uv run uvicorn rubedo.server:app --reload   # API on :8000
-cd web && npm run dev                       # UI on :5173
+rubedo serve                    # API + UI on http://127.0.0.1:8000
 ```
+
+The built UI is served from the package — no separate dev server needed. To hack on the web UI itself, use `cd web && npm run dev` (Vite proxies `/api` to `:8000`).
 
 Running, recomputing, and invalidation always happen from library code or the CLI; the UI never mutates state.
 

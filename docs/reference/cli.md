@@ -11,10 +11,10 @@ rubedo --help
 ```
 
 ```text
-usage: rubedo [-h] {ls,show,invalidate,trace,du,gc} ...
+usage: rubedo [-h] {ls,show,invalidate,trace,du,gc,serve,check} ...
 
 positional arguments:
-  {ls,show,invalidate,trace,du,gc}
+  {ls,show,invalidate,trace,du,gc,serve,check}
     ls                  List recent runs
     show                Show details for a specific run
     invalidate          Invalidate materializations by selection query
@@ -23,6 +23,8 @@ positional arguments:
                         audit
     gc                  Retention GC: prune old runs' outputs and delete
                         unreferenced objects (dry-run unless --delete)
+    serve               Start the read-only FastAPI server (API + web UI)
+    check               Lint a pipeline file for undeclared env reads
 ```
 
 ## Where it looks: `.rubedo/` resolution
@@ -313,6 +315,35 @@ budget: 5.7 MiB before -> ~3.9 MiB after (max 2.0 GiB)
 See [`../guides/retention.md`](../guides/retention.md) for the full
 policy model — what a prune does, the two triggers (`retention=` auto-prune
 and `rubedo gc`), and the bytes-never-facts guarantee.
+
+---
+
+## `rubedo serve`
+
+```bash
+rubedo serve [--host HOST] [--port PORT] [--reload]
+```
+
+Starts the read-only FastAPI server. The API is at `/api/*` and the web
+dashboard is served at `/` (from the built assets bundled with the
+package). Requires the `server` extra: `pip install "rubedo[server]"`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `8000` | Port |
+| `--reload` | *(off)* | Auto-reload on Python file changes (dev) |
+
+```bash
+rubedo serve                    # http://127.0.0.1:8000
+rubedo serve --port 9000        # custom port
+rubedo serve --host 0.0.0.0     # listen on all interfaces
+```
+
+If the web assets aren't built (or aren't bundled), `rubedo serve` falls
+back to API-only mode and prints a note about running `cd web && npm run
+build`. To hack on the web UI itself, run `npm run dev` in the `web/`
+directory — Vite's dev server proxies `/api` to the backend.
 
 ---
 

@@ -155,14 +155,15 @@ the library equivalent.
 ## The web dashboard (read-only)
 
 ```bash
-uv run uvicorn rubedo.server:app --reload   # API on :8000
-cd web && npm run dev                       # UI on :5173
+rubedo serve                    # API + UI on http://127.0.0.1:8000
 ```
 
 The dashboard is a browser over the same ledger everything else here reads
 — runs, materializations, lineage, current outputs — with search to drill
 into a specific value or error. It never mutates state: every write path
 (`run`, `invalidate`, `gc --delete`) is library code or the CLI only.
+The built UI is served from the package; to hack on the web UI itself,
+`cd web && npm run dev` (Vite proxies `/api` to `:8000`).
 `server.py` is a read-only FastAPI app that, like the CLI, never imports
 your pipeline code — it only ever reads the ledger and the `definition()`
 snapshot each run recorded.
