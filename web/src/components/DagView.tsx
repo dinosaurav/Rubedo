@@ -130,6 +130,10 @@ function computeStepState(
 }
 
 import { useState } from 'react';
+import hljs from 'highlight.js/lib/core';
+import python from 'highlight.js/lib/languages/python';
+
+hljs.registerLanguage('python', python);
 
 export default function DagView({
   steps,
@@ -380,22 +384,22 @@ function StepDetail({ step, pipelineId }: { step: StepDef; pipelineId?: string }
         ))}
       </div>
       {step.source && (
-        <details>
+        <details open>
           <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '0.25rem' }}>
             source code
           </summary>
           <pre style={{
             marginTop: '0.5rem',
             padding: '0.75rem',
-            background: 'var(--bg-secondary, #0f172a)',
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--border-color)',
             borderRadius: '6px',
             overflow: 'auto',
             fontSize: '0.8rem',
             fontFamily: 'ui-monospace, monospace',
-            color: 'var(--text-primary)',
             lineHeight: 1.5,
           }}>
-            <code>{step.source}</code>
+            <code dangerouslySetInnerHTML={{ __html: hljs.highlight(step.source, { language: 'python' }).value }} />
           </pre>
         </details>
       )}
