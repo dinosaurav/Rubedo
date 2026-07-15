@@ -10,7 +10,7 @@ two ways to act on a selection: `invalidate()` and `trace()`.
 ## Indexing: `@step(index=[...])`
 
 ```python
-@step(name="extract", version="1", index=["company", "meta.region"])
+@step(index=["company", "meta.region"])
 def extract(row: dict):
     return {"company": row["company"], "meta": {"region": row["region"]}, ...}
 ```
