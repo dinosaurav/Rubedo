@@ -17,6 +17,67 @@ class HasOutputContentHash(Protocol):
     output_content_hash: str
     content_type: Optional[str]
 
+
+def _import_pyarrow():
+    """Lazy import of pyarrow — it's an optional dependency (the `arrow`
+    extra).  JSON/bytes/text paths never touch it, so users who only cache
+    dict/str/bytes outputs pay no install cost.  Returns the module or
+    raises ImportError with a clear install hint."""
+    try:
+        import pyarrow as pa
+        return pa
+    except ImportError as exc:
+        raise ImportError(
+            "caching a DataFrame / Arrow table output requires pyarrow; "
+            'install it with `pip install "rubedo[arrow]"`'
+        ) from exc
+
+
+# Subtypes of the `arrow-ipc` content_type — the full string is
+# "arrow-ipc:<kind>" so read_materialization_output reconstructs the
+# original Python type on cache hit (a polars user gets a polars
+# DataFrame back, not a raw pyarrow Table — their step body's .filter()
+# calls keep working).  Supported kinds: polars, pandas, table.
+
+
+def _to_arrow_table(value: Any, pa: Any):
+    """Return (pa.Table, kind) for any supported Arrow-compatible value.
+
+    `kind` is the subtype tag persisted in content_type so the round-trip
+    can reconstruct the original Python type.  Detection is by isinstance
+    in a deliberately fixed order: polars-first (it's the common case in
+    tests/examples and its DataFrames wrap Arrow natively), then pandas,
+    then a bare pa.Table — returned as-is.
+    """
+    try:
+        import polars as pl
+        if isinstance(value, pl.DataFrame):
+            return value.to_arrow(), "polars"
+    except ImportError:
+        pass
+    try:
+        import pandas as pd
+        if isinstance(value, pd.DataFrame):
+            return pa.Table.from_pandas(value), "pandas"
+    except ImportError:
+        pass
+    if isinstance(value, pa.Table):
+        return value, "table"
+    raise TypeError(
+        f"value of type {type(value).__name__} is not Arrow-compatible "
+        "(expected polars/pandas DataFrame or pyarrow Table)"
+    )
+
+
+def _from_arrow_table(table: Any, kind: str):
+    """Reconstruct the original Python type from a pa.Table on cache hit."""
+    if kind == "polars":
+        import polars as pl
+        return pl.DataFrame(table)
+    if kind == "pandas":
+        return table.to_pandas()
+    return table
+
 def _default_home() -> str:
     return os.environ.get("RUBEDO_HOME", ".rubedo")
 
@@ -56,17 +117,66 @@ def _get_staging_path(run_id: str, coordinate: str, content_hash: str) -> str:
 
 
 def _serialize(result: Any) -> Tuple[bytes, str]:
-    """Serialize an output value to bytes and return its content type."""
+    """Serialize an output value to bytes and return its content type.
+
+    One format per value kind: `bytes`, `text`, `arrow-ipc:<kind>` (for
+    DataFrame / Arrow table outputs — the `:kind` suffix records the
+    original Python type so the round-trip reconstructs it), `json`
+    (fallback for dicts and anything else JSON can carry).
+    """
     value = result.value if isinstance(result, ProcessResult) else result
 
     if isinstance(value, bytes):
         return value, "bytes"
     if isinstance(value, str):
         return value.encode("utf-8"), "text"
+
+    pa = _try_arrow(value)
+    if pa is not None:
+        table, kind = _to_arrow_table(value, pa)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        return sink.getvalue().to_pybytes(), f"arrow-ipc:{kind}"
+
     return (
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8"),
         "json",
     )
+
+
+def _try_arrow(value: Any):
+    """Detect an Arrow-compatible value and return the pyarrow module, or None.
+
+    None means: this value isn't a DataFrame/pa.Table, the JSON fallback
+    should handle it.  A DataFrame/pa.Table is detected without importing
+    pyarrow (via polars/pandas isinstance or a duck-type check).  pyarrow
+    is only imported — and the install-hint ImportError only raised —
+    once we've confirmed the value is Arrow-compatible, so users who only
+    cache dict/str/bytes outputs never pay the import or the cost.
+    """
+    is_arrow = False
+    try:
+        import polars as pl
+        if isinstance(value, pl.DataFrame):
+            is_arrow = True
+    except ImportError:
+        pass
+    if not is_arrow:
+        try:
+            import pandas as pd
+            if isinstance(value, pd.DataFrame):
+                is_arrow = True
+        except ImportError:
+            pass
+    if not is_arrow and hasattr(value, "schema") and hasattr(value, "column"):
+        # Bare pa.Table (duck-typed): has .schema + .column, the slots
+        # pyarrow tables always expose.  Avoids importing pyarrow just to
+        # isinstance-check non-arrow values.
+        is_arrow = True
+    if not is_arrow:
+        return None
+    return _import_pyarrow()
 
 
 def stage_and_commit(run_id: str, coordinate: str, result: Any) -> Tuple[str, str, str]:
@@ -124,6 +234,12 @@ def read_materialization_output(materialization: Optional[HasOutputContentHash])
         return raw_data.decode("utf-8")
     if content_type == "json":
         return json.loads(raw_data.decode("utf-8"))
+    if content_type and content_type.startswith("arrow-ipc:"):
+        pa = _import_pyarrow()
+        kind = content_type.split(":", 1)[1]
+        reader = pa.ipc.open_stream(raw_data)
+        table = reader.read_all()
+        return _from_arrow_table(table, kind)
 
     # Legacy rows without a content_type: best-effort guess
     try:
