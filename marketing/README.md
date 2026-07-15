@@ -7,9 +7,11 @@ React app. Content must stay in sync with the root
 [`README.md`](../README.md) — that file is the source of truth for what
 Rubedo does; this page restates it, never invents beyond it.
 
-No custom domain yet, so the site is served under the `/Rubedo/` project-page
-subpath — see the `base` comment in [`vite.config.js`](vite.config.js) for
-what to change if that changes.
+Deployed under the custom domain **rubedo.run** (GitHub Pages hosting,
+Cloudflare DNS — see the root-level deploy notes). The Vite base path is `/`
+(see [`vite.config.js`](vite.config.js)) and `public/CNAME` carries the
+apex domain for GitHub Pages. DNS + Pages settings are configured outside
+the repo — the build here just needs to be self-consistent with that.
 
 ## Develop
 

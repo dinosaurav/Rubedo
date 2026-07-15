@@ -1,6 +1,6 @@
 site_name: Rubedo
 site_description: Local-first batch engine - DAG pipelines over keyed collections
-site_url: https://dinosaurav.github.io/Rubedo/docs/
+site_url: https://rubedo.run/docs/
 site_dir: marketing/dist/docs
 
 repo_url: https://github.com/dinosaurav/Rubedo

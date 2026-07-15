@@ -4,13 +4,12 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [react()],
-  // Deployed to GitHub Pages as a project site (github.com/dinosaurav/Rubedo),
-  // which serves at /Rubedo/, not the domain root — hence the base path. Applied
-  // to both `build` and `preview` (which serve the same production artifact), so
-  // `npm run dev` (command `serve`) still serves at `/` with HMR. If a custom
-  // domain is ever attached, change this back to '/' (and site_url in
-  // ../mkdocs.yml to match) — everything else here is unaffected.
-  base: command === 'serve' ? '/' : '/Rubedo/',
+// Served from the rubedo.run domain root (custom domain on GitHub Pages),
+  // so the built artifact uses '/'. `command === 'serve'` is the `npm run dev`
+  // path, which also serves at '/' with HMR — so both branches now agree.
+  // If you ever drop the custom domain and go back to the un-customized GitHub
+  // Pages project page, change this to '/Rubedo/' (and site_url in ../mkdocs.yml).
+  base: '/',
   build: {
     // The MkDocs site builds separately into dist/docs/ (see site_dir in
     // ../mkdocs.yml) and is served at /docs/ under that base. Vite's default

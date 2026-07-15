@@ -2467,7 +2467,7 @@ wheels = [
 
 [[package]]
 name = "rubedo"
-version = "0.2.3"
+version = "0.2.6"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
