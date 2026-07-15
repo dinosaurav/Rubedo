@@ -36,9 +36,11 @@ Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for
 Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from rubedo import ProcessResult, step, pipeline
+from rubedo import ProcessResult, pipeline
 
-@step(name="scan", version="1", shape="expand")
+p = pipeline(name="count-lines")
+
+@p.step()
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -46,17 +48,17 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["scan"])
+@p.step()
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
-
-p = pipeline(name="count-lines", steps=[scan, count_lines])
 
 print(p.describe())           # the DAG, before ever running (also: format="mermaid", format="ascii")
 print(p.plan())                # dry-run: what would p.run() do to my data, and why
 summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
+
+Nothing is spelled out that the code already says: `scan` is a parentless generator, so it's an `expand`-shaped source; `count_lines`'s parameter names the `scan` step, so that's its dependency; names default to the function names and `version` to `"0"`.
 
 Run it twice and watch the point of the whole project:
 
@@ -68,36 +70,38 @@ Run it twice and watch the point of the whole project:
 
 Each run also snapshots the pipeline's definition (steps, edges, policies) into the ledger, so history and the dashboard can show the DAG of anything that has ever run — no imports of user code required.
 
-Prefer a fluent style? Steps register on the same object via decorators, and it's one object either way — no separate builder class:
+Prefer steps defined away from the pipeline that uses them? `pipeline(steps=[...])` takes an explicit list of `@step`-decorated functions, and it's one object either way — no separate builder class; the two forms compose freely:
 
 ```python
-p = pipeline(name="count-lines")
+from rubedo import step, pipeline
 
-@p.step(name="scan", version="1", shape="expand")
+@step
 def scan(): ...
 
-@p.step(name="count_lines", version="count-v1", depends_on=["scan"])
+@step
 def count_lines(scan): ...
+
+p = pipeline(name="count-lines", steps=[scan, count_lines])
 ```
 
 ## Ingestion is a step
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless `@step(shape="expand")` that `yield`s a payload per item (a bare generator function infers this shape automatically). Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
+There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `shape="expand"` inferred) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
 
 ```python
 import csv
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="leads", version="v1", shape="expand")
+p = pipeline(name="enrich-leads")
+
+@p.step()
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="enrich", version="v1", depends_on=["leads"])
+@p.step()
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
-
-pipeline(name="enrich-leads", steps=[leads, enrich])
 ```
 
 Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), index it with `@step(index=[...])` and query — the lane key is never a human key.
@@ -112,8 +116,7 @@ Steps carry their own execution policies:
 def check_price_positive(val: dict):
     if val["price"] < 0: raise ValueError("Negative price")
 
-@step(name="enrich", version="1.0.0",
-      retries=3, retry_on=(TimeoutError, ConnectionError), retry_delay=1, retry_backoff=2,
+@step(retries=3, retry_on=(TimeoutError, ConnectionError), retry_delay=1, retry_backoff=2,
       rate_limit="30/min", stale_after="24h", assertions=[check_price_positive])
 def enrich(row: dict): ...
 ```
@@ -138,30 +141,28 @@ By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan
 - **`join`** — an N-way equijoin across multiple `expand` roots, matched on an indexed field, minting one lane per matched tuple:
 
 ```python
-@step(name="orders_src", version="1", shape="expand")
+p = pipeline(name="enrich")
+
+@p.step()
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="customers_src", version="1", shape="expand")
+@p.step()
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+@p.step(index=["cust"])
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+@p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@step(name="enrich", version="1", shape="join",
-      depends_on=["order", "customer"],
-      join_on={"order": "cust", "customer": "cid"})
+@p.step(depends_on=["order", "customer"],
+        join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
-
-p = pipeline(name="enrich",
-             steps=[orders_src, customers_src, order, customer, enrich])
 ```
 
 Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
@@ -169,10 +170,8 @@ Multiple sources are just multiple `expand`-shaped roots in the same pipeline �
 A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `p.run(params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
 
 ```python
-@step(name="load_pdf", version="1")          # no depends_on
+@p.step()                                    # no parents, not a generator
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
-
-pipeline(name="pdf", steps=[load_pdf, ...])
 ```
 
 See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → reduce → two summaries.
