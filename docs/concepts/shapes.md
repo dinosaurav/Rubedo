@@ -24,9 +24,11 @@ The default. One input lane in, one output lane out, same coordinate. This
 is almost every step you'll write:
 
 ```python
-from rubedo import ProcessResult, step, pipeline
+from rubedo import ProcessResult, pipeline
 
-@step(name="scan", version="1", shape="expand")
+p = pipeline(name="count-lines")
+
+@p.step()
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -34,11 +36,10 @@ def scan():
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@step(name="count_lines", version="count-v1", depends_on=["scan"])
+@p.step()
 def count_lines(scan: dict) -> ProcessResult:
     return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
 
-p = pipeline(name="count-lines", steps=[scan, count_lines])
 p.run()
 ```
 
@@ -53,12 +54,12 @@ A root (`no depends_on`) is usually `shape="expand"` — the ingestion shape
 `params` (or a constant, if the function takes none):
 
 ```python
-@step(name="load_pdf", version="1")          # no depends_on
+p = pipeline(name="pdf")
+
+@p.step()                                    # no parents, not a generator
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 
-pipeline_obj = pipeline(name="pdf", steps=[load_pdf, ...])
-
-pipeline_obj.run(params={"pdf": "report.pdf"})
+p.run(params={"pdf": "report.pdf"})
 ```
 
 The lane's coordinate is the fixed constant `@root`, so its address reduces
@@ -77,19 +78,23 @@ receives every lane as one `{coordinate: value}` dict and returns a single
 output at the fixed coordinate `@all`:
 
 ```python
-@step(name="total_lines", version="total-v1",
-      depends_on=["count_lines"], shape="reduce")
+@p.step(depends_on=["count_lines"], shape="reduce")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 ```
 
+(A fan-in step spells out `depends_on=` — `reduce` and `join` validate
+their parent count at decoration time, before parameter-name inference
+gets a chance to run. A plain `@all` reduce is also the one shape that's
+always explicit: nothing in the code implies it.)
+
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of an indexed field, read from
-`@step(index=[...])` entries at plan time (so planning stays value-free):
+`@step(index=[...])` entries at plan time (so planning stays value-free).
+`group_key=` implies `shape="reduce"` on its own:
 
 ```python
-@step(name="digest", version="1", depends_on=["articles"],
-      shape="reduce", group_key="region")
+@p.step(depends_on=["articles"], group_key="region")
 def digest(articles: dict) -> dict:
     titles = sorted(a["title"] for a in articles.values())
     return {"count": len(titles), "headlines": titles}
@@ -120,15 +125,18 @@ value mints its own content-addressed downstream lane
 like a source row:
 
 ```python
-@step(name="articles", version="1", depends_on=["fetch"], shape="expand")
+@p.step()
 def articles(fetch: list):
     for art in fetch:      # 1:N — one lane per article
         yield art
 
-@step(name="headline", version="1", depends_on=["articles"])
+@p.step()
 def headline(articles: dict) -> str:
     return articles["title"].upper()
 ```
+
+(`articles` is a generator, so its `shape="expand"` is inferred; its
+`fetch` parameter names the parent step.)
 
 **The caching insight is the reason `expand` exists.** An expand can't cache
 by a single output address the way `map` does — it's 1:N. Instead, the whole
@@ -155,7 +163,7 @@ automatically:
 ```python
 from rubedo import step
 
-@step(name="hn_top", version="1")
+@step
 def hn_top():
     for sid in fetch_top_ids():
         yield fetch_story(sid)
@@ -178,31 +186,32 @@ field, intersects on shared values, and mints one pair lane per matched
 tuple — coordinate `a|b|…`, the members' coordinates joined by `|`:
 
 ```python
-@step(name="orders_src", version="1", shape="expand")
+p = pipeline(name="enrich")
+
+@p.step()
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="customers_src", version="1", shape="expand")
+@p.step()
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+@p.step(index=["cust"])
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+@p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@step(name="enrich", version="1", shape="join",
-      depends_on=["order", "customer"],
-      join_on={"order": "cust", "customer": "cid"})
+@p.step(depends_on=["order", "customer"],
+        join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
-
-p = pipeline(name="enrich",
-             steps=[orders_src, customers_src, order, customer, enrich])
 ```
+
+(`join_on=` implies `shape="join"`; like `reduce`, a join spells out
+`depends_on=` explicitly.)
 
 Every side named in `join_on` must be indexed on the field it's matched by
 (`@step(index=[...])`), and `join_on`'s keys must exactly match
