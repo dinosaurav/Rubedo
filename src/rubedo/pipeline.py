@@ -262,16 +262,24 @@ class Pipeline:
         self._steps: List[StepSpec] = list(steps or [])
         self._spec: Optional[PipelineSpec] = None
 
-    def step(self, *args, **kwargs) -> Callable[[Callable], StepSpec]:
+    def step(self, *args, **kwargs):
         """Decorate a function to register it as a step on this pipeline
-        (see `rubedo.step` for the policy kwargs)."""
+        (see `rubedo.step` for the policy kwargs). Works bare (`@p.step`)
+        or called (`@p.step(...)`), like `rubedo.step`."""
 
         def decorator(fn):
-            s = _step_decorator(*args, **kwargs)(fn)
+            s = _step_decorator(**kwargs)(fn)
             self._steps.append(s)
             self._spec = None
             return s
 
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return decorator(args[0])
+        if args:
+            raise TypeError(
+                "p.step takes keyword arguments only (or a bare function): "
+                "@p.step / @p.step(version='2')"
+            )
         return decorator
 
     @property
