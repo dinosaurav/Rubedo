@@ -126,7 +126,7 @@ export default function LiveRunCard({
           </div>
 
           {run.definition?.steps?.length > 0 && (
-            <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={isRunning} />
+            <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={isRunning} pipelineId={run.pipeline_id ?? undefined} />
           )}
         </div>
       )}

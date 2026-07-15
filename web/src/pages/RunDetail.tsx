@@ -142,7 +142,7 @@ export default function RunDetail() {
       {run.definition?.steps?.length > 0 && (
         <div className="card" style={{ marginBottom: '1rem' }}>
           <div className="stat-label" style={{ marginBottom: '0.5rem' }}>Pipeline DAG (as run)</div>
-          <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={run.status === 'running'} />
+          <DagView steps={run.definition.steps} stepCounts={run.by_step ?? undefined} isLive={run.status === 'running'} pipelineId={run.pipeline_id ?? undefined} />
         </div>
       )}
 

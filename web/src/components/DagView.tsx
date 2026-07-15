@@ -136,11 +136,13 @@ export default function DagView({
   stepCounts,
   isLive,
   onStepClick,
+  pipelineId,
 }: {
   steps: StepDef[];
   stepCounts?: StepCounts;
   isLive?: boolean;
   onStepClick?: (stepName: string) => void;
+  pipelineId?: string;
 }) {
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   if (!steps?.length) return null;
@@ -323,13 +325,13 @@ export default function DagView({
       </svg>
 
       {selectedStep && byName[selectedStep] && (
-        <StepDetail step={byName[selectedStep]} />
+        <StepDetail step={byName[selectedStep]} pipelineId={pipelineId} />
       )}
     </div>
   );
 }
 
-function StepDetail({ step }: { step: StepDef }) {
+function StepDetail({ step, pipelineId }: { step: StepDef; pipelineId?: string }) {
   const specs: { label: string; value: string }[] = [
     { label: 'name', value: step.name },
     { label: 'version', value: step.version },
@@ -356,8 +358,18 @@ function StepDetail({ step }: { step: StepDef }) {
       borderRadius: '8px',
       fontSize: '0.85rem',
     }}>
-      <div style={{ fontWeight: 600, marginBottom: '0.5rem', fontFamily: 'ui-monospace, monospace' }}>
-        {step.name}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>
+          {step.name}
+        </span>
+        {pipelineId && (
+          <a
+            href={`/materializations?pipeline_id=${encodeURIComponent(pipelineId)}&step_name=${encodeURIComponent(step.name)}`}
+            style={{ fontSize: '0.8rem', color: 'var(--accent-primary)', textDecoration: 'none' }}
+          >
+            View materializations →
+          </a>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.25rem 1rem', marginBottom: step.source ? '0.75rem' : 0 }}>
         {specs.map((s) => (

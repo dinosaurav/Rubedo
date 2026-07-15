@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { fmtDuration, durationMs, runStatusClass } from '../format';
 import { fetchPipelines } from '../api';
 import DagView from '../components/DagView';
 
 export default function Pipelines() {
-  const navigate = useNavigate();
   const [pipelines, setPipelines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -19,10 +17,6 @@ export default function Pipelines() {
 
   if (loading) return <div>Loading pipelines...</div>;
   if (error) return <div className="page-container">API unreachable: {error}</div>;
-
-  const handleStepClick = (pipelineId: string, stepName: string) => {
-    navigate(`/materializations?pipeline_id=${pipelineId}&step_name=${stepName}`);
-  };
 
   return (
     <div className="page-container">
@@ -64,7 +58,7 @@ export default function Pipelines() {
 
           {p.definition?.steps?.length ? (
             <div style={{ marginTop: '1rem' }}>
-              <DagView steps={p.definition.steps} onStepClick={(stepName) => handleStepClick(p.id, stepName)} />
+              <DagView steps={p.definition.steps} pipelineId={p.id} />
             </div>
           ) : (
             <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>
