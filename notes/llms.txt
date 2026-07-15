@@ -3,20 +3,20 @@
 Rubedo is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
 
 ## Concepts in 10 lines
-1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, index it (`@step(index=[...])`) and query — the lane key is never a human key.
-2. **Ingestion is a step, not a class:** there are no `Source` classes. A parentless generator `@step` `yield`s one payload per item and mints a lane per yield — its `shape="expand"` is inferred automatically — a folder scan is a three-line `os.listdir` generator, a CSV is a `csv.DictReader` loop, a SQL table is a plain `SELECT` loop. A pipeline can declare several such roots (multi-source; `join` combines them). Or a source-less plain `map` root (no `depends_on`) mints a single `@root` lane from its `params`.
-3. **Steps:** plain functions decorated with `@step(...)`. `name` defaults to the function's `__name__`; `version` defaults to `"0"`.
-4. **Pipelines:** `p = pipeline(name="...")` returns a `Pipeline`. Attach steps either via `steps=[...]` or by decorating with `@p.step` — both register on the same object, mix freely.
+1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, index it (`index=[...]`) and query — the lane key is never a human key.
+2. **Ingestion is a step, not a class:** there are no `Source` classes. A parentless generator step `yield`s one payload per item and mints a lane per yield — its `shape="expand"` is inferred from its being a generator — a folder scan is a three-line `os.listdir` generator, a CSV is a `csv.DictReader` loop, a SQL table is a plain `SELECT` loop. A pipeline can declare several such roots (multi-source; `join` combines them). Or a source-less plain `map` root (a non-generator with no parents) mints a single `@root` lane from its `params`.
+3. **Steps:** plain functions decorated with `@p.step(...)` (or module-level `@step`). `name` defaults to the function's `__name__`; `version` defaults to `"0"`. The decorator returns a `StepSpec` that is still directly callable exactly like the bare function — `extract(scan={"text": "hi"})` — handy in unit tests; the engine itself never calls it that way.
+4. **Pipelines:** `p = pipeline(name="...")` returns a `Pipeline`. Attach steps by decorating with `@p.step(...)` — note the parentheses: `@p.step()` even with no kwargs; the bare form registers nothing — or by passing module-level `@step` functions as `steps=[...]` (module-level `@step` does work bare). Both register on the same object, mix freely.
 5. **Execution:** the engine runs steps per-lane. If a lane's input, parameters, or step code version changes, it recomputes. Otherwise, it reuses the cache.
 6. **Immutability:** results are content-addressed and saved in `.rubedo/objects`. Never mutate inputs; always return new data.
 7. **Identity:** a step's cache identity is defined by its inputs + `version` + `params` (+ source code, only under `code="auto"`).
 8. **Generations:** a rerun supersedes old outputs with new ones; nothing is deleted, `is_live` flips.
 9. **Filtering:** return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
-10. **Shapes:** `map` (1:1, default); `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across independent roots, matched on indexed fields).
+10. **Shapes — mostly inferred:** a generator function is `expand`; `join_on=` implies `join`; `group_key=` implies `reduce`; everything else is `map` (1:1, the default). Only the plain `@all` reduce (no `group_key`) still needs `shape="reduce"` spelled out. Semantics: `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across independent roots, matched on indexed fields).
 
 ## Step Contract
-- A dependent step's positional arguments are its parents' outputs, one per name in `depends_on` (exact parameter name = exact step name). A root step (`map` or `expand` with no `depends_on`) takes no payload argument at all — it mints its own lane(s).
-- A parameter literally named `params` (any position) receives the pipeline's run params: validated against `pipeline(params_model=...)` when declared (as a plain `dict`, not a model instance — see `params.model_dump()` under the hood), else whatever dict was passed to `.run(params=...)`. It participates in the cache key only for steps that declare it.
+- A step's parameters name its parents: with no `depends_on=`, every parameter other than `params` must match a registered step's name and becomes a dependency in signature order (parents bind as kwargs keyed by step name; an unmatched parameter raises at pipeline-build time). Passing `depends_on=[...]` explicitly disables inference; the dict form `depends_on={"param": "step"}` binds a parent's output to a differently-named parameter. **Exception:** `reduce` (including `group_key=`) and `join` steps must pass `depends_on=` explicitly — those shapes are validated at decoration time, before inference runs. A root step (`map` or `expand` with no parents) takes no payload argument at all — it mints its own lane(s).
+- A parameter literally named `params` (any position) receives the pipeline's run params: validated against `pipeline(params_model=...)` when declared (as a plain `dict`, not a model instance — see `params.model_dump()` under the hood), else whatever dict was passed to `.run(params=...)`. It participates in the cache key only for steps that declare it. `params` is never treated as a dependency.
 - A step returns a JSON-serializable value (commonly a `dict`), or `ProcessResult(value=..., metadata=...)`, or `Filtered("reason")`.
 
 ## Cache Identity Rules
@@ -29,22 +29,24 @@ A step's output is cached based on:
 - `retries=3, retry_on=Exception`: Automatically retry failures.
 - `rate_limit="30/min"`: Limit execution speed across all lanes.
 - `stale_after="24h"`: Force recomputation if the cached result is older than 24 hours.
-- `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step. Not allowed on `shape="expand"` or `shape="reduce"`.
+- `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step. Not allowed on `expand` or `reduce` steps.
 - `assertions=[callable, ...]`: A list of callables that take the output value. If any raise an exception, the step fails.
 - `executor="process"`: run this step's lanes in a `loky` process pool (via `cloudpickle`) instead of the default thread pool — for CPU-bound work.
-- `shape="reduce"`: receives `{lane_key: payload}` for all lanes and returns one output. Add `group_key="field"` (an indexed field of the parent) to emit one output per group instead of one over `@all`.
-- `shape="expand"`: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records, or ingestion (a root expand = a source).
-- `shape="join"` with `join_on={parent: field, ...}`: N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
+- `shape="reduce"` (the only shape you still write out, for the plain `@all` reduce; needs explicit `depends_on=`): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (an indexed field of the parent; implies the reduce, so drop `shape=`) emits one output per group instead of one over `@all`.
+- `join_on={parent: field, ...}` (implies `shape="join"`; needs explicit `depends_on=` with 2+ parents): N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
+- A generator function is `shape="expand"` automatically: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records, or ingestion (a parentless expand = a source).
 
 ## Complete Worked Example
 ```python
-from rubedo import Filtered, ProcessResult, pipeline, step
+from rubedo import Filtered, ProcessResult, pipeline
 from pydantic import BaseModel
 
 class EnrichParams(BaseModel):
     prompt_mode: str = "default"
 
-@step(shape="expand")
+p = pipeline(name="enrichment", params_model=EnrichParams)
+
+@p.step()
 def screen():
     # ingestion is just a step: yield one payload per row/file/item
     rows = [{"company": "acme", "url": "https://acme.example"},
@@ -52,68 +54,71 @@ def screen():
     for row in rows:
         yield row
 
-@step(depends_on=["screen"], retries=3, rate_limit="10/min", index=["company"])
+@p.step(retries=3, rate_limit="10/min", index=["company"])
 def enrich(screen: dict, params: dict):
     if not screen.get("url"):
         return Filtered("No URL")
     return ProcessResult(value={"company": screen["company"], "summary": f"...{params['prompt_mode']}"})
 
-@step(depends_on=["enrich"], shape="reduce")
+@p.step(depends_on=["enrich"], shape="reduce")
 def summarize(enrich: dict) -> dict:
     return {"total": len(enrich), "data": list(enrich.values())}
 
-p = pipeline(name="enrichment", params_model=EnrichParams, steps=[screen, enrich, summarize])
 summary = p.run(params={"prompt_mode": "detailed"})
 print(summary.output_for("summarize"))
 ```
+Nothing spells out what the code already says: `screen` is a parentless generator, so it's an expand root; `enrich`'s `screen` parameter names its parent. Only `summarize` declares anything — the plain `@all` reduce is the one shape with no inferable signal.
 
-Equivalent fluent form (register on the pipeline object instead of building a bare `steps=[...]` list — no separate builder class):
+Equivalent module-level form (bare `@step` functions passed as `steps=[...]` — same `StepSpec`s, same pipeline):
 ```python
-p = pipeline(name="enrichment", params_model=EnrichParams)
+from rubedo import step, pipeline
 
-@p.step(name="screen", shape="expand")
+@step
 def screen(): ...
 
-@p.step(name="enrich", depends_on=["screen"])
+@step(retries=3, rate_limit="10/min", index=["company"])
 def enrich(screen, params): ...
+
+p = pipeline(name="enrichment", params_model=EnrichParams, steps=[screen, enrich])
 ```
 
 ## Join + Expand Example (multi-source)
 ```python
-from rubedo import pipeline, step
+from rubedo import pipeline
 
-@step(shape="expand")
+p = pipeline(name="orders")
+
+@p.step()
 def orders_src():
     yield {"oid": 1, "cust": "a"}
 
-@step(shape="expand")
+@p.step()
 def customers_src():
     yield {"cid": "a", "name": "Acme"}
 
-@step(depends_on=["orders_src"], index=["cust"])
+@p.step(index=["cust"])
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@step(depends_on=["customers_src"], index=["cid"])
+@p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@step(shape="join", depends_on=["order", "customer"],
-      join_on={"order": "cust", "customer": "cid"})  # match order.cust == customer.cid
+@p.step(depends_on=["order", "customer"],
+        join_on={"order": "cust", "customer": "cid"})  # match order.cust == customer.cid
 def enrich(order, customer): return {"oid": order["oid"], "name": customer["name"]}
 
 # an expand fans one lane into many; here each enriched order yields a line item
-@step(depends_on=["enrich"], shape="expand")
+@p.step()
 def lines(enrich):
     for i in range(2):
         yield {"oid": enrich["oid"], "n": i}  # yield payloads; content-addressed lanes
 
-p = pipeline(name="orders", steps=[orders_src, customers_src, order, customer, enrich, lines])
 summary = p.run()
 print(summary.output_for("lines"))
 ```
 
 ## Other verbs
 - `p.plan(params=...)` — read-only dry-run of what `p.run()` would do, and why. Writes nothing.
-- `p.describe(format="text"|"mermaid"|"ascii")` — render the DAG before ever running it.
+- `p.describe()` — render the DAG before ever running it. The default autodetects: "ascii" (a drawn terminal DAG) in a real terminal, "text" otherwise; pass `format="text"|"mermaid"|"ascii"` to override.
 - `p.definition()` — the JSON snapshot of structure/policies recorded on every run.
 - `from rubedo import Selection, invalidate, trace` — `trace(Selection.parse("step:enrich company:acme"))` walks lineage; `invalidate(Selection.parse(...), reason=...)` tombstones matched lanes so the next `p.run()` recomputes them.
 
@@ -121,4 +126,6 @@ print(summary.output_for("lines"))
 1. **Mutating inputs:** `row["new_field"] = "x"; return row`. BAD. This breaks content-addressing and JSON serialization guarantees. Always create a new dict: `return {**row, "new_field": "x"}`.
 2. **Missing version bumps:** Changing step logic without bumping `version` will cause the engine to reuse the old cache (and print a code-drift warning under the default `code="warn"`).
 3. **`skip_cache` on expensive steps:** Only use `skip_cache` for cheap data transformations. Never use it on LLM calls or network requests.
-4. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain parentless generator `@step` (its `shape="expand"` inferred automatically); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.
+4. **Bare `@p.step`:** the pipeline-method decorator must be *called* — `@p.step()` / `@p.step(retries=3)`. A bare `@p.step` silently registers nothing (only module-level `@step` works bare).
+5. **Omitting `depends_on=` on a reduce or join:** shape validation runs at decoration time, before dependency inference — a `group_key=`/`shape="reduce"`/`join_on=` step without an explicit `depends_on=` raises immediately. Map and expand steps are where parameter-name inference applies.
+6. **Reaching for a `Source` class or `pipeline(sources={...})`/`id=`/`PipelineBuilder`/a free `run()` function.** None of these exist anymore. Ingestion is a plain parentless generator step (its `shape="expand"` inferred automatically); `pipeline(name=...)` is the sole constructor and its only required argument; verbs (`run`/`plan`/`describe`/`definition`) are methods on the returned `Pipeline`.
