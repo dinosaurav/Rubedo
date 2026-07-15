@@ -20,7 +20,9 @@ accurate and load-bearing; keep them updated when behavior changes.
   own per-lane commit count too). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check src/rubedo/ tests/ examples/`,
-  `uv run mypy src/rubedo`, `(cd web && npx tsc -b)` when web changed, plus a live end-to-end of the
+  `uv run mypy src/rubedo`, `(cd web && npx tsc -b)` when web changed,
+  `(cd web && npm run build && npx playwright test)` when web or server
+  changed, plus a live end-to-end of the
   changed behavior (the examples, or a small inline script; for API changes
   start uvicorn on a spare port and curl it).
 - **Design-first**: for anything ambiguous or conceptual, propose to the
@@ -146,9 +148,16 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   language: lane-key globs, indexed fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
 - `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
-  Ledger-derived only; never imports user pipelines.
+  Ledger-derived only; never imports user pipelines. Serves the built web
+  UI from `web_static/` (SPA fallback to `index.html`); `rubedo serve`
+  wraps uvicorn so one command gives the full dashboard. The web app's
+  `api.ts` uses a relative `/api` URL — same-origin in production, proxied
+  to `:8000` by Vite in dev.
 - `web/` — React/Vite dashboard. `DagView.tsx` renders definition
   snapshots. Light-themed ("blueprint") CSS variables in `index.css`. The UI is purely read-only.
+  `vite.config.ts` builds to `src/rubedo/web_static/` and proxies `/api` in
+  dev. Playwright e2e specs in `web/tests/` spawn a backend with a temp
+  `RUBEDO_HOME` and verify the SPA renders real ledger data.
 
 ## Test conventions
 

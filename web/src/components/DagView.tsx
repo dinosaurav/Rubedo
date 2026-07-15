@@ -145,7 +145,7 @@ export default function DagView({
           const nodeClasses = `dag-node ${onStepClick ? 'clickable' : ''} ${isNodeRunning ? 'running' : ''}`;
           
           return (
-            <g key={s.name} 
+            <g key={s.name} data-step={s.name}
                onClick={() => onStepClick && onStepClick(s.name)}
                className={nodeClasses}
                style={{ cursor: onStepClick ? 'pointer' : 'default' }}>

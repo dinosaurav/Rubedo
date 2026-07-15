@@ -300,6 +300,36 @@ def cmd_check(args):
     # 21's Trap) — it must never gate or block, so exit code stays 0.
 
 
+def cmd_serve(args):
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]The 'server' extra is not installed.[/red] "
+            "Install it with: pip install \"rubedo[server]\""
+        )
+        sys.exit(1)
+
+    from .server import _web_static_dir
+
+    static = _web_static_dir()
+    console.print(f"[bold]Rubedo server[/bold] — http://{args.host}:{args.port}")
+    if static:
+        console.print(f"  web UI:  http://{args.host}:{args.port}/")
+    else:
+        console.print(
+            "  [yellow]web UI not built[/yellow] — API only at "
+            f"http://{args.host}:{args.port}/api/*\n"
+            "  Build it with: (cd web && npm run build)"
+        )
+    uvicorn.run(
+        "rubedo.server:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rubedo Read-Only Ops CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -368,6 +398,15 @@ def main():
     )
     parser_check.add_argument("file", help="Path to the .py file defining the pipeline")
     parser_check.set_defaults(func=cmd_check)
+
+    parser_serve = subparsers.add_parser(
+        "serve",
+        help="Start the read-only FastAPI server (API + bundled web UI at /)",
+    )
+    parser_serve.add_argument("--host", default="127.0.0.1", help="Bind address (default 127.0.0.1)")
+    parser_serve.add_argument("--port", type=int, default=8000, help="Port (default 8000)")
+    parser_serve.add_argument("--reload", action="store_true", help="Auto-reload on Python changes (dev)")
+    parser_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)

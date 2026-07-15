@@ -5,8 +5,10 @@ import os
 import json
 import time
 from contextlib import asynccontextmanager
+from importlib.resources import files as _resource_files
 from typing import List
 from fastapi import FastAPI, HTTPException, Request, Query, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
@@ -566,4 +568,54 @@ def get_pipelines_api():
                 )
             )
         return out
+
+
+def _web_static_dir() -> str | None:
+    """Locate the built web assets directory, or None if absent.
+
+    Checks three places, in order:
+    1. ``RUBEDO_WEB_DIR`` env var (escape hatch / dev override).
+    2. ``rubedo.web_static`` as importlib package data (the normal
+       installed-package path — ``web/dist`` is shipped as package data).
+    3. ``src/rubedo/web_static`` relative to this file (the editable /
+       in-tree path, useful when ``npm run build`` was just run).
+    """
+    env = os.environ.get("RUBEDO_WEB_DIR")
+    if env and os.path.isdir(env):
+        return env
+    try:
+        d = _resource_files("rubedo") / "web_static"
+        if d.is_dir():
+            return str(d)
+    except (FileNotFoundError, ModuleNotFoundError, TypeError):
+        pass
+    here = os.path.join(os.path.dirname(__file__), "web_static")
+    if os.path.isdir(here):
+        return here
+    return None
+
+
+_STATIC_DIR = _web_static_dir()
+
+if _STATIC_DIR is not None:
+    _static_dir: str = _STATIC_DIR
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(_static_dir, "assets")),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}")
+    def spa_fallback(full_path: str):
+        """Serve the SPA: any non-/api path falls back to index.html so
+        client-side routes (e.g. /runs/<id>) work on refresh. Unmatched
+        /api paths get a JSON 404, not the SPA shell."""
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(404, "Not found")
+        index = os.path.join(_static_dir, "index.html")
+        if full_path:
+            candidate = os.path.join(_static_dir, full_path)
+            if os.path.isfile(candidate):
+                return FileResponse(candidate)
+        return FileResponse(index)
 

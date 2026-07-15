@@ -59,6 +59,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Built web assets (output of `npm run build`, shipped via package-data)
+src/rubedo/web_static/
+
 # Private notes (owner-only strategy docs, never published)
 notes/private/
 private/
