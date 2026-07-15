@@ -187,7 +187,9 @@ def test_cli_check_warns_then_passes_and_always_exits_zero(tmp_path, capsys, mon
 
     monkeypatch.setattr(sys, "argv", ["rubedo", "check", str(undeclared)])
     main()
-    out = capsys.readouterr().out
+    # Normalize whitespace: rich soft-wraps CLI output at terminal width,
+    # which can split a multi-word substring across lines on CI.
+    out = " ".join(capsys.readouterr().out.split())
     assert "MY_SECRET" in out
     assert "warning" in out.lower()
 
@@ -202,5 +204,5 @@ def test_cli_check_warns_then_passes_and_always_exits_zero(tmp_path, capsys, mon
     )
     monkeypatch.setattr(sys, "argv", ["rubedo", "check", str(declared)])
     main()
-    out = capsys.readouterr().out
+    out = " ".join(capsys.readouterr().out.split())
     assert "no undeclared" in out.lower()

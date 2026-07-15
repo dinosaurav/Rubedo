@@ -77,7 +77,7 @@ def create_file(name, content):
     return path
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -99,15 +99,15 @@ def coordinate_for_path(step_name, path_value):
 
 
 def test_topological_sort():
-    @step(name="a", version="1", depends_on=["scan"])
+    @step
     def a(scan):
         pass
 
-    @step(name="b", version="1", depends_on=["a"])
+    @step
     def b(a):
         pass
 
-    @step(name="c", version="1", depends_on=["b"])
+    @step
     def c(b):
         pass
 
@@ -117,11 +117,11 @@ def test_topological_sort():
 
 
 def test_linear_dag():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].strip()
 
-    @step(name="upper", version="1", depends_on=["read"])
+    @step
     def upper(read):
         return read.upper()
 
@@ -171,7 +171,7 @@ def test_linear_dag():
 
 
 def test_cache_hit():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].strip()
 
@@ -203,11 +203,11 @@ def test_invalidate_downstream_then_rerun():
     from rubedo import Selection
     from rubedo.invalidation import invalidate
 
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         return scan["text"].strip()
 
-    @step(name="upper", version="1", depends_on=["read"])
+    @step
     def upper(read):
         return read.upper()
 
@@ -245,14 +245,14 @@ def test_duplicate_content_files_share_materialization():
     # 14 ("identical rows collapse"). The module-level `scan` above folds
     # "path" into the payload precisely so lanes stay distinguishable; this
     # test wants the opposite to exercise collapse.
-    @step(name="scan_nopath", version="1", shape="expand")
+    @step
     def scan_nopath():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
                 yield {"text": open(path).read()}
 
-    @step(name="upper", version="1", depends_on=["scan_nopath"])
+    @step
     def upper(scan_nopath):
         return scan_nopath["text"].strip().upper()
 
@@ -277,11 +277,11 @@ def test_duplicate_content_files_share_materialization():
 
 
 def test_dag_blocked_on_failure():
-    @step(name="read", version="1", depends_on=["scan"])
+    @step
     def read(scan):
         raise ValueError("Boom")
 
-    @step(name="upper", version="1", depends_on=["read"])
+    @step
     def upper(read):
         return read.upper()
 

@@ -69,7 +69,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -86,7 +86,7 @@ class UserRecord(BaseModel):
 def test_output_model_success():
     create_file("f1.txt", "1,alice")
 
-    @step(name="parse", version="1", output_model=UserRecord, depends_on=["scan"])
+    @step(output_model=UserRecord)
     def parse(scan):
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
@@ -102,7 +102,7 @@ def test_output_model_failure():
     create_file("f1.txt", "1,alice")
 
     # Missing the required "id" field in the return value
-    @step(name="parse", version="1", output_model=UserRecord, depends_on=["scan"])
+    @step(output_model=UserRecord)
     def parse(scan):
         return {"name": "alice"}
 
@@ -126,7 +126,7 @@ def test_assertions_success():
     def must_be_positive(val):
         assert val["id"] > 0, "ID must be positive"
 
-    @step(name="parse", version="1", assertions=[must_be_positive], depends_on=["scan"])
+    @step(assertions=[must_be_positive])
     def parse(scan):
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
@@ -145,7 +145,7 @@ def test_assertions_failure():
         if val["id"] <= 0:
             raise ValueError("ID must be positive")
 
-    @step(name="parse", version="1", assertions=[must_be_positive], depends_on=["scan"])
+    @step(assertions=[must_be_positive])
     def parse(scan):
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
@@ -171,7 +171,7 @@ def test_expand_step_validation():
     # `produce` is itself a root expand (no depends_on): it needs no scan/
     # folder recipe at all, so unlike the other tests in this file this
     # pipeline stays single-step.
-    @step(name="produce", version="1", shape="expand", output_model=ItemModel)
+    @step(output_model=ItemModel)
     def produce():
         yield {"num": 1}
         yield {"bad_key": 2} # This should fail validation

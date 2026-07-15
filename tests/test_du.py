@@ -78,7 +78,7 @@ def make_shout_pipeline():
     # generator — this keeps the step's own output content-address exactly
     # hand-countable (no extra scan-step materialization inflating the byte
     # totals below).
-    @step(name="shout", version="1", shape="expand")
+    @step
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -154,14 +154,14 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     create_file("a.txt", "same")
     create_file("b.txt", "same\n")
 
-    @step(name="scan", version="1", shape="expand", index=["path"])
+    @step(index=["path"])
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(name="norm", version="1", depends_on=["scan"])
+    @step
     def norm(scan):
         return scan["text"].strip()
 

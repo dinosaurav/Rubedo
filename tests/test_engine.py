@@ -22,7 +22,7 @@ from sqlalchemy import create_engine
 # file's content. Indexed on `path` so tests can still find "the lane for
 # a.txt" without the coordinate being that literal string (coordinates are
 # content-addressed: row-<hash>).
-@step(name="scan", version="1", shape="expand", index=["path"])
+@step(index=["path"])
 def scan():
     for name in sorted(os.listdir("test_input")):
         path = os.path.join("test_input", name)
@@ -31,7 +31,7 @@ def scan():
 
 
 # A simple processor function for tests
-@step(name="count-lines", version="v1", depends_on=["scan"])
+@step(name="count-lines", version="v1")
 def count_lines(scan: dict) -> dict:
     text = scan["text"]
     lines = text.split("\n")
@@ -160,7 +160,7 @@ def test_edit_one_file_recreates_one():
 def test_change_code_version_recreates_all():
     test_pipeline.run(workers=1)
 
-    @step(name="count-lines", version="v2", depends_on=["scan"])
+    @step(name="count-lines", version="v2")
     def count_lines_v2(scan: dict) -> dict:
         return {"ok": True}
 
@@ -181,7 +181,7 @@ def test_change_code_version_recreates_all():
 
 def test_failure_creates_no_materialization():
     # Make a file unreadable or raise an error
-    @step(name="count-lines", version="v1", depends_on=["scan"])
+    @step(name="count-lines")
     def failing_processor(scan: dict) -> dict:
         if scan["path"] == "a.txt":
             raise Exception("Failure in a.txt")

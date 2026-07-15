@@ -75,7 +75,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(name="scan", version="1", shape="expand")
+@step
 def scan():
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
@@ -83,7 +83,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="extract", version="1", depends_on=["scan"])
+@step
 def extract(scan: dict):
     return {"text": scan["text"]}
 
