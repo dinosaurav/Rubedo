@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-15
+
+### Fixed
+- Static assets now served with correct MIME types via a single
+  `FileResponse` handler instead of a `StaticFiles` mount that didn't
+  resolve correctly in installed-package environments (caused "Expected
+  a JavaScript-or-Wasm module script but the server responded with
+  text/html" errors in the browser).
+
 ## [0.2.4] - 2026-07-15
 
 ### Fixed
