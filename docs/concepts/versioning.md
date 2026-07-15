@@ -45,7 +45,7 @@ change, because from the cache's point of view they're the same kind of
 event.
 
 ```python
-@step(name="enrich", version="1.0.0", ...)
+@step(version="1.0.0")
 def enrich(row: dict): ...
 ```
 
@@ -83,7 +83,7 @@ function's *source text* changes between runs. Two modes:
   is exactly what you want and costs nothing.
 
 ```python
-@step(name="parse", version="1", code="auto")
+@step(code="auto")
 def parse(row: dict): ...   # any edit here recomputes automatically
 ```
 
@@ -123,7 +123,7 @@ re-scrape of the whole fan-out, since the TTL is checked against the cache
 anchor (see [shapes.md](shapes.md#expand-1n-fan-out)).
 
 ```python
-@step(name="enrich", version="1.0.0", stale_after="24h")
+@step(stale_after="24h")
 def enrich(row: dict): ...
 ```
 
@@ -152,7 +152,7 @@ because its output deserves its own row in the ledger. A `skip_cache` step:
   and its consumer, with no store round-trip.
 
 ```python
-@step(name="normalize", version="1", skip_cache=True)
+@step(skip_cache=True)
 def normalize(row: dict) -> dict:
     return {k: v.strip().lower() for k, v in row.items()}
 ```
