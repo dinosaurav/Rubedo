@@ -1,25 +1,25 @@
 # Sources: recipes, not classes
 
 There's no `Source` protocol and no source classes to import. Ingestion is
-just a step: a parentless `@step(shape="expand")` — the same producer shape
-`expand` and `join` already use downstream — that `yield`s one payload per
-item. Each yielded payload mints its own content-addressed lane
-(`row-<hash>`); the engine never imports your code, so there's nothing to
-subclass or register.
+just a step: a parentless generator — its `shape="expand"` inferred, the
+same producer shape `expand` and `join` already use downstream — that
+`yield`s one payload per item. Each yielded payload mints its own
+content-addressed lane (`row-<hash>`); the engine never imports your code,
+so there's nothing to subclass or register.
 
 ```python
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="rows", version="1", shape="expand")
+p = pipeline(name="doubler")
+
+@p.step()
 def rows():
     yield {"n": 1}
     yield {"n": 2}
 
-@step(name="double", version="1", depends_on=["rows"])
+@p.step()
 def double(rows):
     return rows["n"] * 2
-
-pipeline(name="doubler", steps=[rows, double])
 ```
 
 A source-shaped step re-runs its generator on every `p.run()` — there's no
@@ -41,20 +41,20 @@ Each file under a folder is a lane. A three-line `pathlib`/`os` generator:
 
 ```python
 import os
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="scan", version="1", shape="expand")
+p = pipeline(name="docs")
+
+@p.step()
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
         if os.path.isfile(path):
             yield {"path": name, "text": open(path).read()}
 
-@step(name="process", version="1", depends_on=["scan"])
+@p.step()
 def process(scan):
     return scan["text"].upper()
-
-pipeline(name="docs", steps=[scan, process])
 ```
 
 `sorted()` keeps scan order deterministic (harmless either way — lanes are
@@ -68,18 +68,18 @@ Each row of a CSV is a lane. A `csv.DictReader` loop:
 
 ```python
 import csv
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="leads", version="1", shape="expand")
+p = pipeline(name="enrich-leads")
+
+@p.step()
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="enrich", version="1", depends_on=["leads"])
+@p.step()
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
-
-pipeline(name="enrich-leads", steps=[leads, enrich])
 ```
 
 ## SQL table
@@ -88,19 +88,19 @@ Each row of a SQL table is a lane. A plain `SELECT` loop:
 
 ```python
 from sqlalchemy import create_engine, text
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="orders", version="1", shape="expand")
+p = pipeline(name="orders-rollup")
+
+@p.step()
 def orders():
     engine = create_engine("postgresql://...")
     with engine.connect() as conn:
         for row in conn.execute(text("SELECT * FROM orders")).mappings():
             yield dict(row)
 
-@step(name="classify", version="1", depends_on=["orders"])
+@p.step()
 def classify(orders: dict): ...
-
-pipeline(name="orders-rollup", steps=[orders, classify])
 ```
 
 **Buffering is accepted for v1.** The generator above (and `expand` in
@@ -122,9 +122,11 @@ a downstream **cached** step do the actual fetch:
 
 ```python
 import boto3
-from rubedo import step, pipeline
+from rubedo import pipeline
 
-@step(name="objects", version="1", shape="expand")
+p = pipeline(name="ingest")
+
+@p.step()
 def objects():
     client = boto3.client("s3")
     paginator = client.get_paginator("list_objects_v2")
@@ -132,12 +134,10 @@ def objects():
         for obj in page.get("Contents", []):
             yield {"key": obj["Key"], "etag": obj["ETag"], "size": obj["Size"]}
 
-@step(name="fetch", version="1", depends_on=["objects"])
+@p.step()
 def fetch(objects: dict) -> bytes:
     client = boto3.client("s3")
     return client.get_object(Bucket="my-bucket", Key=objects["key"])["Body"].read()
-
-pipeline(name="ingest", steps=[objects, fetch])
 ```
 
 The token (not the bytes) is what mints `objects`'s lane, so an unchanged
@@ -169,7 +169,7 @@ whatever a person would call it — **index it downstream**, don't rely on
 the coordinate:
 
 ```python
-@step(name="scan", version="1", shape="expand", index=["path"])
+@p.step(index=["path"])
 def scan(): ...
 ```
 
@@ -195,36 +195,31 @@ everything that hasn't actually changed.
 
 A pipeline can declare more than one source-shaped root — the shape a
 `join` needs, since a join combines lane sets from independent roots. Each
-is just another parentless `@step(shape="expand")`; nothing extra to
-declare:
+is just another parentless generator step; nothing extra to declare:
 
 ```python
-@step(name="orders_src", version="1", shape="expand")
+p = pipeline(name="enrich")
+
+@p.step()
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="customers_src", version="1", shape="expand")
+@p.step()
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@step(name="order", version="1", depends_on=["orders_src"], index=["cust"])
+@p.step(index=["cust"])
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@step(name="customer", version="1", depends_on=["customers_src"], index=["cid"])
+@p.step(index=["cid"])
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
-@step(name="enrich", version="1", shape="join",
-      depends_on=["order", "customer"],
-      join_on={"order": "cust", "customer": "cid"})
+@p.step(depends_on=["order", "customer"],
+        join_on={"order": "cust", "customer": "cid"})
 def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
-
-p = pipeline(
-    name="enrich",
-    steps=[orders_src, customers_src, order, customer, enrich],
-)
 ```
 
 See [shapes.md](shapes.md) for the `join` step this setup feeds, and
