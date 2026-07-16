@@ -1,5 +1,8 @@
 # Rubedo project gitignore
 
+# Scratch / work-in-progress (not tracked)
+tmp/
+
 # Specific Folder for Rubedo metadata/cache
 .rubedo/
 
