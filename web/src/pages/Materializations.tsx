@@ -20,7 +20,6 @@ export default function Materializations() {
   useEffect(() => { loadPage(0); }, []);
 
   const columns: ColumnDef<any, any>[] = [
-    { accessorKey: 'id', header: 'ID' },
     { accessorKey: 'pipeline_id', header: 'Pipeline', cell: (info) => <TruncatedText value={info.getValue()} /> },
     { accessorKey: 'step_name', header: 'Step', meta: { filterVariant: 'select' } },
     { accessorKey: 'code_version', header: 'Code Version', meta: { filterVariant: 'select' } },

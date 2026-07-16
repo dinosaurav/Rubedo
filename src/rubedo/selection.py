@@ -218,11 +218,3 @@ def _matches_version(version_str: Optional[str], specifier_set: Any) -> bool:
         return Version(str(version_str)) in specifier_set
     except InvalidVersion:
         return False
-
-
-def get_selection_materialization_ids(
-    session: Session, selection: Selection
-) -> List[int]:
-    """Transitional wrapper: delegates to get_selection_addresses.
-    Returns empty list — mat_ids are no longer used (edges are address-based)."""
-    return []

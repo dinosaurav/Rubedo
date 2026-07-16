@@ -182,7 +182,6 @@ def get_materializations(
         response.headers["X-Total-Count"] = str(total)
         return [
             {
-                "id": 0,  # transitional: integer id gone once materializations table deleted
                 "pipeline_id": r.get("pipeline_id", ""),
                 "step_name": r.get("step_name", ""),
                 "code_version": r.get("code_version") or "",
@@ -268,7 +267,6 @@ def get_current_outputs():
                     "code_version": arrow_row.get("code_version"),
                     "input_hash": rc.input_hash,
                     "output_address": rc.output_address,
-                    "materialization_id": None,
                     "run_id": rc.run_id,
                     "updated_at": str(arrow_row.get("ts", "")) if arrow_row.get("ts") else rc.created_at,
                 }
@@ -369,7 +367,6 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
                 "coordinate": rc.coordinate,
                 "status": rc.status,
                 "output_address": rc.output_address,
-                "materialization_id": None,
                 "is_match": addr in matching_addrs,
                 "created_at": str(arrow_row.get("ts", "")) if arrow_row.get("ts") else rc.created_at,
             })
@@ -391,7 +388,6 @@ def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset
                 "coordinate": rc.coordinate,
                 "status": rc.status,
                 "output_address": rc.output_address,
-                "materialization_id": None,
                 "error_message": rc.error_message
             })
         return {"total": total, "items": items}
@@ -528,7 +524,6 @@ async def preview_selection(request: Request):
                 continue
             items.append(
                 {
-                    "materialization_id": 0,
                     "pipeline_id": row.get("pipeline_id", ""),
                     "step_name": row.get("step_name", ""),
                     "code_version": row.get("code_version") or "",
@@ -558,7 +553,6 @@ async def invalidate_selection(request: Request):
         "run_id": result["run_id"],
         "invalidated_count": result["invalidated_count"],
         "addresses": result["addresses"],
-        "materialization_ids": result["materialization_ids"],
     }
 
 

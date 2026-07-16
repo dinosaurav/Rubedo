@@ -126,7 +126,6 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 "seed_count": seed_count,
                 "downstream_count": downstream_count,
                 "addresses": flipped_addrs,
-                "materialization_ids": [],
             }
         except Exception as e:
             session.rollback()

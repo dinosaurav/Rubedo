@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
+from rubedo.models import InputHashUsage
+from rubedo import lane_store
 import rubedo.store as store
 
 TEST_FOLDER = ".test_concurrency_data"
@@ -54,10 +56,45 @@ def _root_output_address(pipe, params):
     return item.output_address
 
 
-@pytest.mark.skip(reason="Needs rewrite for Arrow storage model — _commit_materialization is deleted")
+def _inject_competing(pipeline_id, output_address, content_hash, output_path, content_type):
+    """Simulate another worker completing the same address before our commit.
+
+    Writes an Arrow row and flips IHU ``fulfilled=True`` — the two artifacts
+    the ledger's mat_action check looks at.  The Arrow row is flushed to disk
+    so ``address_row_index`` (which scans disk files) can see it."""
+    lane_store.append_filled(
+        pipeline_id=pipeline_id,
+        step_name="my_step",
+        lane_key="@root",
+        address=output_address,
+        input_hash="dummy_injected",
+        content_hash=content_hash,
+        content_type=content_type,
+        output_path=output_path,
+        run_id="run_concurrent",
+        code_hash="dummy",
+        code_version="1",
+        index_values=None,
+    )
+    lane_store.flush_step(pipeline_id, "my_step")
+    with get_session() as session:
+        existing = session.query(InputHashUsage).filter_by(address=output_address).first()
+        if existing:
+            existing.fulfilled = True
+            existing.last_run_id = "run_concurrent"
+        else:
+            session.add(InputHashUsage(
+                address=output_address,
+                last_run_id="run_concurrent",
+                fulfilled=True,
+            ))
+        session.commit()
+
+
 def test_concurrency_identical_bytes_collision():
-    # We patch stage_and_commit to first insert a competing materialization directly into the DB.
-    # This simulates another worker completing the same task right before we commit.
+    # Another worker commits identical bytes for the same address before
+    # our commit — our run should detect "reused" (same content_hash, was
+    # already fulfilled).
     original_stage_and_commit = store.stage_and_commit
 
     pipe = pipeline(name="p1", steps=[my_step])
@@ -72,45 +109,21 @@ def test_concurrency_identical_bytes_collision():
 
         if not has_injected:
             has_injected = True
-            # Simulate a competing run inserting a live materialization
-            with get_session() as session:
-                from rubedo.ledger import _commit_materialization
-
-                # Insert the identical materialization at the address our
-                # own run is about to commit to.
-                _commit_materialization(
-                    session,
-                    pipeline_id="p1",
-                    step=my_step,
-                    input_hash="",
-                    output_address=output_address,
-                    output_content_hash=output_content_hash,
-                    content_type=content_type,
-                    output_path=final_path,
-                    metadata_json=None,
-                    run_id="run_concurrent",
-                )
-                session.commit()
+            _inject_competing("p1", output_address, output_content_hash, final_path, content_type)
 
         return final_path, output_content_hash, content_type
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
         summary = pipe.run(params=params)
 
-    if summary.failed_count > 0:
-        with get_session() as session:
-            from rubedo.models import RunCoordinateStatus
-            for s in session.query(RunCoordinateStatus).filter_by(status='failed').all():
-                print(f"FAILED TRACE: {s.error_message}")
-
-    # Since bytes were identical, the original run should mark it as "reused"!
     assert summary.reused_count == 1
     assert summary.created_count == 0
+    assert summary.failed_count == 0
 
-@pytest.mark.skip(reason="Needs rewrite for Arrow storage model — _commit_materialization is deleted")
+
 def test_concurrency_different_bytes_collision():
-    # Same as above, but the competing run inserted DIFFERENT bytes for the same address.
-    # This means the current run must supersede it.
+    # Another worker commits DIFFERENT bytes for the same address before
+    # our commit — our run must supersede (counts as "created").
     original_stage_and_commit = store.stage_and_commit
 
     pipe = pipeline(name="p2", steps=[my_step])
@@ -125,36 +138,13 @@ def test_concurrency_different_bytes_collision():
 
         if not has_injected:
             has_injected = True
-            with get_session() as session:
-                from rubedo.ledger import _commit_materialization
-
-                # Insert a competing materialization with DIFFERENT content hash
-                _commit_materialization(
-                    session,
-                    pipeline_id="p2",
-                    step=my_step,
-                    input_hash="",
-                    output_address=output_address,
-                    output_content_hash="mocked_different_hash",
-                    content_type=content_type,
-                    output_path="mocked_different_path",
-                    metadata_json=None,
-                    run_id="run_concurrent",
-                )
-                session.commit()
+            _inject_competing("p2", output_address, "mocked_different_hash", "mocked_different_path", content_type)
 
         return final_path, output_content_hash, content_type
 
     with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
         summary = pipe.run(params=params)
 
-    if summary.failed_count > 0:
-        with get_session() as session:
-            from rubedo.models import RunCoordinateStatus
-            for s in session.query(RunCoordinateStatus).filter_by(status='failed').all():
-                print(f"FAILED TRACE: {s.error_message}")
-
-    # The current run supersedes the injected one, which counts as "created" (since it made a new live row).
     assert summary.created_count == 1
     assert summary.reused_count == 0
     assert summary.failed_count == 0

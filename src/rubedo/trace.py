@@ -36,7 +36,6 @@ from .selection import Selection, get_selection_addresses
 class TraceNode:
     """One materialization reached by a trace."""
 
-    materialization_id: int
     step_name: str
     pipeline_id: str
     coordinate: Optional[str]
@@ -224,7 +223,6 @@ def trace(
 
         nodes = [
             TraceNode(
-                materialization_id=0,
                 step_name=str(arrow_idx.get(a, {}).get("step_name", "")),
                 pipeline_id=str(arrow_idx.get(a, {}).get("pipeline_id", "")),
                 coordinate=addr_coords.get(a),
