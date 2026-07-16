@@ -125,10 +125,15 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   `search_indexed_values` / `get_index_values` serve selection, server
   search, and detail endpoints.
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
-  events, `_commit_materialization` (simplified: same bytes reuse/restore,
-  different bytes insert a new row; no lifecycle rows, no pairing guard,
-  no savepoints), and the `input_hash_usages` claim (plan time,
+  events, the commit path (Arrow row via `lane_store.append_filled` +
+  `input_hash_usages.fulfilled=True` + address-based `MaterializationEdge`;
+  `_commit_materialization` is **deleted**), and the `input_hash_usages`
+  claim (plan time, records `last_run_id` only — does NOT flip
   `fulfilled=False`) / fulfill (commit time, `fulfilled=True`) lifecycle.
+  `mat_action` is determined by checking if the address was already
+  fulfilled with matching content_hash (→ "reused"/"refreshed") or not
+  (→ "created"). Arrow row only written for created/superseded/refreshed
+  — pure reuse is a no-op.
 - `src/rubedo/scheduler.py` — the segment machinery: `_partition_segments`
   (topo order → `broad` singleton segments or `deep` runs of consecutive
   ≤1-parent map steps) and `_run_segment`, the one scheduler over (lane,
@@ -143,22 +148,25 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   and of `scheduler.py`).
 - `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
-  mutable columns anywhere are projections (`Run` lifecycle columns,
-  `Materialization.is_live`/`refreshed_at`) and the `InputHashUsage`
-  liveness columns (`fulfilled`, `last_run_id`, `claimed_at` — the one
-  intentionally mutable ledger table: claim/fulfill/tombstone/demote are
-  in-place updates). The pairing guard (every `is_live` flip ships a
-  lifecycle row) is **deleted** — liveness is `input_hash_usages.fulfilled`,
-  not an is_live projection paired with a lifecycle log. See
-  `notes/arrow-storage.md` for the full design and `notes/invariants.md`
-  for the updated guarantees.
-- `src/rubedo/gc.py` — retention GC: demote (paired `pruned` lifecycle
-  rows) then sweep (delete bytes only when *every* referencing
-  materialization across all pipelines is non-live, logged in append-only
+  mutable columns anywhere are projections (`Run` lifecycle columns)
+  and the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id`,
+  `claimed_at` — the one intentionally mutable ledger table:
+  claim/fulfill/tombstone/demote are in-place updates). The
+  `Materialization` model is **deleted** — no `materializations` table, no
+  `is_live`, no `uq_live_output_address` index. `MaterializationEdge` is
+  address-based (`parent_address`/`child_address`, no integer FKs).
+  `RunCoordinateStatus` has no `materialization_id` column —
+  `output_address` is the join key. See `notes/arrow-storage.md` for the
+  full design and `notes/invariants.md` for the updated guarantees.
+- `src/rubedo/gc.py` — retention GC: demote (set IHU `fulfilled=False`)
+  then sweep (delete bytes only when *every* referencing materialization
+  across all pipelines is non-live, logged in append-only
   `object_reclamations`). `pipeline(retention=N)` auto-prunes at end of
   run; `gc()` / `rubedo gc [--max-bytes] [--delete]` is dry-run by
   default and refuses while any run's heartbeat is live. Expand anchors
   (live mats with zero `RunCoordinateStatus` refs) are always kept.
+  Identity is `Set[str]` addresses; content hashes from
+  `lane_store.all_filled_rows()` — no `Materialization` import.
 - `src/rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
   language: lane-key globs, indexed fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
@@ -231,8 +239,6 @@ downstream lane), not 1.
 - Redefining a step function with the same version in one test triggers the
   code-drift `UserWarning` (by design) — acknowledge with
   `@pytest.mark.filterwarnings`.
-- `_commit_materialization`'s supersede path flushes the demotion *before*
-  inserting the replacement (one-live-per-address partial unique index).
 - Each `examples/<name>/` is a self-contained folder (script + its data);
   the flagship is `examples/count_lines/count_lines.py`. LLM examples read
   `OPENROUTER_API_KEY` from a gitignored `.env` at the repo root.

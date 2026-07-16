@@ -53,11 +53,9 @@ update (claim at plan time, fulfill at commit time, tombstone on
 invalidate, demote on prune).
 
 **Materialization:**
-Successful committed output.  During the transition from the old
-SQLite-only model, a `Materialization` row is still written in parallel
-with the Arrow row (for readers not yet swapped).  The long-term target
-is to delete the `materializations` table entirely; the Arrow lane store
-becomes the sole source of truth for output metadata.
+Successful committed output. The `materializations` SQLite table is
+**deleted** — the Arrow lane store is the sole source of truth for output
+metadata. A materialization is a filled Arrow row + `input_hash_usages.fulfilled=True`.
 
 **Run:**
 A user-triggered execution attempt over some scope.
@@ -134,13 +132,11 @@ rewrites the bytes.
 
 **Liveness:**
 `input_hash_usages.fulfilled` is the single gate. `True` = reuse (read
-content from the Arrow lane store); `False` = recompute.  The old
-`Materialization.is_live` projection and the `materialization_lifecycle`
-append-only log are being retired — the pairing guard that enforced
-"is_live flips ship lifecycle rows" is deleted.  In the new model there
-are no is_live flips to pair: liveness is a column in a keyed table, not
-a projection of an append-only log.  Run's status columns remain a
-projection of the `run_events` log — they are **terminal-only**
+content from the Arrow lane store); `False` = recompute.  The
+`Materialization` model and `materialization_lifecycle` table are
+**deleted** — liveness is a column in a keyed table, not a projection of
+an append-only log.  Run's status columns remain a projection of the
+`run_events` log — they are **terminal-only**
 (`completed` / `completed_with_failures` / `failed`; NULL while in
 flight). "running" is never stored: it is a present-tense claim no
 durable row can keep truthfully. Readers derive `running`/`interrupted`
@@ -167,10 +163,10 @@ directly and, at most, point at this file in general terms.
   — identical inputs always land on the same address, so a cache hit is
   found by construction, not by a lookup table someone has to maintain.
 - **(1.3)** The generations protocol extends this across time: identical
-  bytes reuse or restore the existing row; only genuinely different bytes
-  supersede it (`ledger.py`'s `_commit_materialization`). A pruned lane
-  whose input later reappears with the same content restores the old row
-  for free instead of recomputing.
+  bytes reuse (no new Arrow row); only genuinely different bytes
+  supersede (a new Arrow row is appended). A pruned lane whose input
+  later reappears with the same content reuses the old row for free
+  instead of recomputing.
 
 ### 2 — Never lie about what happened
 
@@ -196,14 +192,13 @@ directly and, at most, point at this file in general terms.
   the next — that's a fact about the run, not a property of the object,
   and the ledger keeps them separate rather than conflating them.
 - **(2.6) Ledger tables are append-only, enforced by ORM guards; the only
-  legal updates anywhere are the projection columns (`Run` lifecycle,
-  `Materialization.is_live`/`refreshed_at`) and the `InputHashUsage`
-  liveness columns (`fulfilled`, `last_run_id`, `claimed_at`).** The
-  pairing guard (every `is_live` flip ships a lifecycle row) is **gone**
-  — liveness is `input_hash_usages.fulfilled`, not an is_live projection
-  paired with a lifecycle log. The `InputHashUsage` table is the one
-  intentionally mutable ledger table: claim/fulfill/tombstone/demote are
-  in-place updates, not append-only history.
+  legal updates anywhere are the projection columns (`Run` lifecycle) and
+  the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id`,
+  `claimed_at`).** The `Materialization` model is **deleted** — no
+  `is_live` projection, no `refreshed_at`, no lifecycle log. The
+  `InputHashUsage` table is the one intentionally mutable ledger table:
+  claim/fulfill/tombstone/demote are in-place updates, not append-only
+  history.
 
 ### 3 — Order and parallelism never change results
 

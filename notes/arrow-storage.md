@@ -1,6 +1,6 @@
 # Arrow Storage — design
 
-Status: **design phase** (owner design session 2026-07-15). This doc
+Status: **Phase 2 + 3 complete** (implemented 2026-07-15/16). This doc
 supersedes the external "Arrow Architecture Discussion.md" — the decisions
 settled there and in the follow-up conversation are recorded here as the
 build spec. Read `notes/invariants.md` for the current vocabulary; this doc
@@ -325,57 +325,49 @@ selection — is already independent of it.
 pipeline (7 steps all `skip_cache=True` today) becomes cached end-to-end;
 threshold changes recompute only the affected pattern step.
 
-### Phase 2 — The refactor (the bulk of this work)
-This is the big change. Suggested order, each a separate commit:
+### Phase 2 — The refactor (the bulk of this work) ✅ Done
+Each bullet was a separate commit. The final state:
 
-- **2a.** New `tables/` directory. Replace the Phase 1 Arrow-IPC-in-`objects/`
-  approach with one IPC file per step output under `tables/<pipeline>/<step>.arrow`.
-  The file is append-only; rows stack across runs.
-- **2b.** New `input_hash_usages` SQLite table (the `input_hash → last_run_id`
-  map). Soft-lock insert path; `fulfilled` flip on commit. No old code
-  depends on it yet — add it alongside, wire up next.
-- **2c.** Rewrite `ledger._commit_materialization` from the
-  supersede/restore/savepoint dance to a one-line append of an Arrow row.
-  Delete the `IntegrityError`-fallback retry path. The engine writes a
-  filled row + flips `fulfilled=1`; that's the commit.
-- **2d.** Delete `materialization_lifecycle` table and the pairing guard
-  (`_assert_liveness_pairing`, `_track_liveness_pairing`, the
-  `before_flush`/`before_commit`/`after_rollback` listeners in
-  `models.py:313-366`). `invalidate()` writes a blank Arrow row, not a
-  lifecycle row. No pairing needed.
-- **2e.** ✅ **Done.** Deleted `materialization_index` table + the
-  index-writer code (`_extract_index_entries`). Indexed field values are
-  now a `map<string, list<string>>` column (`index_values`) in the Arrow
-  file, populated at commit time via `_extract_index_values`. All readers
-  (planning `_group_reduce_lanes`/`_plan_join`, `selection.py`,
-  `server.py` search/detail) scan the Arrow column via
-  `lane_store.scan_indexed_field` / `search_indexed_values` /
-  `get_index_values`. `@step(index=[...])` stays as a query-validation
-  declaration (which fields are searchable) but no longer denormalizes
-  into SQLite.
-- **2f.** Trim `run_coordinate_statuses`: drop `output_address` and
-  `materialization_id` — both derivable from `(step, lane_key, input_hash)`
-  via an Arrow file lookup. Keep `status`, `error_*`, `source_id`,
-  `metadata_json`. Rewrite the server/queries readers that today join on
-  `materialization_id` to instead resolve through the Arrow lookup.
-- **2g.** Rewrite `gc.py`: keep-set is now "the `input_hash_usages` rows
-  whose `last_run_id` is in the pipeline's last N runs" — one index join
-  against `runs`, no `materializations`/`materialization_lifecycle`
-  walk. Sweep unchanged (object bytes still deleted via
-  `object_reclamations` when unreferenced).
-- **2h.** Rewrite `trace._bfs` for the `map`/`join`/`reduce` lineages to
-  align `lane_key`s between Arrow files (zip / pair-key split / group-key
-  rule). Keep `materialization_edges` for `expand` until 2i (or defer
-  indefinitely — the table is small and the blast-radius reader is the
-  only consumer; correctness is paramount).
+- **2a.** ✅ New `tables/` directory. One IPC file per step output under
+  `tables/<pipeline>/<step>.arrow`. The file is append-only; rows stack
+  across runs.
+- **2b.** ✅ New `input_hash_usages` SQLite table (the `address → (last_run_id,
+  fulfilled)` map). Soft-lock insert path; `fulfilled` flip on commit.
+- **2c.** ✅ Rewrote the commit path from the supersede/restore/savepoint
+  dance to a one-line append of an Arrow row. `_commit_materialization` is
+  **deleted**. The engine writes a filled row + flips `fulfilled=True`;
+  that's the commit. `mat_action` is determined by checking if the address
+  was already fulfilled with matching content_hash.
+- **2d.** ✅ Deleted `materialization_lifecycle` table and the pairing guard.
+  `invalidate()` flips `fulfilled=False`; no lifecycle row needed.
+- **2e.** ✅ Deleted `materialization_index` table. Indexed field values are
+  a `map<string, list<string>>` column (`index_values`) in the Arrow file.
+- **2f.** ✅ `RunCoordinateStatus` dropped `materialization_id` —
+  `output_address` is the join key. (Kept `output_address` itself — it's
+  needed by server/trace/selection as a direct lookup key; deriving it
+  from an Arrow scan on every query was more friction than the column
+  costs.) All server/trace/selection readers rewritten to use Arrow +
+  IHU instead of Materialization joins.
+- **2g.** ✅ Rewrote `gc.py`: keep-set is `input_hash_usages` rows whose
+  `last_run_id` is in the pipeline's last N runs. Identity is `Set[str]`
+  addresses; content hashes from `lane_store.all_filled_rows()`. No
+  `Materialization` import.
+- **2h.** ✅ Rewrote `trace._bfs` for address-based edges
+  (`MaterializationEdge` now uses `parent_address`/`child_address`, no
+  integer FKs — the "decision (c)" below was revised to use address
+  strings directly, not synthetic row_ids).
 - **2i.** (Optional, deferred) Persist `expand` parentage as an Arrow
   column on child outputs (`_parent_lane_keys`), rewrite `trace._bfs` for
   expand, delete `materialization_edges`. Separate sub-project.
 
-### Phase 3 — Old-table deletion (after Phase 2 is verified)
-Delete `materializations` table (the `materialization_lifecycle` and
-`materialization_index` tables are already deleted — Phase 2d and 2e).
-Drop the ORM guards for the deleted models. Update `invariants.md`.
+### Phase 3 — Old-table deletion ✅ Done
+Deleted `materializations` table, the `Materialization` ORM model, the
+`uq_live_output_address` unique index, and the `_commit_materialization`
+function. `MaterializationEdge` is address-based (no integer FKs).
+`RunCoordinateStatus` has no `materialization_id` column. All
+`materialization_id`/`materialization_ids` fields purged from API
+schemas, server responses, trace nodes, invalidation responses, and the
+web UI. Concurrency tests rewritten for the Arrow model.
 
 ### Phase 4 — Inline values + automatic object-store spill (TODO 27)
 The Arrow `output` column becomes the sole source of truth for output
@@ -437,15 +429,16 @@ The four promises don't change. The mechanisms that keep them do:
      The most honest "no SQLite mat table at all" option, at the cost of
      edges queries becoming "scan the lane_store file for this row_id."
 
-   **Decision: (c).** It honors "materializations table is gone" fully;
-   edges becomes a 3-column table (`parent_row_id`, `child_row_id`,
-   unique constraint) with no FK, queried by joining row_ids against the
-   relevant step's Arrow file on read. The edges deletion (2i) becomes
-   "drop the table and rewrite the 2 readers" — a smaller, cleaner step
-   once lane_store row_id lookups are exercised. Accept the no-FK
-   trade; correctness is enforced at insert time (row_id is a hash of
-   the lane_store row's identifying tuple) and the immutability guard on
-   edges prevents edits.
+   **Decision: address-based (revised from (c)).** Instead of synthetic
+   `row_id` strings, `MaterializationEdge` uses `parent_address` and
+   `child_address` columns directly — addresses are globally unique (step
+   name is inside the hash) and already the join key everywhere else.
+   No FK target table, no synthetic ID minting. Edges becomes a 3-column
+   table (`parent_address`, `child_address`, unique constraint) queried
+   by joining addresses against the relevant step's Arrow file on read.
+   The edges deletion (2i) becomes "drop the table and rewrite the 2
+   readers" — a smaller, cleaner step once address-based lookups are
+   exercised.
 
 1. **`run_coordinate_statuses` vs `run_events` consolidation.** They
    overlap on per-lane outcome signal. `run_events` is the audit log
