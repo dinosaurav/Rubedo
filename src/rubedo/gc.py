@@ -1,45 +1,26 @@
 """Retention GC: the byte-deleting garbage collector.
 
-In steady state nearly everything is live (current generations are live;
-orphans stay live by producer-model.md Q2), so a classic mark-and-sweep of
-"every non-live reference" reclaims almost nothing. The real storage hog is
-*old runs*: superseded generations and orphaned-live materializations that
-only historical runs still reference. GC v1 therefore prunes by run recency —
-it never touches what recent runs used.
+In the new model (notes/arrow-storage.md), "live" = fulfilled=True in
+input_hash_usages.  Demote = flip fulfilled=False (same mechanism as
+invalidation).  The sweep still refcounts object store entries via
+content_hash — but the content hashes now come from the Arrow lane_store
+rows (via the parallel-written Materialization rows during the transition),
+not from a SQLite is_live column.
 
-Two policies, no others (settled 2026-07-10): per-pipeline keep-last-N-runs
-(`pipeline(retention=N)`) and a global byte budget (`gc(max_bytes=...)`). Both
-run through the same two phases:
+Two policies, no others: per-pipeline keep-last-N-runs
+(`pipeline(retention=N)`) and a global byte budget (`gc(max_bytes=...)`).
+Both run through the same two phases:
 
-  demote  Flip every still-live materialization of a pipeline that falls
-          *outside* the keep-set to is_live=False, with a paired
-          `pruned` lifecycle row (the pairing guard enforces this — see
-          notes/invariants.md).
-          Ledger rows are never deleted — retention removes *bytes*, never
-          *facts* (same document).
-  sweep   Delete an object file only when *every* materialization referencing
-          it, across *all* pipelines, is now non-live (du.py's reclaimable
-          rule — the shared-object trap: one live reference anywhere keeps the
-          bytes). Log each deletion in the append-only object_reclamations
-          table so `rubedo du` reports it as reclaimed, not missing.
+  demote  Flip fulfilled=False on input_hash_usages entries outside the
+          keep-set.  The old Materialization.is_live flip + lifecycle row
+          still fires (parallel write, transitional).
+  sweep   Delete an object file only when *every* reference is non-live
+          once demote is applied.  Log in object_reclamations.
 
-Direction of truth (trap 2): demote and sweep by walking the ledger, never by
-enumerating the store; never delete ledger rows. The restore race (trap 3):
-`stage_and_commit` early-returns without writing when the object already
-exists, and the ledger commit happens later in the main thread — a concurrent
-run could pass that exists-check, GC deletes the file, and the run commits a
-live materialization pointing at nothing. So the sweep *refuses* while any
-run's `effective_run_status()` reads "running"; the end-of-run auto-prune
-*skips* instead of erroring.
-
-Expand anchors (trap 5): expand reuse hangs off a parent-addressed cache-anchor
-materialization (`_plan_expand_reuse`). Verified empirically that an anchor
-appears in *neither* `RunCoordinateStatus.materialization_id` *nor* any
-`MaterializationEdge` — it is fully isolated, because the anchor commit path
-skips the status/edge writes every real lane makes. So the keep-set is widened
-structurally: an anchor is exactly a live materialization with zero
-RunCoordinateStatus references (every real lane commit writes one), and those
-are always kept. Pruning a live anchor would silently re-run the scrape/LLM.
+Expand anchors: always kept (pruning one would silently re-run the
+expand fn).  Under the new model, anchors are input_hash_usages entries
+with fulfilled=True that have no RunCoordinateStatus reference — same
+structural detection, different substrate.
 """
 
 import os
@@ -51,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_session
 from .models import (
+    InputHashUsage,
     Materialization,
     MaterializationLifecycle,
     ObjectReclamation,
@@ -132,9 +114,9 @@ def _running_run_ids(session: Session, exclude_run_id: Optional[str] = None) -> 
 
 def _anchor_mat_ids(session: Session) -> Set[int]:
     """Live materializations referenced by *no* RunCoordinateStatus — exactly
-    the expand cache anchors (every real lane commit writes a status row; only
-    the is_anchor commit path skips it). Always kept: pruning one would silently
-    re-run the expand fn (scrape/LLM) on the next run."""
+    the expand cache anchors.  Under the new model, 'live' = fulfilled=True
+    in input_hash_usages; the mat_id comes from the parallel-written
+    Materialization row (transitional)."""
     referenced = {
         int(r.materialization_id)
         for r in session.query(RunCoordinateStatus.materialization_id)
@@ -142,10 +124,22 @@ def _anchor_mat_ids(session: Session) -> Set[int]:
         .distinct()
         .all()
     }
+    # Live = fulfilled=True in input_hash_usages.  Cross-reference with
+    # Materialization for the integer ids (transitional — once
+    # materializations is deleted, anchors are detected by: fulfilled=True
+    # AND no RCS row for the same address).
+    fulfilled_addrs = {
+        u.address for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True))
+        .all()
+    }
     live_ids = {
         int(m.id)
         for m in session.query(Materialization.id)
-        .filter(Materialization.is_live.is_(True))
+        .filter(
+            Materialization.output_address.in_(fulfilled_addrs),
+            Materialization.is_live.is_(True),
+        )
         .all()
     }
     return live_ids - referenced
@@ -219,18 +213,28 @@ def _retention_demote_ids(
     session: Session, policies: Dict[str, int], anchors: Set[int]
 ) -> Set[int]:
     """Live materializations to demote so each pipeline keeps only its last N
-    runs' outputs. Keep-set = the pipeline's last N terminal runs' referenced
-    materializations, widened with all anchors; the latest terminal run always
-    survives (N >= 1)."""
+    runs' outputs.  Under the new model, 'live' = fulfilled=True in
+    input_hash_usages, cross-referenced with Materialization for integer ids
+    (transitional)."""
     demote: Set[int] = set()
     for pipeline_id, n in policies.items():
         runs = _terminal_runs(session, pipeline_id, limit=n)
         keep = _mat_ids_for_runs(session, [str(r.id) for r in runs]) | anchors
+        # Live = fulfilled=True for this pipeline
+        fulfilled_addrs = {
+            u.address for u in session.query(InputHashUsage)
+            .filter(
+                InputHashUsage.pipeline_id == pipeline_id,
+                InputHashUsage.fulfilled.is_(True),
+            )
+            .all()
+        }
         live_ids = {
             int(m.id)
             for m in session.query(Materialization.id)
             .filter(
                 Materialization.pipeline_id == pipeline_id,
+                Materialization.output_address.in_(fulfilled_addrs),
                 Materialization.is_live.is_(True),
             )
             .all()
@@ -325,7 +329,14 @@ def _budget_demote_ids(
     live_ids = {
         int(m.id)
         for m in session.query(Materialization.id)
-        .filter(Materialization.is_live.is_(True))
+        .filter(
+            Materialization.is_live.is_(True),
+            Materialization.output_address.in_(
+                {u.address for u in session.query(InputHashUsage)
+                 .filter(InputHashUsage.fulfilled.is_(True))
+                 .all()}
+            ),
+        )
         .all()
     }
     candidates = sorted(
@@ -395,6 +406,21 @@ def _apply(
                 created_at=utcnow_iso(),
             )
         )
+        # Parallel write: flip fulfilled=False on input_hash_usages
+        # (the new liveness gate).  Same mechanism as invalidation.
+        usage = (
+            session.query(InputHashUsage)
+            .filter_by(
+                address=str(mat.output_address),
+                step_name=str(mat.step_name),
+                pipeline_id=str(mat.pipeline_id),
+            )
+            .first()
+        )
+        if usage:
+            usage.fulfilled = False  # type: ignore[assignment]
+            usage.last_run_id = run_id  # type: ignore[assignment]
+            usage.claimed_at = utcnow_iso()  # type: ignore[assignment]
     for content_hash, size in reclaimed:
         session.add(
             ObjectReclamation(
