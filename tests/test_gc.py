@@ -16,8 +16,8 @@ from sqlalchemy.pool import StaticPool
 from rubedo import step, pipeline
 from rubedo.db import get_session
 from rubedo.gc import (
-    _anchor_mat_ids,
-    _retention_demote_ids,
+    _anchor_addresses,
+    _retention_demote_addresses,
     auto_prune,
     gc,
 )
@@ -348,9 +348,9 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     # Total = 15 bytes; budget 11 forces dropping the oldest 4-byte object.
     dry = gc(delete=False, max_bytes=11)
     assert not dry.applied
-    assert len(dry.demoted_mat_ids) == 1
+    assert len(dry.demoted_addresses) == 1
     assert dry.reclaimed_bytes == 4  # the "AAAA" generation
-    dry_ids = list(dry.demoted_mat_ids)
+    dry_ids = list(dry.demoted_addresses)
     dry_reclaimed = list(dry.reclaimed)
 
     # Dry-run wrote nothing: all still live, all objects present.
@@ -361,12 +361,12 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     # --delete performs exactly what the dry-run listed.
     done = gc(delete=True, max_bytes=11)
     assert done.applied
-    assert done.demoted_mat_ids == dry_ids
+    assert done.demoted_addresses == dry_ids
     assert done.reclaimed == dry_reclaimed
 
     with get_session() as s:
         demoted = s.query(Materialization).filter_by(is_live=False).all()
-        assert [m.id for m in demoted] == dry_ids
+        assert sorted(m.output_address for m in demoted) == sorted(dry_ids)
         assert demoted[0].output_content_hash == hash_of["AAAA"]  # oldest
         # Latest terminal run's output (CCCCCC) is never a candidate.
         live = {m.output_content_hash for m in s.query(Materialization).filter_by(is_live=True).all()}
@@ -451,12 +451,12 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
         # It survived the prune.
         assert anchor.is_live
 
-        # The widening is load-bearing: _anchor_mat_ids finds it, the keep-set
+        # The widening is load-bearing: _anchor_addresses finds it, the keep-set
         # protects it, and WITHOUT the widening it would be demoted.
-        anchor_ids = _anchor_mat_ids(s)
-        assert anchor.id in anchor_ids
-        assert anchor.id not in _retention_demote_ids(s, {"xp": 2}, anchor_ids)
-        assert anchor.id in _retention_demote_ids(s, {"xp": 2}, set())
+        anchor_addrs = _anchor_addresses(s)
+        assert anchor.output_address in anchor_addrs
+        assert anchor.output_address not in _retention_demote_addresses(s, {"xp": 2}, anchor_addrs)
+        assert anchor.output_address in _retention_demote_addresses(s, {"xp": 2}, set())
 
     # A subsequent run still reuses via the anchor: the expand fn is NOT called.
     calls_before = _split_calls["n"]

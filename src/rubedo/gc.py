@@ -2,25 +2,25 @@
 
 In the new model (notes/arrow-storage.md), "live" = fulfilled=True in
 input_hash_usages.  Demote = flip fulfilled=False (same mechanism as
-invalidation).  The sweep still refcounts object store entries via
-content_hash — but the content hashes now come from the Arrow lane_store
-rows (via the parallel-written Materialization rows during the transition),
-not from a SQLite is_live column.
+invalidation).  The sweep refcounts object store entries via
+content_hash — the content hashes come from the Arrow lane_store rows,
+not from a SQLite column.
 
 Two policies, no others: per-pipeline keep-last-N-runs
 (`pipeline(retention=N)`) and a global byte budget (`gc(max_bytes=...)`).
 Both run through the same two phases:
 
   demote  Flip fulfilled=False on input_hash_usages entries outside the
-          keep-set.  The old Materialization.is_live flip + lifecycle row
-          still fires (parallel write, transitional).
+          keep-set.  The old Materialization.is_live flip still fires
+          (parallel write, transitional — needed for the
+          uq_live_output_address unique index until the materializations
+          table is deleted).
   sweep   Delete an object file only when *every* reference is non-live
           once demote is applied.  Log in object_reclamations.
 
 Expand anchors: always kept (pruning one would silently re-run the
-expand fn).  Under the new model, anchors are input_hash_usages entries
-with fulfilled=True that have no RunCoordinateStatus reference — same
-structural detection, different substrate.
+expand fn).  Anchors are fulfilled addresses that have no
+RunCoordinateStatus reference.
 """
 
 import os
@@ -41,6 +41,7 @@ from .models import (
 )
 from .store import _get_object_path
 from .util import utcnow_iso
+from . import lane_store
 
 # Warn-only threshold: at the end of an *unconfigured* run, if the store is
 # bigger than this, print one line pointing at retention= / rubedo gc.
@@ -55,12 +56,12 @@ _STORE_SIZE_CACHE_TTL_SECONDS = 3600.0
 class GcReport:
     """What a gc()/auto-prune pass did (or, dry-run, would do).
 
-    demoted_mat_ids and reclaimed are computed identically for dry-run and
+    demoted_addresses and reclaimed are computed identically for dry-run and
     delete, so a dry-run lists exactly what a subsequent --delete performs.
     """
 
     applied: bool  # True if writes were performed (delete=True and not refused)
-    demoted_mat_ids: List[int] = field(default_factory=list)
+    demoted_addresses: List[str] = field(default_factory=list)
     # (content_hash, bytes) for each object swept (or that would be swept)
     reclaimed: List[Tuple[str, int]] = field(default_factory=list)
     refused: Optional[str] = None  # non-None if a live run blocked deletion
@@ -73,7 +74,7 @@ class GcReport:
 
     @property
     def demoted_count(self) -> int:
-        return len(self.demoted_mat_ids)
+        return len(self.demoted_addresses)
 
     def __str__(self) -> str:
         verb = "Pruned" if self.applied else "Would prune"
@@ -111,37 +112,22 @@ def _running_run_ids(session: Session, exclude_run_id: Optional[str] = None) -> 
     return live
 
 
-def _anchor_mat_ids(session: Session) -> Set[int]:
-    """Live materializations referenced by *no* RunCoordinateStatus — exactly
-    the expand cache anchors.  Under the new model, 'live' = fulfilled=True
-    in input_hash_usages; the mat_id comes from the parallel-written
-    Materialization row (transitional)."""
+def _anchor_addresses(session: Session) -> Set[str]:
+    """Live (fulfilled=True) addresses referenced by *no*
+    RunCoordinateStatus — exactly the expand cache anchors."""
     referenced = {
-        int(r.materialization_id)
-        for r in session.query(RunCoordinateStatus.materialization_id)
-        .filter(RunCoordinateStatus.materialization_id.isnot(None))
+        str(r.output_address)
+        for r in session.query(RunCoordinateStatus.output_address)
+        .filter(RunCoordinateStatus.output_address.isnot(None))
         .distinct()
         .all()
     }
-    # Live = fulfilled=True in input_hash_usages.  Cross-reference with
-    # Materialization for the integer ids (transitional — once
-    # materializations is deleted, anchors are detected by: fulfilled=True
-    # AND no RCS row for the same address).
-    fulfilled_addrs = {
-        u.address for u in session.query(InputHashUsage)
+    fulfilled_addrs: Set[str] = {
+        str(u.address) for u in session.query(InputHashUsage)
         .filter(InputHashUsage.fulfilled.is_(True))
         .all()
     }
-    live_ids = {
-        int(m.id)
-        for m in session.query(Materialization.id)
-        .filter(
-            Materialization.output_address.in_(fulfilled_addrs),
-            Materialization.is_live.is_(True),
-        )
-        .all()
-    }
-    return live_ids - referenced
+    return fulfilled_addrs - referenced
 
 
 def _terminal_runs(session: Session, pipeline_id: str, limit: Optional[int] = None) -> List[Run]:
@@ -156,20 +142,21 @@ def _terminal_runs(session: Session, pipeline_id: str, limit: Optional[int] = No
     return q.all()
 
 
-def _mat_ids_for_runs(session: Session, run_ids: List[str]) -> Set[int]:
-    """Materializations any of these runs referenced (created or reused)."""
+def _addresses_for_runs(session: Session, run_ids: List[str]) -> Set[str]:
+    """Output addresses any of these runs referenced (created or reused).
+    Uses RunCoordinateStatus.output_address (already a column)."""
     if not run_ids:
         return set()
     rows = (
-        session.query(RunCoordinateStatus.materialization_id)
+        session.query(RunCoordinateStatus.output_address)
         .filter(
             RunCoordinateStatus.run_id.in_(run_ids),
-            RunCoordinateStatus.materialization_id.isnot(None),
+            RunCoordinateStatus.output_address.isnot(None),
         )
         .distinct()
         .all()
     )
-    return {int(r.materialization_id) for r in rows}
+    return {str(r.output_address) for r in rows}
 
 
 def retention_policies(session: Session) -> Dict[str, int]:
@@ -208,52 +195,65 @@ def retention_policies(session: Session) -> Dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _retention_demote_ids(
-    session: Session, policies: Dict[str, int], anchors: Set[int]
-) -> Set[int]:
-    """Live materializations to demote so each pipeline keeps only its last N
-    runs' outputs.  Under the new model, 'live' = fulfilled=True in
-    input_hash_usages, cross-referenced with Materialization for integer ids
-    (transitional)."""
-    demote: Set[int] = set()
+def _fulfilled_addrs_by_pipeline(
+    session: Session,
+) -> Dict[str, Set[str]]:
+    """Fulfilled addresses grouped by pipeline_id.  IHU doesn't store
+    pipeline_id, so we cross-reference with the Arrow lane_store rows
+    (which carry pipeline_id from their file path) and/or
+    RunCoordinateStatus."""
+    fulfilled = {
+        str(u.address) for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True))
+        .all()
+    }
+    if not fulfilled:
+        return {}
+    # Group by pipeline via the Arrow rows
+    by_pipe: Dict[str, Set[str]] = {}
+    for row in lane_store.all_filled_rows():
+        addr = row.get("address")
+        if addr and addr in fulfilled:
+            by_pipe.setdefault(row["pipeline_id"], set()).add(addr)
+    return by_pipe
+
+
+def _retention_demote_addresses(
+    session: Session, policies: Dict[str, int], anchors: Set[str]
+) -> Set[str]:
+    """Live (fulfilled) addresses to demote so each pipeline keeps only its
+    last N runs' outputs."""
+    demote: Set[str] = set()
+    fulfilled_by_pipe = _fulfilled_addrs_by_pipeline(session)
     for pipeline_id, n in policies.items():
         runs = _terminal_runs(session, pipeline_id, limit=n)
-        keep = _mat_ids_for_runs(session, [str(r.id) for r in runs]) | anchors
-        # Live = fulfilled=True, cross-referenced with Materialization
-        # for pipeline_id (transitional — IHU no longer stores pipeline_id)
-        fulfilled_addrs = {
-            u.address for u in session.query(InputHashUsage)
-            .filter(InputHashUsage.fulfilled.is_(True))
-            .all()
-        }
-        live_ids = {
-            int(m.id)
-            for m in session.query(Materialization.id)
-            .filter(
-                Materialization.pipeline_id == pipeline_id,
-                Materialization.output_address.in_(fulfilled_addrs),
-                Materialization.is_live.is_(True),
-            )
-            .all()
-        }
-        demote |= live_ids - keep
+        keep = _addresses_for_runs(session, [str(r.id) for r in runs]) | anchors
+        live = fulfilled_by_pipe.get(pipeline_id, set())
+        demote |= live - keep
     return demote
 
 
 def _object_sizes_and_refs(
     session: Session,
-) -> Tuple[Dict[str, int], Dict[str, List[Tuple[int, bool]]]]:
-    """(size_of, refs_by_hash): present-on-disk byte size per content hash, and
-    the (mat_id, is_live) references to each hash across *all* pipelines."""
-    rows = session.query(
-        Materialization.id,
-        Materialization.output_content_hash,
-        Materialization.is_live,
-    ).all()
+) -> Tuple[Dict[str, int], Dict[str, List[Tuple[str, bool]]]]:
+    """(size_of, refs_by_hash): present-on-disk byte size per content hash,
+    and the (address, fulfilled) references to each hash across *all*
+    pipelines.  Content hashes come from the Arrow lane_store rows;
+    liveness comes from input_hash_usages.fulfilled."""
+    fulfilled = {
+        str(u.address) for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True))
+        .all()
+    }
     size_of: Dict[str, int] = {}
-    refs_by_hash: Dict[str, List[Tuple[int, bool]]] = {}
-    for mat_id, content_hash, is_live in rows:
-        refs_by_hash.setdefault(content_hash, []).append((int(mat_id), bool(is_live)))
+    refs_by_hash: Dict[str, List[Tuple[str, bool]]] = {}
+    for row in lane_store.all_filled_rows():
+        addr = row.get("address", "")
+        content_hash = row.get("content_hash")
+        if not content_hash:
+            continue
+        is_live = addr in fulfilled
+        refs_by_hash.setdefault(content_hash, []).append((addr, is_live))
         if content_hash not in size_of:
             try:
                 size_of[content_hash] = os.path.getsize(_get_object_path(content_hash))
@@ -263,9 +263,9 @@ def _object_sizes_and_refs(
 
 
 def _reclaimable_objects(
-    refs_by_hash: Dict[str, List[Tuple[int, bool]]],
+    refs_by_hash: Dict[str, List[Tuple[str, bool]]],
     size_of: Dict[str, int],
-    demote: Set[int],
+    demote: Set[str],
 ) -> List[Tuple[str, int]]:
     """Objects present on disk whose every reference is non-live once `demote`
     is applied — the shared-object rule (one live reference anywhere keeps the
@@ -276,31 +276,31 @@ def _reclaimable_objects(
         if size < 0:
             continue  # absent from disk: nothing to reclaim
         still_live = any(
-            is_live and mat_id not in demote for (mat_id, is_live) in refs
+            is_live and addr not in demote for (addr, is_live) in refs
         )
         if not still_live:
             out.append((content_hash, size))
     return out
 
 
-def _budget_demote_ids(
+def _budget_demote_addresses(
     session: Session,
-    already_demoted: Set[int],
-    anchors: Set[int],
+    already_demoted: Set[str],
+    anchors: Set[str],
     size_of: Dict[str, int],
-    refs_by_hash: Dict[str, List[Tuple[int, bool]]],
+    refs_by_hash: Dict[str, List[Tuple[str, bool]]],
     max_bytes: int,
-) -> Set[int]:
-    """Extend the demotion set oldest-run-first until the projected reclaimable
-    bytes bring the store under budget. Candidates exclude anchors and anything
-    a pipeline's latest terminal run references."""
+) -> Set[str]:
+    """Extend the demotion set oldest-run-first until the projected
+    reclaimable bytes bring the store under budget. Candidates exclude
+    anchors and anything a pipeline's latest terminal run references."""
     total_bytes = sum(s for s in size_of.values() if s >= 0)
     reclaimed_now = sum(b for _, b in _reclaimable_objects(refs_by_hash, size_of, already_demoted))
     if total_bytes - reclaimed_now <= max_bytes:
         return set()
 
     # Protected: referenced by any pipeline's latest terminal run.
-    protected: Set[int] = set()
+    protected: Set[str] = set()
     for pipeline_id in {
         str(r.pipeline_id)
         for r in session.query(Run.pipeline_id)
@@ -309,47 +309,39 @@ def _budget_demote_ids(
         .all()
     }:
         latest = _terminal_runs(session, pipeline_id, limit=1)
-        protected |= _mat_ids_for_runs(session, [str(r.id) for r in latest])
+        protected |= _addresses_for_runs(session, [str(r.id) for r in latest])
 
-    # Most recent referencing run per live materialization (oldest first).
-    ref_run_at: Dict[int, str] = {}
-    for mat_id, started in (
-        session.query(RunCoordinateStatus.materialization_id, Run.started_at)
+    # Most recent referencing run per live address (oldest first).
+    ref_run_at: Dict[str, str] = {}
+    for addr, started in (
+        session.query(RunCoordinateStatus.output_address, Run.started_at)
         .join(Run, Run.id == RunCoordinateStatus.run_id)
-        .filter(RunCoordinateStatus.materialization_id.isnot(None))
+        .filter(RunCoordinateStatus.output_address.isnot(None))
         .all()
     ):
-        mid = int(mat_id)
-        if started is not None and (mid not in ref_run_at or str(started) > ref_run_at[mid]):
-            ref_run_at[mid] = str(started)
+        a = str(addr)
+        if started is not None and (a not in ref_run_at or str(started) > ref_run_at[a]):
+            ref_run_at[a] = str(started)
 
-    live_ids = {
-        int(m.id)
-        for m in session.query(Materialization.id)
-        .filter(
-            Materialization.is_live.is_(True),
-            Materialization.output_address.in_(
-                {u.address for u in session.query(InputHashUsage)
-                 .filter(InputHashUsage.fulfilled.is_(True))
-                 .all()}
-            ),
-        )
+    fulfilled = {
+        str(u.address) for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True))
         .all()
     }
     candidates = sorted(
         (
-            mid
-            for mid in live_ids
-            if mid not in already_demoted
-            and mid not in protected
-            and mid not in anchors
+            addr
+            for addr in fulfilled
+            if addr not in already_demoted
+            and addr not in protected
+            and addr not in anchors
         ),
-        key=lambda mid: (ref_run_at.get(mid, ""), mid),
+        key=lambda addr: (ref_run_at.get(addr, ""), addr),
     )
 
     demote = set(already_demoted)
-    for mid in candidates:
-        demote.add(mid)
+    for addr in candidates:
+        demote.add(addr)
         reclaimed = sum(b for _, b in _reclaimable_objects(refs_by_hash, size_of, demote))
         if total_bytes - reclaimed <= max_bytes:
             break
@@ -363,13 +355,13 @@ def _budget_demote_ids(
 
 def _plan(
     session: Session, policies: Dict[str, int], max_bytes: Optional[int]
-) -> Tuple[Set[int], List[Tuple[str, int]], int]:
-    """Compute (demote_ids, reclaimed_objects, total_bytes_before) — pure."""
-    anchors = _anchor_mat_ids(session)
-    demote = _retention_demote_ids(session, policies, anchors)
+) -> Tuple[Set[str], List[Tuple[str, int]], int]:
+    """Compute (demote_addresses, reclaimed_objects, total_bytes_before) — pure."""
+    anchors = _anchor_addresses(session)
+    demote = _retention_demote_addresses(session, policies, anchors)
     size_of, refs_by_hash = _object_sizes_and_refs(session)
     if max_bytes is not None:
-        demote |= _budget_demote_ids(
+        demote |= _budget_demote_addresses(
             session, demote, anchors, size_of, refs_by_hash, max_bytes
         )
     reclaimed = _reclaimable_objects(refs_by_hash, size_of, demote)
@@ -379,7 +371,7 @@ def _plan(
 
 def _apply(
     session: Session,
-    demote: Set[int],
+    demote: Set[str],
     reclaimed: List[Tuple[str, int]],
     *,
     trigger: str,
@@ -388,22 +380,30 @@ def _apply(
     """Flip demotions, log reclamations, commit, then delete the physical
     files.  The ledger is committed first so it stays the truth about what
     the store contains — a lingering file after a failed unlink is harmless
-    (du reads the reclamation row).  Lifecycle rows are no longer written
-    — liveness is input_hash_usages.fulfilled."""
-    for mat_id in sorted(demote):
-        mat = session.get(Materialization, mat_id)
-        if mat is None or not mat.is_live:
-            continue
-        mat.is_live = False  # type: ignore[assignment]
+    (du reads the reclamation row).
+
+    Liveness is input_hash_usages.fulfilled.  The Materialization.is_live
+    flip is a transitional parallel write for the uq_live_output_address
+    unique index (deleted when the materializations table is dropped).
+    """
+    for addr in sorted(demote):
         # Flip fulfilled=False on input_hash_usages (the liveness gate)
         usage = (
             session.query(InputHashUsage)
-            .filter_by(address=str(mat.output_address))
+            .filter_by(address=addr)
             .first()
         )
         if usage:
             usage.fulfilled = False  # type: ignore[assignment]
             usage.last_run_id = run_id  # type: ignore[assignment]
+        # Transitional: flip Materialization.is_live for the unique index
+        mat = (
+            session.query(Materialization)
+            .filter_by(output_address=addr, is_live=True)
+            .first()
+        )
+        if mat:
+            mat.is_live = False  # type: ignore[assignment]
     for content_hash, size in reclaimed:
         session.add(
             ObjectReclamation(
@@ -414,7 +414,7 @@ def _apply(
                 created_at=utcnow_iso(),
             )
         )
-    session.commit()  # pairing guard validates the pruned rows (notes/invariants.md)
+    session.commit()
     for content_hash, _ in reclaimed:
         try:
             os.remove(_get_object_path(content_hash))
@@ -478,7 +478,7 @@ def gc(
 
         return GcReport(
             applied=delete,
-            demoted_mat_ids=sorted(demote),
+            demoted_addresses=sorted(demote),
             reclaimed=reclaimed,
             max_bytes=max_bytes,
             total_bytes_before=total_before,
@@ -501,7 +501,7 @@ def auto_prune(
         _apply(session, demote, reclaimed, trigger="auto_prune", run_id=run_id)
     return GcReport(
         applied=True,
-        demoted_mat_ids=sorted(demote),
+        demoted_addresses=sorted(demote),
         reclaimed=reclaimed,
         total_bytes_before=total_before,
     )

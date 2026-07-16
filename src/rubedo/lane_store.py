@@ -580,6 +580,40 @@ def all_index_entries() -> List[Tuple[str, str]]:
     return result
 
 
+def all_filled_rows() -> List[Dict[str, Any]]:
+    """Every filled row across all step Arrow files.
+
+    Returns a list of row dicts (one per lane per attempt), each carrying
+    ``address``, ``content_hash``, ``pipeline_id``, ``step_name``,
+    ``lane_key``, ``run_id``, ``filtered``, ``ts``, etc.  Used by gc and
+    du to refcount object bytes and compute storage reports without
+    querying the ``materializations`` SQLite table.
+
+    ``pipeline_id`` and ``step_name`` are derived from the file path
+    (``tables/<pipeline>/<step>.arrow``), not stored in the row — the
+    caller knows which step's file it's reading.
+    """
+    result: List[Dict[str, Any]] = []
+    if not os.path.isdir(TABLES_DIR):
+        return result
+    for entry in os.listdir(TABLES_DIR):
+        pipe_dir = os.path.join(TABLES_DIR, entry)
+        if not os.path.isdir(pipe_dir):
+            continue
+        for fname in os.listdir(pipe_dir):
+            if not fname.endswith(".arrow"):
+                continue
+            step_name = fname[:-len(".arrow")]
+            table = _combined_table(entry, step_name)
+            if table is None or table.num_rows == 0:
+                continue
+            for row in table.to_pylist():
+                row["pipeline_id"] = entry
+                row["step_name"] = step_name
+                result.append(row)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Flush path
 # ---------------------------------------------------------------------------

@@ -1,10 +1,11 @@
 """Read-only storage observability: what the object store holds, per the ledger.
 
-storage_report() walks the materializations table — never the store
-directory (direction-of-truth rule: the ledger is the truth about what the
-store contains; enumerating `objects/` would invert that). File sizes are
-read via os.path.getsize on ledger-named paths, which is fine: the ledger
-names the path, the filesystem only supplies the byte count.
+storage_report() walks the Arrow lane_store rows + input_hash_usages —
+never the store directory (direction-of-truth rule: the ledger is the
+truth about what the store contains; enumerating `objects/` would invert
+that). File sizes are read via os.path.getsize on ledger-named paths,
+which is fine: the ledger names the path, the filesystem only supplies
+the byte count.
 
 The load-bearing subtlety is sharing. The store is content-addressed and
 dedupes identical bytes, so one physical object (keyed by
@@ -35,8 +36,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from .db import get_session
-from .models import Materialization, ObjectReclamation
+from .models import InputHashUsage, ObjectReclamation
 from .store import _get_object_path
+from . import lane_store
 
 
 @dataclass
@@ -141,12 +143,6 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         _init_home(home)
 
     with get_session() as session:
-        rows = session.query(
-            Materialization.pipeline_id,
-            Materialization.step_name,
-            Materialization.output_content_hash,
-            Materialization.is_live,
-        ).all()
         # Bytes logged at deletion for each reclaimed hash (latest row wins, so
         # a re-reclaimed object reflects its most recent deletion).
         reclaimed_bytes_of: Dict[str, int] = {}
@@ -156,6 +152,26 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
             .all()
         ):
             reclaimed_bytes_of[str(r.content_hash)] = int(r.bytes)
+
+        # Liveness from input_hash_usages.fulfilled
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
+
+    # Content hashes + pipeline/step from the Arrow lane_store rows.
+    arrow_rows = lane_store.all_filled_rows()
+
+    # Build (pipeline_id, step_name, content_hash, is_live) tuples
+    rows: List[tuple] = []
+    for row in arrow_rows:
+        addr = row.get("address", "")
+        content_hash = row.get("content_hash")
+        if not content_hash:
+            continue
+        is_live = addr in fulfilled_addrs
+        rows.append((row.get("pipeline_id", ""), row.get("step_name", ""), content_hash, is_live))
 
     # Physical objects: group all materializations by content hash.
     size_of: Dict[str, int] = {}
@@ -215,7 +231,7 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         total_objects=len(size_of) + len(missing),
         total_bytes=sum(size_of.values()),
         total_materializations=len(rows),
-        live_materializations=sum(1 for r in rows if r.is_live),
+        live_materializations=sum(1 for r in rows if r[3]),
         missing_objects=len(missing),
         reclaimable_objects=len(reclaimable),
         reclaimable_bytes=sum(size_of[h] for h in reclaimable),
