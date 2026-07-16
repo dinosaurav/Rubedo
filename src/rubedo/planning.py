@@ -306,7 +306,7 @@ def _reduce_group_decision(
         existing_mat = result.get(output_address)
     expired = False
     if existing_mat and step.stale_after is not None:
-        freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+        freshness = existing_mat.get("ts")
         if freshness and iso_age_seconds(freshness) > step.stale_after:
             expired = True
 
@@ -459,7 +459,7 @@ def _plan_join(
         existing_mat = mats_by_addr.get(output_address)
         expired = False
         if existing_mat and step.stale_after is not None:
-            freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+            freshness = existing_mat.get("ts")
             if freshness and iso_age_seconds(freshness) > step.stale_after:
                 expired = True
 
@@ -757,7 +757,7 @@ def _plan_step(
             if not anchor:
                 continue
             if step.stale_after is not None:
-                freshness = anchor.get("refreshed_at") or anchor.get("created_at") or anchor.get("ts")
+                freshness = anchor.get("ts")
                 if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
             children_hashes = read_materialization_output(_ArrowRowRef(anchor))  # type: ignore
@@ -837,7 +837,7 @@ def _plan_step(
 
             expired = False
             if existing_mat and step.stale_after is not None:
-                freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+                freshness = existing_mat.get("ts")
                 if freshness and iso_age_seconds(freshness) > step.stale_after:
                     expired = True
 

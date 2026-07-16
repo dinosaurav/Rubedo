@@ -205,8 +205,12 @@ def test_duration_parsing():
 
 
 def backdate_materializations(iso_timestamp):
-    """Raw SQL on purpose: ORM guards forbid mutating created_at."""
+    """Raw SQL on purpose: ORM guards forbid mutating created_at.
+    Also backdates the Arrow lane_store ts column, which is what the
+    planning staleness check reads (refreshed_at/created_at are gone)."""
     from sqlalchemy import text
+    from rubedo import lane_store
+    from datetime import datetime
 
     with get_session() as session:
         session.execute(
@@ -214,6 +218,27 @@ def backdate_materializations(iso_timestamp):
             {"ts": iso_timestamp},
         )
         session.commit()
+
+    # Backdate the Arrow rows' ts column in every step file
+    dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    for row in lane_store.all_filled_rows():
+        pipe = row.get("pipeline_id", "")
+        step = row.get("step_name", "")
+        table = lane_store._combined_table(pipe, step)
+        if table is None or table.num_rows == 0:
+            continue
+        import pyarrow as pa
+
+        ts_idx = table.column_names.index("ts")
+        new_ts = pa.array([dt] * table.num_rows, type=pa.timestamp("us", tz="UTC"))
+        table = table.set_column(ts_idx, "ts", new_ts)
+        path = lane_store._get_step_file(pipe, step)
+        import os
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with pa.ipc.new_file(path, table.schema) as writer:
+            writer.write_table(table)
+    lane_store.clear_run_buffers()
 
 
 def test_fresh_output_is_reused():

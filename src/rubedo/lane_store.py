@@ -401,9 +401,9 @@ def batch_lookup_by_address(
     (recompute).  The row_dict carries all fields the planning phase needs
     to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
     ``output_path``, ``filtered``, ``code_hash``, ``ts``,
-    ``index_values``, and ``mat_id`` (the SQLite Materialization.id —
-    still needed by gc/trace/invalidation/server readers that join on
-    it; goes away when the materializations table itself is deleted).
+    ``index_values``, and ``mat_id`` (resolved from Materialization for
+    MaterializationEdge FKs — transitional, deleted when the
+    materializations table is dropped).
 
     The two-step lookup (SQLite for liveness, Arrow for content) replaces
     today's one-step SQLite query — but the SQLite lookup is a simple
@@ -417,7 +417,7 @@ def batch_lookup_by_address(
 
     # Step 1: find which addresses are fulfilled (liveness gate)
     fulfilled_addrs = {
-        u.address for u in session.query(InputHashUsage)
+        str(u.address) for u in session.query(InputHashUsage)
         .filter(
             InputHashUsage.address.in_(addresses),
             InputHashUsage.fulfilled.is_(True),
@@ -427,26 +427,18 @@ def batch_lookup_by_address(
     if not fulfilled_addrs:
         return {}
 
-    # Step 1b: fetch the SQLite Materialization integer ids for these
-    # addresses.  Still needed by gc/trace/invalidation/server readers
-    # that join on Materialization.id; deleted when the materializations
-    # table itself is dropped (Phase 3).
+    # Step 1b: resolve to SQLite Materialization integer ids for the
+    # MaterializationEdge FKs (trace/invalidation downstream BFS).
+    # Transitional — deleted when the materializations table is dropped.
     mat_rows = (
-        session.query(Materialization)
+        session.query(Materialization.id, Materialization.output_address)
         .filter(
             Materialization.output_address.in_(fulfilled_addrs),
             Materialization.is_live.is_(True),
         )
         .all()
     )
-    mat_meta_by_addr = {
-        m.output_address: {
-            "mat_id": m.id,
-            "created_at": m.created_at,
-            "refreshed_at": m.refreshed_at,
-        }
-        for m in mat_rows
-    }
+    mat_id_by_addr = {str(m.output_address): int(m.id) for m in mat_rows}
 
     # Step 2: for each fulfilled address, retrieve the Arrow row by
     # scanning the step's Arrow file on the address column directly.
@@ -458,10 +450,7 @@ def batch_lookup_by_address(
     for row in rows:
         addr = row.get("address")
         if addr in fulfilled_addrs:
-            meta = mat_meta_by_addr.get(addr, {})
-            row["mat_id"] = meta.get("mat_id")
-            row["created_at"] = meta.get("created_at")
-            row["refreshed_at"] = meta.get("refreshed_at")
+            row["mat_id"] = mat_id_by_addr.get(addr)
             row["index_values"] = _normalize_index_values(row)
             result[addr] = row
     return result
