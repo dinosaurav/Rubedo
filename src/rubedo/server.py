@@ -409,15 +409,20 @@ def _resolve_arrow_row(output_address: str) -> Optional[Dict[str, Any]]:
 
 def _hash_of_output(output_value) -> str:
     """Compute a display hash from the output column value (native Arrow
-    value or string)."""
+    value or string).  Dicts are canonicalized (None-valued keys
+    stripped) so the display hash matches the engine's internal
+    identity hash."""
     import json
-    from .hashing import hash_bytes
+    from .hashing import hash_bytes, canonicalize_output
     if output_value is None:
         return ""
     if isinstance(output_value, str):
         return hash_bytes(output_value.encode("utf-8"))
     return hash_bytes(
-        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonicalize_output(output_value),
+            sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     )
 
 

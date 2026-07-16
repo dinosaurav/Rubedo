@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 
 from sqlalchemy.orm import Session
 
-from .hashing import compute_output_address, hash_json
+from .hashing import compute_output_address, hash_json, canonicalize_output
 from .spec import PipelineSpec, StepSpec
 from .store import read_output
 from .util import iso_age_seconds
@@ -19,7 +19,11 @@ def _identity_from_output(row: dict) -> str:
     """Compute the content identity (for downstream input_hash) from an
     Arrow row's ``output`` column.  Same output value → same identity →
     downstream reuses, regardless of inline (native Arrow) vs spilled
-    (ref string)."""
+    (ref string).  Dicts are canonicalized (None-valued keys stripped)
+    so identity matches what :func:`_identity_of` computed at commit
+    time from the original dict — Arrow's union struct null-fills
+    missing keys, so without canonicalization the read-back dict would
+    have extra ``None``-valued keys that shift the hash."""
     import json
     from .hashing import hash_bytes as _hb
 
@@ -29,7 +33,10 @@ def _identity_from_output(row: dict) -> str:
     if isinstance(output, str):
         return _hb(output.encode("utf-8"))
     return _hb(
-        json.dumps(output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonicalize_output(output),
+            sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     )
 
 

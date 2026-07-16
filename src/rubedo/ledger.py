@@ -250,11 +250,18 @@ def _outputs_equal(existing: Any, new: Any) -> bool:
     """Compare two output values for the mat_action reuse check.  Handles
     the case where one is a native Arrow value (dict from struct, int
     from int64) and the other is a JSON string (from a string column
-    fallback), or both are the same type."""
+    fallback), or both are the same type.  Dicts are canonicalized
+    (None-valued keys stripped) before comparison so the Arrow union
+    struct null-fill doesn't cause false mismatches."""
     import json
+    from .hashing import canonicalize_output
 
     if existing is None or new is None:
         return existing is new
+    if isinstance(existing, dict):
+        existing = canonicalize_output(existing)
+    if isinstance(new, dict):
+        new = canonicalize_output(new)
     if type(existing) is type(new):
         return existing == new
     def _canon(v):
@@ -268,14 +275,18 @@ def _identity_of(output_value: Any) -> str:
     """Compute a content identity hash from an output value (for
     downstream ``input_hash`` computation).  Same value → same identity →
     downstream reuses, regardless of inline (native Arrow) vs spilled
-    (ref string)."""
-    from .hashing import hash_bytes
+    (ref string).  Dicts are canonicalized (None-valued keys stripped)
+    so identity is stable across the Arrow write/read round-trip."""
+    from .hashing import hash_bytes, canonicalize_output
     import json
 
     if isinstance(output_value, str):
         return hash_bytes(output_value.encode("utf-8"))
     return hash_bytes(
-        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonicalize_output(output_value),
+            sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     )
 
 
