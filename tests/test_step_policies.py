@@ -231,7 +231,7 @@ def test_fresh_output_is_reused():
 
 
 def test_expired_deterministic_output_is_refreshed():
-    from rubedo.models import Materialization, MaterializationLifecycle
+    from rubedo.models import Materialization
 
     path = create_file("f1.txt", "hello")
 
@@ -251,12 +251,6 @@ def test_expired_deterministic_output_is_refreshed():
     with get_session() as session:
         mat = session.query(Materialization).one()
         assert mat.refreshed_at is not None
-        lc = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=mat.id)
-            .one()
-        )
-        assert lc.action == "refreshed"
 
     # refreshed_at reset the clock: next run reuses again
     summary3 = pipe.run(params=params, workers=1)
@@ -286,6 +280,9 @@ def test_expired_nondeterministic_output_is_superseded():
     with get_session() as session:
         mats = session.query(Materialization).order_by(Materialization.id).all()
         assert len(mats) == 2
+        # Old generation's is_live flipped for the unique index, but
+        # liveness is input_hash_usages.fulfilled — both rows exist as
+        # history in the lane_store.
         assert mats[0].is_live is False, "old generation superseded"
         assert mats[1].is_live is True
 

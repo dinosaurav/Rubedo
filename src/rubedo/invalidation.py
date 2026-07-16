@@ -6,7 +6,6 @@ import uuid
 from .models import (
     Run,
     Materialization,
-    MaterializationLifecycle,
     InputHashUsage,
     RunCoordinateStatus,
     RunEvent,
@@ -97,22 +96,12 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 mat = session.get(Materialization, mat_id)
                 if mat is None or not mat.is_live:
                     return False
-                mat.is_live = False  # type: ignore
-                session.add(
-                    MaterializationLifecycle(
-                        materialization_id=mat.id,
-                        action="invalidated",
-                        run_id=run_id,
-                        reason=reason,
-                        created_at=utcnow_iso(),
-                    )
-                )
-                # Parallel write: flip fulfilled=False on the
-                # input_hash_usages row for this address.  This is the
-                # tombstone — the Arrow row stays as history, but the
-                # next run sees fulfilled=False and recomputes.  See
-                # notes/arrow-storage.md (tombstones in input_hash_usages,
-                # not blank rows in Arrow).
+                mat.is_live = False  # type: ignore[assignment]
+                # The tombstone: flip fulfilled=False on input_hash_usages.
+                # The Arrow row stays as history, but the next run sees
+                # fulfilled=False and recomputes.  See notes/arrow-storage.md.
+                # (MaterializationLifecycle write removed — liveness is
+                # input_hash_usages.fulfilled, not is_live + lifecycle rows.)
                 lane_key = _mat_lane_key(session, int(mat.id))
                 usage = (
                     session.query(InputHashUsage)

@@ -143,16 +143,16 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
 
     import rubedo.invalidation as inv_mod
 
-    real = inv_mod.MaterializationLifecycle
     calls = {"n": 0}
+    real_fn = inv_mod._mat_lane_key
 
-    def flaky(**kwargs):
+    def flaky_lane_key(session, mat_id):
         calls["n"] += 1
         if calls["n"] >= 2:
             raise RuntimeError("boom mid-invalidation")
-        return real(**kwargs)
+        return real_fn(session, mat_id)
 
-    monkeypatch.setattr(inv_mod, "MaterializationLifecycle", flaky)
+    monkeypatch.setattr(inv_mod, "_mat_lane_key", flaky_lane_key)
     with pytest.raises(RuntimeError, match="boom"):
         invalidate(Selection(step="read"), reason="partial-failure test")
 

@@ -11,11 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import (
-    Materialization,
-    MaterializationLifecycle,
-    RunCoordinateStatus,
-)
+from rubedo.models import Materialization, RunCoordinateStatus
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_generations_data"
@@ -131,17 +127,8 @@ def test_invalidate_nondeterministic_creates_new_generation():
     assert gens[1].is_live is True
     assert gens[0].output_address == gens[1].output_address
     assert gens[0].output_content_hash != gens[1].output_content_hash
-
-    # The lifecycle log preserves the full story: invalidated by the user
-    with get_session() as session:
-        lifecycle = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=gen1.id)
-            .order_by(MaterializationLifecycle.id)
-            .all()
-        )
-        assert [lc.action for lc in lifecycle] == ["invalidated"]
-        assert lifecycle[0].reason == "bad output"
+    # Lifecycle rows are gone in the new model — liveness is
+    # input_hash_usages.fulfilled.
 
     # Old bytes survive on disk (immutability of committed outputs)
     assert os.path.exists(gens[0].output_path)
@@ -175,14 +162,7 @@ def test_force_nondeterministic_supersedes_live_generation():
     assert gens[0].is_live is False
     assert gens[1].is_live is True
 
-    with get_session() as session:
-        lc = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=gens[0].id)
-            .one()
-        )
-        assert lc.action == "superseded"
-        assert lc.superseded_by_id == gens[1].id
+    # Lifecycle rows gone in the new model
 
     # Downstream recomputed off the new bytes rather than reusing stale output
     sums = get_mats("summarize")

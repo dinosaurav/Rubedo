@@ -15,7 +15,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import Session, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase
 
 from .util import iso_age_seconds
 
@@ -344,75 +344,6 @@ for _model in _APPEND_ONLY:
 for _model, _allowed in _PROJECTION_COLUMNS.items():  # type: ignore
     event.listen(_model, "before_update", _projection_guard(_allowed))
     event.listen(_model, "before_delete", _reject_delete)
-
-
-# ---------------------------------------------------------------------------
-# Pairing-rule guard (see notes/invariants.md)
-#
-# is_live/refreshed_at are legal to update (above), but every such flip must
-# ship a materialization_lifecycle row in the same transaction — otherwise the
-# append-only lifecycle log stops being the truth about liveness. This is
-# enforced at commit rather than flush: the supersede path in
-# _commit_materialization legitimately flushes a demotion (is_live=False)
-# before the superseded-by materialization exists to reference in its lifecycle
-# row. So we accumulate across every flush and check the sets once, at commit.
-# ---------------------------------------------------------------------------
-
-
-def _track_liveness_pairing(session, flush_context, instances):
-    """before_flush: record which materializations changed liveness and which
-    lifecycle rows were added, into session.info. Runs on every flush and
-    accumulates — the demotion of a superseded generation is flushed away
-    before its lifecycle row is added, so a single snapshot would miss it."""
-    changed = session.info.setdefault("_liveness_changed", set())
-    paired = session.info.setdefault("_liveness_paired", set())
-    for obj in session.dirty:
-        if isinstance(obj, Materialization):
-            attrs = sa_inspect(obj).attrs
-            if attrs.is_live.history.has_changes() or attrs.refreshed_at.history.has_changes():
-                changed.add(obj.id)
-    for obj in session.new:
-        if isinstance(obj, MaterializationLifecycle):
-            paired.add(obj.materialization_id)
-
-
-def _clear_liveness_tracking(session):
-    """Clear the liveness pairing tracking accumulators."""
-    session.info.pop("_liveness_changed", None)
-    session.info.pop("_liveness_paired", None)
-
-
-def _assert_liveness_pairing(session):
-    """before_commit: every liveness flip in this transaction must be paired
-    with a lifecycle row for the same materialization. before_commit fires
-    *before* commit's own pre-flush, so flush here first to make the
-    accumulators complete (this captures the lifecycle rows that the supersede
-    and refresh paths add just before committing). Consume the accumulators so
-    a clean commit starts the next transaction fresh; aborted transactions are
-    cleared by after_rollback.
-
-    before_commit also fires when a savepoint (begin_nested) is released, with
-    the outer transaction still open — skip those: _commit_materialization
-    demotes and flushes inside a savepoint but adds the superseded lifecycle
-    row only after it, so validating at the savepoint would false-positive."""
-    if session.in_nested_transaction():
-        return
-    session.flush()
-    changed = session.info.get("_liveness_changed", set())
-    paired = session.info.get("_liveness_paired", set())
-    missing = changed - paired
-    _clear_liveness_tracking(session)
-    if missing:
-        raise ImmutabilityError(
-            f"materialization(s) {sorted(missing)} changed is_live/refreshed_at "
-            f"without a materialization_lifecycle row in the same transaction "
-            f"(every liveness transition must be logged; see notes/invariants.md)"
-        )
-
-
-event.listen(Session, "before_flush", _track_liveness_pairing)
-event.listen(Session, "before_commit", _assert_liveness_pairing)
-event.listen(Session, "after_rollback", _clear_liveness_tracking)
 
 
 class ProcessResult(BaseModel):

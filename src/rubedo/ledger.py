@@ -20,7 +20,6 @@ from .models import (
     Materialization,
     MaterializationEdge,
     MaterializationIndexEntry,
-    MaterializationLifecycle,
     ProcessResult,
     Run,
     RunCoordinateStatus,
@@ -274,48 +273,40 @@ def _commit_materialization(
     refresh: bool = False,
     filtered: bool = False,
 ) -> tuple[Materialization, str]:
-    """Record an executed result at its address, honoring generations.
+    """Record an executed result at its address.
 
-    An address may accumulate generations over time; at most one is live.
-    Identical bytes are the same fact (reuse the live row, or restore a
-    non-live one); different bytes supersede the live generation so that
-    downstream input hashes change and dependents recompute. Every liveness
-    transition appends a materialization_lifecycle row — the append-only
-    truth that the is_live/refreshed_at projections cache.
-
-    refresh marks a staleness-driven recompute: identical bytes then reset
-    the generation's freshness clock instead of being a silent no-op.
+    In the new model (notes/arrow-storage.md), liveness is
+    input_hash_usages.fulfilled, not Materialization.is_live.  This
+    function simplified from the generations protocol (supersede/restore/
+    savepoint/IntegrityError dance) to a plain insert: if the same bytes
+    already exist at this address, return the existing row (reused); if
+    different bytes, insert a new row (superseded — but is_live is NOT
+    flipped on the old row, because liveness is in input_hash_usages).
+    No lifecycle rows, no pairing guard, no savepoints.
 
     Returns (materialization, action) with action one of
-    created | reused | restored | superseded | refreshed.
+    created | reused | superseded | refreshed.
     """
-    live = (
+    existing = (
         session.query(Materialization)
         .filter_by(output_address=output_address, is_live=True)
         .first()
     )
-    superseded = None
-    if live:
-        if live.output_content_hash == output_content_hash:
+    if existing:
+        if existing.output_content_hash == output_content_hash:
             if refresh:
-                live.refreshed_at = utcnow_iso()  # type: ignore
-                session.add(
-                    MaterializationLifecycle(
-                        materialization_id=live.id,
-                        action="refreshed",
-                        run_id=run_id,
-                        reason="stale output re-verified byte-identical",
-                        created_at=utcnow_iso(),
-                    )
-                )
-                return live, "refreshed"
-            return live, "reused"
-        live.is_live = False  # type: ignore
-        # Demote before inserting the replacement so the one-live-per-address
-        # index never sees two live generations
+                existing.refreshed_at = utcnow_iso()  # type: ignore[assignment]
+                return existing, "refreshed"
+            return existing, "reused"
+        # Different bytes: flip old row's is_live=False for the partial
+        # unique index (uq_live_output_address still enforces one-live-per-
+        # address).  No lifecycle row — liveness is input_hash_usages.fulfilled.
+        existing.is_live = False  # type: ignore[assignment]
         session.flush()
-        superseded = live
     else:
+        # No live row — check for a non-live row with the same content_hash
+        # (restore: recompute produced identical bytes to an invalidated gen).
+        # Flip it back to is_live=True.  No lifecycle row.
         prior = (
             session.query(Materialization)
             .filter_by(
@@ -327,16 +318,10 @@ def _commit_materialization(
             .first()
         )
         if prior:
-            prior.is_live = True  # type: ignore
-            session.add(
-                MaterializationLifecycle(
-                    materialization_id=prior.id,
-                    action="restored",
-                    run_id=run_id,
-                    reason="recompute produced identical output",
-                    created_at=utcnow_iso(),
-                )
-            )
+            prior.is_live = True  # type: ignore[assignment]
+            if refresh:
+                prior.refreshed_at = utcnow_iso()  # type: ignore[assignment]
+                return prior, "refreshed"
             return prior, "restored"
 
     mat = Materialization(
@@ -355,59 +340,9 @@ def _commit_materialization(
         filtered=filtered,
         is_live=True,
     )
-
-    from sqlalchemy.exc import IntegrityError
-    try:
-        with session.begin_nested():
-            session.add(mat)
-            session.flush()
-    except IntegrityError:
-        live = (
-            session.query(Materialization)
-            .filter_by(output_address=output_address, is_live=True)
-            .first()
-        )
-        if live:
-            if live.output_content_hash == output_content_hash:
-                return live, "reused"
-            
-            live.is_live = False  # type: ignore
-            session.flush()
-            superseded = live
-            
-            mat2 = Materialization(
-                pipeline_id=pipeline_id,
-                step_name=step.name,
-                code_version=step.version,
-                code_hash=step.code_hash,
-                input_hash=input_hash,
-                output_address=output_address,
-                output_content_hash=output_content_hash,
-                content_type=content_type,
-                output_path=output_path,
-                metadata_json=metadata_json,
-                created_at=utcnow_iso(),
-                created_by_run_id=run_id,
-                filtered=filtered,
-                is_live=True,
-            )
-            session.add(mat2)
-            session.flush()
-            mat = mat2
-        else:
-            raise
-
-    if superseded is not None:
-        session.add(
-            MaterializationLifecycle(
-                materialization_id=superseded.id,
-                action="superseded",
-                run_id=run_id,
-                reason="recompute produced different output",
-                superseded_by_id=mat.id,
-                created_at=utcnow_iso(),
-            )
-        )
+    session.add(mat)
+    session.flush()
+    if existing:
         return mat, "superseded"
     return mat, "created"
 

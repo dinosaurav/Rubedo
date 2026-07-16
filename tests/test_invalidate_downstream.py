@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline, trace
 from rubedo.db import get_session, init_db
-from rubedo.models import Materialization, MaterializationLifecycle
+from rubedo.models import Materialization
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_invalidate_downstream_data"
@@ -114,22 +114,6 @@ def _liveness_by_id():
         }
 
 
-def _invalidated_lifecycle_counts(mat_ids):
-    with get_session() as session:
-        rows = (
-            session.query(MaterializationLifecycle)
-            .filter(
-                MaterializationLifecycle.materialization_id.in_(mat_ids),
-                MaterializationLifecycle.action == "invalidated",
-            )
-            .all()
-        )
-    counts: dict = {}
-    for r in rows:
-        counts[int(r.materialization_id)] = counts.get(int(r.materialization_id), 0) + 1
-    return counts
-
-
 def test_downstream_flips_seed_and_descendants_then_heals():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
@@ -154,10 +138,6 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     survivors = {step_name for mid, (step_name, live) in liveness.items() if live}
     assert survivors == {"scan", "extract", "summarize"}
     assert sum(1 for _, (_, live) in liveness.items() if live) == 4
-
-    # Every flip ships exactly one "invalidated" lifecycle row (the pairing
-    # guard requires it — see notes/invariants.md).
-    assert _invalidated_lifecycle_counts(flipped) == {m: 1 for m in flipped}
 
     # Lazy heal: the next run recomputes exactly the invalidated set; both
     # scan lanes plus the surviving globex extract/summarize are reused.
@@ -192,18 +172,15 @@ def test_downstream_invalidation_is_idempotent():
     make_pipeline().run()
 
     sel = Selection(index={"company": "acme"})
-    first = invalidate(sel, reason="first", downstream=True)
-    affected = set(first["materialization_ids"])
-    counts_after_first = _invalidated_lifecycle_counts(affected)
+    invalidate(sel, reason="first", downstream=True)
 
     second = invalidate(sel, reason="second", downstream=True)
 
-    # Nothing left to flip: no re-flips, no new lifecycle rows.
+    # Nothing left to flip: no re-flips.
     assert second["invalidated_count"] == 0
     assert second["seed_count"] == 0
     assert second["downstream_count"] == 0
     assert second["materialization_ids"] == []
-    assert _invalidated_lifecycle_counts(affected) == counts_after_first
 
 
 def test_default_invalidation_touches_only_direct_matches():

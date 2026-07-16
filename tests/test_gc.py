@@ -23,7 +23,6 @@ from rubedo.gc import (
 )
 from rubedo.models import (
     Materialization,
-    MaterializationLifecycle,
     ObjectReclamation,
     Run,
     RunCoordinateStatus,
@@ -181,9 +180,8 @@ def test_retention_demotes_only_the_oldest_generation():
         assert len(demoted) == 1
         gen1 = demoted[0]
 
-        # Paired pruned lifecycle row for exactly that materialization.
-        pruned = s.query(MaterializationLifecycle).filter_by(action="pruned").all()
-        assert [p.materialization_id for p in pruned] == [gen1.id]
+        # Lifecycle rows gone in the new model — liveness is
+        # input_hash_usages.fulfilled.
 
         # Freed object deleted from disk and logged in object_reclamations.
         recl = s.query(ObjectReclamation).all()
@@ -277,12 +275,7 @@ def test_pruned_lane_reappears_and_lazily_heals():
     with get_session() as s:
         healed = s.get(Materialization, gen1_id)
         assert healed.is_live  # restored
-        restored = (
-            s.query(MaterializationLifecycle)
-            .filter_by(materialization_id=gen1_id, action="restored")
-            .all()
-        )
-        assert len(restored) == 1
+        # Lifecycle rows gone in the new model
     assert os.path.exists(_get_object_path(gen1_hash))  # bytes back on disk
 
 

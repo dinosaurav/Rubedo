@@ -34,7 +34,6 @@ from .db import get_session
 from .models import (
     InputHashUsage,
     Materialization,
-    MaterializationLifecycle,
     ObjectReclamation,
     Run,
     RunCoordinateStatus,
@@ -388,25 +387,17 @@ def _apply(
     trigger: str,
     run_id: str,
 ) -> None:
-    """Flip demotions (with paired pruned lifecycle rows), log reclamations,
-    commit, then delete the physical files. The ledger is committed first so it
-    stays the truth about what the store contains — a lingering file after a
-    failed unlink is harmless (du reads the reclamation row)."""
+    """Flip demotions, log reclamations, commit, then delete the physical
+    files.  The ledger is committed first so it stays the truth about what
+    the store contains — a lingering file after a failed unlink is harmless
+    (du reads the reclamation row).  Lifecycle rows are no longer written
+    — liveness is input_hash_usages.fulfilled."""
     for mat_id in sorted(demote):
         mat = session.get(Materialization, mat_id)
         if mat is None or not mat.is_live:
             continue
-        mat.is_live = False  # type: ignore
-        session.add(
-            MaterializationLifecycle(
-                materialization_id=mat.id,
-                action="pruned",
-                run_id=run_id,
-                reason=f"retention GC ({trigger})",
-                created_at=utcnow_iso(),
-            )
-        )
-        # Parallel write: flip fulfilled=False on input_hash_usages
+        mat.is_live = False  # type: ignore[assignment]
+        # Flip fulfilled=False on input_hash_usages (the new liveness gate)
         # (the new liveness gate).  Same mechanism as invalidation.
         usage = (
             session.query(InputHashUsage)
