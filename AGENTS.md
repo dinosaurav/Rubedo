@@ -67,13 +67,16 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   snapshot each run records). No registry: the engine never imports user
   code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
   parent's surviving lanes; `group_key` partitions into one output per
-  indexed-field value, else a single `"@all"`) / `expand` (1:N — the fn
+  field value read from the parent's output dict, else a single `"@all"`)
+  / `expand` (1:N — the fn
   yields payloads, minting content-addressed `row-<hash>` child lanes; **no
   `depends_on` = a root = a source** that yields the initial lanes and
   re-runs every run, so `pipeline(steps=[...])` needs no separate ingestion
   concept — a parentless generator `@step` infers this shape automatically)
   / `join` (N-way equijoin on
-  `join_on={parent: indexed_field}`, minting `a|b|…` pair lanes). A
+  `join_on={parent: field}`, minting `a|b|…` pair lanes; the field is
+  read from the parent's output dict — no `index=` needed on join
+  parents). A
   **source-less `map` root** (no `depends_on`) mints a single `@root` lane
   whose input is its params (or a constant) — so a pipeline can begin with
   a plain step fed a value instead of scanning for one; same params reuse,
@@ -106,9 +109,11 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
   `lane_store.find_latest_filled_by_address` (content retrieval) via
   `batch_lookup_by_address`. Per shape: reduce → one decision per group
-  (`_group_reduce_lanes`); expand → one execute decision per parent lane,
+  (`_group_reduce_lanes`, reads `group_key` field from the parent's
+  output dict); expand → one execute decision per parent lane,
   reused without re-running the fn via a parent-addressed cache anchor;
-  join → one decision per matched tuple (`_plan_join`).
+  join → one decision per matched tuple (`_plan_join`, reads `join_on`
+  fields from parent output dicts — no `index=` declaration needed).
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
