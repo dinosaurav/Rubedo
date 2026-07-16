@@ -6,7 +6,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import fnmatch
 
-from .models import Materialization, MaterializationIndexEntry, RunCoordinateStatus
+from .models import (
+    Materialization,
+    MaterializationIndexEntry,
+    RunCoordinateStatus,
+    InputHashUsage,
+)
 
 
 class Selection(BaseModel):
@@ -88,7 +93,14 @@ def get_selection_materialization_ids(
     if selection.output_address:
         query = query.filter(Materialization.output_address == selection.output_address)
     if selection.invalidated is not None:
-        query = query.filter(Materialization.is_live.is_(not selection.invalidated))
+        # Under the new model, liveness = input_hash_usages.fulfilled.
+        # Join to InputHashUsage on output_address and filter by fulfilled.
+        query = query.join(
+            InputHashUsage,
+            (InputHashUsage.address == Materialization.output_address)
+            & (InputHashUsage.step_name == Materialization.step_name)
+            & (InputHashUsage.pipeline_id == Materialization.pipeline_id),
+        ).filter(InputHashUsage.fulfilled.is_(not selection.invalidated))
 
     if selection.index:
         for field, value in selection.index.items():
