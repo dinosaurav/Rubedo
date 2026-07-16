@@ -116,33 +116,33 @@ mean "no filled Arrow row to reuse"). The planning phase checks
 
 ## What's added to SQLite
 
-**One new table: `input_hash_usages`** (working name — the `input_hash → last_run_id` map we settled on).
+**One new table: `input_hash_usages`** — the `address → (last_run_id, fulfilled)` map.
 
 ```
 input_hash_usages
-  input_hash     VARCHAR  PRIMARY KEY     -- the lane content identity
-  step_name       VARCHAR  NOT NULL        -- which step's output
-  pipeline_id     VARCHAR  NOT NULL        -- which pipeline
-  last_run_id     VARCHAR  NOT NULL        -- the most recent run that claimed it
-  claimed_at      VARCHAR  NOT NULL        -- when the claim was inserted
-  fulfilled       BOOLEAN  NOT NULL DEFAULT 0  -- does a filled Arrow row exist for this claim?
+  address       VARCHAR  PRIMARY KEY     -- the comprehensive cache identity
+  last_run_id   VARCHAR  NOT NULL        -- the most recent run that touched it
+  fulfilled     BOOLEAN  NOT NULL DEFAULT 0  -- does a filled Arrow row exist?
 ```
+
+Two data columns, one PK. The caller already knows `step_name` and
+`pipeline_id` (it's planning a specific step in a specific pipeline), so
+those don't need to be stored — the Arrow file path is
+`tables/<pipeline>/<step>.arrow`, constructed by the caller. `address` is
+globally unique (step name is inside the hash), so it's a sufficient
+lookup key on its own.
 
 This one table carries three jobs:
 
-1. **Scheduler soft lock.** Before a worker executes `(step, input_hash)`,
-   the engine inserts a row (or updates `last_run_id` / `claimed_at`). A
-   second worker consulting it sees an in-flight claim and defers. This
-   replaces the partial unique index's race-loser-buys-free path: today
-   the loser of the INSERT race gets `IntegrityError` and re-reads the
-   winner's output; under the new model, the loser sees the soft-lock row
-   and either waits or reads the once-filled output. Not perfectly atomic
+1. **Scheduler soft lock.** Before a worker executes `(step, address)`,
+   the engine inserts a row with `fulfilled=False`. A second worker
+   consulting it sees an in-flight claim and defers. Not perfectly atomic
    — it's a hint the scheduler consults, not a storage-engine constraint.
    Two workers *can* both run the step; one's output becomes history.
    Acceptable for the LLM/scraping workload (lanes with distinct
-   `input_hash` are the norm; races are rare). Documented as soft.
+   addresses are the norm; races are rare). Documented as soft.
 
-2. **Crash detection.** A row with `fulfilled=0` for a run that has
+2. **Crash detection.** A row with `fulfilled=False` for a run that has
    reached terminal status means a worker crashed mid-execution. The next
    run sees the unfulfilled claim and knows to retry (the Arrow file has
    no filled row for this lane, so reuse-check naturally misses). On a
