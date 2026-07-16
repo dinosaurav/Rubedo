@@ -18,11 +18,11 @@ from .models import (
     RunEvent,
     effective_run_status,
     Materialization,
-    MaterializationIndexEntry,
     MaterializationEdge,
     RunCoordinateStatus,
     InputHashUsage,
 )
+from . import lane_store
 from .selection import Selection
 from .invalidation import invalidate
 from .schemas import (
@@ -258,15 +258,31 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
         for (m_id,) in coords_match:
             matching_mat_ids.add(m_id)
 
-        index_match = session.query(RunCoordinateStatus.materialization_id).join(
-            MaterializationIndexEntry,
-            RunCoordinateStatus.materialization_id == MaterializationIndexEntry.materialization_id
+        # Indexed-field substring search: scan Arrow files for this run's
+        # steps, then map matching addresses back to mat_ids.
+        run_mats = session.query(
+            RunCoordinateStatus.materialization_id,
+            Materialization.output_address,
+            Materialization.pipeline_id,
+            Materialization.step_name,
+        ).join(
+            Materialization,
+            RunCoordinateStatus.materialization_id == Materialization.id,
         ).filter(
             RunCoordinateStatus.run_id == run_id,
-            MaterializationIndexEntry.value.contains(query)
+            RunCoordinateStatus.materialization_id.isnot(None),
         ).all()
-        for (m_id,) in index_match:
-            matching_mat_ids.add(m_id)
+
+        addr_to_mat = {m.output_address: m.materialization_id for m in run_mats}
+        seen_steps = set()
+        for m in run_mats:
+            key = (m.pipeline_id, m.step_name)
+            if key in seen_steps:
+                continue
+            seen_steps.add(key)
+            for addr in lane_store.search_indexed_values(m.pipeline_id, m.step_name, query):
+                if addr in addr_to_mat:
+                    matching_mat_ids.add(addr_to_mat[addr])
 
         if not matching_mat_ids:
             return {"trace": []}
@@ -438,11 +454,10 @@ def get_object_metadata(output_address: str):
             "output_content_hash": mat.output_content_hash,
             "content_type": mat.content_type,
             "index": [
-                {"field": e.field, "value": e.value}
-                for e in session.query(MaterializationIndexEntry)
-                .filter_by(materialization_id=mat.id)
-                .order_by(MaterializationIndexEntry.id)
-                .all()
+                {"field": field, "value": val}
+                for field, val in lane_store.get_index_values(
+                    mat.pipeline_id, mat.step_name, output_address
+                )
             ],
         }
 

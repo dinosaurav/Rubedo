@@ -511,6 +511,51 @@ def scan_indexed_field_all(
     return matches
 
 
+def search_indexed_values(
+    pipeline_id: str,
+    step_name: str,
+    query: str,
+) -> List[str]:
+    """Addresses where any indexed field value contains ``query`` as a
+    substring.  Used by the server's run-search endpoint."""
+    table = _combined_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return []
+    q_lower = query.lower()
+    matches: List[str] = []
+    for row in table.to_pylist():
+        iv = _normalize_index_values(row)
+        hit = False
+        for vals in iv.values():
+            for v in vals:
+                if q_lower in v.lower():
+                    hit = True
+                    break
+            if hit:
+                break
+        if hit:
+            matches.append(row.get("address", ""))
+    return [a for a in matches if a]
+
+
+def get_index_values(
+    pipeline_id: str,
+    step_name: str,
+    address: str,
+) -> List[Tuple[str, str]]:
+    """The ``(field, value)`` pairs for one address's indexed fields.
+    Used by the server's materialization-detail endpoint to display
+    indexed labels."""
+    table = _combined_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return []
+    for row in table.to_pylist():
+        if row.get("address") == address:
+            iv = _normalize_index_values(row)
+            return [(field, val) for field, vals in iv.items() for val in vals]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Flush path
 # ---------------------------------------------------------------------------
