@@ -390,9 +390,9 @@ def _commit_execution_result(
                 # Arrow data already written to the lane store's arrow batch
                 # buffer by _expand_table_outcomes — skip serialize_output +
                 # append_filled.  Read the output value from the arrow batch
-                # buffer for the MatRef.  Still check mat_action: if the
-                # address was already fulfilled (same content from a previous
-                # run), it's "reused" — no new Arrow row needed.
+                # buffer for the MatRef.  Always "created" — re-running an
+                # expand root and producing the same content is a new
+                # generation, not a reuse.
                 mat_action = "created"
                 content_type = "json"
                 batch_row = lane_store.arrow_batch_row_by_address(
@@ -400,14 +400,6 @@ def _commit_execution_result(
                 )
                 output_string = batch_row.get("output") if batch_row else None
                 idx_values = {}
-                from .models import InputHashUsage as _IHU
-                existing_u = (
-                    session.query(_IHU)
-                    .filter_by(address=str(decision.output_address))
-                    .first()
-                )
-                if existing_u and existing_u.fulfilled:
-                    mat_action = "reused"
             else:
                 output_string, content_type = serialize_output(
                     ctx.run_id, decision.coordinate, result

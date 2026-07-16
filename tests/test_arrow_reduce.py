@@ -121,8 +121,10 @@ def test_arrow_reduce_rerun_reuses():
     assert s1.created_count > 0
 
     s2 = pipe.run(workers=1)
-    assert s2.created_count == 0
-    assert s2.reused_count > 0
+    # Expand root re-runs (source) — 3 children "created"
+    # double + total reuse (same addresses, IHU fulfilled)
+    assert s2.created_count == 3  # expand children
+    assert s2.reused_count > 0    # double + total
 
 
 def test_non_arrow_reduce_still_gets_dict():
