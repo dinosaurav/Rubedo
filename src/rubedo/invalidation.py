@@ -7,7 +7,6 @@ from .models import (
     Run,
     Materialization,
     InputHashUsage,
-    RunCoordinateStatus,
     RunEvent,
 )
 from . import lane_store
@@ -15,20 +14,6 @@ from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .trace import _bfs
 from .util import utcnow_iso
-
-
-def _mat_lane_key(session, mat_id: int) -> str:
-    """Recover the lane_key (coordinate) for a Materialization via the
-    run-coordinate join.  Used only during the parallel-write migration;
-    once materializations is deleted the lane_key is the primary identity
-    and this lookup disappears."""
-    row = (
-        session.query(RunCoordinateStatus.coordinate)
-        .filter(RunCoordinateStatus.materialization_id == mat_id)
-        .order_by(RunCoordinateStatus.id.desc())
-        .first()
-    )
-    return row[0] if row else ""
 
 
 def invalidate(selection: Selection, reason: str, downstream: bool = False) -> dict:
