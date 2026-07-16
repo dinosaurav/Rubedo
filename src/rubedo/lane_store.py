@@ -470,6 +470,40 @@ def get_filled_rows(
     ]
 
 
+def output_column_as_table(
+    pipeline_id: str, step_name: str, lane_keys: List[str]
+) -> Optional["pa.Table"]:
+    """Extract the ``output`` struct column for a set of lanes as a
+    ``pa.Table`` — the struct fields become columns.  Used by
+    ``arrow_reduce`` steps that want the parent's data as a table instead
+    of a dict-of-lanes.
+
+    Returns None if the step has no Arrow file or the output column is
+    not a struct (string fallback — the caller should use the dict path).
+    """
+    table = _combined_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return None
+
+    output_type = table.schema.field("output").type
+    if pa.types.is_struct(output_type):
+        # Filter to the requested lanes
+        lane_set = set(lane_keys)
+        mask = pc.is_in(table.column("lane_key"), value_set=pa.array(list(lane_set)))
+        filtered = table.filter(mask)
+        if filtered.num_rows == 0:
+            return None
+        # Flatten the struct column into a table
+        struct_col = filtered.column("output")
+        field_names = [f.name for f in output_type]
+        arrays = []
+        for name in field_names:
+            arrays.append(pc.struct_field(struct_col, name))
+        return pa.table(dict(zip(field_names, arrays)))
+
+    return None
+
+
 def find_by_row_id(
     pipeline_id: str, step_name: str, row_id: str
 ) -> Optional[Dict[str, Any]]:

@@ -153,6 +153,7 @@ def _run_segment(
             memo,
             limiters[step.name],
             pp,
+            ctx.pipeline_id,
         )
         in_flight[fut] = step
 

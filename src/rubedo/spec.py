@@ -74,6 +74,7 @@ class StepSpec:
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
     join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
+    arrow_reduce: bool = False  # reduce: pass parent's output as pa.Table, not dict-of-lanes
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
@@ -165,6 +166,7 @@ def step(
     executor: str = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
+    arrow_reduce: bool = False,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
     on_failed: Literal["use_passed", "block"] = "use_passed",
@@ -409,6 +411,7 @@ def step(
             executor=executor,
             group_key=group_key,
             join_on=join_on,
+            arrow_reduce=arrow_reduce,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,
             on_failed=on_failed,

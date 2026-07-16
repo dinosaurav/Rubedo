@@ -27,9 +27,33 @@ from .planning import (
     expand_child_coord,
     expand_child_identity,
 )
-from .store import _try_arrow, _to_arrow_table
 from .spec import StepSpec
-from .store import read_output
+from .store import _try_arrow, _to_arrow_table, read_output
+
+
+def _resolve_parent_table(
+    pipeline_id: str, parent_step: str, lane_refs: Dict[str, Any]
+):
+    """Resolve a reduce parent's output as a pa.Table — the struct column
+    flattened into columns. Falls back to dict-of-lanes if the output
+    column is not a struct (string fallback for spilled/mixed values)."""
+    from . import lane_store
+
+    lane_keys = list(lane_refs.keys())
+    table = lane_store.output_column_as_table(pipeline_id, parent_step, lane_keys)
+    if table is not None:
+        return table
+    # Fallback: resolve each lane to a Python dict and build a table
+    import pyarrow as pa
+
+    rows = []
+    for lane, ref in lane_refs.items():
+        val = read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
+        if val is not None:
+            rows.append(val)
+    if not rows:
+        return pa.table({})
+    return pa.Table.from_pylist(rows)
 
 
 class _RateLimiter:
@@ -222,6 +246,7 @@ def _process_decision(
     memo: _RunMemo,
     limiter: Optional[_RateLimiter],
     process_pool: Optional[Any] = None,
+    pipeline_id: str = "",
 ) -> List[ExecutionOutcome]:
     """Run the step function for one execute decision — the (step, lane) unit.
 
@@ -244,13 +269,21 @@ def _process_decision(
         if not step.depends_on:
             kwargs = {}
         elif step.shape == "reduce":
-            kwargs = {
-                _dep_kwarg(step, dep): {
-                    lane: _resolve_parent_value(ref, params, memo)
-                    for lane, ref in decision.parent_mats[dep].items()
+            if step.arrow_reduce:
+                kwargs = {
+                    _dep_kwarg(step, dep): _resolve_parent_table(
+                        pipeline_id, dep, decision.parent_mats[dep]
+                    )
+                    for dep in step.depends_on
                 }
-                for dep in step.depends_on
-            }
+            else:
+                kwargs = {
+                    _dep_kwarg(step, dep): {
+                        lane: _resolve_parent_value(ref, params, memo)
+                        for lane, ref in decision.parent_mats[dep].items()
+                    }
+                    for dep in step.depends_on
+                }
         else:
             kwargs = {
                 _dep_kwarg(step, dep): _resolve_parent_value(
