@@ -175,6 +175,36 @@ Reach for `expand` whenever the *number* of downstream items isn't known
 until you've fetched something — RSS feeds, paginated APIs, multi-page
 documents, search results.
 
+### Table-return expand (bulk fan-out)
+
+Instead of `yield`-ing N payloads in a Python loop, an expand step can
+**return an Arrow table** (`pa.Table`, polars DataFrame, or pandas
+DataFrame). Each row becomes a content-addressed lane — the table IS the
+fan-out. This lets you go straight from `pl.read_csv("data.csv")`, a
+DuckDB query, or any Arrow producer to lanes, with no Python iteration:
+
+```python
+import pyarrow as pa
+from rubedo import step
+
+@step(shape="expand")
+def load_csv():
+    return pa.table({
+        "name": ["alice", "bob", "carol"],
+        "score": [100, 200, 300],
+    })
+```
+
+Each row becomes a `row-<hash>` lane whose output is a dict (the row's
+values). Downstream steps receive it as a `dict` parameter, just like a
+yielded payload. Identical rows collapse to one lane (same content → same
+hash). The anchor caching works identically to yield-based expand — on
+re-run, if the parent is unchanged, the expand fn is not called and
+children are reused.
+
+Declare `shape="expand"` explicitly for table-return expand (a
+non-generator function doesn't auto-infer the shape).
+
 ## `join` — N-way equijoin
 
 Combines lane sets from **different roots** on a shared, indexed value —

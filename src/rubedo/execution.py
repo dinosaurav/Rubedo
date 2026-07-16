@@ -27,6 +27,7 @@ from .planning import (
     expand_child_coord,
     expand_child_identity,
 )
+from .store import _try_arrow, _to_arrow_table
 from .spec import StepSpec
 from .store import read_output
 
@@ -338,10 +339,17 @@ def _process_decision(
             try:
                 result = call(decision, pool)
                 if step.shape == "expand":
-                    # Consume the iterable inside the try so a failing
-                    # generator body is caught and retried like any other.
+                    # An expand can return a generator (yield-based) or an
+                    # Arrow-compatible table (pa.Table / polars / pandas
+                    # DataFrame).  A table return mints one lane per row —
+                    # the table IS the fan-out, no Python loop.
+                    if _try_arrow(result):
+                        table, _ = _to_arrow_table(result)
+                        values = table.to_pylist()
+                    else:
+                        values = list(result)
                     return _expand_outcomes(
-                        decision, list(result), attempt, attempt_errors
+                        decision, values, attempt, attempt_errors
                     )
                 _validate_output(step, result)
                 return [
