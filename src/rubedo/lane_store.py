@@ -71,7 +71,7 @@ def _schema(pa):
         if type_str == "string":
             t = pa.string()
         elif type_str == "timestamp[us]":
-            t = pa.timestamp("us")
+            t = pa.timestamp("us", tz="UTC")
         elif type_str == "bool":
             t = pa.bool_()
         else:
@@ -375,14 +375,17 @@ def batch_lookup_by_address(
     Arrow row in the lane_store.  Addresses not in the dict are misses
     (recompute).  The row_dict carries all fields the planning phase needs
     to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
-    ``output_path``, ``filtered``, ``code_hash``, ``ts``.
+    ``output_path``, ``filtered``, ``code_hash``, ``ts``, and ``mat_id``
+    (the SQLite Materialization.id for backward compat with join/reduce
+    index lookups — transitional, goes away when materialization_index
+    is deleted).
 
     The two-step lookup (SQLite for liveness, Arrow for content) replaces
     today's one-step SQLite query — but the SQLite lookup is a simple
     indexed query on ``input_hash_usages``, and the Arrow lookup only
     fires on confirmed reuse hits.
     """
-    from .models import InputHashUsage
+    from .models import InputHashUsage, Materialization
 
     if not addresses:
         return {}
@@ -402,6 +405,27 @@ def batch_lookup_by_address(
     if not fulfilled_addrs:
         return {}
 
+    # Step 1b: for backward compat, also fetch the SQLite Materialization
+    # integer ids for these addresses (the join/reduce paths still use
+    # MaterializationIndexEntry keyed on mat id).  Transitional — deleted
+    # when materialization_index is dropped.
+    mat_rows = (
+        session.query(Materialization)
+        .filter(
+            Materialization.output_address.in_(fulfilled_addrs),
+            Materialization.is_live.is_(True),
+        )
+        .all()
+    )
+    mat_meta_by_addr = {
+        m.output_address: {
+            "mat_id": m.id,
+            "created_at": m.created_at,
+            "refreshed_at": m.refreshed_at,
+        }
+        for m in mat_rows
+    }
+
     # Step 2: for each fulfilled address, retrieve the Arrow row
     # Build a map of lane_key -> address from the usage rows
     addr_to_lane_key = {u.address: u.lane_key for u in fulfilled}
@@ -413,6 +437,10 @@ def batch_lookup_by_address(
             continue
         row = find_latest_filled_by_address(pipeline_id, step_name, lane_key, addr)
         if row is not None:
+            meta = mat_meta_by_addr.get(addr, {})
+            row["mat_id"] = meta.get("mat_id")
+            row["created_at"] = meta.get("created_at")
+            row["refreshed_at"] = meta.get("refreshed_at")
             result[addr] = row
     return result
 

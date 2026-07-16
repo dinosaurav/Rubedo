@@ -45,6 +45,17 @@ class MatRef:
         self.filtered = filtered
 
 
+class _ArrowRowRef:
+    """Adapter that makes an Arrow lane_store row dict satisfy the
+    HasOutputContentHash protocol so ``read_materialization_output`` can
+    read its bytes from the object store.  Used by the expand-anchor
+    path which needs to deserialize the anchor's stored children list."""
+
+    def __init__(self, row: dict):
+        self.output_content_hash = row.get("content_hash")
+        self.content_type = row.get("content_type")
+
+
 @dataclass
 class EphemeralRef:
     """A skip_cache step's stand-in for a materialization.
@@ -300,7 +311,7 @@ def _reduce_group_decision(
     expired = False
     if existing_mat and step.stale_after is not None:
         freshness = existing_mat.refreshed_at or existing_mat.created_at
-        expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
+        expired = iso_age_seconds(freshness) > step.stale_after
 
     if existing_mat and not force and not expired:
         return StepDecision(
@@ -521,6 +532,7 @@ def _plan_step(
     force: bool,
     accepts_params: bool,
     lanes: Optional[List[str]] = None,
+    pipeline_id: str = "",
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only.
 
@@ -743,11 +755,11 @@ def _plan_step(
 
     all_addrs = set(map_addrs + anchor_addrs)
     mats_by_addr = {}
-    if all_addrs:
-        mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_addrs), Materialization.is_live.is_(True)
-        ).all()
-        mats_by_addr = {m.output_address: m for m in mats}
+    if all_addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, all_addrs, session
+        )
 
     child_identities_by_target = {}
     all_child_addrs = []
@@ -761,10 +773,10 @@ def _plan_step(
             if not anchor:
                 continue
             if step.stale_after is not None:
-                freshness = anchor.refreshed_at or anchor.created_at
-                if iso_age_seconds(freshness) > step.stale_after:  # type: ignore
+                freshness = anchor.get("refreshed_at") or anchor.get("created_at") or anchor.get("ts")
+                if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
-            children_hashes = read_materialization_output(anchor)  # type: ignore
+            children_hashes = read_materialization_output(_ArrowRowRef(anchor))  # type: ignore
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:
@@ -778,11 +790,11 @@ def _plan_step(
                 child_identities_by_target[coord] = []
 
     child_mats_by_addr = {}
-    if all_child_addrs:
-        child_mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_child_addrs), Materialization.is_live.is_(True)
-        ).all()
-        child_mats_by_addr = {m.output_address: m for m in child_mats}
+    if all_child_addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        child_mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, set(all_child_addrs), session
+        )
 
     for kind, *args in resolved_targets:
         if kind == "expand":
@@ -802,7 +814,7 @@ def _plan_step(
             incomplete = False
             out = []
             for child_hash, input_hash, child_addr in identities:
-                child = child_mats_by_addr.get(child_addr)  # type: ignore
+                child = child_mats_by_addr.get(child_addr)
                 if child is None:
                     incomplete = True
                     break
@@ -813,11 +825,11 @@ def _plan_step(
                         input_hash=input_hash,
                         output_address=child_addr,
                         existing=MatRef(
-                            child.id,
-                            child.output_address,
-                            child.output_content_hash,
-                            child.content_type,
-                            filtered=child.filtered,
+                            child.get("mat_id") or child.get("row_id", ""),
+                            child_addr,
+                            child.get("content_hash"),
+                            child.get("content_type"),
+                            filtered=child.get("filtered", False),
                         ),
                     )
                 )
@@ -840,8 +852,9 @@ def _plan_step(
 
             expired = False
             if existing_mat and step.stale_after is not None:
-                freshness = existing_mat.refreshed_at or existing_mat.created_at
-                expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
+                freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+                if freshness and iso_age_seconds(freshness) > step.stale_after:
+                    expired = True
 
             if existing_mat and not force and not expired:
                 decisions.append(
@@ -852,17 +865,17 @@ def _plan_step(
                         input_hash=input_hash,
                         output_address=output_address,
                         existing=MatRef(
-                            existing_mat.id,
-                            existing_mat.output_address,
-                            existing_mat.output_content_hash,
-                            existing_mat.content_type,
-                            filtered=existing_mat.filtered,
+                            existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                            output_address,
+                            existing_mat.get("content_hash"),
+                            existing_mat.get("content_type"),
+                            filtered=existing_mat.get("filtered", False),
                         ),
                         code_drift=(
                             step.code_mode == "warn"
                             and step.code_hash is not None
-                            and existing_mat.code_hash is not None
-                            and step.code_hash != existing_mat.code_hash
+                            and existing_mat.get("code_hash") is not None
+                            and step.code_hash != existing_mat.get("code_hash")
                         ),
                     )
                 )

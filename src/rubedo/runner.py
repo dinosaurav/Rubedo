@@ -263,6 +263,7 @@ def plan(
                 params_hash,
                 force,
                 accepts_params,
+                pipeline_id=pipeline.name,
             )
             drifted = sum(1 for d in decisions if d.code_drift)
             if drifted:

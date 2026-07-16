@@ -167,6 +167,7 @@ def _run_segment(
             force,
             accepts[step.name],
             lanes=lanes,
+            pipeline_id=ctx.pipeline_id,
         )
         _record_planned(session, ctx, step, decisions)
         session.commit()

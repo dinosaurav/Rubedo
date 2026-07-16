@@ -10,9 +10,13 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def iso_age_seconds(iso: str) -> float:
-    """Seconds elapsed since an utcnow_iso()-style timestamp."""
-    then = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+def iso_age_seconds(iso) -> float:
+    """Seconds elapsed since an utcnow_iso()-style timestamp or a datetime."""
+    from datetime import datetime as _dt
+    if isinstance(iso, _dt):
+        then = iso if iso.tzinfo else iso.replace(tzinfo=timezone.utc)
+    else:
+        then = _dt.fromisoformat(str(iso).replace("Z", "+00:00"))
     return (datetime.now(timezone.utc) - then).total_seconds()
 
 

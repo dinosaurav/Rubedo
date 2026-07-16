@@ -525,8 +525,8 @@ def _commit_execution_result(
                 pipeline_id=ctx.pipeline_id,
                 step_name=step.name,
                 lane_key=decision.coordinate,
-                address=decision.output_address,  # type: ignore[arg-type]
-                input_hash=decision.input_hash,  # type: ignore
+                address=str(decision.output_address),
+                input_hash=str(decision.input_hash),
                 content_hash=output_content_hash,
                 content_type=content_type,
                 output_path=final_path,
@@ -534,6 +534,36 @@ def _commit_execution_result(
                 filtered=is_filtered,
                 code_hash=step.code_hash,
             )
+
+            # Parallel write: mark this address as fulfilled in
+            # input_hash_usages — the liveness gate.  The planning phase
+            # checks fulfilled=True to decide reuse.
+            from .models import InputHashUsage
+            existing_usage = (
+                session.query(InputHashUsage)
+                .filter_by(
+                    address=str(decision.output_address),
+                    step_name=step.name,
+                    pipeline_id=ctx.pipeline_id,
+                )
+                .first()
+            )
+            if existing_usage:
+                existing_usage.fulfilled = True  # type: ignore[assignment]
+                existing_usage.last_run_id = ctx.run_id  # type: ignore[assignment]
+                existing_usage.claimed_at = utcnow_iso()  # type: ignore[assignment]
+            else:
+                session.add(
+                    InputHashUsage(
+                        address=str(decision.output_address),
+                        lane_key=decision.coordinate,
+                        step_name=step.name,
+                        pipeline_id=ctx.pipeline_id,
+                        last_run_id=ctx.run_id,
+                        claimed_at=utcnow_iso(),
+                        fulfilled=True,
+                    )
+                )
 
             if outcome.is_anchor:
                 # Cache anchor only: stored so a re-run's plan can skip the
