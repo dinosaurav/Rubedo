@@ -503,13 +503,13 @@ async def preview_selection(request: Request):
     """Preview which materializations match a selection query."""
     data = await request.json()
     sel = _selection_from_payload(data)
-    from .selection import get_selection_materialization_ids
+    from .selection import get_selection_addresses
 
     with get_session() as session:
-        mat_ids = get_selection_materialization_ids(session, sel)
+        addrs = get_selection_addresses(session, sel)
         mats = (
-            session.query(Materialization).filter(Materialization.id.in_(mat_ids)).all()
-        )
+            session.query(Materialization).filter(Materialization.output_address.in_(addrs)).all()
+        ) if addrs else []
         items = []
         for m in mats:
             items.append(

@@ -11,7 +11,7 @@ from .models import (
 )
 from . import lane_store
 from .db import get_session
-from .selection import Selection, get_selection_materialization_ids
+from .selection import Selection, get_selection_addresses
 from .trace import _bfs
 from .util import utcnow_iso
 
@@ -60,26 +60,48 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
         session.commit()
 
         try:
-            mat_ids = get_selection_materialization_ids(session, selection)
+            addresses = get_selection_addresses(session, selection)
 
             # Downstream closure: seed on the selection's *live* matches
             # (mirrors trace's default seeding), then walk derivation edges
             # with trace's own BFS. Traversal passes through non-live nodes
             # (edges are the truth of derivation) but only live ones flip.
-            descendant_ids: list[int] = []
+            descendant_addrs: list[str] = []
             if downstream:
-                live_rows = (
-                    session.query(Materialization.id)
-                    .filter(Materialization.id.in_(mat_ids), Materialization.is_live)
+                # Live = fulfilled=True.  Filter the seed addresses.
+                fulfilled = {
+                    str(u.address) for u in session.query(InputHashUsage)
+                    .filter(InputHashUsage.fulfilled.is_(True))
+                    .all()
+                }
+                live_seed_addrs = [a for a in addresses if a in fulfilled]
+                # Convert to mat_ids for the BFS (MaterializationEdge still
+                # uses integer FKs — deleted when edges table is dropped).
+                seed_rows = (
+                    session.query(Materialization.id, Materialization.output_address)
+                    .filter(Materialization.output_address.in_(live_seed_addrs))
                     .all()
                 )
-                seed_ids = {int(r.id) for r in live_rows}
+                seed_ids = {int(r.id) for r in seed_rows}
                 reached, _ = _bfs(session, seed_ids, downstream=True)
-                descendant_ids = sorted(reached)
+                # Convert reached mat_ids back to addresses
+                if reached:
+                    reached_rows = (
+                        session.query(Materialization.id, Materialization.output_address)
+                        .filter(Materialization.id.in_(reached))
+                        .all()
+                    )
+                    descendant_addrs = [str(r.output_address) for r in reached_rows]
 
-            def _flip(mat_id: int) -> bool:
-                mat = session.get(Materialization, mat_id)
-                if mat is None or not mat.is_live:
+            def _flip(addr: str) -> bool:
+                # Transitional: flip Materialization.is_live for the unique
+                # index (deleted when the materializations table is dropped).
+                mat = (
+                    session.query(Materialization)
+                    .filter_by(output_address=addr, is_live=True)
+                    .first()
+                )
+                if mat is None:
                     return False
                 mat.is_live = False  # type: ignore[assignment]
                 # The tombstone: flip fulfilled=False on input_hash_usages.
@@ -87,7 +109,7 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 # fulfilled=False and recomputes.  See notes/arrow-storage.md.
                 usage = (
                     session.query(InputHashUsage)
-                    .filter_by(address=str(mat.output_address))
+                    .filter_by(address=addr)
                     .first()
                 )
                 if usage:
@@ -96,24 +118,24 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 else:
                     session.add(
                         InputHashUsage(
-                            address=str(mat.output_address),
+                            address=addr,
                             last_run_id=run_id,
                             fulfilled=False,
                         )
                     )
                 return True
 
-            flipped_ids: list[int] = []
+            flipped_addrs: list[str] = []
             seed_count = 0
-            for mat_id in mat_ids:
-                if _flip(mat_id):
+            for addr in addresses:
+                if _flip(addr):
                     seed_count += 1
-                    flipped_ids.append(mat_id)
+                    flipped_addrs.append(addr)
             downstream_count = 0
-            for mat_id in descendant_ids:
-                if _flip(mat_id):
+            for addr in descendant_addrs:
+                if _flip(addr):
                     downstream_count += 1
-                    flipped_ids.append(mat_id)
+                    flipped_addrs.append(addr)
             invalidated_count = seed_count + downstream_count
 
             run.status = "completed"  # type: ignore
@@ -130,12 +152,23 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
             session.commit()
             lane_store.flush_all()
 
+            # Resolve addresses to mat_ids for backward compat (callers
+            # that still use integer ids for edge traversal / display).
+            all_flipped = flipped_addrs if downstream else addresses
+            mat_id_rows = (
+                session.query(Materialization.id, Materialization.output_address)
+                .filter(Materialization.output_address.in_(all_flipped))
+                .all()
+            ) if all_flipped else []
+            mat_ids = [int(r.id) for r in mat_id_rows]
+
             return {
                 "run_id": run_id,
                 "invalidated_count": invalidated_count,
                 "seed_count": seed_count,
                 "downstream_count": downstream_count,
-                "materialization_ids": flipped_ids if downstream else mat_ids,
+                "addresses": all_flipped,
+                "materialization_ids": mat_ids,
             }
         except Exception as e:
             session.rollback()

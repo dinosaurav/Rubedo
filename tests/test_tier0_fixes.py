@@ -141,24 +141,27 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     pipe = pipeline(name="inv", steps=[scan, read])
     pipe.run(workers=1)
 
-    # Make the second session.get(Materialization, mat_id) inside _flip
-    # raise — simulates a crash mid-invalidation.  The rollback must undo
-    # the first flip (is_live=False + fulfilled=False).
+    # Make the second Materialization query inside _flip raise — simulates
+    # a crash mid-invalidation.  The rollback must undo the first flip
+    # (is_live=False + fulfilled=False).
     from rubedo.models import Materialization
     from sqlalchemy.orm import Session as ORMSession
-    real_get = ORMSession.get
+    real_query = ORMSession.query
     calls = {"n": 0}
 
-    def flaky_get(self, entity, primary_key, *args, **kwargs):
+    def flaky_query(self, entity, *args, **kwargs):
         if entity is Materialization:
             calls["n"] += 1
             if calls["n"] >= 2:
                 raise RuntimeError("boom mid-invalidation")
-        return real_get(self, entity, primary_key, *args, **kwargs)
+        return real_query(self, entity, *args, **kwargs)
 
-    monkeypatch.setattr(ORMSession, "get", flaky_get)
+    monkeypatch.setattr(ORMSession, "query", flaky_query)
     with pytest.raises(RuntimeError, match="boom"):
         invalidate(Selection(step="read"), reason="partial-failure test")
+
+    # Undo the flaky patch before assertions query Materialization
+    monkeypatch.undo()
 
     with get_session() as session:
         # The first flip happened before the failure; rollback must undo it

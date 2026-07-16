@@ -38,6 +38,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("lane_key", "string", False),
     ("address", "string", False),  # output_address: hash(step, version, input_hash[, params][, code])
     ("input_hash", "string", False),
+    ("code_version", "string", True),  # step version string, for selection queries
     ("content_hash", "string", True),  # nullable for blank tombstones
     ("content_type", "string", True),
     ("output_path", "string", True),
@@ -147,6 +148,7 @@ def append_filled(
     run_id: str,
     filtered: bool = False,
     code_hash: Optional[str] = None,
+    code_version: Optional[str] = None,
     index_values: Optional[Dict[str, List[str]]] = None,
     ts: Optional[Any] = None,
 ):
@@ -173,6 +175,7 @@ def append_filled(
             "lane_key": lane_key,
             "address": address,
             "input_hash": input_hash,
+            "code_version": code_version,
             "content_hash": content_hash,
             "content_type": content_type,
             "output_path": output_path,

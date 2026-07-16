@@ -28,7 +28,7 @@ from .models import (
     RunCoordinateStatus,
     InputHashUsage,
 )
-from .selection import Selection, get_selection_materialization_ids
+from .selection import Selection, get_selection_addresses
 
 
 @dataclass
@@ -143,25 +143,29 @@ def trace(
         _init_home(home)
 
     with get_session() as session:
-        seed_ids = set(get_selection_materialization_ids(session, selection))
+        seed_addrs = set(get_selection_addresses(session, selection))
+        if not seed_addrs:
+            return TraceResult(nodes=[], edges=[])
+
+        # Convert addresses to mat_ids for BFS (MaterializationEdge still
+        # uses integer FKs — deleted when edges table is dropped).
+        seed_rows = (
+            session.query(Materialization.id, Materialization.output_address)
+            .filter(Materialization.output_address.in_(seed_addrs))
+            .all()
+        )
+        addr_to_mat = {str(r.output_address): int(r.id) for r in seed_rows}
+        seed_ids = set(addr_to_mat.values())
+
         if seed_ids and not include_superseded:
-            # Live = fulfilled=True in input_hash_usages.  Cross-reference
-            # with Materialization for the integer ids (transitional).
+            # Live = fulfilled=True in input_hash_usages.
             fulfilled_addrs = {
-                u.address for u in session.query(InputHashUsage)
+                str(u.address) for u in session.query(InputHashUsage)
                 .filter(InputHashUsage.fulfilled.is_(True))
                 .all()
             }
-            live_rows = (
-                session.query(Materialization.id)
-                .filter(
-                    Materialization.id.in_(seed_ids),
-                    Materialization.output_address.in_(fulfilled_addrs),
-                    Materialization.is_live.is_(True),
-                )
-                .all()
-            )
-            seed_ids = {int(r.id) for r in live_rows}
+            live_seed_addrs = {a for a in seed_addrs if a in fulfilled_addrs}
+            seed_ids = {addr_to_mat[a] for a in live_seed_addrs if a in addr_to_mat}
 
         up, up_edges = _bfs(session, seed_ids, downstream=False)
         down, down_edges = _bfs(session, seed_ids, downstream=True)

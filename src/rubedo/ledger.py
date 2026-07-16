@@ -486,6 +486,7 @@ def _commit_execution_result(
                 run_id=ctx.run_id,
                 filtered=is_filtered,
                 code_hash=step.code_hash,
+                code_version=step.version,
                 index_values=idx_values,
             )
 

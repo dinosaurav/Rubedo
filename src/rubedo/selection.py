@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 import fnmatch
 
 from .models import (
-    Materialization,
     RunCoordinateStatus,
     InputHashUsage,
 )
@@ -78,90 +77,166 @@ class Selection(BaseModel):
         return cls(**fields)
 
 
-def get_selection_materialization_ids(
+def _arrow_rows_matching(
+    pipeline_id: Optional[str],
+    step_name: Optional[str],
+    code_version: Optional[str],
+    output_address: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Arrow lane_store rows matching the given filters.  Each row dict
+    carries ``address``, ``code_version``, ``pipeline_id``,
+    ``step_name``, ``content_hash``, ``filtered``, etc."""
+    rows = lane_store.all_filled_rows()
+    out = []
+    for row in rows:
+        if pipeline_id and row.get("pipeline_id") != pipeline_id:
+            continue
+        if step_name and row.get("step_name") != step_name:
+            continue
+        if code_version and row.get("code_version") != code_version:
+            continue
+        if output_address and row.get("address") != output_address:
+            continue
+        out.append(row)
+    return out
+
+
+def get_selection_addresses(
     session: Session, selection: Selection
-) -> List[int]:
-    """Retrieve materialization IDs that match the given selection criteria."""
-    query = session.query(Materialization).distinct()
+) -> List[str]:
+    """Output addresses matching the given selection criteria.
 
-    if selection.step:
-        query = query.filter(Materialization.step_name == selection.step)
-    if selection.pipeline_id:
-        query = query.filter(Materialization.pipeline_id == selection.pipeline_id)
-    if selection.code_version:
-        query = query.filter(Materialization.code_version == selection.code_version)
-    if selection.output_address:
-        query = query.filter(Materialization.output_address == selection.output_address)
+    Builds the candidate set from Arrow lane_store rows (filtered by
+    pipeline/step/version/address), then applies liveness (IHU
+    fulfilled), indexed-field (Arrow index_values), and
+    coordinate/source_id (RunCoordinateStatus.output_address) filters.
+    Version-range and coordinate-glob filtering happen in Python (glob
+    matching and PEP 440 specifiers don't map cleanly to SQL).
+    """
+    # 1. Candidate addresses from Arrow rows
+    arrow_rows = _arrow_rows_matching(
+        selection.pipeline_id,
+        selection.step,
+        selection.code_version,
+        selection.output_address,
+    )
+    if not arrow_rows:
+        return []
+
+    # 2. Liveness filter (input_hash_usages.fulfilled)
     if selection.invalidated is not None:
-        # Liveness = input_hash_usages.fulfilled.  Join on address only.
-        query = query.join(
-            InputHashUsage,
-            InputHashUsage.address == Materialization.output_address,
-        ).filter(InputHashUsage.fulfilled.is_(not selection.invalidated))
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(not selection.invalidated))
+            .all()
+        }
+        arrow_rows = [
+            r for r in arrow_rows if r.get("address") in fulfilled_addrs
+        ]
 
+    # 3. Indexed-field filter (Arrow index_values)
     if selection.index:
         for field, value in selection.index.items():
             if selection.pipeline_id and selection.step:
-                addrs = lane_store.scan_indexed_field(
+                addrs = set(lane_store.scan_indexed_field(
                     selection.pipeline_id, selection.step, field, value
-                )
+                ))
             else:
-                addrs = lane_store.scan_indexed_field_all(field, value)
-            query = query.filter(Materialization.output_address.in_(addrs))
+                addrs = set(lane_store.scan_indexed_field_all(field, value))
+            arrow_rows = [r for r in arrow_rows if r.get("address") in addrs]
 
+    # 4. Coordinate / source_id filter (RunCoordinateStatus.output_address)
     if selection.source_id or selection.coordinate_glob:
-        # Join with RunCoordinateStatus to filter by coordinate or source_id
-        query = query.join(
-            RunCoordinateStatus,
-            RunCoordinateStatus.materialization_id == Materialization.id,
-        )
+        rcs_addrs = {
+            str(r.output_address)
+            for r in session.query(RunCoordinateStatus.output_address)
+            .filter(RunCoordinateStatus.output_address.isnot(None))
+            .all()
+        }
         if selection.source_id:
-            query = query.filter(
-                RunCoordinateStatus.source_id == selection.source_id
+            rcs_addrs = {
+                str(r.output_address)
+                for r in session.query(RunCoordinateStatus.output_address)
+                .filter(
+                    RunCoordinateStatus.output_address.isnot(None),
+                    RunCoordinateStatus.source_id == selection.source_id,
+                )
+                .all()
+            }
+        arrow_rows = [r for r in arrow_rows if r.get("address") in rcs_addrs]
+
+    # 5. Coordinate-glob + version-range filtering (in Python)
+    if selection.coordinate_glob:
+        # Build address → latest coordinate from RCS
+        addr_coords: Dict[str, str] = {}
+        for addr, coord in (
+            session.query(
+                RunCoordinateStatus.output_address,
+                RunCoordinateStatus.coordinate,
             )
-
-    mats = query.all()
-
-    # Batch fetch the latest coordinate for all matching materializations
-    latest_coords = {}
-    if selection.coordinate_glob and mats:
-        mat_ids = [m.id for m in mats]
-        # Order by asc, so the last one inserted into the dict is the latest
-        rows = (
-            session.query(RunCoordinateStatus.materialization_id, RunCoordinateStatus.coordinate)
-            .filter(RunCoordinateStatus.materialization_id.in_(mat_ids))
+            .filter(
+                RunCoordinateStatus.output_address.isnot(None),
+                RunCoordinateStatus.output_address.in_(
+                    [r.get("address", "") for r in arrow_rows]
+                ),
+            )
             .order_by(RunCoordinateStatus.id.asc())
             .all()
-        )
-        for mat_id, coord in rows:
-            latest_coords[mat_id] = coord
+        ):
+            addr_coords[str(addr)] = str(coord)
+        arrow_rows = [
+            r for r in arrow_rows
+            if fnmatch.fnmatch(
+                str(addr_coords.get(r.get("address", ""), "")),
+                str(selection.coordinate_glob),
+            )
+        ]
 
-    # Coordinate-glob and version-range filtering happen in Python (glob
-    # matching and PEP 440 specifiers don't map cleanly to SQL).
-    result_ids = []
-    for m in mats:
-        # Coordinate glob check
-        if selection.coordinate_glob:
-            coord = latest_coords.get(m.id)
-            if not coord or not fnmatch.fnmatch(str(coord), str(selection.coordinate_glob)):
-                continue
-                
-        # Version range check
-        if selection.version_range:
-            from packaging.version import Version, InvalidVersion
-            from packaging.specifiers import SpecifierSet
-            try:
-                specifier_set = SpecifierSet(selection.version_range)
-                parsed_version = Version(str(m.code_version))
-                if parsed_version not in specifier_set:
-                    continue
-            except InvalidVersion:
-                continue
-            except ValueError:
-                # If the specifier itself is invalid, we might want to fail earlier, but for now we skip.
-                continue
+    if selection.version_range:
+        from packaging.specifiers import SpecifierSet
 
-        result_ids.append(m.id)
+        try:
+            specifier_set = SpecifierSet(selection.version_range)
+        except ValueError:
+            pass
+        else:
+            arrow_rows = [
+                r for r in arrow_rows
+                if _matches_version(r.get("code_version"), specifier_set)
+            ]
 
-    return result_ids  # type: ignore
+    return [r.get("address", "") for r in arrow_rows if r.get("address")]
 
+
+def _matches_version(version_str: Optional[str], specifier_set: Any) -> bool:
+    """Check if a version string matches a PEP 440 specifier set."""
+    if not version_str:
+        return False
+    from packaging.version import Version, InvalidVersion
+
+    try:
+        return Version(str(version_str)) in specifier_set
+    except InvalidVersion:
+        return False
+
+
+def get_selection_materialization_ids(
+    session: Session, selection: Selection
+) -> List[int]:
+    """Retrieve materialization IDs that match the given selection criteria.
+
+    Transitional wrapper: delegates to get_selection_addresses, then
+    resolves addresses to Materialization.ids for callers that still
+    need integer ids (trace BFS via MaterializationEdge).
+    """
+    from .models import Materialization
+
+    addrs = get_selection_addresses(session, selection)
+    if not addrs:
+        return []
+    rows = (
+        session.query(Materialization.id)
+        .filter(Materialization.output_address.in_(addrs))
+        .all()
+    )
+    return [int(r.id) for r in rows]
