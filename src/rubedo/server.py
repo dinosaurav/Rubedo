@@ -348,16 +348,10 @@ def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset
 
 
 def _is_fulfilled(session, output_address: str, step_name: Optional[str] = None, pipeline_id: Optional[str] = None) -> bool:
-    """Check input_hash_usages.fulfilled for this address (the new liveness gate)."""
-    from .models import InputHashUsage
-    q = session.query(InputHashUsage.fulfilled).filter(
+    """Check input_hash_usages.fulfilled for this address."""
+    row = session.query(InputHashUsage.fulfilled).filter(
         InputHashUsage.address == output_address,
-    )
-    if step_name:
-        q = q.filter(InputHashUsage.step_name == step_name)
-    if pipeline_id:
-        q = q.filter(InputHashUsage.pipeline_id == pipeline_id)
-    row = q.first()
+    ).first()
     return bool(row and row[0])
 
 
@@ -423,18 +417,14 @@ def get_object_metadata(output_address: str):
         mat = _resolve_materialization(session, output_address)
         invalidated_at = None
         invalidation_reason = None
-        if not _is_fulfilled(session, output_address, str(mat.step_name), str(mat.pipeline_id)):
+        if not _is_fulfilled(session, output_address):
             usage = (
                 session.query(InputHashUsage)
-                .filter_by(
-                    address=output_address,
-                    step_name=str(mat.step_name),
-                    pipeline_id=str(mat.pipeline_id),
-                )
+                .filter_by(address=output_address)
                 .first()
             )
             if usage:
-                invalidated_at = usage.claimed_at
+                invalidated_at = usage.last_run_id
                 invalidation_reason = "invalidated"
         mat_data = {
             "pipeline_id": mat.pipeline_id,

@@ -233,26 +233,17 @@ def _record_planned(
                 from .models import InputHashUsage
                 existing_claim = (
                     session.query(InputHashUsage)
-                    .filter_by(
-                        address=str(d.output_address),
-                        step_name=step.name,
-                        pipeline_id=ctx.pipeline_id,
-                    )
+                    .filter_by(address=str(d.output_address))
                     .first()
                 )
                 if existing_claim:
                     existing_claim.fulfilled = False  # type: ignore[assignment]
                     existing_claim.last_run_id = ctx.run_id  # type: ignore[assignment]
-                    existing_claim.claimed_at = utcnow_iso()  # type: ignore[assignment]
                 else:
                     session.add(
                         InputHashUsage(
                             address=str(d.output_address),
-                            lane_key=d.coordinate,
-                            step_name=step.name,
-                            pipeline_id=ctx.pipeline_id,
                             last_run_id=ctx.run_id,
-                            claimed_at=utcnow_iso(),
                             fulfilled=False,
                         )
                     )
@@ -509,26 +500,17 @@ def _commit_execution_result(
             from .models import InputHashUsage
             existing_usage = (
                 session.query(InputHashUsage)
-                .filter_by(
-                    address=str(decision.output_address),
-                    step_name=step.name,
-                    pipeline_id=ctx.pipeline_id,
-                )
+                .filter_by(address=str(decision.output_address))
                 .first()
             )
             if existing_usage:
                 existing_usage.fulfilled = True  # type: ignore[assignment]
                 existing_usage.last_run_id = ctx.run_id  # type: ignore[assignment]
-                existing_usage.claimed_at = utcnow_iso()  # type: ignore[assignment]
             else:
                 session.add(
                     InputHashUsage(
                         address=str(decision.output_address),
-                        lane_key=decision.coordinate,
-                        step_name=step.name,
-                        pipeline_id=ctx.pipeline_id,
                         last_run_id=ctx.run_id,
-                        claimed_at=utcnow_iso(),
                         fulfilled=True,
                     )
                 )

@@ -209,52 +209,33 @@ class RunCoordinateStatus(Base):
 
 
 class InputHashUsage(Base):
-    """The ``address -> liveness`` map (see notes/arrow-storage.md).
+    """The ``address -> (last_run_id, fulfilled)`` map.
 
-    The single source of truth for "should this lane reuse or recompute?"
-    The Arrow lane_store file is *pure data* — filled rows only, no
-    tombstones.  Liveness lives here:
-
-      - ``fulfilled=True``  → a filled Arrow row exists for this address;
-        the planning phase reuses it (reads the content from the Arrow
-        file).
-      - ``fulfilled=False`` → recompute.  Covers three cases that all
-        mean "no filled Arrow row to reuse":
-          (1) In-flight claim — a run claimed this address but hasn't
-              committed yet (soft lock for the scheduler).
-          (2) Crash — the claiming run died before writing an Arrow row.
-          (3) Invalidation — ``invalidate()`` flipped this to False;
-              the old Arrow row is history, not reusable.
+    Two columns, one job: tell the planning phase whether to reuse or
+    recompute.  ``fulfilled=True`` → a filled Arrow row exists (reuse);
+    ``fulfilled=False`` → recompute (crash, in-flight claim, or
+    invalidation — all three mean "no filled Arrow row to reuse").
 
     ``address`` is the comprehensive cache identity
-    (``hash(step, version, input_hash[, params][, code])`` — see
-    ``hashing.compute_output_address``), so a version bump, a changed
-    params hash, or a code="auto" code change naturally produces a
-    different address and reads as "miss, recompute."
+    (``hash(step, version, input_hash[, params][, code])``) and the
+    primary key.  The caller already knows ``step_name`` and
+    ``pipeline_id`` (it's planning a specific step in a specific
+    pipeline), so those don't need to be stored here — the Arrow file
+    path is ``tables/<pipeline>/<step>.arrow``, constructed by the caller.
 
     Mutability: this table is the one *non-append-only* ledger table —
-    ``last_run_id`` and ``fulfilled`` legitimately update.  The rest of the
-    ledger stays append-only; this is the soft-lock's hint semantics, not
-    ledger history.
+    ``last_run_id`` and ``fulfilled`` legitimately update (claim at plan
+    time, fulfill at commit time, tombstone on invalidate, demote on
+    prune).  The rest of the ledger stays append-only.
 
     Future todo: a bloom filter in front of this table for fast "does
-    this address exist at all?" checks, so cold-cache lanes (the majority
-    in a large pipeline) skip the SQLite lookup entirely.
+    this address exist at all?" checks, so cold-cache lanes skip the
+    SQLite lookup entirely.
     """
     __tablename__ = "input_hash_usages"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    address = Column(String, nullable=False, index=True)
-    lane_key = Column(String, nullable=False)
-    step_name = Column(String, nullable=False, index=True)
-    pipeline_id = Column(String, nullable=False, index=True)
-    last_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
-    claimed_at = Column(String, nullable=False)
+    address = Column(String, primary_key=True)
+    last_run_id = Column(String, nullable=False)
     fulfilled = Column(Boolean, nullable=False, default=False)
-    __table_args__ = (
-        UniqueConstraint(
-            "address", "step_name", "pipeline_id", name="_ihu_uc"
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------

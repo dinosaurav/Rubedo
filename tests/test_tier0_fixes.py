@@ -141,18 +141,22 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     pipe = pipeline(name="inv", steps=[scan, read])
     pipe.run(workers=1)
 
-    import rubedo.invalidation as inv_mod
-
+    # Make the second session.get(Materialization, mat_id) inside _flip
+    # raise — simulates a crash mid-invalidation.  The rollback must undo
+    # the first flip (is_live=False + fulfilled=False).
+    from rubedo.models import Materialization
+    from sqlalchemy.orm import Session as ORMSession
+    real_get = ORMSession.get
     calls = {"n": 0}
-    real_fn = inv_mod._mat_lane_key
 
-    def flaky_lane_key(session, mat_id):
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            raise RuntimeError("boom mid-invalidation")
-        return real_fn(session, mat_id)
+    def flaky_get(self, entity, primary_key, *args, **kwargs):
+        if entity is Materialization:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise RuntimeError("boom mid-invalidation")
+        return real_get(self, entity, primary_key, *args, **kwargs)
 
-    monkeypatch.setattr(inv_mod, "_mat_lane_key", flaky_lane_key)
+    monkeypatch.setattr(ORMSession, "get", flaky_get)
     with pytest.raises(RuntimeError, match="boom"):
         invalidate(Selection(step="read"), reason="partial-failure test")
 

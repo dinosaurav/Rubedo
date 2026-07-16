@@ -1,10 +1,9 @@
 """Tests for batch_lookup_by_address — the planning phase's reuse lookup.
 
-This is the two-step lookup (SQLite input_hash_usages for liveness,
-Arrow lane_store for content) that replaces the single-step SQLite
-`Materialization.filter(output_address IN (...), is_live=True)` query.
-These tests set up both sides and verify the lookup returns the correct
-MatRef-compatible row dicts."""
+Two-step lookup (SQLite input_hash_usages for liveness, Arrow lane_store
+for content) that replaces the single-step SQLite Materialization query.
+These tests set up both sides and verify the batch lookup returns the
+correct row dicts."""
 
 import os
 import shutil
@@ -62,30 +61,19 @@ def _ts(minutes_ago: float = 0):
     return datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
 
 
-def _setup_usage(session, address, lane_key, fulfilled, run_id=RUN1):
+def _setup_usage(session, address, fulfilled, run_id=RUN1):
     run = session.query(Run).filter_by(id=run_id).first()
     if not run:
         session.add(Run(id=run_id, kind="pipeline", started_at=utcnow_iso(),
                         last_heartbeat_at=utcnow_iso()))
         session.flush()
-    session.add(
-        InputHashUsage(
-            address=address,
-            lane_key=lane_key,
-            step_name=STEP,
-            pipeline_id=PIPE,
-            last_run_id=run_id,
-            claimed_at=utcnow_iso(),
-            fulfilled=fulfilled,
-        )
-    )
+    session.add(InputHashUsage(address=address, last_run_id=run_id, fulfilled=fulfilled))
 
 
 def test_batch_lookup_returns_fulfilled_rows():
-    """Addresses with fulfilled=True and an Arrow row are returned."""
     with get_session() as s:
-        _setup_usage(s, "addr_a", "lane_a", fulfilled=True)
-        _setup_usage(s, "addr_b", "lane_b", fulfilled=True)
+        _setup_usage(s, "addr_a", fulfilled=True)
+        _setup_usage(s, "addr_b", fulfilled=True)
         s.commit()
 
     append_filled(PIPE, STEP, "lane_a", "addr_a", "ih_a", "ch_a", "json", "obj/a",
@@ -104,10 +92,9 @@ def test_batch_lookup_returns_fulfilled_rows():
 
 
 def test_batch_lookup_skips_unfulfilled():
-    """Addresses with fulfilled=False are NOT returned (recompute)."""
     with get_session() as s:
-        _setup_usage(s, "addr_fulfilled", "lane_f", fulfilled=True)
-        _setup_usage(s, "addr_unfulfilled", "lane_u", fulfilled=False)
+        _setup_usage(s, "addr_fulfilled", fulfilled=True)
+        _setup_usage(s, "addr_unfulfilled", fulfilled=False)
         s.commit()
 
     append_filled(PIPE, STEP, "lane_f", "addr_fulfilled", "ih_f", "ch_f", "json",
@@ -125,12 +112,9 @@ def test_batch_lookup_skips_unfulfilled():
 
 
 def test_batch_lookup_skips_missing_arrow_row():
-    """If fulfilled=True but no Arrow row exists (edge case — file deleted),
-    the address is not returned (can't reuse without content)."""
     with get_session() as s:
-        _setup_usage(s, "addr_no_arrow", "lane_na", fulfilled=True)
+        _setup_usage(s, "addr_no_arrow", fulfilled=True)
         s.commit()
-    # No append_filled — Arrow file is empty
 
     with get_session() as s:
         result = batch_lookup_by_address(PIPE, STEP, {"addr_no_arrow"}, s)
@@ -139,16 +123,14 @@ def test_batch_lookup_skips_missing_arrow_row():
 
 
 def test_batch_lookup_empty_addresses():
-    """An empty address set returns an empty dict."""
     with get_session() as s:
         result = batch_lookup_by_address(PIPE, STEP, set(), s)
     assert result == {}
 
 
 def test_batch_lookup_missing_address():
-    """An address not in input_hash_usages is a miss."""
     with get_session() as s:
-        _setup_usage(s, "addr_exists", "lane_e", fulfilled=True)
+        _setup_usage(s, "addr_exists", fulfilled=True)
         s.commit()
     append_filled(PIPE, STEP, "lane_e", "addr_exists", "ih_e", "ch_e", "json",
                   "obj/e", RUN1, ts=_ts(minutes_ago=5))
@@ -160,36 +142,3 @@ def test_batch_lookup_missing_address():
 
     assert "addr_exists" in result
     assert "addr_missing" not in result
-
-
-def test_batch_lookup_isolates_by_pipeline_and_step():
-    """The lookup filters by pipeline_id and step_name — the same address
-    in a different pipeline or step is not returned."""
-    with get_session() as s:
-        _setup_usage(s, "addr_shared", "lane_s", fulfilled=True)
-        # Same address, different pipeline
-        s.add(Run(id="run_other", kind="pipeline", started_at=utcnow_iso(),
-                   last_heartbeat_at=utcnow_iso()))
-        s.add(
-            InputHashUsage(
-                address="addr_shared",
-                lane_key="lane_other",
-                step_name=STEP,
-                pipeline_id="other-pipe",
-                last_run_id="run_other",
-                claimed_at=utcnow_iso(),
-                fulfilled=True,
-            )
-        )
-        s.commit()
-
-    append_filled(PIPE, STEP, "lane_s", "addr_shared", "ih_s", "ch_s", "json",
-                  "obj/s", RUN1, ts=_ts(minutes_ago=5))
-    append_filled("other-pipe", STEP, "lane_other", "addr_shared", "ih_o", "ch_o",
-                  "json", "obj/o", "run_other", ts=_ts(minutes_ago=5))
-
-    with get_session() as s:
-        result = batch_lookup_by_address(PIPE, STEP, {"addr_shared"}, s)
-
-    assert "addr_shared" in result
-    assert result["addr_shared"]["content_hash"] == "ch_s"  # not ch_o

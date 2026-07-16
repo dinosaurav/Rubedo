@@ -391,17 +391,14 @@ def batch_lookup_by_address(
         return {}
 
     # Step 1: find which addresses are fulfilled (liveness gate)
-    fulfilled = (
-        session.query(InputHashUsage)
+    fulfilled_addrs = {
+        u.address for u in session.query(InputHashUsage)
         .filter(
             InputHashUsage.address.in_(addresses),
-            InputHashUsage.step_name == step_name,
-            InputHashUsage.pipeline_id == pipeline_id,
             InputHashUsage.fulfilled.is_(True),
         )
         .all()
-    )
-    fulfilled_addrs = {u.address for u in fulfilled}
+    }
     if not fulfilled_addrs:
         return {}
 
@@ -426,17 +423,16 @@ def batch_lookup_by_address(
         for m in mat_rows
     }
 
-    # Step 2: for each fulfilled address, retrieve the Arrow row
-    # Build a map of lane_key -> address from the usage rows
-    addr_to_lane_key = {u.address: u.lane_key for u in fulfilled}
-
+    # Step 2: for each fulfilled address, retrieve the Arrow row by
+    # scanning the step's Arrow file on the address column directly.
     result: Dict[str, Dict[str, Any]] = {}
-    for addr in fulfilled_addrs:
-        lane_key = addr_to_lane_key.get(addr, "")
-        if not lane_key:
-            continue
-        row = find_latest_filled_by_address(pipeline_id, step_name, lane_key, addr)
-        if row is not None:
+    table = _combined_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return result
+    rows = table.to_pylist()
+    for row in rows:
+        addr = row.get("address")
+        if addr in fulfilled_addrs:
             meta = mat_meta_by_addr.get(addr, {})
             row["mat_id"] = meta.get("mat_id")
             row["created_at"] = meta.get("created_at")

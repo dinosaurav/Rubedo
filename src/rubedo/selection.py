@@ -93,13 +93,10 @@ def get_selection_materialization_ids(
     if selection.output_address:
         query = query.filter(Materialization.output_address == selection.output_address)
     if selection.invalidated is not None:
-        # Under the new model, liveness = input_hash_usages.fulfilled.
-        # Join to InputHashUsage on output_address and filter by fulfilled.
+        # Liveness = input_hash_usages.fulfilled.  Join on address only.
         query = query.join(
             InputHashUsage,
-            (InputHashUsage.address == Materialization.output_address)
-            & (InputHashUsage.step_name == Materialization.step_name)
-            & (InputHashUsage.pipeline_id == Materialization.pipeline_id),
+            InputHashUsage.address == Materialization.output_address,
         ).filter(InputHashUsage.fulfilled.is_(not selection.invalidated))
 
     if selection.index:

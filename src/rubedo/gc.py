@@ -219,13 +219,11 @@ def _retention_demote_ids(
     for pipeline_id, n in policies.items():
         runs = _terminal_runs(session, pipeline_id, limit=n)
         keep = _mat_ids_for_runs(session, [str(r.id) for r in runs]) | anchors
-        # Live = fulfilled=True for this pipeline
+        # Live = fulfilled=True, cross-referenced with Materialization
+        # for pipeline_id (transitional — IHU no longer stores pipeline_id)
         fulfilled_addrs = {
             u.address for u in session.query(InputHashUsage)
-            .filter(
-                InputHashUsage.pipeline_id == pipeline_id,
-                InputHashUsage.fulfilled.is_(True),
-            )
+            .filter(InputHashUsage.fulfilled.is_(True))
             .all()
         }
         live_ids = {
@@ -397,21 +395,15 @@ def _apply(
         if mat is None or not mat.is_live:
             continue
         mat.is_live = False  # type: ignore[assignment]
-        # Flip fulfilled=False on input_hash_usages (the new liveness gate)
-        # (the new liveness gate).  Same mechanism as invalidation.
+        # Flip fulfilled=False on input_hash_usages (the liveness gate)
         usage = (
             session.query(InputHashUsage)
-            .filter_by(
-                address=str(mat.output_address),
-                step_name=str(mat.step_name),
-                pipeline_id=str(mat.pipeline_id),
-            )
+            .filter_by(address=str(mat.output_address))
             .first()
         )
         if usage:
             usage.fulfilled = False  # type: ignore[assignment]
             usage.last_run_id = run_id  # type: ignore[assignment]
-            usage.claimed_at = utcnow_iso()  # type: ignore[assignment]
     for content_hash, size in reclaimed:
         session.add(
             ObjectReclamation(

@@ -100,31 +100,19 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 # The tombstone: flip fulfilled=False on input_hash_usages.
                 # The Arrow row stays as history, but the next run sees
                 # fulfilled=False and recomputes.  See notes/arrow-storage.md.
-                # (MaterializationLifecycle write removed — liveness is
-                # input_hash_usages.fulfilled, not is_live + lifecycle rows.)
-                lane_key = _mat_lane_key(session, int(mat.id))
                 usage = (
                     session.query(InputHashUsage)
-                    .filter_by(
-                        address=str(mat.output_address),
-                        step_name=str(mat.step_name),
-                        pipeline_id=str(mat.pipeline_id),
-                    )
+                    .filter_by(address=str(mat.output_address))
                     .first()
                 )
                 if usage:
                     usage.fulfilled = False  # type: ignore
                     usage.last_run_id = run_id  # type: ignore
-                    usage.claimed_at = utcnow_iso()  # type: ignore
                 else:
                     session.add(
                         InputHashUsage(
                             address=str(mat.output_address),
-                            lane_key=lane_key,
-                            step_name=str(mat.step_name),
-                            pipeline_id=str(mat.pipeline_id),
                             last_run_id=run_id,
-                            claimed_at=utcnow_iso(),
                             fulfilled=False,
                         )
                     )
