@@ -22,7 +22,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 
 from .db import get_session
-from .models import Materialization, MaterializationEdge, RunCoordinateStatus
+from .models import (
+    Materialization,
+    MaterializationEdge,
+    RunCoordinateStatus,
+    InputHashUsage,
+)
 from .selection import Selection, get_selection_materialization_ids
 
 
@@ -140,9 +145,20 @@ def trace(
     with get_session() as session:
         seed_ids = set(get_selection_materialization_ids(session, selection))
         if seed_ids and not include_superseded:
+            # Live = fulfilled=True in input_hash_usages.  Cross-reference
+            # with Materialization for the integer ids (transitional).
+            fulfilled_addrs = {
+                u.address for u in session.query(InputHashUsage)
+                .filter(InputHashUsage.fulfilled.is_(True))
+                .all()
+            }
             live_rows = (
                 session.query(Materialization.id)
-                .filter(Materialization.id.in_(seed_ids), Materialization.is_live)
+                .filter(
+                    Materialization.id.in_(seed_ids),
+                    Materialization.output_address.in_(fulfilled_addrs),
+                    Materialization.is_live.is_(True),
+                )
                 .all()
             )
             seed_ids = {int(r.id) for r in live_rows}
