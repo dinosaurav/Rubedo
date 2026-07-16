@@ -17,10 +17,14 @@ callable `StepSpec` + `describe()` TTY default — shipped 2026-07-13/14).
 (auto-index + lazy index heal) is **retired** — the Arrow storage rewrite
 (`notes/arrow-storage.md`) deletes the `materialization_index` table
 entirely; indexed fields become Arrow struct columns scanned by pyarrow,
-making the heal moot. The cloud chain (**6** → **7**+**7b** → **8** →
-**13**) builds when multi-machine demand is real — though **8** is
-independently buildable (workers never touch the ledger/store; item 7 is
-its throughput story, not a prerequisite), and **6 needs a respec
+making the heal moot. **27** (inline values + automatic object-store
+spill) is the Phase 4 endpoint of the Arrow rewrite — the Arrow `output`
+column holds the value itself (small) or a ref to serialized data (large),
+deleting `content_hash`/`output_path`; gated on Phase 3 (delete the
+`materializations` SQLite table). The cloud chain (**6** → **7**+**7b**
+→ **8** → **13**) builds when multi-machine demand is real — though **8**
+is independently buildable (workers never touch the ledger/store; item 7
+is its throughput story, not a prerequisite), and **6 needs a respec
 post-14** (see its note). (**10b** retention GC shipped — see the Done
 changelog.) Unsettled ideas live in **Parked** at the bottom — do not
 build those without a design session.
@@ -41,6 +45,80 @@ table to heal.  The auto-index injection (adding `join_on`/`group_key`
 fields to the parent's declared index) is still valuable and will be
 preserved, but the "lazy heal" half of this item is moot: there's no
 table to backfill.
+
+## 27. Inline values + automatic object-store spill  **[design settled 2026-07-16 — see `notes/arrow-storage.md` § "Inline values + object store spill"]**
+
+Today every output lives in the content-addressed object store
+(`objects/`), and the `materializations` SQLite row stores the
+`output_content_hash` — a hash string the reader resolves to find the
+actual bytes. This item flips the model: **the Arrow file's `output`
+column holds the value itself** for small outputs (the common case —
+dicts, strings, ints), and **automatically spills large values to the
+object store**, storing a ref string (`"objects:<hash>"`) in the column
+that points to the serialized data — not to a content hash that a
+reader has to resolve in a second lookup.
+
+The object store stops being "where every output lives" and becomes
+"where big values that don't fit in an Arrow column live." The
+`content_hash` / `output_path` columns are deleted from the Arrow
+schema — the column *is* the value, or it's a direct pointer to the
+value's bytes.
+
+**Settled decisions (owner design session 2026-07-15/16 — do not
+re-litigate):**
+
+- **The `output` column is the value or a ref, never a bare hash.**
+  Inline: the actual serialized value in an Arrow struct/scalar. Spilled:
+  a ref string (`"objects:<hash>"`) pointing to the serialized value
+  bytes in the object store. The content hash is embedded in the ref's
+  filename (the store is content-addressed), recoverable but not the
+  payload — the payload is the data or a pointer to the data, never a
+  hash string requiring a second lookup.
+- **`content_hash` and `output_path` columns deleted from the Arrow
+  schema.** The child's `input_hash` is computed from the actual input
+  content received — hash the parent's output value directly (inline) or
+  hash the ref string (spilled). No stored hash column needed.
+- **Spill triggers compose (any one triggers spill):**
+  - **Type-based**: `bytes`/images/binary blobs → always spill
+  - **Size-based**: serialized value > threshold (e.g. 4KB) → spill
+  - **Declaration**: `@step(spills=["field_name", ...])` → force spill,
+    override size rule
+- **Object store stays content-addressed;** spilled values are ordinary
+  objects, GC'd via `object_reclamations` as today.
+- **Same bytes → same `input_hash` → downstream reuses**, regardless of
+  inline vs spilled — the `input_hash` derivation is uniform.
+
+**Prerequisite:** the `materializations` SQLite table must be deleted
+first (Phase 3 of the Arrow storage rewrite) — the inline-values model
+only makes sense when the Arrow file is the sole source of truth for
+output content. This item is Phase 4.
+
+**Trap (part of the spec):** (1) the spill threshold must be
+configurable per-step, not just global — a 4KB dict is small, a 4KB
+image thumbnail is not, and the `@step(spills=...)` declaration is the
+override valve; (2) the inline value's Arrow type must encode the
+format (dict → struct, list → list, DataFrame → embedded Arrow IPC) so
+the reader can deserialize without a separate `content_type` column —
+or `content_type` stays as a column if the type encoding is ambiguous;
+(3) GC must handle the new ref-string format — a spilled value is
+reclaimed when no Arrow row references it, same as today's
+`output_content_hash` reclamation but keyed on the ref string; (4) the
+`input_hash` derivation for spilled values hashes the *ref string*
+(`"objects:<hash>"`), not the spilled bytes — this avoids reading
+large objects from the store just to hash them, and the invariant
+"same bytes → same `input_hash`" holds because same bytes → same
+content hash → same ref string → same `input_hash`. The derivation
+path differs between inline (hash the value) and spilled (hash the
+ref), but the identity result is equivalent.
+
+Acceptance: a step returning a small dict stores the dict inline in the
+Arrow `output` column (no object-store write); a step returning a 100KB
+DataFrame spills to `objects/` and stores a ref string in the column; a
+child step receiving either form computes the same `input_hash` for
+identical content; GC reclaims spilled objects when no Arrow row
+references them; the `content_hash` and `output_path` columns are gone
+from the Arrow schema; `uv run pytest -q` green; e2e Created:22 →
+Reused:22.
 
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
 

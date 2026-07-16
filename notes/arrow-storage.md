@@ -225,6 +225,19 @@ the sole source of truth for output content. The object store stops
 being "where every output lives" and becomes "where big values that
 don't fit in an Arrow column live."
 
+**The ref string points to serialized data, not to an output content
+hash.** Today every output lives in `objects/` keyed by its content
+hash, and the `materializations` row stores that hash as
+`output_content_hash`. Under the inline-values model, the Arrow column
+*is* the value for small outputs — no object-store round-trip at all.
+For large outputs, the ref string (`"objects:<hash>"`) points to the
+serialized value bytes in the object store — the actual data, not a
+hash column that a reader has to resolve separately. The content hash
+is embedded in the ref string's filename (the object store is
+content-addressed), so it's recoverable, but the column's payload is
+either the value itself or a pointer to the value's bytes, never a
+bare hash string that requires a second lookup to find the data.
+
 Spill triggers (all available, they compose):
 - **Type-based**: `bytes`/images/binary blobs → always spill to object store
 - **Size-based**: serialized value > threshold (e.g. 4KB) → spill, store
@@ -240,6 +253,10 @@ objects, GC'd via `object_reclamations` as today. The child's
 `input_hash` is derived from the ref string (which encodes the content
 hash) for spilled values, or from hashing the inline value for inline
 values — either way, same bytes → same `input_hash` → downstream reuses.
+
+**Tracked as TODO 27** (`notes/TODO.md`) — the rewrite that makes the
+Arrow file the sole source of truth for output content and adds the
+automatic spill machinery.
 
 ## Edges (deferred deletion — the one open sub-project)
 
@@ -268,11 +285,6 @@ selection — is already independent of it.
 
 ## What's not in scope (do not build)
 
-- **Bloom filter for `input_hash_usages` existence checks.** A bloom
-  filter in front of the table would let cold-cache lanes (the majority
-  in a large pipeline) skip the SQLite lookup entirely — "definitely not
-  present" → execute without consulting the table. Build when the
-  lookup cost is profiled as a real bottleneck, not before.
 - **Stream batching / per-batch durability** (the §10 Arrow IPC stream
   mode). Today each lane commits individually; the new model writes one
   Arrow IPC file per step. Stream batching (flush N-lane batches to disk
@@ -360,6 +372,17 @@ This is the big change. Suggested order, each a separate commit:
 Delete `materializations`, `materialization_lifecycle`,
 `materialization_index` tables. Drop the ORM guards for the deleted
 models. Update `invariants.md`.
+
+### Phase 4 — Inline values + automatic object-store spill (TODO 27)
+The Arrow `output` column becomes the sole source of truth for output
+content. Small values are stored directly in the column (inline);
+large values spill to the object store with a ref string
+(`"objects:<hash>"`) pointing to the serialized data — not to a
+content hash. Deletes the `content_hash` and `output_path` columns
+from the Arrow schema. The object store becomes a spill target for
+values too big for an Arrow column, not the default home for every
+output. See TODO 27 (`notes/TODO.md`) and the "Inline values + object
+store spill" section above for the full spec.
 
 ## What this means for `invariants.md`
 
