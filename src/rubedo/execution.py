@@ -261,7 +261,31 @@ def _process_decision(
     plus N children; every other shape returns exactly one outcome.
     """
 
+    def _declarative_result(decision: StepDecision) -> Any:
+        """Build the output for a declarative step (no fn) from the
+        parents' output values directly.
+
+        - Declarative join: nest each parent's output under its step name
+          -> {"orders": {...}, "customers": {...}}
+        - Declarative union (map shape): pass through the single present
+          parent's output unchanged
+        """
+        if step.shape == "join":
+            return {
+                dep: _resolve_parent_value(
+                    decision.parent_mats[dep], params, memo
+                )
+                for dep in step.depends_on
+            }
+        # Declarative map (union) — passthrough the one parent that has
+        # this lane (parent_mats only contains present parents)
+        dep = list(decision.parent_mats.keys())[0]
+        return _resolve_parent_value(decision.parent_mats[dep], params, memo)
+
     def call(decision: StepDecision, pool: Optional[Any] = None):
+        if step.declarative:
+            return _declarative_result(decision)
+
         # Dependent steps get parent outputs by parameter name; either kind
         # may declare `params`. A root step (map or expand) reads no
         # payload — it mints its own lane(s) from its params/generator.

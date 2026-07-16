@@ -211,9 +211,11 @@ def _compute_step_input_hash(
         parent_name = step.depends_on[0]
         return parent_mats[parent_name].output_content_hash
 
-    # Multi-parent
+    # Multi-parent — for declarative union, only present parents contribute
     parent_hashes = {
-        dep: parent_mats[dep].output_content_hash for dep in sorted(step.depends_on)
+        dep: parent_mats[dep].output_content_hash
+        for dep in sorted(step.depends_on)
+        if dep in parent_mats
     }
     return hash_json(parent_hashes)
 
@@ -264,6 +266,8 @@ def _step_accepts_params(step: StepSpec) -> bool:
     """Check if the step function signature accepts a 'params' keyword argument."""
     import inspect
 
+    if step.fn is None:
+        return False  # declarative step — no function, no params
     return "params" in inspect.signature(step.fn).parameters
 
 
@@ -704,6 +708,10 @@ def _plan_step(
 
         for dep in step.depends_on:
             if (coord, dep) not in coord_step_mats:
+                if step.declarative:
+                    # Declarative union: a lane only needs to exist in one
+                    # parent, not all — skip missing parents
+                    continue
                 raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use shape='join'")
             parent_mat = coord_step_mats[(coord, dep)]
             if parent_mat == "blocked":

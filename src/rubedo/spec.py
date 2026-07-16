@@ -70,11 +70,12 @@ class StepSpec:
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     index: Tuple[str, ...] = ()  # value fields extracted into the search index
-    shape: str = "map"  # map | reduce | expand
+    shape: str = "map"  # map | reduce | expand | join
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
-    join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
+    join_on: Optional[Dict[str, str]] = None  # join: {parent: field}
     arrow_reduce: bool = False  # reduce: pass parent's output as pa.Table, not dict-of-lanes
+    declarative: bool = False  # no fn — engine builds the output (join: nested struct, union: passthrough)
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
