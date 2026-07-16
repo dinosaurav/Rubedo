@@ -23,11 +23,12 @@ from sqlalchemy.orm import Session
 
 from .db import get_session
 from .models import (
-    Materialization,
     MaterializationEdge,
     RunCoordinateStatus,
     InputHashUsage,
 )
+from . import lane_store
+from .planning import _ArrowRowRef
 from .selection import Selection, get_selection_addresses
 
 
@@ -52,7 +53,7 @@ class TraceResult:
     """Everything a trace reached: nodes plus the edges between them."""
 
     nodes: List[TraceNode]
-    edges: List[Tuple[int, int]]  # (parent_materialization_id, child_materialization_id)
+    edges: List[Tuple[str, str]]  # (parent_address, child_address)
 
     @property
     def seeds(self) -> List[TraceNode]:
@@ -94,17 +95,21 @@ class TraceResult:
 
 
 def _bfs(
-    session: Session, seed_ids: Set[int], *, downstream: bool
-) -> Tuple[Dict[int, int], List[Tuple[int, int]]]:
-    """Walk edges transitively from seeds; {mat_id: depth} plus edges seen."""
+    session: Session, seed_addrs: Set[str], *, downstream: bool
+) -> Tuple[Dict[str, int], List[Tuple[str, str]]]:
+    """Walk edges transitively from seeds; {address: depth} plus edges seen.
+
+    Address-based: uses ``parent_address`` / ``child_address`` columns on
+    ``MaterializationEdge`` — no integer FK lookups.
+    """
     here, there = (
-        (MaterializationEdge.parent_id, MaterializationEdge.child_id)
+        (MaterializationEdge.parent_address, MaterializationEdge.child_address)
         if downstream
-        else (MaterializationEdge.child_id, MaterializationEdge.parent_id)
+        else (MaterializationEdge.child_address, MaterializationEdge.parent_address)
     )
-    reached: Dict[int, int] = {}
-    edges: List[Tuple[int, int]] = []
-    frontier = set(seed_ids)
+    reached: Dict[str, int] = {}
+    edges: List[Tuple[str, str]] = []
+    frontier = set(seed_addrs)
     depth = 0
     while frontier:
         depth += 1
@@ -113,10 +118,10 @@ def _bfs(
             .filter(here.in_(frontier))
             .all()
         )
-        edges.extend((int(r.parent_id), int(r.child_id)) for r in rows)
-        nxt = {int(getattr(r, there.key)) for r in rows}
+        edges.extend((str(r.parent_address), str(r.child_address)) for r in rows)
+        nxt = {str(getattr(r, there.key)) for r in rows}
         frontier = {
-            m for m in nxt if m not in reached and m not in seed_ids
+            m for m in nxt if m not in reached and m not in seed_addrs
         }
         for m in frontier:
             reached[m] = depth
@@ -147,89 +152,90 @@ def trace(
         if not seed_addrs:
             return TraceResult(nodes=[], edges=[])
 
-        # Convert addresses to mat_ids for BFS (MaterializationEdge still
-        # uses integer FKs — deleted when edges table is dropped).
-        seed_rows = (
-            session.query(Materialization.id, Materialization.output_address)
-            .filter(Materialization.output_address.in_(seed_addrs))
-            .all()
-        )
-        addr_to_mat = {str(r.output_address): int(r.id) for r in seed_rows}
-        seed_ids = set(addr_to_mat.values())
-
-        if seed_ids and not include_superseded:
+        if not include_superseded:
             # Live = fulfilled=True in input_hash_usages.
             fulfilled_addrs = {
                 str(u.address) for u in session.query(InputHashUsage)
                 .filter(InputHashUsage.fulfilled.is_(True))
                 .all()
             }
-            live_seed_addrs = {a for a in seed_addrs if a in fulfilled_addrs}
-            seed_ids = {addr_to_mat[a] for a in live_seed_addrs if a in addr_to_mat}
+            seed_addrs = seed_addrs & fulfilled_addrs
 
-        up, up_edges = _bfs(session, seed_ids, downstream=False)
-        down, down_edges = _bfs(session, seed_ids, downstream=True)
+        up, up_edges = _bfs(session, seed_addrs, downstream=False)
+        down, down_edges = _bfs(session, seed_addrs, downstream=True)
 
         # A node reachable both ways (diamonds) keeps its upstream reading.
-        placement: Dict[int, Tuple[str, int]] = {}
-        for m in seed_ids:
-            placement[m] = ("seed", 0)
-        for m, d in down.items():
-            placement.setdefault(m, ("downstream", d))
-        for m, d in up.items():
-            placement[m] = ("upstream", d) if placement.get(m, ("", 0))[0] != "seed" else placement[m]
+        placement: Dict[str, Tuple[str, int]] = {}
+        for a in seed_addrs:
+            placement[a] = ("seed", 0)
+        for a, d in down.items():
+            placement.setdefault(a, ("downstream", d))
+        for a, d in up.items():
+            placement[a] = ("upstream", d) if placement.get(a, ("", 0))[0] != "seed" else placement[a]
 
-        all_ids = set(placement)
-        if not all_ids:
+        all_addrs = set(placement)
+        if not all_addrs:
             return TraceResult(nodes=[], edges=[])
 
-        mats = {
-            int(m.id): m
-            for m in session.query(Materialization)
-            .filter(Materialization.id.in_(all_ids))
-            .all()
-        }
-        coords: Dict[int, str] = {}
-        for mat_id, coordinate in (
+        # Build nodes from Arrow rows + RCS coordinates
+        arrow_idx = lane_store.address_row_index()
+        # Coordinates from RCS (latest per address)
+        addr_coords: Dict[str, str] = {}
+        for addr, coord in (
             session.query(
-                RunCoordinateStatus.materialization_id, RunCoordinateStatus.coordinate
+                RunCoordinateStatus.output_address,
+                RunCoordinateStatus.coordinate,
             )
-            .filter(RunCoordinateStatus.materialization_id.in_(all_ids))
+            .filter(
+                RunCoordinateStatus.output_address.isnot(None),
+                RunCoordinateStatus.output_address.in_(all_addrs),
+            )
+            .order_by(RunCoordinateStatus.id.asc())
             .all()
         ):
-            coords[int(mat_id)] = str(coordinate)
+            addr_coords[str(addr)] = str(coord)
 
-        # Lineage roots: reached nodes with no parent edge in the ledger at all.
+        # Lineage roots: reached addresses with no parent edge.
         parented = {
-            int(r.child_id)
-            for r in session.query(MaterializationEdge.child_id)
-            .filter(MaterializationEdge.child_id.in_(all_ids))
+            str(r.child_address)
+            for r in session.query(MaterializationEdge.child_address)
+            .filter(MaterializationEdge.child_address.in_(all_addrs))
             .all()
         }
-        root_values: Dict[int, Any] = {}
+        root_values: Dict[str, Any] = {}
         if resolve_roots:
             from .store import read_materialization_output
 
-            for m in all_ids - parented:
-                try:
-                    root_values[m] = read_materialization_output(mats[m])  # type: ignore[arg-type]
-                except Exception:
-                    pass  # a missing object never breaks a read-only trace
+            for addr in all_addrs - parented:
+                row = arrow_idx.get(addr)
+                if row:
+                    try:
+                        root_values[addr] = read_materialization_output(
+                            _ArrowRowRef(row)
+                        )
+                    except Exception:
+                        pass  # a missing object never breaks a read-only trace
+
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
 
         nodes = [
             TraceNode(
-                materialization_id=m,
-                step_name=str(mat.step_name),
-                pipeline_id=str(mat.pipeline_id),
-                coordinate=coords.get(m),
-                output_address=str(mat.output_address),
-                is_live=bool(mat.is_live),
-                filtered=bool(mat.filtered),
-                relation=placement[m][0],
-                depth=placement[m][1],
-                root_value=root_values.get(m),
+                materialization_id=0,
+                step_name=str(arrow_idx.get(a, {}).get("step_name", "")),
+                pipeline_id=str(arrow_idx.get(a, {}).get("pipeline_id", "")),
+                coordinate=addr_coords.get(a),
+                output_address=a,
+                is_live=a in fulfilled_addrs,
+                filtered=bool(arrow_idx.get(a, {}).get("filtered", False)),
+                relation=placement[a][0],
+                depth=placement[a][1],
+                root_value=root_values.get(a),
             )
-            for m, mat in mats.items()
+            for a in all_addrs
         ]
         edge_set = {e for e in up_edges + down_edges}
         return TraceResult(nodes=nodes, edges=sorted(edge_set))

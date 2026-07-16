@@ -95,14 +95,23 @@ class RunEvent(Base):
 
 
 class MaterializationEdge(Base):
-    """A directed lineage edge between parent and child materializations."""
+    """A directed lineage edge between parent and child materializations.
+
+    Address-based: ``parent_address`` and ``child_address`` are the
+    output_address strings (the comprehensive cache identity).  The old
+    integer FK columns (``parent_id``, ``child_id``) are kept for the
+    dev-stage transition but no longer required — they go away when the
+    ``materializations`` table is deleted.
+    """
     __tablename__ = "materialization_edges"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    parent_id = Column(Integer, ForeignKey("materializations.id"), nullable=False)
-    child_id = Column(
-        Integer, ForeignKey("materializations.id"), nullable=False, index=True
+    parent_id = Column(Integer, ForeignKey("materializations.id"), nullable=True)
+    child_id = Column(Integer, ForeignKey("materializations.id"), nullable=True, index=True)
+    parent_address = Column(String, nullable=False, index=True)
+    child_address = Column(String, nullable=False, index=True)
+    __table_args__ = (
+        UniqueConstraint("parent_address", "child_address", name="_mat_edge_addr_uc"),
     )
-    __table_args__ = (UniqueConstraint("parent_id", "child_id", name="_mat_edge_uc"),)
 
 
 class Materialization(Base):

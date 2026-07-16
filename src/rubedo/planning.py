@@ -53,7 +53,7 @@ class _ArrowRowRef:
     path which needs to deserialize the anchor's stored children list."""
 
     def __init__(self, row: dict):
-        self.output_content_hash = row.get("content_hash")
+        self.output_content_hash = str(row.get("content_hash") or "")
         self.content_type = row.get("content_type")
 
 
@@ -760,7 +760,7 @@ def _plan_step(
                 freshness = anchor.get("ts")
                 if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
-            children_hashes = read_materialization_output(_ArrowRowRef(anchor))  # type: ignore
+            children_hashes = read_materialization_output(_ArrowRowRef(anchor))
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:

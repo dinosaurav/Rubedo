@@ -143,4 +143,4 @@ def test_selection_invalidate():
     assert response.status_code == 200
     data = response.json()
     assert data["invalidated_count"] == 1
-    assert len(data["materialization_ids"]) == 1
+    assert len(data["addresses"]) == 1

@@ -128,10 +128,18 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     assert result["seed_count"] == 1
     assert result["downstream_count"] == 2
 
-    flipped = set(result["materialization_ids"])
+    flipped = set(result["addresses"])
     liveness = _liveness_by_id()
     for mat_id in flipped:
-        assert liveness[mat_id][1] is False
+        # _liveness_by_id still uses mat_id keys — resolve via address
+        pass  # liveness check moved to IHU fulfilled check below
+    # Check via IHU that all flipped addresses are unfulfilled
+    from rubedo.models import InputHashUsage
+    with get_session() as s:
+        for addr in flipped:
+            usage = s.query(InputHashUsage).filter_by(address=addr).first()
+            assert usage is not None
+            assert usage.fulfilled is False
     # The sibling lane (globex extract/summarize) is untouched, and so are
     # both scan lanes (scan is upstream of the seed, never touched by
     # downstream invalidation).
@@ -156,14 +164,14 @@ def test_downstream_flipped_set_equals_trace_preview():
     # excluding upstream context (scan) — invalidate(downstream=True) never
     # touches upstream, only the seed and its downstream closure.
     preview = {
-        n.materialization_id
+        n.output_address
         for n in trace(sel).nodes
         if n.is_live and n.relation != "upstream"
     }
 
     result = invalidate(sel, reason="preview parity", downstream=True)
 
-    assert set(result["materialization_ids"]) == preview
+    assert set(result["addresses"]) == preview
 
 
 def test_downstream_invalidation_is_idempotent():
@@ -180,7 +188,7 @@ def test_downstream_invalidation_is_idempotent():
     assert second["invalidated_count"] == 0
     assert second["seed_count"] == 0
     assert second["downstream_count"] == 0
-    assert second["materialization_ids"] == []
+    assert second["addresses"] == []
 
 
 def test_default_invalidation_touches_only_direct_matches():

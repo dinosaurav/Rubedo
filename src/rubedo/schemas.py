@@ -107,7 +107,8 @@ class SelectionInvalidateResponse(BaseModel):
     """Result of an invalidation request."""
     run_id: str
     invalidated_count: int
-    materialization_ids: List[int]
+    addresses: List[str] = []
+    materialization_ids: List[int] = []
 
 
 class PipelineOut(BaseModel):

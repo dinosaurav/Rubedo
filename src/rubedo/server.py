@@ -17,7 +17,6 @@ from .models import (
     Run,
     RunEvent,
     effective_run_status,
-    Materialization,
     MaterializationEdge,
     RunCoordinateStatus,
     InputHashUsage,
@@ -317,30 +316,26 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
         if not matching_addrs:
             return {"trace": []}
 
-        # 2. Build edge graph via MaterializationEdge (still integer FKs)
-        addr_to_mat = {
-            str(m.output_address): int(m.id)
-            for m in session.query(Materialization.id, Materialization.output_address)
-            .filter(Materialization.output_address.in_(run_addrs))
-            .all()
-        }
-        run_mat_ids = set(addr_to_mat.values())
-
-        all_edges = session.query(MaterializationEdge).filter(
-            (MaterializationEdge.parent_id.in_(run_mat_ids)) | (MaterializationEdge.child_id.in_(run_mat_ids))
+        # 2. Build edge graph via MaterializationEdge (address-based)
+        all_edges = session.query(
+            MaterializationEdge.parent_address,
+            MaterializationEdge.child_address,
+        ).filter(
+            (MaterializationEdge.parent_address.in_(run_addrs))
+            | (MaterializationEdge.child_address.in_(run_addrs))
         ).all()
 
-        parents = {m: [] for m in run_mat_ids}  # type: ignore
-        children = {m: [] for m in run_mat_ids}  # type: ignore
+        parents: Dict[str, List[str]] = {a: [] for a in run_addrs}
+        children: Dict[str, List[str]] = {a: [] for a in run_addrs}
         for e in all_edges:
-            if e.child_id in run_mat_ids and e.parent_id in run_mat_ids:
-                parents[int(e.child_id)].append(int(e.parent_id))
-                children[int(e.parent_id)].append(int(e.child_id))
+            p, c = str(e.parent_address), str(e.child_address)
+            if p in run_addrs and c in run_addrs:
+                parents[c].append(p)
+                children[p].append(c)
 
-        # 3. BFS to find all related materializations
-        matching_mat_ids = {addr_to_mat[a] for a in matching_addrs if a in addr_to_mat}
-        queue = list(matching_mat_ids)
-        visited = set(matching_mat_ids)
+        # 3. BFS to find all related addresses
+        queue = list(matching_addrs)
+        visited = set(matching_addrs)
 
         while queue:
             curr = queue.pop(0)
@@ -354,7 +349,6 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
                     queue.append(c)
 
         # 4. Fetch details for the trace (RCS + Arrow)
-        mat_to_addr = {v: k for k, v in addr_to_mat.items()}
         arrow_idx = lane_store.address_row_index()
         rcs_rows = (
             session.query(RunCoordinateStatus)
@@ -362,9 +356,7 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
                 RunCoordinateStatus.run_id == run_id,
                 RunCoordinateStatus.output_address.isnot(None),
             )
-            .filter(RunCoordinateStatus.output_address.in_(
-                [mat_to_addr.get(m, "") for m in visited]
-            ))
+            .filter(RunCoordinateStatus.output_address.in_(visited))
             .all()
         )
 
@@ -565,6 +557,7 @@ async def invalidate_selection(request: Request):
     return {
         "run_id": result["run_id"],
         "invalidated_count": result["invalidated_count"],
+        "addresses": result["addresses"],
         "materialization_ids": result["materialization_ids"],
     }
 

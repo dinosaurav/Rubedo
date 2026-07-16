@@ -234,13 +234,13 @@ def test_invalidate_selected():
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
-        # Check materialization is invalidated
-        mat = (
-            session.query(Materialization)
-            .filter(Materialization.id == res["materialization_ids"][0])
-            .first()
-        )
-        assert mat.is_live is False
+        # Check materialization is invalidated (by address via IHU)
+        from rubedo.models import InputHashUsage
+
+        addr = res["addresses"][0]
+        usage = session.query(InputHashUsage).filter_by(address=addr).first()
+        assert usage is not None
+        assert usage.fulfilled is False
 
 
 def test_invalidated_result_not_reused():

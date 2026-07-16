@@ -74,24 +74,9 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                     .filter(InputHashUsage.fulfilled.is_(True))
                     .all()
                 }
-                live_seed_addrs = [a for a in addresses if a in fulfilled]
-                # Convert to mat_ids for the BFS (MaterializationEdge still
-                # uses integer FKs — deleted when edges table is dropped).
-                seed_rows = (
-                    session.query(Materialization.id, Materialization.output_address)
-                    .filter(Materialization.output_address.in_(live_seed_addrs))
-                    .all()
-                )
-                seed_ids = {int(r.id) for r in seed_rows}
-                reached, _ = _bfs(session, seed_ids, downstream=True)
-                # Convert reached mat_ids back to addresses
-                if reached:
-                    reached_rows = (
-                        session.query(Materialization.id, Materialization.output_address)
-                        .filter(Materialization.id.in_(reached))
-                        .all()
-                    )
-                    descendant_addrs = [str(r.output_address) for r in reached_rows]
+                live_seed_addrs = {a for a in addresses if a in fulfilled}
+                reached, _ = _bfs(session, live_seed_addrs, downstream=True)
+                descendant_addrs = sorted(reached)
 
             def _flip(addr: str) -> bool:
                 # Transitional: flip Materialization.is_live for the unique
@@ -152,23 +137,13 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
             session.commit()
             lane_store.flush_all()
 
-            # Resolve addresses to mat_ids for backward compat (callers
-            # that still use integer ids for edge traversal / display).
-            all_flipped = flipped_addrs if downstream else addresses
-            mat_id_rows = (
-                session.query(Materialization.id, Materialization.output_address)
-                .filter(Materialization.output_address.in_(all_flipped))
-                .all()
-            ) if all_flipped else []
-            mat_ids = [int(r.id) for r in mat_id_rows]
-
             return {
                 "run_id": run_id,
                 "invalidated_count": invalidated_count,
                 "seed_count": seed_count,
                 "downstream_count": downstream_count,
-                "addresses": all_flipped,
-                "materialization_ids": mat_ids,
+                "addresses": flipped_addrs,
+                "materialization_ids": [],
             }
         except Exception as e:
             session.rollback()

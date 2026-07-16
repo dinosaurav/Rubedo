@@ -531,14 +531,21 @@ def _commit_execution_result(
                 flat_parents = decision.parent_mats
                 
             for p_mat in _materialized_ancestors(flat_parents).values():
+                p_addr = getattr(p_mat, "output_address", None) or ""
+                c_addr = str(decision.output_address)
                 edge_exists = (
                     session.query(MaterializationEdge)
-                    .filter_by(parent_id=p_mat.id, child_id=mat.id)
+                    .filter_by(parent_address=p_addr, child_address=c_addr)
                     .first()
                 )
                 if not edge_exists:
                     session.add(
-                        MaterializationEdge(parent_id=p_mat.id, child_id=mat.id)
+                        MaterializationEdge(
+                            parent_id=p_mat.id,
+                            child_id=mat.id,
+                            parent_address=p_addr,
+                            child_address=c_addr,
+                        )
                     )
 
             if is_filtered:

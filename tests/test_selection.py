@@ -6,7 +6,7 @@ import uuid
 from rubedo import step, pipeline, Selection
 from rubedo.db import get_session, init_db
 import rubedo.db as db
-from rubedo.models import Base, Materialization
+from rubedo.models import Base
 from rubedo.invalidation import invalidate
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -110,8 +110,11 @@ def test_selection_version_range():
 
     assert res["invalidated_count"] == 3
 
+    # All invalidated addresses should have fulfilled=False in IHU
+    from rubedo.models import InputHashUsage
+
     with get_session() as session:
-        mats = session.query(Materialization).filter(Materialization.id.in_(res["materialization_ids"])).all()
-        for m in mats:
-            assert m.code_version == "1.0.0"
-            assert not m.is_live
+        for addr in res["addresses"]:
+            usage = session.query(InputHashUsage).filter_by(address=addr).first()
+            assert usage is not None
+            assert usage.fulfilled is False
