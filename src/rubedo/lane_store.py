@@ -583,6 +583,22 @@ def all_index_entries() -> List[Tuple[str, str]]:
     return result
 
 
+def address_row_index() -> Dict[str, Dict[str, Any]]:
+    """A ``{address: row_dict}`` index of the latest row per address
+    across all Arrow files.  Used by server endpoints that need to
+    resolve a single address to its content metadata without querying
+    the ``materializations`` SQLite table."""
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in all_filled_rows():
+        addr = row.get("address")
+        if not addr:
+            continue
+        existing = index.get(addr)
+        if existing is None or (row.get("ts") and existing.get("ts") and row["ts"] > existing["ts"]):
+            index[addr] = row
+    return index
+
+
 def all_filled_rows() -> List[Dict[str, Any]]:
     """Every filled row across all step Arrow files.
 

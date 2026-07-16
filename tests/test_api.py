@@ -130,7 +130,9 @@ def test_selection_preview():
     assert response.status_code == 200
     data = response.json()
     assert data["materialization_count"] == 1
-    assert data["items"][0]["metadata"]["line_count"] == 2
+    # metadata is {} from Arrow (metadata_json was a Materialization column,
+    # now deleted; RCS.metadata_json carries the rich per-attempt data)
+    assert data["items"][0]["metadata"] == {}
 
 
 def test_selection_invalidate():
