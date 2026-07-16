@@ -19,7 +19,6 @@ from .models import (
     effective_run_status,
     Materialization,
     MaterializationIndexEntry,
-    MaterializationLifecycle,
     MaterializationEdge,
     RunCoordinateStatus,
     InputHashUsage,
@@ -424,16 +423,19 @@ def get_object_metadata(output_address: str):
         mat = _resolve_materialization(session, output_address)
         invalidated_at = None
         invalidation_reason = None
-        if not mat.is_live:
-            lc = (
-                session.query(MaterializationLifecycle)
-                .filter_by(materialization_id=mat.id)
-                .order_by(MaterializationLifecycle.id.desc())
+        if not _is_fulfilled(session, output_address, str(mat.step_name), str(mat.pipeline_id)):
+            usage = (
+                session.query(InputHashUsage)
+                .filter_by(
+                    address=output_address,
+                    step_name=str(mat.step_name),
+                    pipeline_id=str(mat.pipeline_id),
+                )
                 .first()
             )
-            if lc:
-                invalidated_at = lc.created_at
-                invalidation_reason = lc.reason
+            if usage:
+                invalidated_at = usage.claimed_at
+                invalidation_reason = "invalidated"
         mat_data = {
             "pipeline_id": mat.pipeline_id,
             "step_name": mat.step_name,

@@ -167,21 +167,6 @@ class MaterializationIndexEntry(Base):
     __table_args__ = (Index("ix_mat_index_field_value", "field", "value"),)
 
 
-class MaterializationLifecycle(Base):
-    """Append-only record of every liveness transition of a materialization."""
-
-    __tablename__ = "materialization_lifecycle"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    materialization_id = Column(
-        Integer, ForeignKey("materializations.id"), nullable=False, index=True
-    )
-    action = Column(String, nullable=False)  # invalidated | restored | superseded | refreshed
-    run_id = Column(String, ForeignKey("runs.id"))
-    reason = Column(String)
-    superseded_by_id = Column(Integer, ForeignKey("materializations.id"))
-    created_at = Column(String, nullable=False)
-
-
 class ObjectReclamation(Base):
     """Append-only record of an object file deleted by retention GC (10b).
 
@@ -292,7 +277,6 @@ _APPEND_ONLY = (
     RunEvent,
     MaterializationEdge,
     MaterializationIndexEntry,
-    MaterializationLifecycle,
     RunCoordinateStatus,
     ObjectReclamation,
 )
