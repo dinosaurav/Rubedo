@@ -1,10 +1,12 @@
 """Per-step Arrow lane store — pure computed-output history.
 
 One Arrow IPC file per step.  Each row is one successful computation:
-``(row_id, lane_key, address, input_hash, content_hash, content_type,
-output_path, ts, run_id, filtered)``.  The output *bytes* still live in
-the content-addressed object store (``objects/``); this module tracks
-the *metadata* columnarly.
+``(row_id, lane_key, address, input_hash, output, content_type,
+code_hash, ts, run_id, filtered, index_values)``.  The ``output`` column
+holds the value itself in a native Arrow type (struct for dicts, int64
+for ints, string) when all lanes in a step are inline; falls back to
+``string`` (JSON-serialized inline + ``"objects:<hash>"`` ref strings)
+when any value spills to the object store.
 
 **No tombstones here.**  Liveness (reuse vs. recompute) is the
 ``input_hash_usages`` SQLite table's job — ``fulfilled=True`` means a

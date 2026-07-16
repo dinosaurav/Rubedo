@@ -369,15 +369,25 @@ function. `MaterializationEdge` is address-based (no integer FKs).
 schemas, server responses, trace nodes, invalidation responses, and the
 web UI. Concurrency tests rewritten for the Arrow model.
 
-### Phase 4 — Inline values + automatic object-store spill (TODO 27)
-The Arrow `output` column becomes the sole source of truth for output
-content. Small values are stored directly in the column (inline);
-large values spill to the object store with a ref string
-(`"objects:<hash>"`) pointing to the serialized data — not to a
-content hash. Deletes the `content_hash` and `output_path` columns
-from the Arrow schema. The object store becomes a spill target for
-values too big for an Arrow column, not the default home for every
-output. See TODO 27 (`notes/TODO.md`) and the "Inline values + object
+### Phase 4 — Inline values + automatic object-store spill (TODO 27) ✅ Done
+The Arrow `output` column holds values in their **native Arrow type**
+(struct for dicts, int64 for ints, string, etc.) — not JSON strings.
+Small values are stored directly in the column (zero object-store I/O).
+Large values (>4KB), bytes, and DataFrames spill to the object store
+with a ref string (`"objects:<hash>"`) in the column. The `content_hash`
+and `output_path` columns are deleted from the Arrow schema.
+
+The output column type is inferred **per-step-file** from the buffer's
+values: a step returning dicts gets `struct<...>`, a step returning ints
+gets `int64`, etc. If any value spills (ref string) or types are mixed
+within a step, the column falls back to `string` (inline values
+JSON-serialized, ref strings as-is). When concatenating on-disk history
+with a new buffer, type mismatches are resolved by converting both to
+`string`.
+
+String returns use `content_type="text"` to distinguish them from
+JSON-serialized values (`content_type="json"`) in the string fallback
+case. See TODO 27 (`notes/TODO.md`) and the "Inline values + object
 store spill" section above for the full spec.
 
 ## What this means for `invariants.md`
