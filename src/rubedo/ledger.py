@@ -506,6 +506,7 @@ def _commit_execution_result(
             # above while readers are migrated one-by-one; the SQLite path
             # is deleted once every reader consults lane_store.  See
             # notes/arrow-storage.md §Phase 2.
+            idx_values = _extract_index_values(step, result)
             lane_store.append_filled(
                 pipeline_id=ctx.pipeline_id,
                 step_name=step.name,
@@ -518,7 +519,7 @@ def _commit_execution_result(
                 run_id=ctx.run_id,
                 filtered=is_filtered,
                 code_hash=step.code_hash,
-                index_values=_extract_index_values(step, result),
+                index_values=idx_values,
             )
 
             # Parallel write: mark this address as fulfilled in
@@ -633,6 +634,7 @@ def _commit_execution_result(
                 mat.output_content_hash,
                 mat.content_type,
                 filtered=is_filtered,
+                index_values=idx_values,
             )
         except Exception as e:
             session.rollback()

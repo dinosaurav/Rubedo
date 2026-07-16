@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
-from .models import MaterializationIndexEntry
 from .spec import PipelineSpec, StepSpec
 from .store import read_materialization_output
 from .util import iso_age_seconds
@@ -37,12 +36,14 @@ class MatRef:
         output_content_hash,
         content_type=None,
         filtered=False,
+        index_values=None,
     ):
         self.id = id
         self.output_address = output_address
         self.output_content_hash = output_content_hash
         self.content_type = content_type
         self.filtered = filtered
+        self.index_values = index_values or {}
 
 
 class _ArrowRowRef:
@@ -75,6 +76,12 @@ class EphemeralRef:
         # Chains into consumers' input hashes exactly like a real
         # materialization's content hash would
         return self.identity_hash
+
+    @property
+    def index_values(self) -> Dict[str, List[str]]:
+        # EphemeralRefs are never parents of reduce/join (validation
+        # prevents it), so index_values is never consulted.
+        return {}
 
 
 @dataclass
@@ -232,33 +239,19 @@ def _group_reduce_lanes(
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Partition a reduce's parent lanes into groups by an indexed field.
 
-    Reads each lane's `MaterializationIndexEntry` rows for `step.group_key`: a
-    lane with several values (a list-valued index) joins each group; a lane
-    with none raises, since you cannot group by a field it never indexed.
+    Reads each lane's ``index_values`` (the Arrow ``index_values`` map
+    column) for ``step.group_key``: a lane with several values (a
+    list-valued index) joins each group; a lane with none raises, since
+    you cannot group by a field it never indexed.
     """
-    mat_ids = []
     coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
         for coord, ref in coord_refs.items():
-            mat_ids.append(ref.id)  # type: ignore
             coord_ref_map.append((dep, coord, ref))
-
-    vals_by_mat: Dict[int, List[str]] = {}
-    if mat_ids:
-        rows = (
-            session.query(MaterializationIndexEntry)
-            .filter(
-                MaterializationIndexEntry.materialization_id.in_(mat_ids),
-                MaterializationIndexEntry.field == step.group_key,
-            )
-            .all()
-        )
-        for row in rows:
-            vals_by_mat.setdefault(row.materialization_id, []).append(row.value)  # type: ignore
 
     groups: Dict[str, Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]] = {}
     for dep, coord, ref in coord_ref_map:
-        values = vals_by_mat.get(ref.id)  # type: ignore
+        values = ref.index_values.get(step.group_key, [])  # type: ignore[arg-type]
         if not values:
             raise ValueError(
                 f"reduce step '{step.name}': group_key '{step.group_key}' "
@@ -329,6 +322,7 @@ def _reduce_group_decision(
                 existing_mat.get("content_hash"),
                 existing_mat.get("content_type"),
                 filtered=existing_mat.get("filtered", False),
+                index_values=existing_mat.get("index_values", {}),
             ),
             code_drift=(
                 step.code_mode == "warn"
@@ -378,7 +372,6 @@ def _plan_join(
     blocked_parents: List[str] = []
     pending = False
 
-    mat_ids_by_dep: Dict[str, List[int]] = {dep: [] for dep in deps}
     coord_ref_map: Dict[str, List[Tuple[str, Any]]] = {dep: [] for dep in deps}
 
     for (coord, d), ref in coord_step_mats.items():
@@ -393,7 +386,6 @@ def _plan_join(
         elif ref == "filtered" or getattr(ref, "filtered", False):
             pass
         elif ref is not None:
-            mat_ids_by_dep[d].append(ref.id)  # type: ignore
             coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
@@ -410,25 +402,10 @@ def _plan_join(
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
-    vals_by_mat_by_dep: Dict[str, Dict[int, List[str]]] = {dep: {} for dep in deps}
-    for d in deps:
-        if not mat_ids_by_dep[d]:
-            continue
-        rows = (
-            session.query(MaterializationIndexEntry)
-            .filter(
-                MaterializationIndexEntry.materialization_id.in_(mat_ids_by_dep[d]),
-                MaterializationIndexEntry.field == step.join_on[d],  # type: ignore
-            )
-            .all()
-        )
-        for row in rows:
-            vals_by_mat_by_dep[d].setdefault(row.materialization_id, []).append(row.value)  # type: ignore
-
     for d in deps:
         field = step.join_on[d]  # type: ignore
         for coord, ref in coord_ref_map[d]:
-            values = vals_by_mat_by_dep[d].get(ref.id)
+            values = ref.index_values.get(field, [])
             if not values:
                 raise ValueError(
                     f"join step '{step.name}': side '{d}' has no indexed value "
@@ -499,6 +476,7 @@ def _plan_join(
                         existing_mat.get("content_hash"),
                         existing_mat.get("content_type"),
                         filtered=existing_mat.get("filtered", False),
+                        index_values=existing_mat.get("index_values", {}),
                     ),
                     code_drift=(
                         step.code_mode == "warn"
@@ -836,6 +814,7 @@ def _plan_step(
                             child.get("content_hash"),
                             child.get("content_type"),
                             filtered=child.get("filtered", False),
+                            index_values=child.get("index_values", {}),
                         ),
                     )
                 )
@@ -876,6 +855,7 @@ def _plan_step(
                             existing_mat.get("content_hash"),
                             existing_mat.get("content_type"),
                             filtered=existing_mat.get("filtered", False),
+                            index_values=existing_mat.get("index_values", {}),
                         ),
                         code_drift=(
                             step.code_mode == "warn"
