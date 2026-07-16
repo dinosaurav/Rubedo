@@ -25,7 +25,6 @@ from sqlalchemy.pool import StaticPool
 from rubedo import ProcessResult, pipeline, step
 from rubedo.db import init_db
 from rubedo.lane_store import (
-    append_blank,
     append_filled,
     clear_run_buffers,
     find_latest_filled_by_address,
@@ -89,52 +88,42 @@ def test_different_address_is_a_miss():
 
 
 def test_version_bump_supersedes_not_overwrites():
-    """A later run with a new address leaves the old row in place on disk,
-    but the by-address lookup reflects the same semantics as today's
-    partial-unique-index: only the latest filled row is reusable."""
+    """A later run with a new address leaves the old row in place on disk.
+    Under the new model, both rows are valid filled data in the Arrow
+    file — the question of which is 'live' is ``input_hash_usages.fulfilled``'s
+    job, not the Arrow file's.  ``find_latest_filled_by_address`` retrieves
+    whichever row matches the address it's asked for."""
     append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
                   RUN1, ts=_ts(minutes_ago=10))
     append_filled(PIPE, STEP, "@root#0", ADDR_V2, "ih_a", "ch_v2", "json", "obj/2",
                   RUN2, ts=_ts(minutes_ago=0))
 
-    # The new address is the latest filled → reuse hit
-    assert (
-        find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V2)["content_hash"]
-        == "ch_v2"
-    )
+    # Both addresses find their own row — the Arrow file is pure data
+    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)["content_hash"] == "ch_v1"
+    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V2)["content_hash"] == "ch_v2"
 
-    # The old address is now history — superseded by ADDR_V2's row, the
-    # latest filled (any address) doesn't match ADDR_V1 → miss
-    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1) is None
+    # The *planning phase* decides which to reuse by checking
+    # input_hash_usages.fulfilled — not by asking the Arrow file.  An
+    # invalidated ADDR_V1 (fulfilled=False) won't be consulted even though
+    # its Arrow row still exists.
 
 
-def test_blank_tombstone_invalidates_specific_address():
-    """A blank tombstone targets a lane_key, not an address.  Per the
-    design doc: invalidate() writes a blank with the lane_key, and the
-    next run should recompute regardless of the address it would have
-    built.  This test confirms the by-address check correctly sees 'miss'
-    when the latest row is blank, even if an older row had a matching
-    address."""
+# ---------------------------------------------------------------------------
+# Multiple rows for the same lane_key (generations across runs)
+# ---------------------------------------------------------------------------
+
+
+def test_multiple_generations_latest_by_ts_wins():
+    """When the same address is recomputed (e.g. stale_after refresh),
+    the latest by ts is returned by find_latest_filled_by_address."""
     append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
                   RUN1, ts=_ts(minutes_ago=10))
-    append_blank(PIPE, STEP, "@root#0", RUN2, address=ADDR_V1,
-                 ts=_ts(minutes_ago=5))
-    # Latest row for this lane blank → invalidated → miss
-    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1) is None
-
-
-def test_recompute_after_blank_fills_again_under_same_address():
-    """After invalidation, a fresh computation under the same address
-    reuses the lane_key and refills it; the by-address lookup then sees
-    the fresh row as a hit."""
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
-                  RUN1, ts=_ts(minutes_ago=10))
-    append_blank(PIPE, STEP, "@root#0", RUN2, address=ADDR_V1,
-                 ts=_ts(minutes_ago=5))
-    # Refill
     append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v2", "json", "obj/2",
                   RUN2, ts=_ts(minutes_ago=0))
     row = find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)
+    assert row is not None
+    assert row["content_hash"] == "ch_v2"
+    assert row["run_id"] == RUN2
     assert row is not None
     assert row["content_hash"] == "ch_v2"
 

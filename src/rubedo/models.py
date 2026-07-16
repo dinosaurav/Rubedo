@@ -224,25 +224,42 @@ class RunCoordinateStatus(Base):
 
 
 class InputHashUsage(Base):
-    """The `input_hash -> last_run_id` map (see notes/arrow-storage.md).
+    """The ``address -> liveness`` map (see notes/arrow-storage.md).
 
-    Three jobs in one keyed table:
-      - Scheduler soft lock: a row's ``last_run_id`` is consulted before
-        a worker claims (step, input_hash) so two workers don't both run
-        the same input.
-      - Crash detection: a row with ``fulfilled=False`` for a terminal run
-        means the worker crashed mid-execution (no Arrow row was written).
-      - GC handle: retention prunes by run recency; "is this output still
-        referenced by a recent run?" is a lookup on last_run_id.
+    The single source of truth for "should this lane reuse or recompute?"
+    The Arrow lane_store file is *pure data* — filled rows only, no
+    tombstones.  Liveness lives here:
+
+      - ``fulfilled=True``  → a filled Arrow row exists for this address;
+        the planning phase reuses it (reads the content from the Arrow
+        file).
+      - ``fulfilled=False`` → recompute.  Covers three cases that all
+        mean "no filled Arrow row to reuse":
+          (1) In-flight claim — a run claimed this address but hasn't
+              committed yet (soft lock for the scheduler).
+          (2) Crash — the claiming run died before writing an Arrow row.
+          (3) Invalidation — ``invalidate()`` flipped this to False;
+              the old Arrow row is history, not reusable.
+
+    ``address`` is the comprehensive cache identity
+    (``hash(step, version, input_hash[, params][, code])`` — see
+    ``hashing.compute_output_address``), so a version bump, a changed
+    params hash, or a code="auto" code change naturally produces a
+    different address and reads as "miss, recompute."
 
     Mutability: this table is the one *non-append-only* ledger table —
     ``last_run_id`` and ``fulfilled`` legitimately update.  The rest of the
     ledger stays append-only; this is the soft-lock's hint semantics, not
     ledger history.
+
+    Future todo: a bloom filter in front of this table for fast "does
+    this address exist at all?" checks, so cold-cache lanes (the majority
+    in a large pipeline) skip the SQLite lookup entirely.
     """
     __tablename__ = "input_hash_usages"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    input_hash = Column(String, nullable=False, index=True)
+    address = Column(String, nullable=False, index=True)
+    lane_key = Column(String, nullable=False)
     step_name = Column(String, nullable=False, index=True)
     pipeline_id = Column(String, nullable=False, index=True)
     last_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
@@ -250,7 +267,7 @@ class InputHashUsage(Base):
     fulfilled = Column(Boolean, nullable=False, default=False)
     __table_args__ = (
         UniqueConstraint(
-            "input_hash", "step_name", "pipeline_id", name="_ihu_uc"
+            "address", "step_name", "pipeline_id", name="_ihu_uc"
         ),
     )
 

@@ -2,8 +2,10 @@
 
 The lane store replaces the `materializations` SQLite table with append-only
 Arrow IPC files.  These tests exercise the store primitives in isolation:
-append-filled, append-blank (invalidation), find-latest-filled (reuse check),
-find-latest (blank vs absent), flush (durability), and compaction (GC)."""
+append-filled, find-latest-filled (reuse check), find-latest (latest row),
+flush (durability), and compaction (GC).  The Arrow file is pure data —
+no blank tombstones; liveness (reuse vs. recompute) is the
+``input_hash_usages`` SQLite table's job."""
 
 import os
 import shutil
@@ -12,7 +14,6 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from rubedo.lane_store import (
-    append_blank,
     append_filled,
     clear_run_buffers,
     compact_step,
@@ -108,24 +109,8 @@ def test_latest_by_ts_wins():
 
 
 # ---------------------------------------------------------------------------
-# Blank tombstones (invalidation)
+# Latest row lookup
 # ---------------------------------------------------------------------------
-
-
-def test_blank_tombstone_makes_lane_not_filled():
-    """After an invalidation (blank row), find_latest_filled returns None."""
-    append_filled(PIPE, STEP, "@root#0", "addr_7", "ih_a", "ch_0", "json", "obj/0", RUN1,
-                  ts=_ts(minutes_ago=5))
-    append_blank(PIPE, STEP, "@root#0", RUN2, ts=_ts(minutes_ago=0))
-
-    # Latest filled is None — the blank tombstone supersedes the filled row
-    assert find_latest_filled(PIPE, STEP, "@root#0") is None
-
-    # But the latest row of any kind IS the blank
-    latest = find_latest(PIPE, STEP, "@root#0")
-    assert latest is not None
-    assert latest["content_hash"] is None
-    assert latest["run_id"] == RUN2
 
 
 def test_find_latest_absent_lane():
@@ -134,21 +119,16 @@ def test_find_latest_absent_lane():
     assert find_latest(PIPE, STEP, "@root#never") is None
 
 
-def test_recompute_after_blank_fills_again():
-    """After a blank tombstone, a new filled row makes the lane live again."""
-    append_filled(PIPE, STEP, "@root#0", "addr_9", "ih_a", "ch_v1", "json", "obj/1", RUN1,
-                  ts=_ts(minutes_ago=10))
-    append_blank(PIPE, STEP, "@root#0", RUN2, address="", input_hash="ih_a",
-                 ts=_ts(minutes_ago=5))
-    # Invalidated → None
-    assert find_latest_filled(PIPE, STEP, "@root#0") is None
-
-    append_filled(PIPE, STEP, "@root#0", "addr_10", "ih_a", "ch_v2", "json", "obj/2", RUN2,
-                  ts=_ts(minutes_ago=0))
-    # Refilled → latest filled is the new one
-    row = find_latest_filled(PIPE, STEP, "@root#0")
-    assert row is not None
-    assert row["content_hash"] == "ch_v2"
+def test_find_latest_returns_most_recent():
+    """find_latest returns the most recent row by ts, regardless of address."""
+    append_filled(PIPE, STEP, "@root#0", "addr_old", "ih_a", "ch_old", "json", "obj/old",
+                  RUN1, ts=_ts(minutes_ago=10))
+    append_filled(PIPE, STEP, "@root#0", "addr_new", "ih_a", "ch_new", "json", "obj/new",
+                  RUN2, ts=_ts(minutes_ago=0))
+    latest = find_latest(PIPE, STEP, "@root#0")
+    assert latest is not None
+    assert latest["content_hash"] == "ch_new"
+    assert latest["address"] == "addr_new"
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +149,9 @@ def test_multiple_lanes_independent():
 def test_get_all_lane_keys():
     append_filled(PIPE, STEP, "@root#0", "addr_11", "ih_a", "ch_0", "json", "obj/0", RUN1)
     append_filled(PIPE, STEP, "@root#1", "addr_12", "ih_b", "ch_1", "json", "obj/1", RUN1)
-    append_blank(PIPE, STEP, "@root#2", RUN1)
     keys = set(get_all_lane_keys(PIPE, STEP))
-    assert keys == {"@root#0", "@root#1", "@root#2"}
+    assert keys == {"@root#0", "@root#1"}
+    # All rows are filled — filled_only doesn't filter anything out
     filled = set(get_all_lane_keys(PIPE, STEP, filled_only=True))
     assert filled == {"@root#0", "@root#1"}
 

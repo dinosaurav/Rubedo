@@ -1,16 +1,18 @@
-"""Per-step Arrow lane store — the append-only history of what each step's
-lanes produced across all runs.
+"""Per-step Arrow lane store — pure computed-output history.
 
-Replaces the `materializations` SQLite table (one row per lane) with one
-Arrow IPC file per step (one row per lane *attempt*, stacked across time).
-The output *bytes* still live in the content-addressed object store
-(``objects/``); this module tracks the *metadata* — lane_key, input_hash,
-content_hash, content_type, output_path, ts, run_id, filtered — columnarly.
+One Arrow IPC file per step.  Each row is one successful computation:
+``(row_id, lane_key, address, input_hash, content_hash, content_type,
+output_path, ts, run_id, filtered)``.  The output *bytes* still live in
+the content-addressed object store (``objects/``); this module tracks
+the *metadata* columnarly.
 
-Blank rows (content_hash = None, output_path = None) are invalidation
-tombstones written by ``invalidate()``.  "What is live" is a query: the
-latest row by ``ts`` for a (step, lane_key); filled = live, blank =
-invalidated (pending recompute), absent = never computed or crashed.
+**No tombstones here.**  Liveness (reuse vs. recompute) is the
+``input_hash_usages`` SQLite table's job — ``fulfilled=True`` means a
+filled Arrow row exists for this address; ``fulfilled=False`` means
+recompute (crash, in-flight claim, or invalidation).  The Arrow file is
+pure data: every row has a non-null content_hash and output_path.
+Invalidation flips ``fulfilled=False`` in SQLite; the old Arrow row
+stays as history but is not reused.
 
 During a run, rows accumulate in an in-memory buffer.  Reads combine the
 on-disk history (previous runs) with the in-memory buffer (current run),
@@ -170,43 +172,6 @@ def append_filled(
     )
 
 
-def append_blank(
-    pipeline_id: str,
-    step_name: str,
-    lane_key: str,
-    run_id: str,
-    address: str = "",
-    input_hash: str = "",
-    ts: Optional[Any] = None,
-):
-    """Append a blank tombstone row (an invalidation marker).
-
-    content_hash / content_type / output_path are NULL — the latest row
-    being blank means "pending, recompute next run."  address / input_hash
-    are stored as the empty string when not supplied (Arrow doesn't allow
-    null in the non-nullable columns) to keep the schema simple; readers
-    treat blank as "regardless of identity, this lane is invalidated."
-    """
-    from datetime import datetime, timezone
-
-    if ts is None:
-        ts = datetime.now(timezone.utc)
-    _buffer(pipeline_id, step_name).append(
-        {
-            "row_id": _make_row_id(pipeline_id, step_name, lane_key, ts),
-            "lane_key": lane_key,
-            "address": address,
-            "input_hash": input_hash,
-            "content_hash": None,
-            "content_type": None,
-            "output_path": None,
-            "ts": ts,
-            "run_id": run_id,
-            "filtered": False,
-        }
-    )
-
-
 # ---------------------------------------------------------------------------
 # Read path
 # ---------------------------------------------------------------------------
@@ -281,27 +246,21 @@ def find_latest_filled(
     lane_key: str,
     input_hash: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """The latest filled (non-blank) row for this lane.
+    """The latest filled row for this lane.
 
-    If ``input_hash`` is given, only a latest row with a matching
-    input_hash counts as a reuse hit; a mismatch means the lane was
-    recomputed with a different input since, so the old output is stale.
-
-    Returns None if no filled row exists — meaning the lane must be
-    (re)computed.  A blank tombstone is NOT a filled row; if the latest
-    row is blank, this returns None, signalling "invalidated, recompute."
+    If ``input_hash`` is given, only a row with a matching input_hash
+    is returned.  Returns None if no filled row exists.
 
     NOTE: this filter doesn't account for version / params / code_hash,
     so it isn't the right reuse check for the engine's planning phase —
     use ``find_latest_filled_by_address`` for that.  Kept for tests and
     narrow uses where the caller knows the identity is stable.
     """
-    latest = find_latest(pipeline_id, step_name, lane_key)
-    if latest is None or latest["content_hash"] is None:
-        return None  # blank tombstone wins — lane is invalidated
-    if input_hash is not None and latest["input_hash"] != input_hash:
-        return None  # latest filled was for a different input
-    return latest
+    rows = _rows_for_lane(pipeline_id, step_name, lane_key)
+    candidates = [r for r in rows if r["content_hash"] is not None]
+    if input_hash is not None:
+        candidates = [r for r in candidates if r["input_hash"] == input_hash]
+    return _latest_by_ts(candidates)
 
 
 def find_latest_filled_by_address(
@@ -310,33 +269,22 @@ def find_latest_filled_by_address(
     lane_key: str,
     address: str,
 ) -> Optional[Dict[str, Any]]:
-    """The reuse check the planning phase actually needs.
+    """Retrieve the Arrow row for (step, lane_key, address).
 
-    Returns the latest row for (step, lane_key, address) if filled;
-    None if the latest row for that lane_key is a blank tombstone
-    (invalidated), if no row with the given address exists, or if no
-    row of any kind exists.  Mirrors the SQLite semantics
-    `Materialization.filter_by(output_address=address, is_live=True)` and
-    is the port-ready replacement for the planning reuse lookup.
-
-    Blank-tombstone semantics (notes/arrow-storage.md): the latest row
-    for a lane_key of *any* address trumps older rows.  If the latest is
-    blank, the lane is invalidated and recomputes regardless of which
-    address the next run computes; older filled rows (even with the
-    exact address we're querying) are not reused.
+    Returns the latest row matching the given address, or None if no row
+    with that address exists.  Every row in the Arrow file is a filled
+    computation — there are no blank tombstones here.  Liveness (should
+    this row be reused?) is the ``input_hash_usages.fulfilled`` column's
+    job, not this function's; the caller checks ``fulfilled`` first and
+    only calls this to retrieve the content on a confirmed reuse hit.
 
     ``address`` is the comprehensive cache identity
     (``hash(step, version, input_hash[, params][, code])`` — see
-    ``hashing.compute_output_address``), so a version bump, a changed
-    params hash, or a code="auto" code change naturally produces a different
-    address and reads as "miss, recompute."
+    ``hashing.compute_output_address``).
     """
-    latest_any = find_latest(pipeline_id, step_name, lane_key)
-    if latest_any is None or latest_any["content_hash"] is None:
-        return None  # blank tombstone wins — lane is invalidated
-    if latest_any["address"] != address:
-        return None  # latest filled was under a different identity
-    return latest_any
+    rows = _rows_for_lane(pipeline_id, step_name, lane_key)
+    candidates = [r for r in rows if r["address"] == address]
+    return _latest_by_ts(candidates)
 
 
 def find_latest(

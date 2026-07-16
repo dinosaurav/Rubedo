@@ -55,18 +55,15 @@ columns:
   scalar/struct, or an object-store ref (`objects/<hash>` for large/binary
   values; see "TOAST spill" below). `content_hash` is the hash of the
   serialized value — used by children as `input_hash` and by dedup.
-- **Blank row** = an invalidation tombstone (`output IS NULL`). Written by
-  `invalidate()` only — never by execution. The latest row for a lane is
-  blank → readers see "pending, will recompute next run."
-- **Absent row** = the lane was never computed, or the worker crashed
-  mid-run. Distinct from blank: an invalidate wrote a tombstone; a crash
-  wrote nothing. The new `input_hash → last_run_id` table tells the two
-  apart (see below).
+- **No blank rows.** The Arrow file is pure data — every row has a
+  non-null `content_hash` and `output_path`. Liveness (reuse vs.
+  recompute) is the `input_hash_usages` SQLite table's job.
 
-**Latest-by-`ts` is current state.** No `is_live` projection, no partial
-unique index, no generations protocol. "What is live" is a query: scan the
-file for the latest row for `(lane_key)`; filled = live, blank =
-invalidated, absent = pending-or-crashed.
+**Liveness is not in the Arrow file.** `input_hash_usages.fulfilled` is
+the single gate: `True` → a filled Arrow row exists (reuse); `False` →
+recompute (covers crash, in-flight claim, and invalidation — all three
+mean "no filled Arrow row to reuse"). The planning phase checks
+`fulfilled` first and only reads the Arrow file on a confirmed reuse hit.
 
 ## What gets deleted from the current ledger
 
@@ -136,30 +133,34 @@ This one table carries three jobs:
 This is the heart of the simplification. The design has *two* mechanisms
 where the current engine has *four*:
 
-1. **Blank rows** = invalidation *only*. `invalidate()` inserts a blank
-   row with the `lane_key` + `ts`. That's it. Not a claim token, not a
-   soft lock — purely "this lane is pending, recompute it." The latest
-   row being blank is the invalidation state; the next run sees it and
-   recomputes.
+1. **Arrow file** = pure data. Filled rows only — every row is a
+   successful computation with a non-null `content_hash` and
+   `output_path`. No tombstones, no liveness, no `is_live`. The file is
+   a content store: "given this address, what was the output?"
 
-2. **`input_hash_usages`** = claim + crash + GC. The scheduler consults it
-   before claiming; the engine updates it on commit; retention reads it
-   for keep-set. Three jobs, one table, no Arrow involvement.
+2. **`input_hash_usages`** = liveness + claim + crash + GC. One table,
+   four jobs, all keyed on `address` (the comprehensive cache identity):
+   - **Reuse gate**: `fulfilled=True` → reuse (read content from Arrow);
+     `fulfilled=False` → recompute.
+   - **Soft lock**: the scheduler checks before claiming; an in-flight
+     `fulfilled=False` row means another worker is on it.
+   - **Crash detection**: `fulfilled=False` on a terminal run = crashed
+     mid-execution; the next run retries.
+   - **Invalidation tombstone**: `invalidate()` flips `fulfilled=False`;
+     the Arrow row stays as history but is not reused.
+   - **GC handle**: `last_run_id` joined to `runs.started_at` for
+     retention recency.
 
-Crash semantics — pin these explicitly, since the simplification leans on
-them:
+Crash semantics:
 - A worker that **succeeds** writes a filled Arrow row + flips
-  `fulfilled=1` on the claim row.
-- A worker that **crashes** writes neither. The claim row remains with
-  `fulfilled=0` and the Arrow file has no row for this `lane_key`. The
-  next run sees the unfulfilled claim and a missing latest row — they
-  agree: "pending, retry."
-- A worker that **fails terminally** (exhausts retries) writes the claim
-  row with `fulfilled=1`? No — the run reached a terminal "failed" state
-  and the `run_events` has the per-attempt tracebacks; the claim row
-  stays `fulfilled=0` and the next run retries. This matches today: a
-  failed lane is not cached; `run_events.step_failed` is the record.
-  `fulfilled=1` is reserved for "a filled Arrow row exists."
+  `fulfilled=True` on the usage row.
+- A worker that **crashes** writes neither. The usage row stays
+  `fulfilled=False` → the next run sees "recompute."
+- A worker that **fails terminally** (exhausts retries): `fulfilled`
+  stays `False`; `run_events.step_failed` is the record; the next run
+  retries. `fulfilled=True` is reserved for "a filled Arrow row exists."
+- **Invalidation** flips `fulfilled=False` and updates `last_run_id` to
+  the invalidation run. No Arrow write — the old row is history.
 
 ## Reduces and dedup
 
@@ -227,6 +228,11 @@ selection — is already independent of it.
 
 ## What's not in scope (do not build)
 
+- **Bloom filter for `input_hash_usages` existence checks.** A bloom
+  filter in front of the table would let cold-cache lanes (the majority
+  in a large pipeline) skip the SQLite lookup entirely — "definitely not
+  present" → execute without consulting the table. Build when the
+  lookup cost is profiled as a real bottleneck, not before.
 - **Stream batching / per-batch durability** (the §10 Arrow IPC stream
   mode). Today each lane commits individually; the new model writes one
   Arrow IPC file per step. Stream batching (flush N-lane batches to disk

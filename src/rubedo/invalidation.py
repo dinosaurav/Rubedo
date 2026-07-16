@@ -7,6 +7,7 @@ from .models import (
     Run,
     Materialization,
     MaterializationLifecycle,
+    InputHashUsage,
     RunCoordinateStatus,
     RunEvent,
 )
@@ -106,17 +107,38 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                         created_at=utcnow_iso(),
                     )
                 )
-                # Parallel write: a blank tombstone row in lane_store.
-                # The lane_key is the coordinate (today's mat rows carry
-                # the lane identity in their address; once materializations
-                # is deleted the lane_key is the only identity).  See
-                # notes/arrow-storage.md §Phase 2d.
-                lane_store.append_blank(
-                    pipeline_id=str(mat.pipeline_id),
-                    step_name=str(mat.step_name),
-                    lane_key=_mat_lane_key(session, int(mat.id)),
-                    run_id=run_id,
+                # Parallel write: flip fulfilled=False on the
+                # input_hash_usages row for this address.  This is the
+                # tombstone — the Arrow row stays as history, but the
+                # next run sees fulfilled=False and recomputes.  See
+                # notes/arrow-storage.md (tombstones in input_hash_usages,
+                # not blank rows in Arrow).
+                lane_key = _mat_lane_key(session, int(mat.id))
+                usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(
+                        address=str(mat.output_address),
+                        step_name=str(mat.step_name),
+                        pipeline_id=str(mat.pipeline_id),
+                    )
+                    .first()
                 )
+                if usage:
+                    usage.fulfilled = False  # type: ignore
+                    usage.last_run_id = run_id  # type: ignore
+                    usage.claimed_at = utcnow_iso()  # type: ignore
+                else:
+                    session.add(
+                        InputHashUsage(
+                            address=str(mat.output_address),
+                            lane_key=lane_key,
+                            step_name=str(mat.step_name),
+                            pipeline_id=str(mat.pipeline_id),
+                            last_run_id=run_id,
+                            claimed_at=utcnow_iso(),
+                            fulfilled=False,
+                        )
+                    )
                 return True
 
             flipped_ids: list[int] = []
