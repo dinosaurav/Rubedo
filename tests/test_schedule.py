@@ -152,8 +152,11 @@ def _status_rows(run_id):
 
 
 def _mat_hashes():
+    import json
     return {
-        r.get("content_hash") for r in lane_store.all_filled_rows()
+        r.get("output") if isinstance(r.get("output"), str)
+        else json.dumps(r.get("output"), sort_keys=True, default=str)
+        for r in lane_store.all_filled_rows()
     }
 
 

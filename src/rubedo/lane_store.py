@@ -39,9 +39,8 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("address", "string", False),  # output_address: hash(step, version, input_hash[, params][, code])
     ("input_hash", "string", False),
     ("code_version", "string", True),  # step version string, for selection queries
-    ("content_hash", "string", True),  # nullable for blank tombstones
-    ("content_type", "string", True),
-    ("output_path", "string", True),
+    ("output", "dynamic", True),  # native Arrow type per-step, or string for mixed/spilled
+    ("content_type", "string", True),  # "json" for inline; "bytes"/"text"/"arrow-ipc:..." for spilled
     ("code_hash", "string", True),  # source hash at creation time, for drift detection
     ("ts", "timestamp[us]", False),
     ("run_id", "string", False),
@@ -66,10 +65,19 @@ def _make_row_id(pipeline_id: str, step_name: str, lane_key: str, ts) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _schema(pa):
-    """Build the pa.Schema for a per-step Arrow file."""
+def _schema(pa, output_type=None):
+    """Build the pa.Schema for a per-step Arrow file.
+
+    ``output_type`` overrides the ``output`` column's type — this is
+    dynamic per step file: a step returning dicts gets a ``struct<...>``
+    output column, a step returning ints gets ``int64``, etc.  Defaults
+    to ``string`` for the mixed/spilled case (inline JSON + ref strings)."""
     fields = []
     for name, type_str, nullable in _SCHEMA_FIELDS:
+        if name == "output":
+            t = output_type or pa.string()
+            fields.append(pa.field(name, t, nullable=True))
+            continue
         if type_str == "string":
             t = pa.string()
         elif type_str == "timestamp[us]":
@@ -142,9 +150,8 @@ def append_filled(
     lane_key: str,
     address: str,
     input_hash: str,
-    content_hash: str,
+    output: str,
     content_type: str,
-    output_path: str,
     run_id: str,
     filtered: bool = False,
     code_hash: Optional[str] = None,
@@ -155,16 +162,18 @@ def append_filled(
     """Append a filled row (a successful computation) to the step's buffer.
 
     ``address`` is the comprehensive cache identity = hash(step, version,
-    input_hash[, params][, code]) — what today's SQLite reuse check keys on.
-    Carrying it as a column lets planning ask "is there a filled row with
-    *this* address for *this* lane_key?" — a port of the current
-    `Materialization.output_address IN (...) AND is_live` lookup, just on
-    a different substrate.
+    input_hash[, params][, code]).
+
+    ``output`` is either an inline JSON string (small values — no object
+    store I/O) or a ref string ``"objects:<hash>"`` pointing to the
+    serialized value bytes in the content-addressed object store (large
+    values, bytes, DataFrames).  ``content_type`` tells the reader how to
+    deserialize: ``"json"`` for inline, ``"bytes"``/``"text"``/
+    ``"arrow-ipc:<kind>"`` for spilled.
 
     ``index_values`` is the @step(index=[...]) field→values dict, stored
     as a map<string, list<string>> column — the sole source of truth for
-    indexed field values (the ``materialization_index`` SQLite table is
-    deleted)."""
+    indexed field values."""
     from datetime import datetime, timezone
 
     if ts is None:
@@ -176,9 +185,8 @@ def append_filled(
             "address": address,
             "input_hash": input_hash,
             "code_version": code_version,
-            "content_hash": content_hash,
+            "output": output,
             "content_type": content_type,
-            "output_path": output_path,
             "code_hash": code_hash,
             "ts": ts,
             "run_id": run_id,
@@ -209,18 +217,91 @@ def _read_disk_table(pipeline_id: str, step_name: str):
         return None
 
 
+def _infer_output_type(rows: List[Dict[str, Any]]):
+    """Determine the Arrow type for the ``output`` column from the buffer's
+    rows.  Returns a pa.DataType, or ``None`` to use ``string`` (the
+    fallback for mixed inline/spill or all-null).
+
+    The rule: if every non-null output value is the same Python type and
+    none are ref strings (spilled), infer the native Arrow type (struct
+    for dicts, int64 for ints, etc.).  If any value is a ref string or
+    types are mixed, fall back to ``string`` — inline values will be
+    JSON-serialized, ref strings pass through as-is.
+    """
+
+    native_type = None
+    has_refs = False
+
+    for row in rows:
+        output = row.get("output")
+        if output is None:
+            continue
+        if isinstance(output, str) and output.startswith("objects:"):
+            has_refs = True
+            continue
+        # Try to infer the Arrow type from this value
+        try:
+            arr = pa.array([output])
+            t = arr.type
+        except (pa.lib.ArrowInvalid, TypeError):
+            return pa.string()  # can't represent natively → string
+        if native_type is None:
+            native_type = t
+        elif native_type != t:
+            return pa.string()  # mixed types → string
+
+    if has_refs:
+        return pa.string()  # mixed inline + spill → string
+    return native_type  # may be None (all null) → caller uses string
+
+
+def _stringify_outputs(rows: List[Dict[str, Any]]) -> None:
+    """Convert all ``output`` values in the buffer rows to strings (in
+    place).  Inline values are JSON-serialized; ref strings pass through;
+    None stays None.  Used when the output column must be ``string``
+    (mixed inline/spill or unrepresentable types)."""
+    import json
+
+    for row in rows:
+        output = row.get("output")
+        if output is None:
+            continue
+        if isinstance(output, str):
+            continue  # already a string (ref or plain string return)
+        row["output"] = json.dumps(
+            output, sort_keys=True, separators=(",", ":")
+        )
+
+
 def _buffer_table(pipeline_id: str, step_name: str):
-    """Convert the in-memory buffer to a pa.Table, or None if empty."""
+    """Convert the in-memory buffer to a pa.Table, or None if empty.
+
+    The ``output`` column's Arrow type is inferred from the buffer's
+    values: a step returning dicts gets a ``struct<...>`` column, a step
+    returning ints gets ``int64``, etc.  If the buffer has mixed types or
+    spilled ref strings, the column falls back to ``string`` (inline
+    values JSON-serialized, ref strings as-is)."""
     rows = _buffer(pipeline_id, step_name)
     if not rows:
         return None
-    
-    return pa.Table.from_pylist(rows, schema=_schema(pa))
+
+    output_type = _infer_output_type(rows)
+    if output_type is None or output_type == pa.string():
+        _stringify_outputs(rows)
+        output_type = pa.string()
+
+    schema = _schema(pa, output_type)
+    return pa.Table.from_pylist(rows, schema=schema)
 
 
 def _combined_table(pipeline_id: str, step_name: str):
-    """Concatenate on-disk history + in-memory buffer, or None if both empty."""
-    
+    """Concatenate on-disk history + in-memory buffer, or None if both
+    empty.  If the on-disk and buffer ``output`` column types differ
+    (e.g. disk has ``struct`` from a previous run, buffer has ``string``
+    because a value spilled this run), both are converted to ``string``
+    before concatenation."""
+    import json
+
     disk = _read_disk_table(pipeline_id, step_name)
     buf = _buffer_table(pipeline_id, step_name)
     if disk is None and buf is None:
@@ -229,8 +310,37 @@ def _combined_table(pipeline_id: str, step_name: str):
         return buf
     if buf is None:
         return disk
-    # Ensure schema compatibility (disk file may predate a schema change —
-    # v1 assumes they match; the dev-stage reset covers migrations).
+
+    disk_output_type = disk.schema.field("output").type
+    buf_output_type = buf.schema.field("output").type
+
+    if disk_output_type != buf_output_type:
+        # Convert both to string — inline values JSON-serialized, ref
+        # strings and native scalars stringified.
+        def _to_string_table(table):
+            col = table.column("output")
+            if col.type == pa.string():
+                return table
+            # Convert each value to a canonical string
+            pyvals = col.to_pylist()
+            str_vals: List[Optional[str]] = []
+            for v in pyvals:
+                if v is None:
+                    str_vals.append(None)
+                elif isinstance(v, str):
+                    str_vals.append(v)
+                else:
+                    str_vals.append(
+                        json.dumps(v, sort_keys=True, separators=(",", ":"))
+                    )
+            new_col = pa.array(str_vals, type=pa.string())
+            return table.set_column(
+                table.schema.get_field_index("output"), "output", new_col
+            )
+
+        disk = _to_string_table(disk)
+        buf = _to_string_table(buf)
+
     return pa.concat_tables([disk, buf], promote_options="default")
 
 
@@ -273,7 +383,7 @@ def find_latest_filled(
     narrow uses where the caller knows the identity is stable.
     """
     rows = _rows_for_lane(pipeline_id, step_name, lane_key)
-    candidates = [r for r in rows if r["content_hash"] is not None]
+    candidates = [r for r in rows if r["output"] is not None]
     if input_hash is not None:
         candidates = [r for r in candidates if r["input_hash"] == input_hash]
     return _latest_by_ts(candidates)
@@ -323,7 +433,7 @@ def get_all_lane_keys(
         return []
     if filled_only:
 
-        table = table.filter(pc.is_valid(table.column("content_hash")))
+        table = table.filter(pc.is_valid(table.column("output")))
     return table.column("lane_key").to_pylist()
 
 
@@ -339,7 +449,7 @@ def get_filled_rows(
     if table is None or table.num_rows == 0:
         return []
 
-    table = table.filter(pc.is_valid(table.column("content_hash")))
+    table = table.filter(pc.is_valid(table.column("output")))
     if table.num_rows == 0:
         return []
     lane_keys = table.column("lane_key").to_pylist()
@@ -617,13 +727,25 @@ def flush_step(pipeline_id: str, step_name: str):
     if not rows:
         return
     init_tables()
-    
-    buf_table = pa.Table.from_pylist(rows, schema=_schema(pa))
+
+    buf_table = _buffer_table(pipeline_id, step_name)
+    if buf_table is None:
+        return
     disk_table = _read_disk_table(pipeline_id, step_name)
+
+    # Handle output type mismatch between disk and buffer
     if disk_table is not None:
-        combined = pa.concat_tables(
-            [disk_table, buf_table], promote_options="default"
-        )
+        disk_output_type = disk_table.schema.field("output").type
+        buf_output_type = buf_table.schema.field("output").type
+        if disk_output_type != buf_output_type:
+            # Convert both to string — reuse _combined_table's logic
+            combined = _combined_table(pipeline_id, step_name)
+            if combined is None:
+                return
+        else:
+            combined = pa.concat_tables(
+                [disk_table, buf_table], promote_options="default"
+            )
     else:
         combined = buf_table
     path = _get_step_file(pipeline_id, step_name)

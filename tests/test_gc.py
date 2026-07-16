@@ -95,13 +95,14 @@ def _shout(folder=TEST_FOLDER):
     # generator — retention/gc keys off
     # "which of the pipeline's last N runs referenced this materialization",
     # not off address stability, so a plain content-addressed expand root
-    # (no separate scan step) is enough here.
+    # (no separate scan step) is enough here. Yields bytes so outputs spill
+    # to the content-addressed object store (small strings would be inline).
     @step
     def shout():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
             if os.path.isfile(path):
-                yield open(path).read().upper()
+                yield open(path).read().upper().encode("utf-8")
 
     return shout
 
@@ -112,7 +113,9 @@ def _norm_chain(folder=TEST_FOLDER):
     the address. Same as test_du.py's shared-object case: two inputs that
     differ before the transform ("SHARED" vs "SHARED ") but normalize to
     the same bytes get different addresses sharing one physical object,
-    exactly the "same object, different address" case under test."""
+    exactly the "same object, different address" case under test. norm
+    returns bytes so it spills to the object store (scan's small dict is
+    inline JSON)."""
 
     @step
     def scan():
@@ -123,7 +126,7 @@ def _norm_chain(folder=TEST_FOLDER):
 
     @step
     def norm(scan):
-        return scan["text"].strip()
+        return scan["text"].strip().encode("utf-8")
 
     return [scan, norm]
 
@@ -135,6 +138,15 @@ def make_pipe(retention=None, folder=TEST_FOLDER, pid="gcp"):
     )
 
 
+def _hash_of(row):
+    """Parse the content hash from a row's `output` ref string, or None for
+    inline (native Arrow) values."""
+    out = row.get("output")
+    if isinstance(out, str) and out.startswith("objects:"):
+        return out[len("objects:"):]
+    return None
+
+
 def live_hashes():
     with get_session() as s:
         live_addrs = {
@@ -143,9 +155,10 @@ def live_hashes():
         }
         addr_index = lane_store.address_row_index()
         return {
-            row.get("content_hash")
+            h
             for addr in live_addrs
             if (row := addr_index.get(addr))
+            and (h := _hash_of(row)) is not None
         }
 
 
@@ -178,7 +191,7 @@ def test_retention_demotes_only_the_oldest_generation():
 
     with get_session() as s:
         rows = lane_store.all_filled_rows()
-        mats = {r.get("content_hash", "")[:10]: r for r in rows}
+        mats = {_hash_of(r): r for r in rows if _hash_of(r) is not None}
         assert len(mats) == 3
         live_addrs = {
             str(u.address) for u in s.query(InputHashUsage)
@@ -198,15 +211,15 @@ def test_retention_demotes_only_the_oldest_generation():
         # Freed object deleted from disk and logged in object_reclamations.
         recl = s.query(ObjectReclamation).all()
         assert len(recl) == 1
-        assert recl[0].content_hash == gen1.get("content_hash")
+        assert recl[0].content_hash == _hash_of(gen1)
         assert recl[0].trigger == "auto_prune"
-        assert not os.path.exists(_get_object_path(gen1.get("content_hash")))
+        assert not os.path.exists(_get_object_path(_hash_of(gen1)))
 
     # The two kept objects survive on disk.
     for h in live_hashes():
         assert os.path.exists(_get_object_path(h))
     # Latest output byte-identical (coordinates are row-<hash>, not "a.txt").
-    assert list(s3.output_for("shout").values()) == ["GEN3"]
+    assert list(s3.output_for("shout").values()) == [b"GEN3"]
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +249,14 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
             shared_hash = None
             for r in lane_store.all_filled_rows():
                 if r.get("pipeline_id") == "pb":
-                    shared_hash = r.get("content_hash")
+                    h = _hash_of(r)
+                    if h is not None:
+                        shared_hash = h
             assert shared_hash is not None
             # gen1 (pipeline A, "SHARED") was demoted...
             a_shared = [
                 r for r in lane_store.all_filled_rows()
-                if r.get("pipeline_id") == "gcp" and r.get("content_hash") == shared_hash
+                if r.get("pipeline_id") == "gcp" and _hash_of(r) == shared_hash
             ]
             assert a_shared
             ihu = s.query(InputHashUsage).filter_by(address=a_shared[0]["address"]).first()
@@ -282,7 +297,7 @@ def test_pruned_lane_reappears_and_lazily_heals():
         gen1 = [
             r for r in lane_store.all_filled_rows() if r.get("address") not in live_addrs
         ][0]
-        gen1_hash = gen1.get("content_hash")
+        gen1_hash = _hash_of(gen1)
         gen1_addr = gen1["address"]
     assert not os.path.exists(_get_object_path(gen1_hash))
 
@@ -354,14 +369,15 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     write("a.txt", "CCCCCC")  # -> 6 bytes (latest terminal run)
     make_pipe().run(workers=1)
 
-    # Map each generation's output text -> content hash while all are present.
+    # Map each generation's output bytes -> content hash while all are present.
     from rubedo.store import read_materialization_output
     from rubedo.planning import _ArrowRowRef
 
     with get_session() as s:
         hash_of = {
-            read_materialization_output(_ArrowRowRef(r)): r.get("content_hash")
+            read_materialization_output(_ArrowRowRef(r)): _hash_of(r)
             for r in lane_store.all_filled_rows()
+            if _hash_of(r) is not None
         }
 
     # Total = 15 bytes; budget 11 forces dropping the oldest 4-byte object.
@@ -392,17 +408,17 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
         addr_index = lane_store.address_row_index()
         demoted_row = next((addr_index[a] for a in unfulfilled_addrs), None)
         assert demoted_row is not None
-        assert demoted_row.get("content_hash") == hash_of["AAAA"]  # oldest
+        assert _hash_of(demoted_row) == hash_of[b"AAAA"]  # oldest
         # Latest terminal run's output (CCCCCC) is never a candidate.
         live = {
-            addr_index[a].get("content_hash")
+            _hash_of(addr_index[a])
             for a in {
                 str(u.address) for u in s.query(InputHashUsage)
                 .filter(InputHashUsage.fulfilled.is_(True)).all()
             }
             if addr_index.get(a)
         }
-        assert hash_of["CCCCCC"] in live
+        assert hash_of[b"CCCCCC"] in live
     assert not os.path.exists(_get_object_path(dry_reclaimed[0][0]))
 
 

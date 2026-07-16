@@ -41,34 +41,27 @@ def my_step(params):
 
 
 def test_staging_cleanup_on_error():
-    # We patch _commit_materialization to raise an unexpected Exception.
+    # We patch serialize_output to raise an unexpected Exception.
     # This will trigger the exception handler in _commit_execution_result,
     # and the finally block should clean up staging.
 
     pipe = pipeline(name="p1", steps=[my_step])
 
-    
-    # We intercept stage_and_commit just to mock a failure during the DB commit phase.
-    # Wait, the easiest way to test staging cleanup is to fail DURING stage_and_commit
-    # right after writing the staging file, OR fail _commit_materialization.
-    # If we fail _commit_materialization, stage_and_commit has already moved it.
-    # Let's fail stage_and_commit halfway!
-    
-    def mock_stage_and_commit(run_id, coordinate, result):
+    def mock_serialize_output(run_id, coordinate, result):
         # We manually write a file to staging to prove it gets cleaned up
         staging_path = store._get_staging_path(run_id, coordinate, "mockhash")
         os.makedirs(os.path.dirname(staging_path), exist_ok=True)
         with open(staging_path, "w") as f:
             f.write("staged_but_failed")
-            
-        # Then we raise an error!
-        raise ValueError("Simulated failure during stage_and_commit")
 
-    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+        # Then we raise an error!
+        raise ValueError("Simulated failure during serialize_output")
+
+    with patch("rubedo.ledger.serialize_output", side_effect=mock_serialize_output):
         summary = pipe.run(params={"content": "A"})
-        
+
     assert summary.failed_count == 1
-    
+
     # Assert staging directory for the run is gone!
     run_staging = os.path.join(store.STAGING_DIR, summary.run_id)
     assert not os.path.exists(run_staging)

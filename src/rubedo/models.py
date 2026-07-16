@@ -292,7 +292,7 @@ class RunSummary(BaseModel):
         Returns a dict mapping coordinates to their materialization payload.
         """
         from .db import get_session
-        from .store import read_materialization_output
+        from .store import read_output
         with get_session() as session:
             statuses = (
                 session.query(RunCoordinateStatus)
@@ -302,11 +302,11 @@ class RunSummary(BaseModel):
             result: dict[str, Any] = {}
             for s in statuses:
                 if s.status in ("created", "filtered", "reused") and s.output_address:
-                    from .store import read_materialization_output
-                    from .planning import _ArrowRowRef
                     from . import lane_store
 
                     row = lane_store.address_row_index().get(str(s.output_address))
                     if row:
-                        result[str(s.coordinate)] = read_materialization_output(_ArrowRowRef(row))
+                        result[str(s.coordinate)] = read_output(
+                            row.get("output"), row.get("content_type")
+                        )
             return result

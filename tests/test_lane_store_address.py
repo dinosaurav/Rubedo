@@ -70,11 +70,11 @@ ADDR_PARAMS_B = "addr_params_b"
 
 
 def test_address_match_returns_filled():
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json",
                   RUN1, ts=_ts(minutes_ago=10))
     row = find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)
     assert row is not None
-    assert row["content_hash"] == "ch_v1"
+    assert row["output"] == "ch_v1"
     assert row["address"] == ADDR_V1
 
 
@@ -82,7 +82,7 @@ def test_different_address_is_a_miss():
     """The same lane but computed under a different address (e.g. version
     bumped between runs) reads as a miss — exactly the SQLite semantics
     `output_address=X, is_live=True` returns no row when only Y exists."""
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json",
                   RUN1, ts=_ts(minutes_ago=10))
     assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V2) is None
 
@@ -93,14 +93,14 @@ def test_version_bump_supersedes_not_overwrites():
     file — the question of which is 'live' is ``input_hash_usages.fulfilled``'s
     job, not the Arrow file's.  ``find_latest_filled_by_address`` retrieves
     whichever row matches the address it's asked for."""
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json",
                   RUN1, ts=_ts(minutes_ago=10))
-    append_filled(PIPE, STEP, "@root#0", ADDR_V2, "ih_a", "ch_v2", "json", "obj/2",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V2, "ih_a", "ch_v2", "json",
                   RUN2, ts=_ts(minutes_ago=0))
 
     # Both addresses find their own row — the Arrow file is pure data
-    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)["content_hash"] == "ch_v1"
-    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V2)["content_hash"] == "ch_v2"
+    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)["output"] == "ch_v1"
+    assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V2)["output"] == "ch_v2"
 
     # The *planning phase* decides which to reuse by checking
     # input_hash_usages.fulfilled — not by asking the Arrow file.  An
@@ -116,16 +116,16 @@ def test_version_bump_supersedes_not_overwrites():
 def test_multiple_generations_latest_by_ts_wins():
     """When the same address is recomputed (e.g. stale_after refresh),
     the latest by ts is returned by find_latest_filled_by_address."""
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json", "obj/1",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v1", "json",
                   RUN1, ts=_ts(minutes_ago=10))
-    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v2", "json", "obj/2",
+    append_filled(PIPE, STEP, "@root#0", ADDR_V1, "ih_a", "ch_v2", "json",
                   RUN2, ts=_ts(minutes_ago=0))
     row = find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_V1)
     assert row is not None
-    assert row["content_hash"] == "ch_v2"
+    assert row["output"] == "ch_v2"
     assert row["run_id"] == RUN2
     assert row is not None
-    assert row["content_hash"] == "ch_v2"
+    assert row["output"] == "ch_v2"
 
 
 def test_params_change_is_a_miss():
@@ -133,7 +133,7 @@ def test_params_change_is_a_miss():
     different address -> miss.  This is what makes 'turning a knob
     recomputes exactly the steps that read it' work."""
     append_filled(PIPE, STEP, "@root#0", ADDR_PARAMS_A, "ih_a", "ch_pa", "json",
-                  "obj/pa", RUN1, ts=_ts(minutes_ago=10))
+                  RUN1, ts=_ts(minutes_ago=10))
     assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_PARAMS_A) is not None
     assert find_latest_filled_by_address(PIPE, STEP, "@root#0", ADDR_PARAMS_B) is None
 
@@ -210,7 +210,7 @@ def test_lane_store_address_matches_compute_output_address():
         "addr-e2e", "producer", rows[0]["lane_key"], addr
     )
     assert found is not None
-    assert found["content_hash"] == rows[0]["content_hash"]
+    assert found["output"] == rows[0]["output"]
 
     # And a wrong address is a miss
     assert (

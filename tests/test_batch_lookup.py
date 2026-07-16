@@ -76,19 +76,19 @@ def test_batch_lookup_returns_fulfilled_rows():
         _setup_usage(s, "addr_b", fulfilled=True)
         s.commit()
 
-    append_filled(PIPE, STEP, "lane_a", "addr_a", "ih_a", "ch_a", "json", "obj/a",
+    append_filled(PIPE, STEP, "lane_a", "addr_a", "ih_a", "ch_a", "json",
                   RUN1, code_hash="code_a", ts=_ts(minutes_ago=5))
-    append_filled(PIPE, STEP, "lane_b", "addr_b", "ih_b", "ch_b", "json", "obj/b",
+    append_filled(PIPE, STEP, "lane_b", "addr_b", "ih_b", "ch_b", "json",
                   RUN1, code_hash="code_b", ts=_ts(minutes_ago=3))
 
     with get_session() as s:
         result = batch_lookup_by_address(PIPE, STEP, {"addr_a", "addr_b"}, s)
 
     assert "addr_a" in result
-    assert result["addr_a"]["content_hash"] == "ch_a"
+    assert result["addr_a"]["output"] == "ch_a"
     assert result["addr_a"]["code_hash"] == "code_a"
     assert "addr_b" in result
-    assert result["addr_b"]["content_hash"] == "ch_b"
+    assert result["addr_b"]["output"] == "ch_b"
 
 
 def test_batch_lookup_skips_unfulfilled():
@@ -98,9 +98,9 @@ def test_batch_lookup_skips_unfulfilled():
         s.commit()
 
     append_filled(PIPE, STEP, "lane_f", "addr_fulfilled", "ih_f", "ch_f", "json",
-                  "obj/f", RUN1, ts=_ts(minutes_ago=5))
+                  RUN1, ts=_ts(minutes_ago=5))
     append_filled(PIPE, STEP, "lane_u", "addr_unfulfilled", "ih_u", "ch_u", "json",
-                  "obj/u", RUN1, ts=_ts(minutes_ago=3))
+                  RUN1, ts=_ts(minutes_ago=3))
 
     with get_session() as s:
         result = batch_lookup_by_address(
@@ -133,7 +133,7 @@ def test_batch_lookup_missing_address():
         _setup_usage(s, "addr_exists", fulfilled=True)
         s.commit()
     append_filled(PIPE, STEP, "lane_e", "addr_exists", "ih_e", "ch_e", "json",
-                  "obj/e", RUN1, ts=_ts(minutes_ago=5))
+                  RUN1, ts=_ts(minutes_ago=5))
 
     with get_session() as s:
         result = batch_lookup_by_address(

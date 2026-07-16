@@ -78,19 +78,20 @@ def make_shout_pipeline():
     # Single-step expand root that reads and transforms in the same
     # generator — this keeps the step's own output content-address exactly
     # hand-countable (no extra scan-step materialization inflating the byte
-    # totals below).
+    # totals below). Yields bytes so outputs spill to the content-addressed
+    # object store (small strings would be inline JSON, not on disk).
     @step
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
-                yield open(path).read().upper()
+                yield open(path).read().upper().encode("utf-8")
 
     return pipeline(name="du", steps=[shout])
 
 
 def test_sizes_and_counts_for_populated_store():
-    # Outputs are text-serialized: "ALPHA" = 5 bytes, "HI" = 2 bytes.
+    # Outputs are bytes-spilled: b"ALPHA" = 5 bytes, b"HI" = 2 bytes.
     create_file("a.txt", "alpha")
     create_file("b.txt", "hi")
     summary = make_shout_pipeline().run(workers=1)
@@ -164,7 +165,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
 
     @step
     def norm(scan):
-        return scan["text"].strip()
+        return scan["text"].strip().encode("utf-8")
 
     summary = pipeline(name="du", steps=[scan, norm]).run(workers=1)
     assert summary.failed_count == 0
@@ -172,24 +173,28 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
 
     report = storage_report()
     assert report.total_materializations == 4  # 2 scan + 2 norm
-    # norm's two materializations dedupe to one physical object; scan's two
-    # (different "path", so different content, JSON-serialized) add two
-    # more distinct objects.
-    assert report.total_objects == 3
+    # scan yields small dicts -> inline JSON (no object-store bytes); norm's
+    # two materializations dedupe to one physical bytes object.
+    assert report.total_objects == 1
     (scan_usage,) = [
         s for s in report.pipelines[0].steps if s.step_name == "scan"
     ]
     (norm_usage,) = [
         s for s in report.pipelines[0].steps if s.step_name == "norm"
     ]
-    assert norm_usage.objects == 1  # deduped: one shared "same" object
+    assert scan_usage.objects == 0  # inline dicts: no object-store entries
+    assert norm_usage.objects == 1  # deduped: one shared b"same" object
     assert norm_usage.bytes == len("same")
     assert report.total_bytes == scan_usage.bytes + norm_usage.bytes
 
     with get_session():
         norm_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "norm"]
         addresses = {r.get("address") for r in norm_rows}
-        hashes = {r.get("content_hash") for r in norm_rows}
+        hashes = {
+            r.get("output", "")[len("objects:"):]
+            for r in norm_rows
+            if r.get("output", "").startswith("objects:")
+        }
     assert len(addresses) == 2  # distinct addresses...
     assert len(hashes) == 1  # ...sharing one object
 
@@ -241,7 +246,9 @@ def test_missing_object_file_is_reported_not_crashed():
     with get_session():
         rows = lane_store.all_filled_rows()
         assert len(rows) == 1
-        content_hash = str(rows[0].get("content_hash"))
+        out = rows[0].get("output", "")
+        assert out.startswith("objects:")
+        content_hash = out[len("objects:"):]
     os.remove(_get_object_path(content_hash))
 
     report = storage_report()  # must not raise
@@ -292,7 +299,9 @@ def test_reclaimed_object_reported_separately_from_missing():
         }
     idx = lane_store.address_row_index()
     live_row = next(idx[a] for a in fulfilled_addrs if a in idx)
-    os.remove(_get_object_path(str(live_row.get("content_hash"))))
+    live_out = live_row.get("output", "")
+    assert live_out.startswith("objects:")
+    os.remove(_get_object_path(live_out[len("objects:"):]))
     mixed = storage_report()
     assert mixed.missing_objects == 1
     assert mixed.reclaimed_objects == len(done.reclaimed)

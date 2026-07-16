@@ -26,7 +26,7 @@ from .models import (
 )
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
-from .store import stage_and_commit
+from .store import serialize_output
 from . import lane_store
 from .util import utcnow_iso
 
@@ -246,6 +246,39 @@ def _record_planned(
                     )
 
 
+def _outputs_equal(existing: Any, new: Any) -> bool:
+    """Compare two output values for the mat_action reuse check.  Handles
+    the case where one is a native Arrow value (dict from struct, int
+    from int64) and the other is a JSON string (from a string column
+    fallback), or both are the same type."""
+    import json
+
+    if existing is None or new is None:
+        return existing is new
+    if type(existing) is type(new):
+        return existing == new
+    def _canon(v):
+        if isinstance(v, str):
+            return v
+        return json.dumps(v, sort_keys=True, separators=(",", ":"))
+    return _canon(existing) == _canon(new)
+
+
+def _identity_of(output_value: Any) -> str:
+    """Compute a content identity hash from an output value (for
+    downstream ``input_hash`` computation).  Same value → same identity →
+    downstream reuses, regardless of inline (native Arrow) vs spilled
+    (ref string)."""
+    from .hashing import hash_bytes
+    import json
+
+    if isinstance(output_value, str):
+        return hash_bytes(output_value.encode("utf-8"))
+    return hash_bytes(
+        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
 def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
     """Extract declared index fields from the output value into a
     ``{field_path: [stringified_values]}`` dict for the Arrow
@@ -347,22 +380,18 @@ def _commit_execution_result(
 
         try:
             # A step declining the coordinate is a cacheable decision: it is
-            # committed like any output (a marker object with filtered=True)
+            # committed like any output (a marker dict with filtered=True)
             # so re-runs reuse the verdict instead of re-executing the step.
             is_filtered = isinstance(result, Filtered)
             if is_filtered:
-                json.dumps({"reason": result.reason})
                 result = {"__filtered__": True, "reason": result.reason}
-            else:
-                if isinstance(result, ProcessResult) and result.metadata:
-                    pass  # metadata_json was on Materialization, now in RCS
 
-            final_path, output_content_hash, content_type = stage_and_commit(
+            output_string, content_type = serialize_output(
                 ctx.run_id, decision.coordinate, result
             )
 
             # Determine mat_action: if the address was already fulfilled
-            # (live) and the existing Arrow row has the same content_hash,
+            # (live) and the existing Arrow row has the same output string,
             # the step re-ran but produced identical bytes → "reused".
             # If the address was NOT fulfilled (invalidated/missing), the
             # step had to recompute → "created" even if bytes are identical.
@@ -375,7 +404,9 @@ def _commit_execution_result(
             )
             if existing_usage and existing_usage.fulfilled:
                 existing_row = lane_store.address_row_index().get(str(decision.output_address))
-                if existing_row and existing_row.get("content_hash") == output_content_hash:
+                if existing_row and _outputs_equal(
+                    existing_row.get("output"), output_string
+                ):
                     mat_action = "reused" if not decision.stale else "refreshed"
 
             # Write to the lane_store (Arrow) — only for new/superseded/
@@ -390,9 +421,8 @@ def _commit_execution_result(
                     lane_key=decision.coordinate,
                     address=str(decision.output_address),
                     input_hash=str(decision.input_hash),
-                    content_hash=output_content_hash,
+                    output=output_string,
                     content_type=content_type,
-                    output_path=final_path,
                     run_id=ctx.run_id,
                     filtered=is_filtered,
                     code_hash=step.code_hash,
@@ -502,10 +532,11 @@ def _commit_execution_result(
             ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
                 0,
                 str(decision.output_address),
-                output_content_hash,
+                _identity_of(output_string),
                 content_type,
                 filtered=is_filtered,
                 index_values=idx_values,
+                output=output_string,
             )
         except Exception as e:
             session.rollback()

@@ -187,7 +187,7 @@ def get_materializations(
                 "code_version": r.get("code_version") or "",
                 "input_hash": r.get("input_hash", ""),
                 "output_address": r.get("address", ""),
-                "output_content_hash": r.get("content_hash") or "",
+                "output_content_hash": _hash_of_output(r.get("output", "")),
                 "content_type": r.get("content_type"),
                 "metadata_json": None,
                 "created_at": str(r.get("ts", "")),
@@ -407,37 +407,87 @@ def _resolve_arrow_row(output_address: str) -> Optional[Dict[str, Any]]:
     return lane_store.address_row_index().get(output_address)
 
 
+def _hash_of_output(output_value) -> str:
+    """Compute a display hash from the output column value (native Arrow
+    value or string)."""
+    import json
+    from .hashing import hash_bytes
+    if output_value is None:
+        return ""
+    if isinstance(output_value, str):
+        return hash_bytes(output_value.encode("utf-8"))
+    return hash_bytes(
+        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _resolve_object_path(arrow_row: Dict[str, Any]) -> Optional[str]:
+    """If the output is a spilled ref string, return the object store path.
+    Returns None for inline values (no on-disk file)."""
+    output = arrow_row.get("output", "")
+    if isinstance(output, str) and output.startswith("objects:"):
+        from .store import _get_object_path
+        return _get_object_path(output[len("objects:"):])
+    return None
+
+
 @app.get("/api/objects/{output_address}", response_model=ObjectMetadataOut)
 def get_object_metadata(output_address: str):
     """Get metadata and a preview for a materialized object."""
     arrow_row = _resolve_arrow_row(output_address)
     if not arrow_row:
         raise HTTPException(404, "Object not found")
-    obj_path = os.path.abspath(arrow_row.get("output_path", ""))
 
-    if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object bytes not found in store")
+    output = arrow_row.get("output")
+    obj_path = _resolve_object_path(arrow_row)
 
-    size = os.path.getsize(obj_path)
-
-    # Try to preview first 4KB
-    preview_kind = "binary"
-    preview_text = None
-    preview_json = None
-
-    if size < 1024 * 1024 * 10:  # Only try to preview if < 10MB
-        try:
-            with open(obj_path, "r", encoding="utf-8") as f:
-                content = f.read(4096)
-                preview_text = content
-                preview_kind = "text"
-                try:
-                    preview_json = json.loads(content)
-                    preview_kind = "json"
-                except Exception:
-                    pass
-        except UnicodeDecodeError:
-            pass  # It's binary
+    # For inline values (native Arrow types or JSON strings), preview directly
+    if obj_path is None:
+        if isinstance(output, str):
+            size = len(output.encode("utf-8"))
+            preview_text = output[:4096]
+            preview_kind = "text"
+            try:
+                preview_json = json.loads(output)
+                preview_kind = "json"
+            except Exception:
+                preview_json = None
+        elif output is None:
+            size = 0
+            preview_kind = "binary"
+            preview_text = None
+            preview_json = None
+        else:
+            # Native Arrow value (dict, int, etc.)
+            import json as _json
+            json_str = _json.dumps(output, sort_keys=True, default=str)
+            size = len(json_str.encode("utf-8"))
+            preview_text = json_str[:4096]
+            preview_kind = "json"
+            try:
+                preview_json = _json.loads(json_str)
+            except Exception:
+                preview_json = None
+    else:
+        if not os.path.exists(obj_path):
+            raise HTTPException(404, "Object bytes not found in store")
+        size = os.path.getsize(obj_path)
+        preview_kind = "binary"
+        preview_text = None
+        preview_json = None
+        if size < 1024 * 1024 * 10:
+            try:
+                with open(obj_path, "r", encoding="utf-8") as f:
+                    content = f.read(4096)
+                    preview_text = content
+                    preview_kind = "text"
+                    try:
+                        preview_json = json.loads(content)
+                        preview_kind = "json"
+                    except Exception:
+                        pass
+            except UnicodeDecodeError:
+                pass
 
     with get_session() as session:
         is_live = _is_fulfilled(session, output_address)
@@ -461,7 +511,7 @@ def get_object_metadata(output_address: str):
             "is_live": is_live,
             "invalidated_at": invalidated_at,
             "invalidation_reason": invalidation_reason,
-            "output_content_hash": arrow_row.get("content_hash") or "",
+            "output_content_hash": _hash_of_output(arrow_row.get("output", "")),
             "content_type": arrow_row.get("content_type"),
             "index": [
                 {"field": field, "value": val}
@@ -483,17 +533,35 @@ def get_object_metadata(output_address: str):
 
 
 @app.get("/api/objects/{output_address}/download")
-def download_object(output_address: str) -> FileResponse:
+def download_object(output_address: str):
     """Download the raw bytes of a materialized object."""
+    from fastapi.responses import Response
+
     arrow_row = _resolve_arrow_row(output_address)
     if not arrow_row:
         raise HTTPException(404, "Object not found")
-    obj_path = os.path.abspath(arrow_row.get("output_path", ""))
 
-    if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object bytes not found in store")
+    output = arrow_row.get("output")
+    obj_path = _resolve_object_path(arrow_row)
 
-    return FileResponse(obj_path, filename=output_address)
+    if obj_path is not None:
+        if not os.path.exists(obj_path):
+            raise HTTPException(404, "Object bytes not found in store")
+        return FileResponse(obj_path, filename=output_address)
+    else:
+        # Inline value — serialize native Arrow value to JSON for download
+        import json as _json
+        if isinstance(output, str):
+            body = output
+        elif output is None:
+            body = ""
+        else:
+            body = _json.dumps(output, sort_keys=True, default=str)
+        return Response(
+            content=body.encode("utf-8"),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{output_address}"'},
+        )
 
 
 def _selection_from_payload(data: dict) -> Selection:
@@ -528,7 +596,7 @@ async def preview_selection(request: Request):
                     "step_name": row.get("step_name", ""),
                     "code_version": row.get("code_version") or "",
                     "output_address": addr,
-                    "output_content_hash": row.get("content_hash") or "",
+                    "output_content_hash": _hash_of_output(row.get("output", "")),
                     "metadata": {},
                     "invalidated": not _is_fulfilled(session, addr),
                 }

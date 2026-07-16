@@ -28,7 +28,7 @@ from .planning import (
     expand_child_identity,
 )
 from .spec import StepSpec
-from .store import read_materialization_output
+from .store import read_output
 
 
 class _RateLimiter:
@@ -154,7 +154,7 @@ def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     """
     if isinstance(ref, EphemeralRef):
         return _compute_ephemeral(ref, params, memo)
-    return read_materialization_output(ref)
+    return read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
 
 
 def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo):

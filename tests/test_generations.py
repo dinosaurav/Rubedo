@@ -1,6 +1,7 @@
 """Generations semantics: non-deterministic steps, supersede/resurrect, type fidelity."""
 
 import itertools
+import json as _json
 import os
 import shutil
 import uuid
@@ -13,7 +14,8 @@ from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus, InputHashUsage
 from rubedo import lane_store
-from rubedo.store import init_store
+from rubedo.hashing import hash_bytes
+from rubedo.store import init_store, _get_object_path
 
 TEST_FOLDER = ".test_generations_data"
 ENV_FOLDER = ".test_generations_env"
@@ -113,6 +115,15 @@ def _is_live(addr):
         return bool(u and u.fulfilled)
 
 
+def _object_path_for(row):
+    """Object-store path for a spilled row, else None (inline values live
+    in the Arrow row, not the object store)."""
+    out = row.get("output")
+    if isinstance(out, str) and out.startswith("objects:"):
+        return _get_object_path(out[len("objects:"):])
+    return None
+
+
 def test_invalidate_nondeterministic_creates_new_generation():
     pipe = make_nondeterministic_pipeline()
     path = create_file("f1.txt", "hello")
@@ -132,20 +143,29 @@ def test_invalidate_nondeterministic_creates_new_generation():
     assert gens[0].get("address") == gen1.get("address")
     # Both generations share the same address — the address is live
     # (the new generation is fulfilled).  The old generation is history
-    # (an old Arrow row with different content_hash).
-    assert gens[0].get("content_hash") != gens[1].get("content_hash")
+    # (an old Arrow row with a different output string).
+    assert gens[0].get("output") != gens[1].get("output")
     assert _is_live(gens[1].get("address"))
     assert gens[0].get("address") == gens[1].get("address")
-    assert gens[0].get("content_hash") != gens[1].get("content_hash")
+    assert gens[0].get("output") != gens[1].get("output")
 
-    # Old bytes survive on disk (immutability of committed outputs)
-    assert os.path.exists(gens[0].get("output_path"))
-    assert os.path.exists(gens[1].get("output_path"))
+    # Old output survives (immutability of committed outputs): spilled
+    # objects are on disk; inline values persist in the append-only Arrow row.
+    for g in (gens[0], gens[1]):
+        p = _object_path_for(g)
+        if p is not None:
+            assert os.path.exists(p)
+        else:
+            assert g.get("output") is not None
 
-    # Downstream saw the new content hash and recomputed
+    # Downstream saw the new output string and recomputed
     sums = get_mats("summarize")
     assert len(sums) == 2
-    assert sums[1].get("input_hash") == gens[1].get("content_hash")
+    from rubedo.hashing import hash_bytes
+    import json as _json
+    _gen1_output = gens[1].get("output")
+    _gen1_key = _gen1_output.encode("utf-8") if isinstance(_gen1_output, str) else _json.dumps(_gen1_output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert sums[1].get("input_hash") == hash_bytes(_gen1_key)
     with get_session() as session:
         rc = (
             session.query(RunCoordinateStatus)
@@ -167,14 +187,16 @@ def test_force_nondeterministic_supersedes_live_generation():
 
     gens = get_mats("generate")
     assert len(gens) == 2
-    assert gens[0].get("content_hash") != gens[1].get("content_hash")
+    assert gens[0].get("output") != gens[1].get("output")
     assert _is_live(gens[1].get("address"))
 
     # Lifecycle rows gone in the new model
 
     # Downstream recomputed off the new bytes rather than reusing stale output
     sums = get_mats("summarize")
-    assert sums[-1].get("input_hash") == gens[1].get("content_hash")
+    _gen1_output = gens[1].get("output")
+    _gen1_key = _gen1_output.encode("utf-8") if isinstance(_gen1_output, str) else _json.dumps(_gen1_output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert sums[-1].get("input_hash") == hash_bytes(_gen1_key)
 
 
 def test_force_deterministic_reuses_live_row():

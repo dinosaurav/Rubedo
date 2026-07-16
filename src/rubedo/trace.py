@@ -28,7 +28,6 @@ from .models import (
     InputHashUsage,
 )
 from . import lane_store
-from .planning import _ArrowRowRef
 from .selection import Selection, get_selection_addresses
 
 
@@ -203,14 +202,14 @@ def trace(
         }
         root_values: Dict[str, Any] = {}
         if resolve_roots:
-            from .store import read_materialization_output
+            from .store import read_output
 
             for addr in all_addrs - parented:
                 row = arrow_idx.get(addr)
                 if row:
                     try:
-                        root_values[addr] = read_materialization_output(
-                            _ArrowRowRef(row)
+                        root_values[addr] = read_output(
+                            row.get("output"), row.get("content_type")
                         )
                     except Exception:
                         pass  # a missing object never breaks a read-only trace

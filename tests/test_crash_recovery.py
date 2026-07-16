@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch
 from rubedo.db import init_db
 from rubedo import lane_store
-from rubedo.store import stage_and_commit
+from rubedo.store import serialize_output
 from rubedo import step, pipeline
 import uuid
 from sqlalchemy.pool import StaticPool
@@ -98,12 +98,12 @@ def test_crash_before_processing(setup_teardown):
 
 
 def test_crash_during_staging(setup_teardown):
-    # Simulate crash inside stage_and_commit
+    # Simulate crash inside serialize_output
 
     def crashing_stage(*args, **kwargs):
         raise Exception("Disk full or worker killed during write")
 
-    with patch("rubedo.ledger.stage_and_commit", side_effect=crashing_stage):
+    with patch("rubedo.ledger.serialize_output", side_effect=crashing_stage):
         summary = p_dummy.run(workers=1)
         assert summary.status == "failed"
         assert summary.created_count == 0
@@ -118,17 +118,17 @@ def test_crash_during_staging(setup_teardown):
 
 
 def test_crash_after_staging_before_db_commit(setup_teardown):
-    original_stage = stage_and_commit
+    original_serialize = serialize_output
 
-    def crashing_stage_but_write_succeeds(*args, **kwargs):
+    def crashing_serialize_but_write_succeeds(*args, **kwargs):
         # We actually do the write
-        original_stage(*args, **kwargs)
+        original_serialize(*args, **kwargs)
         # But we throw before the DB row can be inserted
         raise Exception("Worker killed right after disk write but before DB commit")
 
     with patch(
-        "rubedo.ledger.stage_and_commit",
-        side_effect=crashing_stage_but_write_succeeds,
+        "rubedo.ledger.serialize_output",
+        side_effect=crashing_serialize_but_write_succeeds,
     ):
         summary = p_dummy.run(workers=1)
         assert summary.status == "failed"
@@ -138,7 +138,6 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
 
     # Rerun normally
     # The output address will be exactly the same.
-    # Because stage_and_commit does an atomic os.replace, it will harmlessly overwrite the orphaned file.
     summary2 = p_dummy.run(workers=1)
     assert summary2.status == "completed"
     assert summary2.created_count == 4  # scan(a,b) + dummy(a,b)

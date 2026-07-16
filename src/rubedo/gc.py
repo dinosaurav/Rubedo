@@ -245,9 +245,13 @@ def _object_sizes_and_refs(
     refs_by_hash: Dict[str, List[Tuple[str, bool]]] = {}
     for row in lane_store.all_filled_rows():
         addr = row.get("address", "")
-        content_hash = row.get("content_hash")
-        if not content_hash:
+        output = row.get("output")
+        # Parse ref strings from the output column — native inline values
+        # (dicts, ints) have no object bytes to GC; only "objects:<hash>"
+        # ref strings do.
+        if not isinstance(output, str) or not output.startswith("objects:"):
             continue
+        content_hash = output[len("objects:"):]
         is_live = addr in fulfilled
         refs_by_hash.setdefault(content_hash, []).append((addr, is_live))
         if content_hash not in size_of:

@@ -56,7 +56,7 @@ def _root_output_address(pipe, params):
     return item.output_address
 
 
-def _inject_competing(pipeline_id, output_address, content_hash, output_path, content_type):
+def _inject_competing(pipeline_id, output_address, output_string, content_type):
     """Simulate another worker completing the same address before our commit.
 
     Writes an Arrow row and flips IHU ``fulfilled=True`` — the two artifacts
@@ -68,9 +68,8 @@ def _inject_competing(pipeline_id, output_address, content_hash, output_path, co
         lane_key="@root",
         address=output_address,
         input_hash="dummy_injected",
-        content_hash=content_hash,
+        output=output_string,
         content_type=content_type,
-        output_path=output_path,
         run_id="run_concurrent",
         code_hash="dummy",
         code_version="1",
@@ -93,9 +92,9 @@ def _inject_competing(pipeline_id, output_address, content_hash, output_path, co
 
 def test_concurrency_identical_bytes_collision():
     # Another worker commits identical bytes for the same address before
-    # our commit — our run should detect "reused" (same content_hash, was
+    # our commit — our run should detect "reused" (same output string, was
     # already fulfilled).
-    original_stage_and_commit = store.stage_and_commit
+    original_serialize = store.serialize_output
 
     pipe = pipeline(name="p1", steps=[my_step])
     params = {"content": "A"}
@@ -103,17 +102,17 @@ def test_concurrency_identical_bytes_collision():
 
     has_injected = False
 
-    def mock_stage_and_commit(run_id, coordinate, result):
+    def mock_serialize(run_id, coordinate, result):
         nonlocal has_injected
-        final_path, output_content_hash, content_type = original_stage_and_commit(run_id, coordinate, result)
+        output_string, content_type = original_serialize(run_id, coordinate, result)
 
         if not has_injected:
             has_injected = True
-            _inject_competing("p1", output_address, output_content_hash, final_path, content_type)
+            _inject_competing("p1", output_address, output_string, content_type)
 
-        return final_path, output_content_hash, content_type
+        return output_string, content_type
 
-    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+    with patch("rubedo.ledger.serialize_output", side_effect=mock_serialize):
         summary = pipe.run(params=params)
 
     assert summary.reused_count == 1
@@ -122,9 +121,9 @@ def test_concurrency_identical_bytes_collision():
 
 
 def test_concurrency_different_bytes_collision():
-    # Another worker commits DIFFERENT bytes for the same address before
+    # Another worker commits DIFFERENTENT bytes for the same address before
     # our commit — our run must supersede (counts as "created").
-    original_stage_and_commit = store.stage_and_commit
+    original_serialize = store.serialize_output
 
     pipe = pipeline(name="p2", steps=[my_step])
     params = {"content": "A"}
@@ -132,17 +131,17 @@ def test_concurrency_different_bytes_collision():
 
     has_injected = False
 
-    def mock_stage_and_commit(run_id, coordinate, result):
+    def mock_serialize(run_id, coordinate, result):
         nonlocal has_injected
-        final_path, output_content_hash, content_type = original_stage_and_commit(run_id, coordinate, result)
+        output_string, content_type = original_serialize(run_id, coordinate, result)
 
         if not has_injected:
             has_injected = True
-            _inject_competing("p2", output_address, "mocked_different_hash", "mocked_different_path", content_type)
+            _inject_competing("p2", output_address, "objects:mocked_different_hash", content_type)
 
-        return final_path, output_content_hash, content_type
+        return output_string, content_type
 
-    with patch("rubedo.ledger.stage_and_commit", side_effect=mock_stage_and_commit):
+    with patch("rubedo.ledger.serialize_output", side_effect=mock_serialize):
         summary = pipe.run(params=params)
 
     assert summary.created_count == 1

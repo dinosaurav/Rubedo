@@ -11,8 +11,26 @@ from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
 from .spec import PipelineSpec, StepSpec
-from .store import read_materialization_output
+from .store import read_output
 from .util import iso_age_seconds
+
+
+def _identity_from_output(row: dict) -> str:
+    """Compute the content identity (for downstream input_hash) from an
+    Arrow row's ``output`` column.  Same output value → same identity →
+    downstream reuses, regardless of inline (native Arrow) vs spilled
+    (ref string)."""
+    import json
+    from .hashing import hash_bytes as _hb
+
+    output = row.get("output")
+    if output is None:
+        return _hb(b"")
+    if isinstance(output, str):
+        return _hb(output.encode("utf-8"))
+    return _hb(
+        json.dumps(output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
 
 
 @dataclass
@@ -37,6 +55,7 @@ class MatRef:
         content_type=None,
         filtered=False,
         index_values=None,
+        output=None,
     ):
         self.id = id
         self.output_address = output_address
@@ -44,16 +63,25 @@ class MatRef:
         self.content_type = content_type
         self.filtered = filtered
         self.index_values = index_values or {}
+        self.output = output  # the Arrow "output" column value (inline JSON or ref string)
 
 
 class _ArrowRowRef:
     """Adapter that makes an Arrow lane_store row dict satisfy the
-    HasOutputContentHash protocol so ``read_materialization_output`` can
-    read its bytes from the object store.  Used by the expand-anchor
-    path which needs to deserialize the anchor's stored children list."""
+    HasOutputContentHash protocol so ``read_output`` can read its value
+    from the inline JSON or the object store (for spilled refs).  Used by
+    the expand-anchor path which needs to deserialize the anchor's stored
+    children list.
+
+    The ``output_content_hash`` (identity for downstream ``input_hash``
+    computation) is derived from the ``output`` column: hash of the inline
+    JSON string or the ref string.  Same bytes → same output string →
+    same identity → downstream reuses."""
 
     def __init__(self, row: dict):
-        self.output_content_hash = str(row.get("content_hash") or "")
+        self._row = row
+        self.output = row.get("output")
+        self.output_content_hash = _identity_from_output(row)
         self.content_type = row.get("content_type")
 
 
@@ -319,10 +347,11 @@ def _reduce_group_decision(
             existing=MatRef(
                 existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                 output_address,
-                existing_mat.get("content_hash"),
+                _identity_from_output(existing_mat),
                 existing_mat.get("content_type"),
                 filtered=existing_mat.get("filtered", False),
                 index_values=existing_mat.get("index_values", {}),
+                output=existing_mat.get("output"),
             ),
             code_drift=(
                 step.code_mode == "warn"
@@ -473,10 +502,11 @@ def _plan_join(
                     existing=MatRef(
                         existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                         output_address,
-                        existing_mat.get("content_hash"),
+                        _identity_from_output(existing_mat),
                         existing_mat.get("content_type"),
                         filtered=existing_mat.get("filtered", False),
                         index_values=existing_mat.get("index_values", {}),
+                        output=existing_mat.get("output"),
                     ),
                     code_drift=(
                         step.code_mode == "warn"
@@ -760,7 +790,7 @@ def _plan_step(
                 freshness = anchor.get("ts")
                 if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
-            children_hashes = read_materialization_output(_ArrowRowRef(anchor))
+            children_hashes = read_output(anchor.get("output"), anchor.get("content_type"))
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:
@@ -811,10 +841,11 @@ def _plan_step(
                         existing=MatRef(
                             child.get("mat_id") or child.get("row_id", ""),
                             child_addr,
-                            child.get("content_hash"),
+                            _identity_from_output(child),
                             child.get("content_type"),
                             filtered=child.get("filtered", False),
                             index_values=child.get("index_values", {}),
+                            output=child.get("output"),
                         ),
                     )
                 )
@@ -852,10 +883,11 @@ def _plan_step(
                         existing=MatRef(
                             existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                             output_address,
-                            existing_mat.get("content_hash"),
+                            _identity_from_output(existing_mat),
                             existing_mat.get("content_type"),
                             filtered=existing_mat.get("filtered", False),
                             index_values=existing_mat.get("index_values", {}),
+                            output=existing_mat.get("output"),
                         ),
                         code_drift=(
                             step.code_mode == "warn"
