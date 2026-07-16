@@ -7,12 +7,28 @@ from .models import (
     Run,
     Materialization,
     MaterializationLifecycle,
+    RunCoordinateStatus,
     RunEvent,
 )
+from . import lane_store
 from .db import get_session
 from .selection import Selection, get_selection_materialization_ids
 from .trace import _bfs
 from .util import utcnow_iso
+
+
+def _mat_lane_key(session, mat_id: int) -> str:
+    """Recover the lane_key (coordinate) for a Materialization via the
+    run-coordinate join.  Used only during the parallel-write migration;
+    once materializations is deleted the lane_key is the primary identity
+    and this lookup disappears."""
+    row = (
+        session.query(RunCoordinateStatus.coordinate)
+        .filter(RunCoordinateStatus.materialization_id == mat_id)
+        .order_by(RunCoordinateStatus.id.desc())
+        .first()
+    )
+    return row[0] if row else ""
 
 
 def invalidate(selection: Selection, reason: str, downstream: bool = False) -> dict:
@@ -90,6 +106,17 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                         created_at=utcnow_iso(),
                     )
                 )
+                # Parallel write: a blank tombstone row in lane_store.
+                # The lane_key is the coordinate (today's mat rows carry
+                # the lane identity in their address; once materializations
+                # is deleted the lane_key is the only identity).  See
+                # notes/arrow-storage.md §Phase 2d.
+                lane_store.append_blank(
+                    pipeline_id=str(mat.pipeline_id),
+                    step_name=str(mat.step_name),
+                    lane_key=_mat_lane_key(session, int(mat.id)),
+                    run_id=run_id,
+                )
                 return True
 
             flipped_ids: list[int] = []
@@ -117,6 +144,7 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
             )
             session.add(event)
             session.commit()
+            lane_store.flush_all()
 
             return {
                 "run_id": run_id,

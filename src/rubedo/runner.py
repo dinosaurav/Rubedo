@@ -50,6 +50,8 @@ def _init_home(home: str):
     """
     init_db(db_path=os.path.join(home, "rubedo.sqlite"))
     init_store(home=home)
+    from . import lane_store
+    lane_store.init_tables(home=home)
 
 
 @contextlib.contextmanager
@@ -345,6 +347,8 @@ def declare_pipeline(
 
     init_db()
     init_store()
+    from . import lane_store
+    lane_store.init_tables()
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     now = utcnow_iso()
@@ -475,6 +479,13 @@ def run_pipeline(
                 return summary
 
             except Exception as e:
+                # Drop any half-written lane_store buffers — the rows
+                # the run didn't finish committing are not durable.
+                # Disk state from prior flushes (this run's completed
+                # steps) is left in place; recovery is "next run sees
+                # what did flush + retries the rest" (notes/arrow-storage.md).
+                from . import lane_store
+                lane_store.clear_run_buffers()
                 with get_session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                     if err_run:

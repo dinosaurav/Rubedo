@@ -30,6 +30,7 @@ from .models import (
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
 from .store import stage_and_commit
+from . import lane_store
 from .util import utcnow_iso
 
 
@@ -515,6 +516,23 @@ def _commit_execution_result(
                 filtered=is_filtered,
             )
 
+            # Parallel write to the lane_store (Arrow) — the new primary
+            # data plane.  Coexists with the SQLite materializations row
+            # above while readers are migrated one-by-one; the SQLite path
+            # is deleted once every reader consults lane_store.  See
+            # notes/arrow-storage.md §Phase 2.
+            lane_store.append_filled(
+                pipeline_id=ctx.pipeline_id,
+                step_name=step.name,
+                lane_key=decision.coordinate,
+                input_hash=decision.input_hash,  # type: ignore
+                content_hash=output_content_hash,
+                content_type=content_type,
+                output_path=final_path,
+                run_id=ctx.run_id,
+                filtered=is_filtered,
+            )
+
             if outcome.is_anchor:
                 # Cache anchor only: stored so a re-run's plan can skip the
                 # expand fn. Not a lane — no index, edge, status, count, or
@@ -628,6 +646,12 @@ def _commit_execution_result(
 
 def _finish_run(ctx: _RunContext) -> RunSummary:
     """Finalize the run status and return a summary of all outcomes."""
+    # Flush the lane_store's in-memory buffers to disk so a crashed
+    # process at least leaves the rows it wrote on disk before the run
+    # ended.  On exception paths the buffer is cleared by the next run's
+    # fresh start; here it's the normal end-of-run flush.
+    lane_store.flush_all()
+
     full_summary = {
         "created": ctx.totals["created"],
         "reused": ctx.totals["reused"],
