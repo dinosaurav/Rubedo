@@ -532,6 +532,7 @@ def _commit_execution_result(
                 output_path=final_path,
                 run_id=ctx.run_id,
                 filtered=is_filtered,
+                code_hash=step.code_hash,
             )
 
             if outcome.is_anchor:

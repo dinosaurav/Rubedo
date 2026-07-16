@@ -41,6 +41,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("content_hash", "string", True),  # nullable for blank tombstones
     ("content_type", "string", True),
     ("output_path", "string", True),
+    ("code_hash", "string", True),  # source hash at creation time, for drift detection
     ("ts", "timestamp[us]", False),
     ("run_id", "string", False),
     ("filtered", "bool", False),
@@ -142,6 +143,7 @@ def append_filled(
     output_path: str,
     run_id: str,
     filtered: bool = False,
+    code_hash: Optional[str] = None,
     ts: Optional[Any] = None,
 ):
     """Append a filled row (a successful computation) to the step's buffer.
@@ -165,6 +167,7 @@ def append_filled(
             "content_hash": content_hash,
             "content_type": content_type,
             "output_path": output_path,
+            "code_hash": code_hash,
             "ts": ts,
             "run_id": run_id,
             "filtered": filtered,
@@ -351,12 +354,67 @@ def find_by_row_id(
     table = _combined_table(pipeline_id, step_name)
     if table is None or table.num_rows == 0:
         return None
-
     mask = pc.equal(table.column("row_id"), row_id)
     filtered = table.filter(mask)
     if filtered.num_rows == 0:
         return None
     return filtered.to_pylist()[0]
+
+
+def batch_lookup_by_address(
+    pipeline_id: str,
+    step_name: str,
+    addresses: set,
+    session,
+) -> Dict[str, Dict[str, Any]]:
+    """Batch reuse lookup — the port-ready replacement for the planning
+    phase's `Materialization.filter(output_address IN (...), is_live=True)`.
+
+    Returns a dict mapping ``address -> row_dict`` for every address that
+    has a ``fulfilled=True`` entry in ``input_hash_usages`` AND a filled
+    Arrow row in the lane_store.  Addresses not in the dict are misses
+    (recompute).  The row_dict carries all fields the planning phase needs
+    to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
+    ``output_path``, ``filtered``, ``code_hash``, ``ts``.
+
+    The two-step lookup (SQLite for liveness, Arrow for content) replaces
+    today's one-step SQLite query — but the SQLite lookup is a simple
+    indexed query on ``input_hash_usages``, and the Arrow lookup only
+    fires on confirmed reuse hits.
+    """
+    from .models import InputHashUsage
+
+    if not addresses:
+        return {}
+
+    # Step 1: find which addresses are fulfilled (liveness gate)
+    fulfilled = (
+        session.query(InputHashUsage)
+        .filter(
+            InputHashUsage.address.in_(addresses),
+            InputHashUsage.step_name == step_name,
+            InputHashUsage.pipeline_id == pipeline_id,
+            InputHashUsage.fulfilled.is_(True),
+        )
+        .all()
+    )
+    fulfilled_addrs = {u.address for u in fulfilled}
+    if not fulfilled_addrs:
+        return {}
+
+    # Step 2: for each fulfilled address, retrieve the Arrow row
+    # Build a map of lane_key -> address from the usage rows
+    addr_to_lane_key = {u.address: u.lane_key for u in fulfilled}
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for addr in fulfilled_addrs:
+        lane_key = addr_to_lane_key.get(addr, "")
+        if not lane_key:
+            continue
+        row = find_latest_filled_by_address(pipeline_id, step_name, lane_key, addr)
+        if row is not None:
+            result[addr] = row
+    return result
 
 
 def scan_indexed_field(

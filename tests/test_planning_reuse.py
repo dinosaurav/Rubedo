@@ -26,7 +26,6 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import ProcessResult, Selection, Filtered, invalidate, pipeline, step
 from rubedo.db import init_db
-from rubedo.store import init_store
 
 TEST_FOLDER = ".test_planning_reuse_data"
 ENV_FOLDER = ".test_planning_reuse_env"
