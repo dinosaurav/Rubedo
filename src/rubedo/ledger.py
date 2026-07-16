@@ -338,6 +338,32 @@ def _commit_materialization(
     return mat, "created"
 
 
+def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
+    """Extract declared index fields from the output value into a
+    ``{field_path: [stringified_values]}`` dict — the same projection
+    ``_extract_index_entries`` writes to SQLite, but returned as a dict
+    for the Arrow ``index_values`` map column."""
+    if not step.index:
+        return {}
+    value = result.value if isinstance(result, ProcessResult) else result
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, List[str]] = {}
+    for path in step.index:
+        node = value
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None  # type: ignore
+            if node is None:
+                break
+        if node is None:
+            continue
+        elements = node if isinstance(node, list) else [node]
+        vals = [str(el) for el in elements if isinstance(el, (str, int, float, bool))]
+        if vals:
+            out[path] = vals
+    return out
+
+
 def _extract_index_entries(session: Session, mat_id: int, step: StepSpec, result):
     """Project declared value fields into the search index.
 
@@ -492,6 +518,7 @@ def _commit_execution_result(
                 run_id=ctx.run_id,
                 filtered=is_filtered,
                 code_hash=step.code_hash,
+                index_values=_extract_index_values(step, result),
             )
 
             # Parallel write: mark this address as fulfilled in

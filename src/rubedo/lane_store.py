@@ -45,6 +45,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("ts", "timestamp[us]", False),
     ("run_id", "string", False),
     ("filtered", "bool", False),
+    ("index_values", "map<string, list<string>>", True),  # @step(index=[...]) field→values
 ]
 
 
@@ -74,6 +75,8 @@ def _schema(pa):
             t = pa.timestamp("us", tz="UTC")
         elif type_str == "bool":
             t = pa.bool_()
+        elif type_str == "map<string, list<string>>":
+            t = pa.map_(pa.string(), pa.list_(pa.string()))
         else:
             raise ValueError(f"unknown column type {type_str}")
         fields.append(pa.field(name, t, nullable=nullable))
@@ -144,6 +147,7 @@ def append_filled(
     run_id: str,
     filtered: bool = False,
     code_hash: Optional[str] = None,
+    index_values: Optional[Dict[str, List[str]]] = None,
     ts: Optional[Any] = None,
 ):
     """Append a filled row (a successful computation) to the step's buffer.
@@ -153,7 +157,11 @@ def append_filled(
     Carrying it as a column lets planning ask "is there a filled row with
     *this* address for *this* lane_key?" — a port of the current
     `Materialization.output_address IN (...) AND is_live` lookup, just on
-    a different substrate."""
+    a different substrate.
+
+    ``index_values`` is the @step(index=[...]) field→values dict, stored
+    as a map<string, list<string>> column.  Replaces the
+    ``materialization_index`` SQLite table."""
     from datetime import datetime, timezone
 
     if ts is None:
@@ -171,6 +179,7 @@ def append_filled(
             "ts": ts,
             "run_id": run_id,
             "filtered": filtered,
+            "index_values": index_values,
         }
     )
 
@@ -361,6 +370,18 @@ def find_by_row_id(
     return filtered.to_pylist()[0]
 
 
+def _normalize_index_values(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert the index_values map column from pyarrow's list-of-tuples
+    format to a plain dict.  Returns {} for null/missing."""
+    iv = row.get("index_values")
+    if iv is None:
+        return {}
+    if isinstance(iv, dict):
+        return iv
+    # pyarrow map columns come back as [(key, value), ...]
+    return dict(iv)
+
+
 def batch_lookup_by_address(
     pipeline_id: str,
     step_name: str,
@@ -437,6 +458,7 @@ def batch_lookup_by_address(
             row["mat_id"] = meta.get("mat_id")
             row["created_at"] = meta.get("created_at")
             row["refreshed_at"] = meta.get("refreshed_at")
+            row["index_values"] = _normalize_index_values(row)
             result[addr] = row
     return result
 
