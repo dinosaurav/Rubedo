@@ -224,37 +224,41 @@ def _infer_output_type(rows: List[Dict[str, Any]]):
     rows.  Returns a pa.DataType, or ``None`` to use ``string`` (the
     fallback for mixed inline/spill or all-null).
 
-    The rule: if every non-null output value is the same Python type and
-    none are ref strings (spilled), infer the native Arrow type (struct
-    for dicts, int64 for ints, etc.).  If any value is a ref string or
-    types are mixed, fall back to ``string`` — inline values will be
-    JSON-serialized, ref strings pass through as-is.
+    Collects all non-ref output values and passes them to ``pa.array()``
+    in one shot.  Pyarrow infers the union of dict fields (nullable for
+    missing) and handles schema evolution: a step where some lanes return
+    ``{"a": 1, "b": 2}`` and others return ``{"a": 1, "b": 2, "c": 3}``
+    gets ``struct<a, b, c>`` with ``c = null`` for the first row — no
+    fallback to string.  Only falls back when:
+    - any value is a ref string (spilled) — can't mix native + string
+    - field types genuinely conflict (e.g. field "a" is int in one row,
+      string in another)
+    - the value type can't be represented in Arrow at all
     """
-
-    native_type = None
+    values: List[Any] = []
     has_refs = False
 
     for row in rows:
         output = row.get("output")
         if output is None:
+            values.append(None)
             continue
         if isinstance(output, str) and output.startswith("objects:"):
             has_refs = True
             continue
-        # Try to infer the Arrow type from this value
-        try:
-            arr = pa.array([output])
-            t = arr.type
-        except (pa.lib.ArrowInvalid, TypeError):
-            return pa.string()  # can't represent natively → string
-        if native_type is None:
-            native_type = t
-        elif native_type != t:
-            return pa.string()  # mixed types → string
+        values.append(output)
 
     if has_refs:
         return pa.string()  # mixed inline + spill → string
-    return native_type  # may be None (all null) → caller uses string
+
+    if not any(v is not None for v in values):
+        return None  # all null → caller uses string
+
+    try:
+        arr = pa.array(values)
+        return arr.type
+    except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError, TypeError):
+        return pa.string()  # conflicting types or unrepresentable → string
 
 
 def _stringify_outputs(rows: List[Dict[str, Any]]) -> None:
@@ -298,10 +302,12 @@ def _buffer_table(pipeline_id: str, step_name: str):
 
 def _combined_table(pipeline_id: str, step_name: str):
     """Concatenate on-disk history + in-memory buffer, or None if both
-    empty.  If the on-disk and buffer ``output`` column types differ
-    (e.g. disk has ``struct`` from a previous run, buffer has ``string``
-    because a value spilled this run), both are converted to ``string``
-    before concatenation."""
+    empty.  If the on-disk and buffer ``output`` column types are
+    compatible (e.g. structs with different fields — schema evolution),
+    ``pa.concat_tables`` with ``promote_options='default'`` unions the
+    struct fields and fills nulls.  If the types are genuinely
+    incompatible (struct vs string, int vs string), both are converted
+    to ``string`` before concatenation."""
     import json
 
     disk = _read_disk_table(pipeline_id, step_name)
@@ -313,36 +319,34 @@ def _combined_table(pipeline_id: str, step_name: str):
     if buf is None:
         return disk
 
-    disk_output_type = disk.schema.field("output").type
-    buf_output_type = buf.schema.field("output").type
+    try:
+        return pa.concat_tables([disk, buf], promote_options="default")
+    except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError):
+        pass
 
-    if disk_output_type != buf_output_type:
-        # Convert both to string — inline values JSON-serialized, ref
-        # strings and native scalars stringified.
-        def _to_string_table(table):
-            col = table.column("output")
-            if col.type == pa.string():
-                return table
-            # Convert each value to a canonical string
-            pyvals = col.to_pylist()
-            str_vals: List[Optional[str]] = []
-            for v in pyvals:
-                if v is None:
-                    str_vals.append(None)
-                elif isinstance(v, str):
-                    str_vals.append(v)
-                else:
-                    str_vals.append(
-                        json.dumps(v, sort_keys=True, separators=(",", ":"))
-                    )
-            new_col = pa.array(str_vals, type=pa.string())
-            return table.set_column(
-                table.schema.get_field_index("output"), "output", new_col
-            )
+    # Types are genuinely incompatible — convert both to string
+    def _to_string_table(table):
+        col = table.column("output")
+        if col.type == pa.string():
+            return table
+        pyvals = col.to_pylist()
+        str_vals: List[Optional[str]] = []
+        for v in pyvals:
+            if v is None:
+                str_vals.append(None)
+            elif isinstance(v, str):
+                str_vals.append(v)
+            else:
+                str_vals.append(
+                    json.dumps(v, sort_keys=True, separators=(",", ":"))
+                )
+        new_col = pa.array(str_vals, type=pa.string())
+        return table.set_column(
+            table.schema.get_field_index("output"), "output", new_col
+        )
 
-        disk = _to_string_table(disk)
-        buf = _to_string_table(buf)
-
+    disk = _to_string_table(disk)
+    buf = _to_string_table(buf)
     return pa.concat_tables([disk, buf], promote_options="default")
 
 
@@ -735,19 +739,17 @@ def flush_step(pipeline_id: str, step_name: str):
         return
     disk_table = _read_disk_table(pipeline_id, step_name)
 
-    # Handle output type mismatch between disk and buffer
     if disk_table is not None:
-        disk_output_type = disk_table.schema.field("output").type
-        buf_output_type = buf_table.schema.field("output").type
-        if disk_output_type != buf_output_type:
-            # Convert both to string — reuse _combined_table's logic
-            combined = _combined_table(pipeline_id, step_name)
-            if combined is None:
-                return
-        else:
+        try:
             combined = pa.concat_tables(
                 [disk_table, buf_table], promote_options="default"
             )
+        except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError):
+            # Incompatible types — fall back to _combined_table which
+            # converts both to string
+            combined = _combined_table(pipeline_id, step_name)
+            if combined is None:
+                return
     else:
         combined = buf_table
     path = _get_step_file(pipeline_id, step_name)
