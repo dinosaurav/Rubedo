@@ -43,21 +43,48 @@ One file per step output. Append-only rows = one attempted output per lane:
 
 ```
 columns:
-  lane_key        string          the coordinate through the DAG
-  input_hash      string          identity of the inputs this row consumed
-  output          <inline or blank>   the value, or null for a tombstone
-  content_hash    string          hash of output bytes (for dedup + child input_hash)
-  ts              timestamp       when this row was written (latest = current)
-  run_id          string          which run produced it
+  row_id         string          deterministic hash of (pipeline|step|lane_key|ts)
+  lane_key       string          the coordinate through the DAG
+  address        string          hash(step, version, input_hash[, params][, code]) — the cache identity
+  input_hash     string          hash of the input content the child receives
+  output         <inline value or object-store ref>   the actual result
+  code_hash      string          source hash at creation time, for drift detection
+  ts             timestamp       when this row was written
+  run_id         string          which run produced it
+  filtered       bool            whether this output is a Filtered verdict
 ```
 
-- **Filled row** = a computed result. The output column is either an inline
-  scalar/struct, or an object-store ref (`objects/<hash>` for large/binary
-  values; see "TOAST spill" below). `content_hash` is the hash of the
-  serialized value — used by children as `input_hash` and by dedup.
-- **No blank rows.** The Arrow file is pure data — every row has a
-  non-null `content_hash` and `output_path`. Liveness (reuse vs.
-  recompute) is the `input_hash_usages` SQLite table's job.
+**No `content_hash` column.** The child's `input_hash` is computed from
+the actual input content it receives — hash the parent's output value
+directly, not a stored string from the parent's row. If the parent's
+output is byte-identical across runs, the child's `input_hash` is
+identical → child reuses. If the parent's output changes, the child's
+`input_hash` changes → child recomputes. The identity flows naturally
+through the content, not through a stored hash. (Today's object store is
+content-addressed, so `output_path = objects/ca/ee/caee6ff8...` already
+encodes the hash — the child can derive `input_hash` from the path. When
+inline values arrive, the child hashes the inline value at plan time.)
+
+**`output` holds the actual value, not a path.** This is the key
+simplification that arrives once the SQLite `materializations` table is
+deleted and the Arrow file is the sole source of truth for output
+content:
+- **Small values** (ints, strings, flat dicts → Arrow struct columns,
+  small bytes): stored directly in the `output` column. Zero object
+  store I/O. Selection scans struct sub-columns directly. Trace reads
+  the value from the row. No separate blob to fetch.
+- **Large/blob values** (images, large LLM responses, DataFrames via
+  Arrow IPC): spilled to `objects/`, the `output` column holds a ref
+  string (`"objects:<hash>"`). The object store is purely a spill target
+  for values too big for an Arrow column. GC refcounts spilled entries
+  via `object_reclamations` as today.
+- The `output_path` and `content_type` columns are gone — `output` is
+  either the inline value (its Arrow type encodes the format) or a ref
+  string (the object store knows the format from its own metadata).
+
+- **No blank rows.** The Arrow file is pure data — every row is a
+  successful computation. Liveness (reuse vs. recompute) is the
+  `input_hash_usages` SQLite table's job.
 
 **Liveness is not in the Arrow file.** `input_hash_usages.fulfilled` is
 the single gate: `True` → a filled Arrow row exists (reuse); `False` →
@@ -75,7 +102,7 @@ mean "no filled Arrow row to reuse"). The planning phase checks
 | `uq_live_output_address` partial unique index | **gone** | no longer one-live-per-address; multiple rows per `input_hash` across time are expected and correct |
 | the pairing guard (`_assert_liveness_pairing`) | **gone** | nothing to pair — there's no `is_live` flip and no lifecycle row to ship with it |
 | the supersede/restore/savepoint dance in `_commit_materialization` | **gone** | recompute just appends; identical bytes are detected by `content_hash` equality, not by a unique-index collision |
-| `output_content_hash` *as a row identity* | gone as identity; **stays as a column** | the child's `input_hash` is the parent's `content_hash` (`planning.py:145`), so the content hash must be readable — it's just data now, not a unique-index key |
+| `output_content_hash` *as a stored column* | **gone** | the child's `input_hash` is computed from the actual input content it receives, not from a stored string on the parent's row. The identity flows through content, not through a hash column. |
 
 ## What stays in SQLite
 
@@ -185,21 +212,34 @@ The `content_hash` column is what makes byte-identical reuse still work:
   downstream protection that actually mattered survives via `content_hash`
   in `input_hash`.
 
-## TOAST spill (deferred to Phase 2b, not blocking v1)
+## Inline values + object store spill
 
-A 50KB LLM response or a 2MB image shouldn't bloat the inline Arrow
-column. Postgres's TOAST pattern: small inline, large spilled to the
-object store with a hash ref in the column. Not needed for v1 — a v1
-Arrow file can hold arbitrary-sized string columns; the bloat cost is
-deferred until profile evidence justifies the complexity. When added:
+The `output` column holds the actual value. Small values (the common
+case — dicts, strings, ints, small bytes) are stored directly in the
+Arrow column as a struct/scalar. Large values (images, LLM responses,
+DataFrames) spill to the object store with a ref string in the column.
 
-- Type-based: `bytes`/images always spill.
-- Size-based: a value > threshold (e.g. 4KB) spills; column stores the
-  hash instead.
-- Declaration: `@step(spills=["ocr_text"])` forces spill, overrides size.
+This is not a deferred optimization — it's the natural endpoint once
+the SQLite `materializations` table is deleted and the Arrow file is
+the sole source of truth for output content. The object store stops
+being "where every output lives" and becomes "where big values that
+don't fit in an Arrow column live."
+
+Spill triggers (all available, they compose):
+- **Type-based**: `bytes`/images/binary blobs → always spill to object store
+- **Size-based**: serialized value > threshold (e.g. 4KB) → spill, store
+  ref string in column
+- **Declaration**: `@step(spills=["ocr_text", "image_bytes"])` → force
+  spill, override size rule
+
+A value is inline if it passes all three checks (small, non-binary, not
+declared as spill). Otherwise it's a ref. Any one triggering means spill.
 
 The object store stays content-addressed; spilled values are ordinary
-objects, GC'd via `object_reclamations` as today.
+objects, GC'd via `object_reclamations` as today. The child's
+`input_hash` is derived from the ref string (which encodes the content
+hash) for spilled values, or from hashing the inline value for inline
+values — either way, same bytes → same `input_hash` → downstream reuses.
 
 ## Edges (deferred deletion — the one open sub-project)
 
