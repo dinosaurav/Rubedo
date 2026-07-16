@@ -103,18 +103,26 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
   addresses = `hash(step, version, input_hash[, params][, code])`;
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
-  Per shape: reduce → one decision per group (`_group_reduce_lanes`); expand
-  → one execute decision per parent lane, reused without re-running the fn via
-  a parent-addressed cache anchor (`_plan_expand_reuse`); join → one decision
-  per matched tuple (`_plan_join`). `group_key`/`join_on` read `index` rows at
-  plan time, so planning stays value-free. Untouched by TODO 15.
+  Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
+  `lane_store.find_latest_filled_by_address` (content retrieval) via
+  `batch_lookup_by_address`. Per shape: reduce → one decision per group
+  (`_group_reduce_lanes`); expand → one execute decision per parent lane,
+  reused without re-running the fn via a parent-addressed cache anchor;
+  join → one decision per matched tuple (`_plan_join`).
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
+- `src/rubedo/lane_store.py` — per-step Arrow IPC files under
+  `.rubedo/tables/`: append-only rows of lane metadata (row_id, lane_key,
+  address, input_hash, content_hash, content_type, output_path, code_hash,
+  ts, run_id, filtered). Pure data — no tombstones, no liveness. The
+  `batch_lookup_by_address` function is the planning phase's reuse lookup
+  (SQLite `input_hash_usages` for liveness, Arrow for content).
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
-  events, and `_commit_materialization` (the generations protocol:
-  identical bytes reuse/restore, different bytes supersede; every liveness
-  transition appends a `materialization_lifecycle` row).
+  events, `_commit_materialization` (simplified: same bytes reuse/restore,
+  different bytes insert a new row; no lifecycle rows, no pairing guard,
+  no savepoints), and the `input_hash_usages` claim (plan time,
+  `fulfilled=False`) / fulfill (commit time, `fulfilled=True`) lifecycle.
 - `src/rubedo/scheduler.py` — the segment machinery: `_partition_segments`
   (topo order → `broad` singleton segments or `deep` runs of consecutive
   ≤1-parent map steps) and `_run_segment`, the one scheduler over (lane,
@@ -130,13 +138,14 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns,
-  `Materialization.is_live`/`refreshed_at`). Tests that must backdate rows
-  use raw SQL deliberately. A `before_commit` session guard (the pairing
-  guard) additionally enforces that every `is_live`/`refreshed_at`
-  flip must ship a `materialization_lifecycle` row for that materialization in
-  the same transaction (see `notes/invariants.md`). It accumulates across flushes (the supersede path
-  flushes a demotion before its lifecycle row exists) and skips savepoint
-  releases (`in_nested_transaction()`).
+  `Materialization.is_live`/`refreshed_at`) and the `InputHashUsage`
+  liveness columns (`fulfilled`, `last_run_id`, `claimed_at` — the one
+  intentionally mutable ledger table: claim/fulfill/tombstone/demote are
+  in-place updates). The pairing guard (every `is_live` flip ships a
+  lifecycle row) is **deleted** — liveness is `input_hash_usages.fulfilled`,
+  not an is_live projection paired with a lifecycle log. See
+  `notes/arrow-storage.md` for the full design and `notes/invariants.md`
+  for the updated guarantees.
 - `src/rubedo/gc.py` — retention GC: demote (paired `pruned` lifecycle
   rows) then sweep (delete bytes only when *every* referencing
   materialization across all pipelines is non-live, logged in append-only
