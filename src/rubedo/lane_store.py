@@ -469,14 +469,46 @@ def scan_indexed_field(
     field: str,
     value: Any,
 ) -> List[str]:
-    """Lane_keys where the indexed field matches the value.
+    """Addresses where the indexed field has the given value.
 
-    Phase 2c will make the indexed field a real Arrow column; for now this
-    is a placeholder that returns [] (materialization_index still handles
-    the query).  The signature is here so callers can be written against
-    the future API.
+    Scans the step's Arrow ``index_values`` map column — the replacement
+    for ``MaterializationIndexEntry`` queries.  Returns a list of
+    ``address`` strings (the cache identity) for rows whose
+    ``index_values[field]`` list contains ``str(value)``.
     """
-    return []
+    table = _combined_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return []
+    target = str(value)
+    matches: List[str] = []
+    for row in table.to_pylist():
+        iv = _normalize_index_values(row)
+        if target in iv.get(field, []):
+            matches.append(row.get("address", ""))
+    return [a for a in matches if a]
+
+
+def scan_indexed_field_all(
+    field: str,
+    value: Any,
+) -> List[str]:
+    """Addresses where the indexed field has the given value, across ALL
+    step Arrow files.  The cross-step replacement for querying
+    ``MaterializationIndexEntry`` without a step filter.
+    """
+    matches: List[str] = []
+    if not os.path.isdir(TABLES_DIR):
+        return matches
+    for entry in os.listdir(TABLES_DIR):
+        pipe_dir = os.path.join(TABLES_DIR, entry)
+        if not os.path.isdir(pipe_dir):
+            continue
+        for fname in os.listdir(pipe_dir):
+            if not fname.endswith(".arrow"):
+                continue
+            step_name = fname[:-len(".arrow")]
+            matches.extend(scan_indexed_field(entry, step_name, field, value))
+    return matches
 
 
 # ---------------------------------------------------------------------------

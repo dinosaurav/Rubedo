@@ -8,10 +8,10 @@ import fnmatch
 
 from .models import (
     Materialization,
-    MaterializationIndexEntry,
     RunCoordinateStatus,
     InputHashUsage,
 )
+from . import lane_store
 
 
 class Selection(BaseModel):
@@ -101,11 +101,13 @@ def get_selection_materialization_ids(
 
     if selection.index:
         for field, value in selection.index.items():
-            matching = (
-                session.query(MaterializationIndexEntry.materialization_id)
-                .filter_by(field=field, value=str(value))
-            )
-            query = query.filter(Materialization.id.in_(matching))
+            if selection.pipeline_id and selection.step:
+                addrs = lane_store.scan_indexed_field(
+                    selection.pipeline_id, selection.step, field, value
+                )
+            else:
+                addrs = lane_store.scan_indexed_field_all(field, value)
+            query = query.filter(Materialization.output_address.in_(addrs))
 
     if selection.source_id or selection.coordinate_glob:
         # Join with RunCoordinateStatus to filter by coordinate or source_id
