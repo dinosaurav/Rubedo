@@ -9,6 +9,7 @@ import os
 import shutil
 import uuid
 
+import pyarrow as pa
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -62,14 +63,14 @@ def isolated_env():
 def test_serialize_polars_roundtrip():
     import polars as pl
 
-    from rubedo.store import _serialize, _import_pyarrow, _from_arrow_table
+    from rubedo.store import _serialize, _from_arrow_table
 
     df = pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
     raw, ct = _serialize(df)
     assert ct == "arrow-ipc:polars"
     assert isinstance(raw, bytes)
 
-    pa = _import_pyarrow()
+    pa  # module-level import above
     reader = pa.ipc.open_stream(raw)
     tbl = reader.read_all()
     restored = _from_arrow_table(tbl, "polars")
@@ -81,13 +82,13 @@ def test_serialize_polars_roundtrip():
 def test_serialize_pa_table_roundtrip():
     import pyarrow as pa
 
-    from rubedo.store import _serialize, _import_pyarrow
+    from rubedo.store import _serialize
 
     tbl = pa.table({"x": [1.0, 2.0], "y": [True, False]})
     raw, ct = _serialize(tbl)
     assert ct == "arrow-ipc:table"
 
-    pa = _import_pyarrow()
+    pa  # module-level import above
     reader = pa.ipc.open_stream(raw)
     restored = reader.read_all()
     assert isinstance(restored, pa.Table)
@@ -97,13 +98,13 @@ def test_serialize_pa_table_roundtrip():
 def test_serialize_pandas_roundtrip():
     pd = pytest.importorskip("pandas")
 
-    from rubedo.store import _serialize, _import_pyarrow, _from_arrow_table
+    from rubedo.store import _serialize, _from_arrow_table
 
     df = pd.DataFrame({"a": [10, 20], "b": ["p", "q"]})
     raw, ct = _serialize(df)
     assert ct == "arrow-ipc:pandas"
 
-    pa = _import_pyarrow()
+    pa  # module-level import above
     reader = pa.ipc.open_stream(raw)
     tbl = reader.read_all()
     restored = _from_arrow_table(tbl, "pandas")

@@ -38,6 +38,7 @@ dependencies = [
     "loky>=3.5.6",
     "cloudpickle>=3.1.2",
     "rich>=13.0.0",
+    "pyarrow>=15.0.0",
 ]
 
 [project.urls]
@@ -51,7 +52,6 @@ rubedo = "rubedo.cli:main"
 
 [project.optional-dependencies]
 server = ["fastapi", "uvicorn"]
-arrow = ["pyarrow>=15.0.0"]
 
 # Most examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via
 # OpenRouter) using only the standard library. A few need a library (e.g.

@@ -24,10 +24,18 @@ detection in one structure.
 | Query over outputs | pyarrow (`pa.ipc` + `pa.compute`) | reuse checks, selection, trace alignment, du scans |
 | Control plane | SQLite + SQLAlchemy | run history, the soft lock, crash detection, object reclamations, immutable audit log |
 
-DuckDB is **not** in scope for v1. pyarrow scans cover every query we need.
-DuckDB may be revisited once the Arrow storage is stable, as a query-layer
-accelerator — it composes with both Arrow storage and SQLite control plane
-without displacing either. Do not adopt it speculatively.
+**pyarrow is a hard dependency**, not an optional extra. Once Phase 2
+makes per-step Arrow files the primary data plane (every reuse check is
+a lane_store scan, every commit writes an Arrow row), pyarrow is on the
+hot path of every run — the lazy-import ceremony an optional-extra
+would require is just friction. polars and pandas stay optional (only
+needed when a step actually returns a DataFrame of that flavor; the
+engine accepts any Arrow-compatible type via isinstance checks at
+serialize time). DuckDB is **not** in scope for v1 — pyarrow scans cover
+every query we need. DuckDB may be revisited once the Arrow storage is
+stable as a query-layer accelerator; it composes with both Arrow
+storage and SQLite control plane without displacing either. Do not
+adopt it speculatively.
 
 ## The per-step Arrow file
 
@@ -334,6 +342,37 @@ The four promises don't change. The mechanisms that keep them do:
   invariant — it's not needed when the invariant itself is rephrased.
 
 ## Open questions to resolve during Phase 2
+
+0. **The edges-FK problem (must resolve before Phase 2a lands).**
+   `materialization_edges` (deferred for deletion in 2i) references
+   `materializations.id` via two integer FKs. If `materializations` is
+   deleted entirely, edges lose their reference scheme. Three options:
+   - **(a) Thin identity-minting table** (`lane_row_ids`: id, pipeline_id,
+     step_name, lane_key, ts) whose only role is minting stable integer
+     IDs for the edges FK contract until 2i deletes edges. 3 columns of
+     pure plumbing — feels like the "thin shadow" the owner rejected, but
+     it's *not* the materializations table (no content, no is_live, no
+     lifecycle).
+   - **(b) Composite string keys on edges.** Migrate `materialization_edges`
+     to reference rows by `pipeline_id|step_name|lane_key|ts` strings.
+     Real schema change to edges, no extra table — ends up with the FK
+     target being a synthetic string rather than a real table row (FK
+     target tables don't exist).
+   - **(c) Give lane_store rows a synthetic `row_id`** (hash of
+     `pipeline_id|step_name|lane_key|ts`), migrate edges to use it. No
+     FK target — edges becomes join-by-string on the Arrow file when read.
+     The most honest "no SQLite mat table at all" option, at the cost of
+     edges queries becoming "scan the lane_store file for this row_id."
+
+   **Decision: (c).** It honors "materializations table is gone" fully;
+   edges becomes a 3-column table (`parent_row_id`, `child_row_id`,
+   unique constraint) with no FK, queried by joining row_ids against the
+   relevant step's Arrow file on read. The edges deletion (2i) becomes
+   "drop the table and rewrite the 2 readers" — a smaller, cleaner step
+   once lane_store row_id lookups are exercised. Accept the no-FK
+   trade; correctness is enforced at insert time (row_id is a hash of
+   the lane_store row's identifying tuple) and the immutability guard on
+   edges prevents edits.
 
 1. **`run_coordinate_statuses` vs `run_events` consolidation.** They
    overlap on per-lane outcome signal. `run_events` is the audit log

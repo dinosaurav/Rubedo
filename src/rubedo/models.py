@@ -223,6 +223,38 @@ class RunCoordinateStatus(Base):
     )
 
 
+class InputHashUsage(Base):
+    """The `input_hash -> last_run_id` map (see notes/arrow-storage.md).
+
+    Three jobs in one keyed table:
+      - Scheduler soft lock: a row's ``last_run_id`` is consulted before
+        a worker claims (step, input_hash) so two workers don't both run
+        the same input.
+      - Crash detection: a row with ``fulfilled=False`` for a terminal run
+        means the worker crashed mid-execution (no Arrow row was written).
+      - GC handle: retention prunes by run recency; "is this output still
+        referenced by a recent run?" is a lookup on last_run_id.
+
+    Mutability: this table is the one *non-append-only* ledger table —
+    ``last_run_id`` and ``fulfilled`` legitimately update.  The rest of the
+    ledger stays append-only; this is the soft-lock's hint semantics, not
+    ledger history.
+    """
+    __tablename__ = "input_hash_usages"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    input_hash = Column(String, nullable=False, index=True)
+    step_name = Column(String, nullable=False, index=True)
+    pipeline_id = Column(String, nullable=False, index=True)
+    last_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
+    claimed_at = Column(String, nullable=False)
+    fulfilled = Column(Boolean, nullable=False, default=False)
+    __table_args__ = (
+        UniqueConstraint(
+            "input_hash", "step_name", "pipeline_id", name="_ihu_uc"
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Immutability guards
 #
