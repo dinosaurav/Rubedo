@@ -224,6 +224,39 @@ def _record_planned(
                 coordinate=d.coordinate,
                 data={"reason": "stale"} if d.stale else None,
             )
+            # Claim: insert/update input_hash_usages with fulfilled=False
+            # before execution starts.  This is the soft lock — a second
+            # worker checking sees fulfilled=False and defers.  The commit
+            # path flips fulfilled=True after the step succeeds.
+            # Skip for expand parent lanes whose output_address isn't
+            # known yet (children are minted during execution).
+            if d.output_address is not None:
+                from .models import InputHashUsage
+                existing_claim = (
+                    session.query(InputHashUsage)
+                    .filter_by(
+                        address=str(d.output_address),
+                        step_name=step.name,
+                        pipeline_id=ctx.pipeline_id,
+                    )
+                    .first()
+                )
+                if existing_claim:
+                    existing_claim.fulfilled = False  # type: ignore[assignment]
+                    existing_claim.last_run_id = ctx.run_id  # type: ignore[assignment]
+                    existing_claim.claimed_at = utcnow_iso()  # type: ignore[assignment]
+                else:
+                    session.add(
+                        InputHashUsage(
+                            address=str(d.output_address),
+                            lane_key=d.coordinate,
+                            step_name=step.name,
+                            pipeline_id=ctx.pipeline_id,
+                            last_run_id=ctx.run_id,
+                            claimed_at=utcnow_iso(),
+                            fulfilled=False,
+                        )
+                    )
 
 
 def _commit_materialization(
