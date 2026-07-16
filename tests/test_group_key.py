@@ -196,19 +196,19 @@ def test_group_key_reduce_after_expand():
     assert outs["biz"]["n"] == 1
 
 
-def test_group_key_unindexed_field_raises():
+def test_group_key_missing_field_raises():
     create_file("a.txt", "hello")
 
-    @step  # category is NOT indexed
+    @step  # no "category" field in the output
     def classify(scan):
-        return {"category": "tech"}
+        return {"type": "tech"}
 
     @step(depends_on=["classify"], group_key="category")
     def rollup(classify):
         return {"n": len(classify)}
 
     pipe = pipeline(name="g", steps=[scan, classify, rollup])
-    with pytest.raises(ValueError, match="no indexed value"):
+    with pytest.raises(ValueError, match="no value"):
         pipe.run(workers=1)
 
 

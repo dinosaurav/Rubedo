@@ -134,16 +134,42 @@ def get_selection_addresses(
             r for r in arrow_rows if r.get("address") in fulfilled_addrs
         ]
 
-    # 3. Indexed-field filter (Arrow index_values)
+    # 3. Indexed-field filter — scan the struct output column for steps
+    #    that declared index= on the field, fall back to index_values
+    #    for string output or spilled values.  Without an index=
+    #    declaration, a field is not searchable via selection (it's
+    #    still available for join/group_key matching directly from the
+    #    parent's output dict).
     if selection.index:
         for field, value in selection.index.items():
-            if selection.pipeline_id and selection.step:
-                addrs = set(lane_store.scan_indexed_field(
-                    selection.pipeline_id, selection.step, field, value
-                ))
+            # Try struct sub-field scan: only for rows whose step declared
+            # index= on this field (index_values has the field key, even if
+            # the struct scan is what actually reads the value)
+            struct_matches: set = set()
+            for r in arrow_rows:
+                # Check if this step declared index= on this field
+                iv = r.get("index_values")
+                if not iv or field not in iv:
+                    continue
+                output = r.get("output")
+                if isinstance(output, dict):
+                    val = output.get(field)
+                    if val is None:
+                        continue
+                    check_vals = [str(v) for v in val] if isinstance(val, (list, tuple)) else [str(val)]
+                    if value in check_vals:
+                        struct_matches.add(r.get("address"))
+            if struct_matches:
+                arrow_rows = [r for r in arrow_rows if r.get("address") in struct_matches]
             else:
-                addrs = set(lane_store.scan_indexed_field_all(field, value))
-            arrow_rows = [r for r in arrow_rows if r.get("address") in addrs]
+                # Fall back to index_values map column
+                if selection.pipeline_id and selection.step:
+                    addrs = set(lane_store.scan_indexed_field(
+                        selection.pipeline_id, selection.step, field, value
+                    ))
+                else:
+                    addrs = set(lane_store.scan_indexed_field_all(field, value))
+                arrow_rows = [r for r in arrow_rows if r.get("address") in addrs]
 
     # 4. Coordinate / source_id filter (RunCoordinateStatus.output_address)
     if selection.source_id or selection.coordinate_glob:

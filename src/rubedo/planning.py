@@ -33,6 +33,27 @@ def _identity_from_output(row: dict) -> str:
     )
 
 
+def _field_values_from_ref(ref, field: str) -> List[str]:
+    """Extract the stringified values of a field from a MatRef's output.
+
+    When the output is a native Arrow value (a dict from a struct column),
+    the field is a dict key — read it directly, no ``index=`` declaration
+    needed.  When the output is a string (the spill/mixed fallback) or
+    None, fall back to ``index_values`` (the pre-extracted map column).
+    """
+    output = getattr(ref, "output", None)
+    if isinstance(output, dict):
+        val = output.get(field)
+        if val is None:
+            return []
+        if isinstance(val, (list, tuple)):
+            return [str(v) for v in val]
+        return [str(val)]
+    # Fallback: index_values (for string output column or missing output)
+    iv = getattr(ref, "index_values", {}) or {}
+    return iv.get(field, [])
+
+
 @dataclass
 class RootItem:
     """A synthetic lane item for a source-less root map: its single `@root`
@@ -265,12 +286,14 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
 def _group_reduce_lanes(
     session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """Partition a reduce's parent lanes into groups by an indexed field.
+    """Partition a reduce's parent lanes into groups by a field.
 
-    Reads each lane's ``index_values`` (the Arrow ``index_values`` map
-    column) for ``step.group_key``: a lane with several values (a
-    list-valued index) joins each group; a lane with none raises, since
-    you cannot group by a field it never indexed.
+    Reads each lane's ``group_key`` field from the parent's output (a
+    dict from a native Arrow struct column) directly — no ``index=``
+    declaration needed on the parent.  Falls back to ``index_values``
+    (the pre-extracted map column) when the output is a string (spilled/
+    mixed case).  A lane with several values (a list-valued field) joins
+    each group; a lane with none raises.
     """
     coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
@@ -278,13 +301,15 @@ def _group_reduce_lanes(
             coord_ref_map.append((dep, coord, ref))
 
     groups: Dict[str, Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]] = {}
+    gk = step.group_key or ""
     for dep, coord, ref in coord_ref_map:
-        values = ref.index_values.get(step.group_key, [])  # type: ignore[arg-type]
+        values = _field_values_from_ref(ref, gk)
         if not values:
             raise ValueError(
                 f"reduce step '{step.name}': group_key '{step.group_key}' "
-                f"has no indexed value for lane '{coord}' (parent '{dep}'). "
-                f"Add index=['{step.group_key}'] to that step."
+                f"has no value for lane '{coord}' (parent '{dep}'). "
+                f"The field must exist in the parent's output dict "
+                f"or be declared with index=['{step.group_key}']."
             )
         for v in values:
             groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
@@ -434,12 +459,13 @@ def _plan_join(
     for d in deps:
         field = step.join_on[d]  # type: ignore
         for coord, ref in coord_ref_map[d]:
-            values = ref.index_values.get(field, [])
+            values = _field_values_from_ref(ref, field)
             if not values:
                 raise ValueError(
-                    f"join step '{step.name}': side '{d}' has no indexed value "
-                    f"for join field '{field}' at lane '{coord}'. Add "
-                    f"index=['{field}'] to that step."
+                    f"join step '{step.name}': side '{d}' has no value "
+                    f"for join field '{field}' at lane '{coord}'. "
+                    f"The field must exist in the parent's output dict "
+                    f"or be declared with index=['{field}']."
                 )
             for v in values:
                 buckets[d].setdefault(v, []).append((coord, ref))
