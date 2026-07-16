@@ -525,6 +525,7 @@ def _commit_execution_result(
                 pipeline_id=ctx.pipeline_id,
                 step_name=step.name,
                 lane_key=decision.coordinate,
+                address=decision.output_address,  # type: ignore[arg-type]
                 input_hash=decision.input_hash,  # type: ignore
                 content_hash=output_content_hash,
                 content_type=content_type,

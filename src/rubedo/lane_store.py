@@ -34,6 +34,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     # (name, pyarrow type string, nullable)
     ("row_id", "string", False),
     ("lane_key", "string", False),
+    ("address", "string", False),  # output_address: hash(step, version, input_hash[, params][, code])
     ("input_hash", "string", False),
     ("content_hash", "string", True),  # nullable for blank tombstones
     ("content_type", "string", True),
@@ -132,6 +133,7 @@ def append_filled(
     pipeline_id: str,
     step_name: str,
     lane_key: str,
+    address: str,
     input_hash: str,
     content_hash: str,
     content_type: str,
@@ -140,7 +142,14 @@ def append_filled(
     filtered: bool = False,
     ts: Optional[Any] = None,
 ):
-    """Append a filled row (a successful computation) to the step's buffer."""
+    """Append a filled row (a successful computation) to the step's buffer.
+
+    ``address`` is the comprehensive cache identity = hash(step, version,
+    input_hash[, params][, code]) — what today's SQLite reuse check keys on.
+    Carrying it as a column lets planning ask "is there a filled row with
+    *this* address for *this* lane_key?" — a port of the current
+    `Materialization.output_address IN (...) AND is_live` lookup, just on
+    a different substrate."""
     from datetime import datetime, timezone
 
     if ts is None:
@@ -149,6 +158,7 @@ def append_filled(
         {
             "row_id": _make_row_id(pipeline_id, step_name, lane_key, ts),
             "lane_key": lane_key,
+            "address": address,
             "input_hash": input_hash,
             "content_hash": content_hash,
             "content_type": content_type,
@@ -165,16 +175,17 @@ def append_blank(
     step_name: str,
     lane_key: str,
     run_id: str,
+    address: str = "",
     input_hash: str = "",
     ts: Optional[Any] = None,
 ):
     """Append a blank tombstone row (an invalidation marker).
 
     content_hash / content_type / output_path are NULL — the latest row
-    being blank means "pending, recompute next run."  input_hash is stored
-    as the empty string (Arrow doesn't allow null in the non-nullable
-    column) to keep the schema simple; readers treat blank as "regardless
-    of input_hash, this lane is invalidated."
+    being blank means "pending, recompute next run."  address / input_hash
+    are stored as the empty string when not supplied (Arrow doesn't allow
+    null in the non-nullable columns) to keep the schema simple; readers
+    treat blank as "regardless of identity, this lane is invalidated."
     """
     from datetime import datetime, timezone
 
@@ -184,6 +195,7 @@ def append_blank(
         {
             "row_id": _make_row_id(pipeline_id, step_name, lane_key, ts),
             "lane_key": lane_key,
+            "address": address,
             "input_hash": input_hash,
             "content_hash": None,
             "content_type": None,
@@ -269,7 +281,7 @@ def find_latest_filled(
     lane_key: str,
     input_hash: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """The latest filled (non-blank) row for this lane — the reuse check.
+    """The latest filled (non-blank) row for this lane.
 
     If ``input_hash`` is given, only a latest row with a matching
     input_hash counts as a reuse hit; a mismatch means the lane was
@@ -278,6 +290,11 @@ def find_latest_filled(
     Returns None if no filled row exists — meaning the lane must be
     (re)computed.  A blank tombstone is NOT a filled row; if the latest
     row is blank, this returns None, signalling "invalidated, recompute."
+
+    NOTE: this filter doesn't account for version / params / code_hash,
+    so it isn't the right reuse check for the engine's planning phase —
+    use ``find_latest_filled_by_address`` for that.  Kept for tests and
+    narrow uses where the caller knows the identity is stable.
     """
     latest = find_latest(pipeline_id, step_name, lane_key)
     if latest is None or latest["content_hash"] is None:
@@ -285,6 +302,41 @@ def find_latest_filled(
     if input_hash is not None and latest["input_hash"] != input_hash:
         return None  # latest filled was for a different input
     return latest
+
+
+def find_latest_filled_by_address(
+    pipeline_id: str,
+    step_name: str,
+    lane_key: str,
+    address: str,
+) -> Optional[Dict[str, Any]]:
+    """The reuse check the planning phase actually needs.
+
+    Returns the latest row for (step, lane_key, address) if filled;
+    None if the latest row for that lane_key is a blank tombstone
+    (invalidated), if no row with the given address exists, or if no
+    row of any kind exists.  Mirrors the SQLite semantics
+    `Materialization.filter_by(output_address=address, is_live=True)` and
+    is the port-ready replacement for the planning reuse lookup.
+
+    Blank-tombstone semantics (notes/arrow-storage.md): the latest row
+    for a lane_key of *any* address trumps older rows.  If the latest is
+    blank, the lane is invalidated and recomputes regardless of which
+    address the next run computes; older filled rows (even with the
+    exact address we're querying) are not reused.
+
+    ``address`` is the comprehensive cache identity
+    (``hash(step, version, input_hash[, params][, code])`` — see
+    ``hashing.compute_output_address``), so a version bump, a changed
+    params hash, or a code="auto" code change naturally produces a different
+    address and reads as "miss, recompute."
+    """
+    latest_any = find_latest(pipeline_id, step_name, lane_key)
+    if latest_any is None or latest_any["content_hash"] is None:
+        return None  # blank tombstone wins — lane is invalidated
+    if latest_any["address"] != address:
+        return None  # latest filled was under a different identity
+    return latest_any
 
 
 def find_latest(

@@ -60,7 +60,7 @@ def _ts(minutes_ago: float = 0):
 
 
 def test_append_filled_and_find():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_1", "ih_a", "ch_0", "json", "obj/0", RUN1)
     row = find_latest_filled(PIPE, STEP, "@root#0")
     assert row is not None
     assert row["content_hash"] == "ch_0"
@@ -71,7 +71,7 @@ def test_append_filled_and_find():
 
 
 def test_find_latest_filled_missing_lane():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_2", "ih_a", "ch_0", "json", "obj/0", RUN1)
     assert find_latest_filled(PIPE, STEP, "@root#nonexistent") is None
 
 
@@ -81,8 +81,8 @@ def test_find_latest_filled_missing_step():
 
 def test_find_latest_filled_with_input_hash_filter():
     """When input_hash is given, only rows with a matching hash are returned."""
-    append_filled(PIPE, STEP, "@root#0", "ih_v1", "ch_v1", "json", "obj/1", RUN1)
-    append_filled(PIPE, STEP, "@root#0", "ih_v2", "ch_v2", "json", "obj/2", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_3", "ih_v1", "ch_v1", "json", "obj/1", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_4", "ih_v2", "ch_v2", "json", "obj/2", RUN1,
                   ts=_ts(minutes_ago=1))  # explicitly older
 
     # Matching input_hash → reuse
@@ -98,9 +98,9 @@ def test_latest_by_ts_wins():
     """When multiple filled rows exist for a lane, the latest by ts is returned."""
     old_ts = _ts(minutes_ago=10)
     new_ts = _ts(minutes_ago=0)
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_old", "json", "obj/old", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_5", "ih_a", "ch_old", "json", "obj/old", RUN1,
                   ts=old_ts)
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_new", "json", "obj/new", RUN2,
+    append_filled(PIPE, STEP, "@root#0", "addr_6", "ih_a", "ch_new", "json", "obj/new", RUN2,
                   ts=new_ts)
     row = find_latest_filled(PIPE, STEP, "@root#0")
     assert row["content_hash"] == "ch_new"
@@ -114,7 +114,7 @@ def test_latest_by_ts_wins():
 
 def test_blank_tombstone_makes_lane_not_filled():
     """After an invalidation (blank row), find_latest_filled returns None."""
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_7", "ih_a", "ch_0", "json", "obj/0", RUN1,
                   ts=_ts(minutes_ago=5))
     append_blank(PIPE, STEP, "@root#0", RUN2, ts=_ts(minutes_ago=0))
 
@@ -130,20 +130,20 @@ def test_blank_tombstone_makes_lane_not_filled():
 
 def test_find_latest_absent_lane():
     """A lane that was never computed returns None from find_latest."""
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_8", "ih_a", "ch_0", "json", "obj/0", RUN1)
     assert find_latest(PIPE, STEP, "@root#never") is None
 
 
 def test_recompute_after_blank_fills_again():
     """After a blank tombstone, a new filled row makes the lane live again."""
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v1", "json", "obj/1", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_9", "ih_a", "ch_v1", "json", "obj/1", RUN1,
                   ts=_ts(minutes_ago=10))
-    append_blank(PIPE, STEP, "@root#0", RUN2, input_hash="ih_a",
+    append_blank(PIPE, STEP, "@root#0", RUN2, address="", input_hash="ih_a",
                  ts=_ts(minutes_ago=5))
     # Invalidated → None
     assert find_latest_filled(PIPE, STEP, "@root#0") is None
 
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v2", "json", "obj/2", RUN2,
+    append_filled(PIPE, STEP, "@root#0", "addr_10", "ih_a", "ch_v2", "json", "obj/2", RUN2,
                   ts=_ts(minutes_ago=0))
     # Refilled → latest filled is the new one
     row = find_latest_filled(PIPE, STEP, "@root#0")
@@ -158,7 +158,7 @@ def test_recompute_after_blank_fills_again():
 
 def test_multiple_lanes_independent():
     for i in range(5):
-        append_filled(PIPE, STEP, f"@root#{i}", f"ih_{i}", f"ch_{i}",
+        append_filled(PIPE, STEP, f"@root#{i}", f"addr_{i}", f"ih_{i}", f"ch_{i}",
                        "json", f"obj/{i}", RUN1)
     for i in range(5):
         row = find_latest_filled(PIPE, STEP, f"@root#{i}")
@@ -167,8 +167,8 @@ def test_multiple_lanes_independent():
 
 
 def test_get_all_lane_keys():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
-    append_filled(PIPE, STEP, "@root#1", "ih_b", "ch_1", "json", "obj/1", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_11", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#1", "addr_12", "ih_b", "ch_1", "json", "obj/1", RUN1)
     append_blank(PIPE, STEP, "@root#2", RUN1)
     keys = set(get_all_lane_keys(PIPE, STEP))
     assert keys == {"@root#0", "@root#1", "@root#2"}
@@ -177,11 +177,11 @@ def test_get_all_lane_keys():
 
 
 def test_get_filled_rows():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_13", "ih_a", "ch_0", "json", "obj/0", RUN1,
                   ts=_ts(minutes_ago=5))
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_1", "json", "obj/1", RUN2,
+    append_filled(PIPE, STEP, "@root#0", "addr_14", "ih_a", "ch_1", "json", "obj/1", RUN2,
                   ts=_ts(minutes_ago=0))  # newer generation
-    append_filled(PIPE, STEP, "@root#1", "ih_b", "ch_2", "json", "obj/2", RUN1)
+    append_filled(PIPE, STEP, "@root#1", "addr_15", "ih_b", "ch_2", "json", "obj/2", RUN1)
     rows = get_filled_rows(PIPE, STEP)
     by_lane = {r["lane_key"]: r for r in rows}
     assert by_lane["@root#0"]["content_hash"] == "ch_1"  # latest generation
@@ -194,7 +194,7 @@ def test_get_filled_rows():
 
 
 def test_flush_persists_to_disk():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_16", "ih_a", "ch_0", "json", "obj/0", RUN1)
     flush_step(PIPE, STEP)
 
     # After flush, the in-memory buffer is cleared
@@ -207,8 +207,8 @@ def test_flush_persists_to_disk():
 
 
 def test_flush_all_writes_every_step():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
-    append_filled(PIPE, "other_step", "@root#1", "ih_b", "ch_1", "json", "obj/1",
+    append_filled(PIPE, STEP, "@root#0", "addr_17", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, "other_step", "@root#1", "addr_other", "ih_b", "ch_1", "json", "obj/1",
                   RUN1)
     flush_all()
     clear_run_buffers()
@@ -219,12 +219,12 @@ def test_flush_all_writes_every_step():
 
 def test_flush_accumulates_across_runs():
     """A second flush doesn't clobber the first run's rows."""
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v1", "json", "obj/1", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_18", "ih_a", "ch_v1", "json", "obj/1", RUN1,
                   ts=_ts(minutes_ago=10))
     flush_step(PIPE, STEP)
     clear_run_buffers()
 
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v2", "json", "obj/2", RUN2,
+    append_filled(PIPE, STEP, "@root#0", "addr_19", "ih_a", "ch_v2", "json", "obj/2", RUN2,
                   ts=_ts(minutes_ago=0))
     flush_step(PIPE, STEP)
     clear_run_buffers()
@@ -235,7 +235,7 @@ def test_flush_accumulates_across_runs():
 
 def test_in_memory_buffer_visible_before_flush():
     """During a run, downstream reads see the buffer without a disk flush."""
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_20", "ih_a", "ch_0", "json", "obj/0", RUN1)
     # No flush — still in buffer
     row = find_latest_filled(PIPE, STEP, "@root#0")
     assert row is not None
@@ -248,11 +248,11 @@ def test_in_memory_buffer_visible_before_flush():
 
 
 def test_compact_keeps_latest_per_lane():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v1", "json", "obj/1", RUN1,
+    append_filled(PIPE, STEP, "@root#0", "addr_21", "ih_a", "ch_v1", "json", "obj/1", RUN1,
                   ts=_ts(minutes_ago=10))
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_v2", "json", "obj/2", RUN2,
+    append_filled(PIPE, STEP, "@root#0", "addr_22", "ih_a", "ch_v2", "json", "obj/2", RUN2,
                   ts=_ts(minutes_ago=0))
-    append_filled(PIPE, STEP, "@root#1", "ih_b", "ch_3", "json", "obj/3", RUN1)
+    append_filled(PIPE, STEP, "@root#1", "addr_23", "ih_b", "ch_3", "json", "obj/3", RUN1)
     flush_step(PIPE, STEP)
     clear_run_buffers()
 
@@ -266,8 +266,8 @@ def test_compact_keeps_latest_per_lane():
 
 
 def test_compact_drops_unkept_lanes():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
-    append_filled(PIPE, STEP, "@root#1", "ih_b", "ch_1", "json", "obj/1", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_24", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#1", "addr_25", "ih_b", "ch_1", "json", "obj/1", RUN1)
     flush_step(PIPE, STEP)
     clear_run_buffers()
 
@@ -278,7 +278,7 @@ def test_compact_drops_unkept_lanes():
 
 
 def test_compact_removes_file_when_nothing_kept():
-    append_filled(PIPE, STEP, "@root#0", "ih_a", "ch_0", "json", "obj/0", RUN1)
+    append_filled(PIPE, STEP, "@root#0", "addr_26", "ih_a", "ch_0", "json", "obj/0", RUN1)
     flush_step(PIPE, STEP)
     clear_run_buffers()
 
@@ -292,7 +292,7 @@ def test_compact_removes_file_when_nothing_kept():
 
 
 def test_different_pipelines_isolated():
-    append_filled("pipe_a", STEP, "@root#0", "ih_a", "ch_a", "json", "obj/a", RUN1)
-    append_filled("pipe_b", STEP, "@root#0", "ih_b", "ch_b", "json", "obj/b", RUN1)
+    append_filled("pipe_a", STEP, "@root#0", "addr_a", "ih_a", "ch_a", "json", "obj/a", RUN1)
+    append_filled("pipe_b", STEP, "@root#0", "addr_b", "ih_b", "ch_b", "json", "obj/b", RUN1)
     assert find_latest_filled("pipe_a", STEP, "@root#0")["content_hash"] == "ch_a"
     assert find_latest_filled("pipe_b", STEP, "@root#0")["content_hash"] == "ch_b"
