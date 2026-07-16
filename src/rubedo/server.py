@@ -6,7 +6,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from importlib.resources import files as _resource_files
-from typing import List
+from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Request, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ from .models import (
     MaterializationLifecycle,
     MaterializationEdge,
     RunCoordinateStatus,
+    InputHashUsage,
 )
 from .selection import Selection
 from .invalidation import invalidate
@@ -347,14 +348,34 @@ def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset
         return {"total": total, "items": items}
 
 
+def _is_fulfilled(session, output_address: str, step_name: Optional[str] = None, pipeline_id: Optional[str] = None) -> bool:
+    """Check input_hash_usages.fulfilled for this address (the new liveness gate)."""
+    from .models import InputHashUsage
+    q = session.query(InputHashUsage.fulfilled).filter(
+        InputHashUsage.address == output_address,
+    )
+    if step_name:
+        q = q.filter(InputHashUsage.step_name == step_name)
+    if pipeline_id:
+        q = q.filter(InputHashUsage.pipeline_id == pipeline_id)
+    row = q.first()
+    return bool(row and row[0])
+
+
 def _resolve_materialization(session, output_address: str):
-    """Latest generation at an address, preferring the live one."""
+    """Latest generation at an address, preferring the fulfilled one."""
+    # Check input_hash_usages for fulfilled=True (new liveness gate)
+    fulfilled_addrs = {
+        u.address for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.address == output_address, InputHashUsage.fulfilled.is_(True))
+        .all()
+    }
     live = (
         session.query(Materialization)
         .filter_by(output_address=output_address, is_live=True)
         .first()
     )
-    if live:
+    if live and (not fulfilled_addrs or output_address in fulfilled_addrs):
         return live
     return (
         session.query(Materialization)
@@ -493,7 +514,7 @@ async def preview_selection(request: Request):
                     "output_address": m.output_address,
                     "output_content_hash": m.output_content_hash,
                     "metadata": json.loads(m.metadata_json) if m.metadata_json else {},  # type: ignore
-                    "invalidated": not m.is_live,
+                    "invalidated": not _is_fulfilled(session, str(m.output_address), str(m.step_name), str(m.pipeline_id)),
                 }
             )
 
