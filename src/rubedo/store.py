@@ -12,7 +12,7 @@ from .hashing import hash_bytes
 
 class HasOutputContentHash(Protocol):
     """Structural type for read_materialization_output's argument — a
-    Materialization row and a runner MatRef both satisfy this without
+    a runner MatRef both satisfy this without
     either needing to know about the other."""
 
     output_content_hash: str
@@ -189,7 +189,7 @@ def read_materialization_output(materialization: Optional[HasOutputContentHash])
     """Reads and deserializes a materialization output from the store.
 
     Accepts anything carrying output_content_hash and content_type
-    (a Materialization row or a runner MatRef).
+    (an Arrow row ref or a runner MatRef).
     """
     if not materialization or not materialization.output_content_hash:
         return None

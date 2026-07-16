@@ -21,8 +21,9 @@ from rubedo.gc import (
     auto_prune,
     gc,
 )
+from rubedo import lane_store
 from rubedo.models import (
-    Materialization,
+    InputHashUsage,
     ObjectReclamation,
     Run,
     RunCoordinateStatus,
@@ -136,9 +137,15 @@ def make_pipe(retention=None, folder=TEST_FOLDER, pid="gcp"):
 
 def live_hashes():
     with get_session() as s:
+        live_addrs = {
+            str(u.address) for u in s.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
+        addr_index = lane_store.address_row_index()
         return {
-            m.output_content_hash
-            for m in s.query(Materialization).filter_by(is_live=True).all()
+            row.get("content_hash")
+            for addr in live_addrs
+            if (row := addr_index.get(addr))
         }
 
 
@@ -170,13 +177,18 @@ def test_retention_demotes_only_the_oldest_generation():
     s3 = make_pipe(retention=2).run(workers=1)  # auto-prune fires here
 
     with get_session() as s:
-        mats = {m.output_content_hash[:10]: m for m in s.query(Materialization).all()}
+        rows = lane_store.all_filled_rows()
+        mats = {r.get("content_hash", "")[:10]: r for r in rows}
         assert len(mats) == 3
-        live = [m for m in mats.values() if m.is_live]
+        live_addrs = {
+            str(u.address) for u in s.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
+        live = [m for m in mats.values() if m.get("address") in live_addrs]
         assert len(live) == 2  # gen2, gen3 kept; gen1 demoted
 
         # The demoted one is the generation only run 1 referenced.
-        demoted = [m for m in mats.values() if not m.is_live]
+        demoted = [m for m in mats.values() if m.get("address") not in live_addrs]
         assert len(demoted) == 1
         gen1 = demoted[0]
 
@@ -186,9 +198,9 @@ def test_retention_demotes_only_the_oldest_generation():
         # Freed object deleted from disk and logged in object_reclamations.
         recl = s.query(ObjectReclamation).all()
         assert len(recl) == 1
-        assert recl[0].content_hash == gen1.output_content_hash
+        assert recl[0].content_hash == gen1.get("content_hash")
         assert recl[0].trigger == "auto_prune"
-        assert not os.path.exists(_get_object_path(gen1.output_content_hash))
+        assert not os.path.exists(_get_object_path(gen1.get("content_hash")))
 
     # The two kept objects survive on disk.
     for h in live_hashes():
@@ -222,16 +234,18 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
 
         with get_session() as s:
             shared_hash = None
-            for m in s.query(Materialization).all():
-                if m.pipeline_id == "pb":
-                    shared_hash = m.output_content_hash
+            for r in lane_store.all_filled_rows():
+                if r.get("pipeline_id") == "pb":
+                    shared_hash = r.get("content_hash")
             assert shared_hash is not None
             # gen1 (pipeline A, "SHARED") was demoted...
             a_shared = [
-                m for m in s.query(Materialization).filter_by(pipeline_id="gcp").all()
-                if m.output_content_hash == shared_hash
+                r for r in lane_store.all_filled_rows()
+                if r.get("pipeline_id") == "gcp" and r.get("content_hash") == shared_hash
             ]
-            assert a_shared and not a_shared[0].is_live
+            assert a_shared
+            ihu = s.query(InputHashUsage).filter_by(address=a_shared[0]["address"]).first()
+            assert ihu is not None and ihu.fulfilled is False
             # ...but the object was NOT reclaimed: B's live reference keeps it.
             recl_hashes = {r.content_hash for r in s.query(ObjectReclamation).all()}
             assert shared_hash not in recl_hashes
@@ -261,11 +275,15 @@ def test_pruned_lane_reappears_and_lazily_heals():
     make_pipe(retention=2).run(workers=1)  # gen1 pruned + object deleted
 
     with get_session() as s:
+        live_addrs = {
+            str(u.address) for u in s.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
         gen1 = [
-            m for m in s.query(Materialization).all() if not m.is_live
+            r for r in lane_store.all_filled_rows() if r.get("address") not in live_addrs
         ][0]
-        gen1_hash = gen1.output_content_hash
-        gen1_id = gen1.id
+        gen1_hash = gen1.get("content_hash")
+        gen1_addr = gen1["address"]
     assert not os.path.exists(_get_object_path(gen1_hash))
 
     # The input reappears: recompute rewrites the bytes and restores the row.
@@ -273,8 +291,8 @@ def test_pruned_lane_reappears_and_lazily_heals():
     make_pipe(retention=2).run(workers=1)
 
     with get_session() as s:
-        healed = s.get(Materialization, gen1_id)
-        assert healed.is_live  # restored
+        ihu = s.query(InputHashUsage).filter_by(address=gen1_addr).first()
+        assert ihu is not None and ihu.fulfilled is True  # restored
         # Lifecycle rows gone in the new model
     assert os.path.exists(_get_object_path(gen1_hash))  # bytes back on disk
 
@@ -311,7 +329,7 @@ def test_gc_refuses_and_auto_prune_skips_while_a_run_is_live():
     assert not report.applied
     with get_session() as s:
         assert s.query(ObjectReclamation).count() == 0
-        assert s.query(Materialization).filter_by(is_live=False).count() == 0
+        assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
 
     # A dry-run is still allowed (touches nothing).
     dry = gc(delete=False, max_bytes=1)
@@ -338,11 +356,12 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 
     # Map each generation's output text -> content hash while all are present.
     from rubedo.store import read_materialization_output
+    from rubedo.planning import _ArrowRowRef
 
     with get_session() as s:
         hash_of = {
-            read_materialization_output(m): m.output_content_hash
-            for m in s.query(Materialization).all()
+            read_materialization_output(_ArrowRowRef(r)): r.get("content_hash")
+            for r in lane_store.all_filled_rows()
         }
 
     # Total = 15 bytes; budget 11 forces dropping the oldest 4-byte object.
@@ -355,7 +374,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 
     # Dry-run wrote nothing: all still live, all objects present.
     with get_session() as s:
-        assert s.query(Materialization).filter_by(is_live=False).count() == 0
+        assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
         assert s.query(ObjectReclamation).count() == 0
 
     # --delete performs exactly what the dry-run listed.
@@ -365,11 +384,24 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     assert done.reclaimed == dry_reclaimed
 
     with get_session() as s:
-        demoted = s.query(Materialization).filter_by(is_live=False).all()
-        assert sorted(m.output_address for m in demoted) == sorted(dry_ids)
-        assert demoted[0].output_content_hash == hash_of["AAAA"]  # oldest
+        unfulfilled_addrs = {
+            str(u.address) for u in s.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(False)).all()
+        }
+        assert sorted(unfulfilled_addrs) == sorted(dry_ids)
+        addr_index = lane_store.address_row_index()
+        demoted_row = next((addr_index[a] for a in unfulfilled_addrs), None)
+        assert demoted_row is not None
+        assert demoted_row.get("content_hash") == hash_of["AAAA"]  # oldest
         # Latest terminal run's output (CCCCCC) is never a candidate.
-        live = {m.output_content_hash for m in s.query(Materialization).filter_by(is_live=True).all()}
+        live = {
+            addr_index[a].get("content_hash")
+            for a in {
+                str(u.address) for u in s.query(InputHashUsage)
+                .filter(InputHashUsage.fulfilled.is_(True)).all()
+            }
+            if addr_index.get(a)
+        }
         assert hash_of["CCCCCC"] in live
     assert not os.path.exists(_get_object_path(dry_reclaimed[0][0]))
 
@@ -437,26 +469,27 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
     make_expand_pipe(retention=2).run(workers=1)  # auto-prune fires
 
     with get_session() as s:
-        # The anchor = the split-step materialization with no status row.
-        rcs_ids = {
-            r.materialization_id
+        # The anchor = the split-step Arrow row with no status row.
+        rcs_addrs = {
+            str(r.output_address)
             for r in s.query(RunCoordinateStatus).all()
-            if r.materialization_id
+            if r.output_address
         }
-        split_mats = s.query(Materialization).filter_by(step_name="split").all()
-        anchors = [m for m in split_mats if m.id not in rcs_ids]
+        split_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "split"]
+        anchors = [r for r in split_rows if r["address"] not in rcs_addrs]
         assert len(anchors) == 1
         anchor = anchors[0]
 
-        # It survived the prune.
-        assert anchor.is_live
+        # It survived the prune (liveness = IHU fulfilled).
+        ihu = s.query(InputHashUsage).filter_by(address=anchor["address"]).first()
+        assert ihu is not None and ihu.fulfilled is True
 
         # The widening is load-bearing: _anchor_addresses finds it, the keep-set
         # protects it, and WITHOUT the widening it would be demoted.
         anchor_addrs = _anchor_addresses(s)
-        assert anchor.output_address in anchor_addrs
-        assert anchor.output_address not in _retention_demote_addresses(s, {"xp": 2}, anchor_addrs)
-        assert anchor.output_address in _retention_demote_addresses(s, {"xp": 2}, set())
+        assert anchor["address"] in anchor_addrs
+        assert anchor["address"] not in _retention_demote_addresses(s, {"xp": 2}, anchor_addrs)
+        assert anchor["address"] in _retention_demote_addresses(s, {"xp": 2}, set())
 
     # A subsequent run still reuses via the anchor: the expand fn is NOT called.
     calls_before = _split_calls["n"]
@@ -485,4 +518,4 @@ def test_gc_applies_recorded_retention_policy_manually():
     # gen1 already auto-pruned; nothing left to do.
     assert report.demoted_count == 0
     with get_session() as s:
-        assert s.query(Materialization).filter_by(is_live=True).count() == 2
+        assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count() == 2

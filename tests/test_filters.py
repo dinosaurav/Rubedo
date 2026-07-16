@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, RunCoordinateStatus
+from rubedo.models import InputHashUsage, RunCoordinateStatus
 from rubedo import lane_store
 from rubedo.store import init_store
 
@@ -119,14 +119,17 @@ def coord_for_path(run_id, filename):
     coordinate all the way down the chain."""
     with get_session() as session:
         rows = (
-            session.query(RunCoordinateStatus, Materialization)
-            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        for rc, mat in rows:
-            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+        addr_index = lane_store.address_row_index()
+        for rc in rows:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            iv = lane_store.get_index_values(row["pipeline_id"], "scan", row["address"])
             if ("path", filename) in iv:
                 return rc.coordinate
     return None
@@ -161,7 +164,7 @@ def test_filtered_coordinate_skips_downstream():
         "filtered_parents": ["screen"]
     }
     # Downstream never materialized anything for the filtered coordinate
-    assert sum_rcs[coord_short].materialization_id is None
+    assert sum_rcs[coord_short].output_address is None
 
 
 def test_filter_decision_is_cached():
@@ -177,11 +180,12 @@ def test_filter_decision_is_cached():
     assert summary.created_count == 0
 
     with get_session() as session:
-        mats = session.query(Materialization).all()
-        assert len(mats) == 2  # scan's real lane + screen's filtered marker
-        screen_mat = next(m for m in mats if m.step_name == "screen")
-        assert screen_mat.filtered is True
-        assert screen_mat.is_live is True
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 2  # scan's real lane + screen's filtered marker
+        screen_row = next(r for r in rows if r.get("step_name") == "screen")
+        assert screen_row.get("filtered") is True
+        ihu = session.query(InputHashUsage).filter_by(address=screen_row["address"]).first()
+        assert ihu is not None and ihu.fulfilled is True
 
 
 def test_content_change_reverses_the_verdict():

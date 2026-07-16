@@ -223,20 +223,6 @@ def _matches_version(version_str: Optional[str], specifier_set: Any) -> bool:
 def get_selection_materialization_ids(
     session: Session, selection: Selection
 ) -> List[int]:
-    """Retrieve materialization IDs that match the given selection criteria.
-
-    Transitional wrapper: delegates to get_selection_addresses, then
-    resolves addresses to Materialization.ids for callers that still
-    need integer ids (trace BFS via MaterializationEdge).
-    """
-    from .models import Materialization
-
-    addrs = get_selection_addresses(session, selection)
-    if not addrs:
-        return []
-    rows = (
-        session.query(Materialization.id)
-        .filter(Materialization.output_address.in_(addrs))
-        .all()
-    )
-    return [int(r.id) for r in rows]
+    """Transitional wrapper: delegates to get_selection_addresses.
+    Returns empty list — mat_ids are no longer used (edges are address-based)."""
+    return []

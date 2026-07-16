@@ -401,16 +401,9 @@ def batch_lookup_by_address(
     (recompute).  The row_dict carries all fields the planning phase needs
     to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
     ``output_path``, ``filtered``, ``code_hash``, ``ts``,
-    ``index_values``, and ``mat_id`` (resolved from Materialization for
-    MaterializationEdge FKs — transitional, deleted when the
-    materializations table is dropped).
-
-    The two-step lookup (SQLite for liveness, Arrow for content) replaces
-    today's one-step SQLite query — but the SQLite lookup is a simple
-    indexed query on ``input_hash_usages``, and the Arrow lookup only
-    fires on confirmed reuse hits.
+    ``index_values``.
     """
-    from .models import InputHashUsage, Materialization
+    from .models import InputHashUsage
 
     if not addresses:
         return {}
@@ -427,19 +420,6 @@ def batch_lookup_by_address(
     if not fulfilled_addrs:
         return {}
 
-    # Step 1b: resolve to SQLite Materialization integer ids for the
-    # MaterializationEdge FKs (trace/invalidation downstream BFS).
-    # Transitional — deleted when the materializations table is dropped.
-    mat_rows = (
-        session.query(Materialization.id, Materialization.output_address)
-        .filter(
-            Materialization.output_address.in_(fulfilled_addrs),
-            Materialization.is_live.is_(True),
-        )
-        .all()
-    )
-    mat_id_by_addr = {str(m.output_address): int(m.id) for m in mat_rows}
-
     # Step 2: for each fulfilled address, retrieve the Arrow row by
     # scanning the step's Arrow file on the address column directly.
     result: Dict[str, Dict[str, Any]] = {}
@@ -450,7 +430,6 @@ def batch_lookup_by_address(
     for row in rows:
         addr = row.get("address")
         if addr in fulfilled_addrs:
-            row["mat_id"] = mat_id_by_addr.get(addr)
             row["index_values"] = _normalize_index_values(row)
             result[addr] = row
     return result

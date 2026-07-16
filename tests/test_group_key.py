@@ -8,7 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, RunCoordinateStatus, RunEvent
+from rubedo.models import RunCoordinateStatus, RunEvent, InputHashUsage
+from rubedo import lane_store
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_groupkey_data"
@@ -95,13 +97,16 @@ def _outputs(step_name):
         statuses = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name=step_name)
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
         for st in statuses:
-            mat = session.get(Materialization, st.materialization_id)
-            if mat and mat.is_live:
-                result[st.coordinate] = read_materialization_output(mat)
+            if st.output_address:
+                row = lane_store.address_row_index().get(str(st.output_address))
+                if row:
+                    usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
+                    if usage and usage.fulfilled:
+                        result[st.coordinate] = read_materialization_output(_ArrowRowRef(row))
     return result
 
 

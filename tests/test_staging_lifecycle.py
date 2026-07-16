@@ -75,17 +75,13 @@ def test_staging_cleanup_on_error():
 
 def test_staging_cleanup_on_commit_error():
     pipe = pipeline(name="p2", steps=[my_step])
-    
-    def mock_commit():
-        raise RuntimeError("DB commit failed")
-        
-    # Patch session.commit inside ledger's _commit_execution_result context
-    # It's tricky to patch just one commit, so we patch _commit_materialization to fail.
-    with patch("rubedo.ledger._commit_materialization", side_effect=RuntimeError("Simulated DB failure")):
+
+    # Simulate a failure during the Arrow write (the new commit path)
+    with patch("rubedo.lane_store.append_filled", side_effect=RuntimeError("Simulated Arrow write failure")):
         summary = pipe.run(params={"content": "A"})
-        
+
     assert summary.failed_count == 1
-    
+
     run_staging = os.path.join(store.STAGING_DIR, summary.run_id)
     assert not os.path.exists(run_staging)
 

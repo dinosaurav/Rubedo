@@ -11,7 +11,8 @@ from sqlalchemy.pool import StaticPool
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import get_session
 from rubedo.du import storage_report
-from rubedo.models import Materialization
+from rubedo.models import InputHashUsage
+from rubedo import lane_store
 from rubedo.store import _get_object_path, read_materialization_output
 
 TEST_FOLDER = ".test_du_data"
@@ -185,22 +186,24 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     assert norm_usage.bytes == len("same")
     assert report.total_bytes == scan_usage.bytes + norm_usage.bytes
 
-    with get_session() as session:
-        norm_mats = session.query(Materialization).filter_by(step_name="norm").all()
-        addresses = {m.output_address for m in norm_mats}
-        hashes = {m.output_content_hash for m in norm_mats}
+    with get_session():
+        norm_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "norm"]
+        addresses = {r.get("address") for r in norm_rows}
+        hashes = {r.get("content_hash") for r in norm_rows}
     assert len(addresses) == 2  # distinct addresses...
     assert len(hashes) == 1  # ...sharing one object
 
     def coordinate_for_path(path_value):
+        from rubedo.planning import _ArrowRowRef
+
         with get_session() as session:
-            for m in session.query(Materialization).filter_by(step_name="scan").all():
-                if read_materialization_output(m).get("path") == path_value:
+            for r in [row for row in lane_store.all_filled_rows() if row.get("step_name") == "scan"]:
+                if read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
                     from rubedo.models import RunCoordinateStatus
 
                     rc = (
                         session.query(RunCoordinateStatus)
-                        .filter_by(step_name="scan", materialization_id=m.id)
+                        .filter_by(step_name="scan", output_address=r.get("address"))
                         .first()
                     )
                     return rc.coordinate
@@ -235,9 +238,10 @@ def test_missing_object_file_is_reported_not_crashed():
     create_file("a.txt", "alpha")
     make_shout_pipeline().run(workers=1)
 
-    with get_session() as session:
-        mat = session.query(Materialization).one()
-        content_hash = str(mat.output_content_hash)
+    with get_session():
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 1
+        content_hash = str(rows[0].get("content_hash"))
     os.remove(_get_object_path(content_hash))
 
     report = storage_report()  # must not raise
@@ -282,10 +286,13 @@ def test_reclaimed_object_reported_separately_from_missing():
 
     # A genuinely missing object still reads as missing, alongside the reclaimed.
     with get_session() as session:
-        live = (
-            session.query(Materialization).filter_by(is_live=True).first()
-        )
-        os.remove(_get_object_path(str(live.output_content_hash)))
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
+    idx = lane_store.address_row_index()
+    live_row = next(idx[a] for a in fulfilled_addrs if a in idx)
+    os.remove(_get_object_path(str(live_row.get("content_hash"))))
     mixed = storage_report()
     assert mixed.missing_objects == 1
     assert mixed.reclaimed_objects == len(done.reclaimed)

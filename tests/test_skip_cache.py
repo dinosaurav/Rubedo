@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import (
-    Materialization,
     MaterializationEdge,
     RunCoordinateStatus,
 )
@@ -112,24 +111,27 @@ def test_util_never_materialized_or_recorded():
     assert calls == ["parse"]
 
     with get_session() as session:
-        step_names = {m.step_name for m in session.query(Materialization).all()}
+        from rubedo import lane_store
+        from rubedo.planning import _ArrowRowRef
+        from rubedo.store import read_materialization_output
+
+        step_names = {r.get("step_name") for r in lane_store.all_filled_rows()}
         assert step_names == {"scan", "read", "report"}
         rc_steps = {c.step_name for c in session.query(RunCoordinateStatus).all()}
         assert rc_steps == {"scan", "read", "report"}
 
         # Value flowed through the util correctly
-        report_mat = session.query(Materialization).filter_by(step_name="report").one()
-        from rubedo.store import read_materialization_output
-
-        assert read_materialization_output(report_mat) == "report: hello"
+        lane_store.address_row_index()
+        report_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "report")
+        assert read_materialization_output(_ArrowRowRef(report_row)) == "report: hello"
 
         # Lineage skips through: report's parent is read (not scan, and not
         # the fused-away parse util)
-        read_mat = session.query(Materialization).filter_by(step_name="read").one()
+        read_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "read")
         edge = session.query(MaterializationEdge).filter_by(
-            parent_id=read_mat.id, child_id=report_mat.id
+            parent_address=read_row.get("address"), child_address=report_row.get("address")
         ).one()
-        assert (edge.parent_id, edge.child_id) == (read_mat.id, report_mat.id)
+        assert (edge.parent_address, edge.child_address) == (read_row.get("address"), report_row.get("address"))
 
 
 def test_fully_cached_run_skips_util_entirely():
@@ -265,9 +267,12 @@ name="chain", steps=[scan, read, strip, lower, out])
 
     from rubedo.store import read_materialization_output
 
-    with get_session() as session:
-        mat = session.query(Materialization).filter_by(step_name="out").one()
-        assert read_materialization_output(mat) == "hello"
+    with get_session():
+        from rubedo import lane_store
+        from rubedo.planning import _ArrowRowRef
+
+        out_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "out")
+        assert read_materialization_output(_ArrowRowRef(out_row)) == "hello"
 
 
 def test_plan_omits_utils():

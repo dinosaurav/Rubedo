@@ -205,19 +205,10 @@ def test_duration_parsing():
 
 
 def backdate_materializations(iso_timestamp):
-    """Raw SQL on purpose: ORM guards forbid mutating created_at.
-    Also backdates the Arrow lane_store ts column, which is what the
-    planning staleness check reads (refreshed_at/created_at are gone)."""
-    from sqlalchemy import text
+    """Backdates the Arrow lane_store ts column, which is what the
+    planning staleness check reads."""
     from rubedo import lane_store
     from datetime import datetime
-
-    with get_session() as session:
-        session.execute(
-            text("UPDATE materializations SET created_at = :ts"),
-            {"ts": iso_timestamp},
-        )
-        session.commit()
 
     # Backdate the Arrow rows' ts column in every step file
     dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
@@ -256,8 +247,6 @@ def test_fresh_output_is_reused():
 
 
 def test_expired_deterministic_output_is_refreshed():
-    from rubedo.models import Materialization
-
     path = create_file("f1.txt", "hello")
 
     @step(stale_after="1h")
@@ -273,10 +262,6 @@ def test_expired_deterministic_output_is_refreshed():
     summary = pipe.run(params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (1, 0)
 
-    with get_session() as session:
-        mat = session.query(Materialization).one()
-        assert mat.refreshed_at is not None
-
     # refreshed_at reset the clock: next run reuses again
     summary3 = pipe.run(params=params, workers=1)
     assert (summary3.created_count, summary3.reused_count) == (0, 1)
@@ -284,8 +269,6 @@ def test_expired_deterministic_output_is_refreshed():
 
 def test_expired_nondeterministic_output_is_superseded():
     import itertools
-
-    from rubedo.models import Materialization
 
     path = create_file("f1.txt", "hello")
     counter = itertools.count()
@@ -302,14 +285,16 @@ def test_expired_nondeterministic_output_is_superseded():
     summary = pipe.run(params=params, workers=1)
     assert summary.created_count == 1
 
+    from rubedo import lane_store
+    from rubedo.models import InputHashUsage
+    from rubedo.db import get_session
+
+    # Two Arrow rows (two generations), one IHU fulfilled (the new one)
+    rows = lane_store.all_filled_rows()
+    assert len(rows) == 2
     with get_session() as session:
-        mats = session.query(Materialization).order_by(Materialization.id).all()
-        assert len(mats) == 2
-        # Old generation's is_live flipped for the unique index, but
-        # liveness is input_hash_usages.fulfilled — both rows exist as
-        # history in the lane_store.
-        assert mats[0].is_live is False, "old generation superseded"
-        assert mats[1].is_live is True
+        fulfilled = session.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count()
+        assert fulfilled == 1
 
 
 def test_staleness_visible_in_plan():

@@ -18,7 +18,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline, trace
 from rubedo.db import get_session, init_db
-from rubedo.models import Materialization
+from rubedo.models import InputHashUsage
+from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_invalidate_downstream_data"
@@ -107,11 +108,14 @@ def make_pipeline():
 
 
 def _liveness_by_id():
+    """Returns {address: (step_name, is_fulfilled)} for all outputs."""
     with get_session() as session:
-        return {
-            int(m.id): (str(m.step_name), bool(m.is_live))
-            for m in session.query(Materialization).all()
-        }
+        idx = lane_store.address_row_index()
+        result = {}
+        for addr, row in idx.items():
+            usage = session.query(InputHashUsage).filter_by(address=addr).first()
+            result[addr] = (str(row.get("step_name", "")), bool(usage and usage.fulfilled))
+        return result
 
 
 def test_downstream_flips_seed_and_descendants_then_heals():
@@ -130,11 +134,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
 
     flipped = set(result["addresses"])
     liveness = _liveness_by_id()
-    for mat_id in flipped:
-        # _liveness_by_id still uses mat_id keys — resolve via address
-        pass  # liveness check moved to IHU fulfilled check below
     # Check via IHU that all flipped addresses are unfulfilled
-    from rubedo.models import InputHashUsage
     with get_session() as s:
         for addr in flipped:
             usage = s.query(InputHashUsage).filter_by(address=addr).first()

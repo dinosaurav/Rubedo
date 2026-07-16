@@ -26,10 +26,11 @@ from sqlalchemy.pool import StaticPool
 from rubedo import Filtered, pipeline, step
 from rubedo.db import init_db, get_session
 from rubedo.models import (
-    Materialization,
+    InputHashUsage,
     RunCoordinateStatus,
 )
 from rubedo import lane_store
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_schedule_data"
@@ -104,14 +105,17 @@ def coord_for_path(filename):
     ancestor's coordinate unchanged."""
     with get_session() as session:
         rows = (
-            session.query(RunCoordinateStatus, Materialization)
-            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        for rc, mat in rows:
-            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+        addr_index = lane_store.address_row_index()
+        for rc in rows:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            iv = lane_store.get_index_values(row["pipeline_id"], "scan", row["address"])
             if ("path", filename) in iv:
                 return rc.coordinate
     return None
@@ -148,10 +152,9 @@ def _status_rows(run_id):
 
 
 def _mat_hashes():
-    with get_session() as session:
-        return {
-            m.output_content_hash for m in session.query(Materialization).all()
-        }
+    return {
+        r.get("content_hash") for r in lane_store.all_filled_rows()
+    }
 
 
 # (a) Mode equivalence: fresh broad vs fresh deep produce identical facts.
@@ -385,12 +388,12 @@ def test_deep_reduce_barrier_receives_all_lanes():
     assert summary.status == "completed"
     assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
     with get_session() as session:
-        mat = (
-            session.query(Materialization)
-            .filter_by(step_name="total", is_live=True)
-            .one()
-        )
-        assert read_materialization_output(mat) == {"n": 3, "total": 12}
+        total_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "total"]
+        assert total_rows
+        total_row = total_rows[0]
+        ihu = session.query(InputHashUsage).filter_by(address=total_row["address"]).first()
+        assert ihu is not None and ihu.fulfilled is True
+        assert read_materialization_output(_ArrowRowRef(total_row)) == {"n": 3, "total": 12}
 
 
 # (h) The rate limiter is one instance per step per run, shared across every

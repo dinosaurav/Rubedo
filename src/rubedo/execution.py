@@ -191,14 +191,15 @@ def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo
     return memo.compute((ref.step.name, ref.item.coordinate), produce)
 
 
-def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
-    """Nearest materialized ancestors, skipping through ephemeral hops."""
-    out: Dict[int, MatRef] = {}
+def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[str, MatRef]:
+    """Nearest materialized ancestors, skipping through ephemeral hops.
+    Keyed by output_address (the identity for edge writes)."""
+    out: Dict[str, MatRef] = {}
     for ref in parent_refs.values():
         if isinstance(ref, EphemeralRef):
             out.update(_materialized_ancestors(ref.parent_refs))
         else:
-            out[ref.id] = ref
+            out[ref.output_address] = ref
     return out
 
 

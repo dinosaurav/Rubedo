@@ -7,7 +7,6 @@ import rubedo.db as db
 from rubedo.models import (
     Run,
     RunCoordinateStatus,
-    Materialization,
     RunEvent,
 )
 from rubedo import step, pipeline, lane_store
@@ -85,16 +84,19 @@ def coord_for_path(filename, run_id=None):
     """
     with get_session() as session:
         q = (
-            session.query(RunCoordinateStatus, Materialization)
-            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
         )
         if run_id is not None:
             q = q.filter(RunCoordinateStatus.run_id == run_id)
         rows = q.all()
-        for rc, mat in rows:
-            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+        addr_index = lane_store.address_row_index()
+        for rc in rows:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            iv = lane_store.get_index_values(row["pipeline_id"], "scan", row["address"])
             if ("path", filename) in iv:
                 return rc.coordinate
     return None
@@ -127,7 +129,7 @@ def test_first_run_creates_statuses(setup_teardown):
         for c in coords:
             assert c.status == "created"
             assert c.pipeline_id == "p-dummy"
-            assert c.materialization_id is not None
+            assert c.output_address is not None
 
         run_row = session.query(Run).filter_by(id=res.run_id).first()
         summary = json.loads(run_row.summary_json)
@@ -151,8 +153,8 @@ def test_second_run_reuses_statuses(setup_teardown):
         assert summary["reused"] == 6
         assert summary["created"] == 0
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 6  # No new materializations
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 6  # No new materializations
 
 
 def test_changed_file_creates_one(setup_teardown):
@@ -186,8 +188,8 @@ def test_changed_file_creates_one(setup_teardown):
         assert summary["created"] == 2  # scan(a) + dummy(a)
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 8  # 6 original + 2 new (scan-a, dummy-a)
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 8  # 6 original + 2 new (scan-a, dummy-a)
 
 
 def test_deleted_file_absent_from_next_run(setup_teardown):
@@ -223,10 +225,8 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
         assert "removed" not in summary
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        # Output bytes still exist logically (materialization row still there)
-        mat = (
-            session.query(Materialization).filter_by(output_address=old_address).first()
-        )
+        # Output bytes still exist logically (Arrow row still there)
+        mat = lane_store.address_row_index().get(old_address)
         assert mat is not None
 
 
@@ -258,9 +258,7 @@ def test_failed_coordinate_records_failed(setup_teardown):
         assert summary["created"] == 5  # 3 scan + 2 failing (a, c)
 
         # Ensure no materialization created for b.txt's failing step
-        mats = (
-            session.query(Materialization).filter_by(created_by_run_id=res.run_id).all()
-        )
+        mats = [r for r in lane_store.all_filled_rows() if r.get("run_id") == res.run_id]
         assert len(mats) == 5
 
 

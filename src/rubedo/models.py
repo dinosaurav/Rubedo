@@ -7,12 +7,10 @@ from sqlalchemy import (
     Boolean,
     Column,
     ForeignKey,
-    Index,
     Integer,
     String,
     UniqueConstraint,
     event,
-    text,
 )
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import DeclarativeBase
@@ -95,65 +93,17 @@ class RunEvent(Base):
 
 
 class MaterializationEdge(Base):
-    """A directed lineage edge between parent and child materializations.
+    """A directed lineage edge between parent and child outputs.
 
     Address-based: ``parent_address`` and ``child_address`` are the
-    output_address strings (the comprehensive cache identity).  The old
-    integer FK columns (``parent_id``, ``child_id``) are kept for the
-    dev-stage transition but no longer required — they go away when the
-    ``materializations`` table is deleted.
+    output_address strings (the comprehensive cache identity).
     """
     __tablename__ = "materialization_edges"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    parent_id = Column(Integer, ForeignKey("materializations.id"), nullable=True)
-    child_id = Column(Integer, ForeignKey("materializations.id"), nullable=True, index=True)
     parent_address = Column(String, nullable=False, index=True)
     child_address = Column(String, nullable=False, index=True)
     __table_args__ = (
         UniqueConstraint("parent_address", "child_address", name="_mat_edge_addr_uc"),
-    )
-
-
-class Materialization(Base):
-    """A committed output. Every column except is_live is immutable.
-
-    is_live is a projection: the append-only materialization_lifecycle table
-    is the truth about invalidations, restorations, and supersessions, and
-    every is_live flip must be accompanied by a lifecycle row. An address can
-    accumulate generations over time (recomputes of non-deterministic steps);
-    at most one may be live at once."""
-
-    __tablename__ = "materializations"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    pipeline_id = Column(String, nullable=False, index=True)
-    step_name = Column(String, nullable=False, index=True)
-    code_version = Column(String, nullable=False)
-    code_hash = Column(String)  # source hash at creation time, for drift detection
-    input_hash = Column(String, nullable=False)
-    output_address = Column(String, nullable=False, index=True)
-    output_content_hash = Column(String, nullable=False)
-    content_type = Column(String)  # bytes | text | json
-    output_path = Column(String, nullable=False)
-    metadata_json = Column(String)
-    created_at = Column(String, nullable=False)
-    created_by_run_id = Column(String, ForeignKey("runs.id"), nullable=False)
-    # The step declined this coordinate: the stored object is a marker, and
-    # downstream steps are filtered rather than executed. Immutable, like
-    # the rest of the content columns — a changed decision is a new
-    # generation.
-    filtered = Column(Boolean, nullable=False, default=False)
-    is_live = Column(Boolean, nullable=False, default=True)
-    # Projection of the latest "refreshed" lifecycle row: when a stale
-    # output was last re-verified byte-identical. Freshness clock is
-    # refreshed_at or created_at.
-    refreshed_at = Column(String)
-    __table_args__ = (
-        Index(
-            "uq_live_output_address",
-            "output_address",
-            unique=True,
-            sqlite_where=text("is_live"),
-        ),
     )
 
 
@@ -187,7 +137,6 @@ class RunCoordinateStatus(Base):
     coordinate = Column(String, nullable=False, index=True)
     input_hash = Column(String)
     output_address = Column(String)
-    materialization_id = Column(Integer, ForeignKey("materializations.id"))
     status = Column(String, nullable=False, index=True)
     error_message = Column(String)
     error_type = Column(String, index=True)
@@ -233,7 +182,7 @@ class InputHashUsage(Base):
 #
 # The ledger is append-only: history is recorded by inserting new rows, never
 # by rewriting old ones. These listeners make that physical instead of
-# conventional. Run and Materialization carry a small set of projection
+# conventional. Run carries a small set of projection
 # columns (caches of the run_events / materialization_lifecycle logs) that
 # are the only legal updates anywhere in the schema.
 # ---------------------------------------------------------------------------
@@ -255,7 +204,6 @@ _PROJECTION_COLUMNS = {
     Run: frozenset(
         {"status", "finished_at", "error_message", "summary_json", "last_heartbeat_at"}
     ),
-    Materialization: frozenset({"is_live", "refreshed_at"}),
 }
 
 
@@ -353,8 +301,12 @@ class RunSummary(BaseModel):
             )
             result: dict[str, Any] = {}
             for s in statuses:
-                if s.status in ("created", "filtered", "reused") and s.materialization_id:
-                    mat = session.get(Materialization, s.materialization_id)
-                    if mat:
-                        result[str(s.coordinate)] = read_materialization_output(mat)  # type: ignore[arg-type]
+                if s.status in ("created", "filtered", "reused") and s.output_address:
+                    from .store import read_materialization_output
+                    from .planning import _ArrowRowRef
+                    from . import lane_store
+
+                    row = lane_store.address_row_index().get(str(s.output_address))
+                    if row:
+                        result[str(s.coordinate)] = read_materialization_output(_ArrowRowRef(row))
             return result

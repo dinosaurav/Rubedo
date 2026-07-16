@@ -11,10 +11,7 @@ Two policies, no others: per-pipeline keep-last-N-runs
 Both run through the same two phases:
 
   demote  Flip fulfilled=False on input_hash_usages entries outside the
-          keep-set.  The old Materialization.is_live flip still fires
-          (parallel write, transitional — needed for the
-          uq_live_output_address unique index until the materializations
-          table is deleted).
+          keep-set.
   sweep   Delete an object file only when *every* reference is non-live
           once demote is applied.  Log in object_reclamations.
 
@@ -33,7 +30,6 @@ from sqlalchemy.orm import Session
 from .db import get_session
 from .models import (
     InputHashUsage,
-    Materialization,
     ObjectReclamation,
     Run,
     RunCoordinateStatus,
@@ -382,9 +378,7 @@ def _apply(
     the store contains — a lingering file after a failed unlink is harmless
     (du reads the reclamation row).
 
-    Liveness is input_hash_usages.fulfilled.  The Materialization.is_live
-    flip is a transitional parallel write for the uq_live_output_address
-    unique index (deleted when the materializations table is dropped).
+    Liveness is input_hash_usages.fulfilled.
     """
     for addr in sorted(demote):
         # Flip fulfilled=False on input_hash_usages (the liveness gate)
@@ -396,14 +390,6 @@ def _apply(
         if usage:
             usage.fulfilled = False  # type: ignore[assignment]
             usage.last_run_id = run_id  # type: ignore[assignment]
-        # Transitional: flip Materialization.is_live for the unique index
-        mat = (
-            session.query(Materialization)
-            .filter_by(output_address=addr, is_live=True)
-            .first()
-        )
-        if mat:
-            mat.is_live = False  # type: ignore[assignment]
     for content_hash, size in reclaimed:
         session.add(
             ObjectReclamation(

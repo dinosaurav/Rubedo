@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization
+from rubedo.models import InputHashUsage
 from rubedo import lane_store
 from rubedo.store import init_store
 
@@ -120,9 +120,18 @@ def test_selection_by_indexed_field():
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
-        dead = session.query(Materialization).filter_by(is_live=False).one()
+        # The invalidated address: fulfilled=False in IHU
+        unfulfilled = (
+            session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(False))
+            .all()
+        )
+        assert len(unfulfilled) == 1
+        addr = unfulfilled[0].address
+        # Look up the Arrow row by address to get pipeline_id/step_name
+        row = lane_store.address_row_index().get(addr, {})
         iv = lane_store.get_index_values(
-            dead.pipeline_id, dead.step_name, dead.output_address
+            row.get("pipeline_id", ""), row.get("step_name", ""), addr
         )
         assert ("company", "acme") in iv
 

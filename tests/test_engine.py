@@ -8,7 +8,7 @@ from rubedo.models import (
     Base,
     Run,
     RunCoordinateStatus,
-    Materialization,
+    InputHashUsage,
 )
 from rubedo import lane_store
 from rubedo.selection import Selection
@@ -47,14 +47,13 @@ def _coord_for_path(session, run_id, step_name, filename):
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
     rows = (
-        session.query(RunCoordinateStatus, Materialization)
-        .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+        session.query(RunCoordinateStatus)
         .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
-        .filter(RunCoordinateStatus.materialization_id.isnot(None))
+        .filter(RunCoordinateStatus.output_address.isnot(None))
         .all()
     )
-    for rc, mat in rows:
-        iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+    for rc in rows:
+        iv = lane_store.get_index_values(rc.pipeline_id, "scan", rc.output_address)
         if ("path", filename) in iv:
             return rc.coordinate
     return None
@@ -114,8 +113,7 @@ def test_first_run_creates_all():
         for c in coords:
             assert c.status == "created"
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
+        assert len(lane_store.all_filled_rows()) == 4
 
 
 def test_second_run_reuses_all():
@@ -197,30 +195,27 @@ def test_failure_creates_no_materialization():
 
         # Ensure no materialization was created for a.txt (only b.txt's
         # count-lines output — the 2 scan lanes always materialize)
-        mats = (
-            session.query(Materialization)
-            .filter_by(step_name="count-lines")
-            .all()
-        )
-        assert len(mats) == 1
+        count_lines_rows = [
+            r for r in lane_store.all_filled_rows() if r.get("step_name") == "count-lines"
+        ]
+        assert len(count_lines_rows) == 1
 
 
 def test_select_by_coordinate_glob():
     test_pipeline.run(workers=1)
 
     sel = Selection(source_id="scan", coordinate_glob="row-*")
-    from rubedo.selection import get_selection_materialization_ids
+    from rubedo.selection import get_selection_addresses
 
     with get_session() as session:
-        mat_ids = get_selection_materialization_ids(session, sel)
-        mats = (
-            session.query(Materialization).filter(Materialization.id.in_(mat_ids)).all()
-        )
+        addrs = get_selection_addresses(session, sel)
+        idx = lane_store.address_row_index()
+        rows = [idx[a] for a in addrs if a in idx]
         # every live materialization's latest coordinate matches row-* —
         # both scan's own lanes and count-lines' (which shares its
         # parent's coordinate, a 1:1 dependent map)
-        assert len(mats) == 4
-        assert all(m.input_hash is not None for m in mats)
+        assert len(rows) == 4
+        assert all(r.get("input_hash") is not None for r in rows)
 
 
 def test_invalidate_selected():
@@ -272,9 +267,7 @@ def test_logical_deletion():
     assert res1.created_count == 4  # 2 files x (scan lane + count-lines lane)
     assert res1.reused_count == 0
 
-    with db.get_session() as session:
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
+    assert len(lane_store.all_filled_rows()) == 4
 
     # 2. Delete one file
     os.remove("test_input/a.txt")
@@ -296,10 +289,14 @@ def test_logical_deletion():
         assert run_coords[0].status == "reused"
 
         # a.txt's materialization is untouched and still live — a re-add reuses it.
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
-        for m in mats:
-            assert m.is_live
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 4
+        assert (
+            session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .count()
+            == 4
+        )
 
 
 def test_restore_deleted_reuses_cache():

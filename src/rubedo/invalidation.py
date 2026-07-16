@@ -5,7 +5,6 @@ import json
 import uuid
 from .models import (
     Run,
-    Materialization,
     InputHashUsage,
     RunEvent,
 )
@@ -79,35 +78,19 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 descendant_addrs = sorted(reached)
 
             def _flip(addr: str) -> bool:
-                # Transitional: flip Materialization.is_live for the unique
-                # index (deleted when the materializations table is dropped).
-                mat = (
-                    session.query(Materialization)
-                    .filter_by(output_address=addr, is_live=True)
-                    .first()
-                )
-                if mat is None:
-                    return False
-                mat.is_live = False  # type: ignore[assignment]
-                # The tombstone: flip fulfilled=False on input_hash_usages.
-                # The Arrow row stays as history, but the next run sees
-                # fulfilled=False and recomputes.  See notes/arrow-storage.md.
+                # Check liveness via IHU.fulfilled — only flip if currently live.
                 usage = (
                     session.query(InputHashUsage)
                     .filter_by(address=addr)
                     .first()
                 )
-                if usage:
-                    usage.fulfilled = False  # type: ignore
-                    usage.last_run_id = run_id  # type: ignore
-                else:
-                    session.add(
-                        InputHashUsage(
-                            address=addr,
-                            last_run_id=run_id,
-                            fulfilled=False,
-                        )
-                    )
+                if usage is None or not usage.fulfilled:
+                    return False
+                # The tombstone: flip fulfilled=False.
+                # The Arrow row stays as history, but the next run sees
+                # fulfilled=False and recomputes.  See notes/arrow-storage.md.
+                usage.fulfilled = False  # type: ignore
+                usage.last_run_id = run_id  # type: ignore
                 return True
 
             flipped_addrs: list[str] = []

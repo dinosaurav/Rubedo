@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from rubedo import step, pipeline, Filtered
 from rubedo.db import init_db, get_session
 from rubedo.models import (
-    Materialization,
+    InputHashUsage,
     MaterializationEdge,
     RunCoordinateStatus,
     RunEvent,
@@ -97,17 +97,36 @@ def coord_for_path(filename):
     its ancestor's coordinate unchanged."""
     with get_session() as session:
         rows = (
-            session.query(RunCoordinateStatus, Materialization)
-            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        for rc, mat in rows:
-            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+        addr_index = lane_store.address_row_index()
+        for rc in rows:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            iv = lane_store.get_index_values(row["pipeline_id"], "scan", row["address"])
             if ("path", filename) in iv:
                 return rc.coordinate
     return None
+
+
+def _latest_live_row(session, step_name):
+    """The latest fulfilled Arrow row for a step (the is_live=True
+    equivalent).  Mirrors the old
+    ``session.query(Materialization).filter_by(step_name=…, is_live=True)
+    .order_by(id.desc()).first()`` lookup."""
+    rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name]
+    live_addrs = {
+        str(u.address) for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True)).all()
+    }
+    live_rows = [r for r in rows if r.get("address") in live_addrs]
+    if not live_rows:
+        return None
+    return max(live_rows, key=lambda r: r.get("ts"))
 
 
 def test_reduce_basic_and_lineage():
@@ -129,10 +148,11 @@ def test_reduce_basic_and_lineage():
     assert summary.created_count == 7  # 3 scan + 3 parse + 1 reduce
 
     with get_session() as session:
-        mat = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
-        assert mat.output_address is not None
+        sum_row = _latest_live_row(session, "sum")
+        assert sum_row is not None
+        assert sum_row["address"] is not None
 
-        edges = session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
+        edges = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         assert len(edges) == 3
 
 def test_reduce_caching():
@@ -197,8 +217,8 @@ def test_reduce_filtered_lane():
     assert_run(pipe)
 
     with get_session() as session:
-        mat = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
-        edges = session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
+        sum_row = _latest_live_row(session, "sum")
+        edges = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         # Edge only from the survived lane
         assert len(edges) == 1
 
@@ -210,8 +230,8 @@ def test_reduce_filtered_lane():
     assert s2.reused_count == 2  # scan(a), parse(a)
 
     with get_session() as session:
-        mat2 = session.query(Materialization).filter_by(step_name="sum", is_live=True).order_by(Materialization.id.desc()).first()
-        edges2 = session.query(MaterializationEdge).filter_by(child_id=mat2.id).all()
+        sum_row = _latest_live_row(session, "sum")
+        edges2 = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         assert len(edges2) == 2
 
 def test_reduce_failed_parent_lane():

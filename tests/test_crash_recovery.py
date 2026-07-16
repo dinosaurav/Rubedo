@@ -2,8 +2,8 @@ import os
 import tempfile
 import pytest
 from unittest.mock import patch
-from rubedo.db import init_db, get_session
-from rubedo.models import Materialization
+from rubedo.db import init_db
+from rubedo import lane_store
 from rubedo.store import stage_and_commit
 from rubedo import step, pipeline
 import uuid
@@ -109,8 +109,7 @@ def test_crash_during_staging(setup_teardown):
         assert summary.created_count == 0
 
     # Check that no materialization rows exist
-    with get_session() as session:
-        assert session.query(Materialization).count() == 0
+    assert len(lane_store.all_filled_rows()) == 0
 
     # Rerun normally
     summary2 = p_dummy.run(workers=1)
@@ -135,8 +134,7 @@ def test_crash_after_staging_before_db_commit(setup_teardown):
         assert summary.status == "failed"
 
     # Verify no materialization row
-    with get_session() as session:
-        assert session.query(Materialization).count() == 0
+    assert len(lane_store.all_filled_rows()) == 0
 
     # Rerun normally
     # The output address will be exactly the same.
