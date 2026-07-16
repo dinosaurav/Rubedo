@@ -9,8 +9,8 @@ from rubedo.models import (
     Run,
     RunCoordinateStatus,
     Materialization,
-    MaterializationIndexEntry,
 )
+from rubedo import lane_store
 from rubedo.selection import Selection
 from rubedo.invalidation import invalidate
 import uuid
@@ -46,23 +46,16 @@ def _coord_for_path(session, run_id, step_name, filename):
     `scan` step's indexed `path` field — coordinates are row-<hash>, not
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
-    scan_rows = (
-        session.query(RunCoordinateStatus)
-        .filter_by(run_id=run_id, step_name="scan")
+    rows = (
+        session.query(RunCoordinateStatus, Materialization)
+        .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+        .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
         .filter(RunCoordinateStatus.materialization_id.isnot(None))
         .all()
     )
-    for rc in scan_rows:
-        hit = (
-            session.query(MaterializationIndexEntry)
-            .filter_by(
-                materialization_id=rc.materialization_id,
-                field="path",
-                value=filename,
-            )
-            .first()
-        )
-        if hit:
+    for rc, mat in rows:
+        iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+        if ("path", filename) in iv:
             return rc.coordinate
     return None
 

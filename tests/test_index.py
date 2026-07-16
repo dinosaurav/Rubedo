@@ -10,7 +10,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, MaterializationIndexEntry
+from rubedo.models import Materialization
+from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_index_data"
@@ -93,13 +94,7 @@ def make_pipeline():
 
 
 def entries():
-    with get_session() as session:
-        return [
-            (e.field, e.value)
-            for e in session.query(MaterializationIndexEntry)
-            .order_by(MaterializationIndexEntry.id)
-            .all()
-        ]
+    return sorted(lane_store.all_index_entries())
 
 
 def test_declared_fields_are_extracted():
@@ -126,12 +121,10 @@ def test_selection_by_indexed_field():
 
     with get_session() as session:
         dead = session.query(Materialization).filter_by(is_live=False).one()
-        assert ("company", "acme") in [
-            (e.field, e.value)
-            for e in session.query(MaterializationIndexEntry)
-            .filter_by(materialization_id=dead.id)
-            .all()
-        ]
+        iv = lane_store.get_index_values(
+            dead.pipeline_id, dead.step_name, dead.output_address
+        )
+        assert ("company", "acme") in iv
 
 
 def test_selection_index_pairs_are_anded():

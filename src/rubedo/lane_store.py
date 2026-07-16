@@ -160,8 +160,9 @@ def append_filled(
     a different substrate.
 
     ``index_values`` is the @step(index=[...]) field→values dict, stored
-    as a map<string, list<string>> column.  Replaces the
-    ``materialization_index`` SQLite table."""
+    as a map<string, list<string>> column — the sole source of truth for
+    indexed field values (the ``materialization_index`` SQLite table is
+    deleted)."""
     from datetime import datetime, timezone
 
     if ts is None:
@@ -396,10 +397,10 @@ def batch_lookup_by_address(
     Arrow row in the lane_store.  Addresses not in the dict are misses
     (recompute).  The row_dict carries all fields the planning phase needs
     to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
-    ``output_path``, ``filtered``, ``code_hash``, ``ts``, and ``mat_id``
-    (the SQLite Materialization.id for backward compat with join/reduce
-    index lookups — transitional, goes away when materialization_index
-    is deleted).
+    ``output_path``, ``filtered``, ``code_hash``, ``ts``,
+    ``index_values``, and ``mat_id`` (the SQLite Materialization.id —
+    still needed by gc/trace/invalidation/server readers that join on
+    it; goes away when the materializations table itself is deleted).
 
     The two-step lookup (SQLite for liveness, Arrow for content) replaces
     today's one-step SQLite query — but the SQLite lookup is a simple
@@ -423,10 +424,10 @@ def batch_lookup_by_address(
     if not fulfilled_addrs:
         return {}
 
-    # Step 1b: for backward compat, also fetch the SQLite Materialization
-    # integer ids for these addresses (the join/reduce paths still use
-    # MaterializationIndexEntry keyed on mat id).  Transitional — deleted
-    # when materialization_index is dropped.
+    # Step 1b: fetch the SQLite Materialization integer ids for these
+    # addresses.  Still needed by gc/trace/invalidation/server readers
+    # that join on Materialization.id; deleted when the materializations
+    # table itself is dropped (Phase 3).
     mat_rows = (
         session.query(Materialization)
         .filter(
@@ -471,9 +472,8 @@ def scan_indexed_field(
 ) -> List[str]:
     """Addresses where the indexed field has the given value.
 
-    Scans the step's Arrow ``index_values`` map column — the replacement
-    for ``MaterializationIndexEntry`` queries.  Returns a list of
-    ``address`` strings (the cache identity) for rows whose
+    Scans the step's Arrow ``index_values`` map column.  Returns a list
+    of ``address`` strings (the cache identity) for rows whose
     ``index_values[field]`` list contains ``str(value)``.
     """
     table = _combined_table(pipeline_id, step_name)
@@ -493,8 +493,7 @@ def scan_indexed_field_all(
     value: Any,
 ) -> List[str]:
     """Addresses where the indexed field has the given value, across ALL
-    step Arrow files.  The cross-step replacement for querying
-    ``MaterializationIndexEntry`` without a step filter.
+    step Arrow files.  Used when the selection has no step filter.
     """
     matches: List[str] = []
     if not os.path.isdir(TABLES_DIR):
@@ -554,6 +553,31 @@ def get_index_values(
             iv = _normalize_index_values(row)
             return [(field, val) for field, vals in iv.items() for val in vals]
     return []
+
+
+def all_index_entries() -> List[Tuple[str, str]]:
+    """All ``(field, value)`` pairs across all step Arrow files.
+    Test/debugging utility — scans every file under ``TABLES_DIR``."""
+    result: List[Tuple[str, str]] = []
+    if not os.path.isdir(TABLES_DIR):
+        return result
+    for entry in os.listdir(TABLES_DIR):
+        pipe_dir = os.path.join(TABLES_DIR, entry)
+        if not os.path.isdir(pipe_dir):
+            continue
+        for fname in os.listdir(pipe_dir):
+            if not fname.endswith(".arrow"):
+                continue
+            step_name = fname[:-len(".arrow")]
+            table = _combined_table(entry, step_name)
+            if table is None or table.num_rows == 0:
+                continue
+            for row in table.to_pylist():
+                iv = _normalize_index_values(row)
+                for field, vals in iv.items():
+                    for val in vals:
+                        result.append((field, val))
+    return result
 
 
 # ---------------------------------------------------------------------------

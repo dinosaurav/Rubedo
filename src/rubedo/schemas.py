@@ -123,7 +123,7 @@ class PipelineOut(BaseModel):
     definition: Optional[Dict[str, Any]] = None
 
 
-class MaterializationIndexEntryOut(BaseModel):
+class IndexEntryOut(BaseModel):
     """One indexed field/value pair for a materialization."""
     field: str
     value: str
@@ -147,4 +147,4 @@ class ObjectMetadataOut(BaseModel):
     invalidation_reason: Optional[str] = None
     output_content_hash: str
     content_type: Optional[str] = None
-    index: List[MaterializationIndexEntryOut]
+    index: List[IndexEntryOut]

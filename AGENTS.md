@@ -115,9 +115,15 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/lane_store.py` — per-step Arrow IPC files under
   `.rubedo/tables/`: append-only rows of lane metadata (row_id, lane_key,
   address, input_hash, content_hash, content_type, output_path, code_hash,
-  ts, run_id, filtered). Pure data — no tombstones, no liveness. The
-  `batch_lookup_by_address` function is the planning phase's reuse lookup
-  (SQLite `input_hash_usages` for liveness, Arrow for content).
+  ts, run_id, filtered, index_values). `index_values` is a
+  `map<string, list<string>>` column holding the `@step(index=[...])`
+  field→values dict — the sole source of truth for indexed fields (the
+  `materialization_index` SQLite table is deleted). Pure data — no
+  tombstones, no liveness. The `batch_lookup_by_address` function is the
+  planning phase's reuse lookup (SQLite `input_hash_usages` for liveness,
+  Arrow for content). `scan_indexed_field` / `scan_indexed_field_all` /
+  `search_indexed_values` / `get_index_values` serve selection, server
+  search, and detail endpoints.
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
   events, `_commit_materialization` (simplified: same bytes reuse/restore,
   different bytes insert a new row; no lifecycle rows, no pairing guard,
@@ -156,6 +162,9 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
   language: lane-key globs, indexed fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
+  Indexed-field selection scans the Arrow `index_values` map column via
+  `lane_store.scan_indexed_field` / `scan_indexed_field_all` (no SQLite
+  `materialization_index` table).
 - `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines. Serves the built web
   UI from `web_static/` (SPA fallback to `index.html`); `rubedo serve`

@@ -19,7 +19,6 @@ from .models import (
     Filtered,
     Materialization,
     MaterializationEdge,
-    MaterializationIndexEntry,
     ProcessResult,
     Run,
     RunCoordinateStatus,
@@ -340,9 +339,8 @@ def _commit_materialization(
 
 def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
     """Extract declared index fields from the output value into a
-    ``{field_path: [stringified_values]}`` dict — the same projection
-    ``_extract_index_entries`` writes to SQLite, but returned as a dict
-    for the Arrow ``index_values`` map column."""
+    ``{field_path: [stringified_values]}`` dict for the Arrow
+    ``index_values`` map column."""
     if not step.index:
         return {}
     value = result.value if isinstance(result, ProcessResult) else result
@@ -362,37 +360,6 @@ def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
         if vals:
             out[path] = vals
     return out
-
-
-def _extract_index_entries(session: Session, mat_id: int, step: StepSpec, result):
-    """Project declared value fields into the search index.
-
-    Labels are data someone chose to index: fields come straight from the
-    output value (dotted paths for nesting), list fields yield one entry
-    per element, missing fields are simply not indexed.
-    """
-    if not step.index:
-        return
-    value = result.value if isinstance(result, ProcessResult) else result
-    if not isinstance(value, dict):
-        return
-
-    for path in step.index:
-        node = value
-        for part in path.split("."):
-            node = node.get(part) if isinstance(node, dict) else None  # type: ignore
-            if node is None:
-                break
-        if node is None:
-            continue
-        elements = node if isinstance(node, list) else [node]
-        for el in elements:
-            if isinstance(el, (str, int, float, bool)):
-                session.add(
-                    MaterializationIndexEntry(
-                        materialization_id=mat_id, field=path, value=str(el)
-                    )
-                )
 
 
 def _record_failure(
@@ -549,11 +516,6 @@ def _commit_execution_result(
                 # coord_step_mats entry.
                 session.commit()
                 return
-
-            # Fresh generations get their declared value fields indexed;
-            # reused/restored/refreshed rows already carry their entries
-            if mat_action in ("created", "superseded") and not is_filtered:
-                _extract_index_entries(session, mat.id, step, result)  # type: ignore
 
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation

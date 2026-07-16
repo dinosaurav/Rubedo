@@ -12,10 +12,10 @@ from rubedo.db import init_db, get_session
 from rubedo.models import (
     Materialization,
     MaterializationEdge,
-    MaterializationIndexEntry,
     RunCoordinateStatus,
     RunEvent,
 )
+from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_reduce_data"
@@ -97,22 +97,15 @@ def coord_for_path(filename):
     its ancestor's coordinate unchanged."""
     with get_session() as session:
         rows = (
-            session.query(RunCoordinateStatus)
-            .filter_by(step_name="scan")
+            session.query(RunCoordinateStatus, Materialization)
+            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            .filter(RunCoordinateStatus.step_name == "scan")
             .filter(RunCoordinateStatus.materialization_id.isnot(None))
             .all()
         )
-        for rc in rows:
-            hit = (
-                session.query(MaterializationIndexEntry)
-                .filter_by(
-                    materialization_id=rc.materialization_id,
-                    field="path",
-                    value=filename,
-                )
-                .first()
-            )
-            if hit:
+        for rc, mat in rows:
+            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+            if ("path", filename) in iv:
                 return rc.coordinate
     return None
 

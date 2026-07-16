@@ -8,10 +8,9 @@ from rubedo.models import (
     Run,
     RunCoordinateStatus,
     Materialization,
-    MaterializationIndexEntry,
     RunEvent,
 )
-from rubedo import step, pipeline
+from rubedo import step, pipeline, lane_store
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -85,21 +84,18 @@ def coord_for_path(filename, run_id=None):
     a specific run when that matters.
     """
     with get_session() as session:
-        q = session.query(RunCoordinateStatus).filter_by(step_name="scan")
+        q = (
+            session.query(RunCoordinateStatus, Materialization)
+            .join(Materialization, RunCoordinateStatus.materialization_id == Materialization.id)
+            .filter(RunCoordinateStatus.step_name == "scan")
+            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+        )
         if run_id is not None:
-            q = q.filter_by(run_id=run_id)
-        rows = q.filter(RunCoordinateStatus.materialization_id.isnot(None)).all()
-        for rc in rows:
-            hit = (
-                session.query(MaterializationIndexEntry)
-                .filter_by(
-                    materialization_id=rc.materialization_id,
-                    field="path",
-                    value=filename,
-                )
-                .first()
-            )
-            if hit:
+            q = q.filter(RunCoordinateStatus.run_id == run_id)
+        rows = q.all()
+        for rc, mat in rows:
+            iv = lane_store.get_index_values(mat.pipeline_id, "scan", mat.output_address)
+            if ("path", filename) in iv:
                 return rc.coordinate
     return None
 

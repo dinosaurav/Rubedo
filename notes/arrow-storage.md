@@ -343,12 +343,16 @@ This is the big change. Suggested order, each a separate commit:
   `before_flush`/`before_commit`/`after_rollback` listeners in
   `models.py:313-366`). `invalidate()` writes a blank Arrow row, not a
   lifecycle row. No pairing needed.
-- **2e.** Delete `materialization_index` table + the index-writer code in
-  `_commit_execution_result`. Rewrite `selection.get_selection_materialization_ids`
-  to scan the Arrow file's struct column with a pyarrow predicate
-  (`pa.compute.field("company") == "acme"`). `@step(index=[...])` stays
-  as a query-validation declaration (which fields are searchable), but
-  stops denormalizing into SQLite.
+- **2e.** ✅ **Done.** Deleted `materialization_index` table + the
+  index-writer code (`_extract_index_entries`). Indexed field values are
+  now a `map<string, list<string>>` column (`index_values`) in the Arrow
+  file, populated at commit time via `_extract_index_values`. All readers
+  (planning `_group_reduce_lanes`/`_plan_join`, `selection.py`,
+  `server.py` search/detail) scan the Arrow column via
+  `lane_store.scan_indexed_field` / `search_indexed_values` /
+  `get_index_values`. `@step(index=[...])` stays as a query-validation
+  declaration (which fields are searchable) but no longer denormalizes
+  into SQLite.
 - **2f.** Trim `run_coordinate_statuses`: drop `output_address` and
   `materialization_id` — both derivable from `(step, lane_key, input_hash)`
   via an Arrow file lookup. Keep `status`, `error_*`, `source_id`,
@@ -369,9 +373,9 @@ This is the big change. Suggested order, each a separate commit:
   expand, delete `materialization_edges`. Separate sub-project.
 
 ### Phase 3 — Old-table deletion (after Phase 2 is verified)
-Delete `materializations`, `materialization_lifecycle`,
-`materialization_index` tables. Drop the ORM guards for the deleted
-models. Update `invariants.md`.
+Delete `materializations` table (the `materialization_lifecycle` and
+`materialization_index` tables are already deleted — Phase 2d and 2e).
+Drop the ORM guards for the deleted models. Update `invariants.md`.
 
 ### Phase 4 — Inline values + automatic object-store spill (TODO 27)
 The Arrow `output` column becomes the sole source of truth for output

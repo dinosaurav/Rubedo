@@ -148,25 +148,6 @@ class Materialization(Base):
     )
 
 
-class MaterializationIndexEntry(Base):
-    """A searchable projection of an output-value field.
-
-    A "label" is just data someone chose to index: @step(index=[...]) names
-    value fields to extract at commit time. Non-unique and multi-valued by
-    nature (a list field yields one row per element). Purely operational —
-    never part of cache identity or dataflow.
-    """
-
-    __tablename__ = "materialization_index"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    materialization_id = Column(
-        Integer, ForeignKey("materializations.id"), nullable=False, index=True
-    )
-    field = Column(String, nullable=False)
-    value = Column(String, nullable=False)
-    __table_args__ = (Index("ix_mat_index_field_value", "field", "value"),)
-
-
 class ObjectReclamation(Base):
     """Append-only record of an object file deleted by retention GC (10b).
 
@@ -257,7 +238,6 @@ class ImmutabilityError(RuntimeError):
 _APPEND_ONLY = (
     RunEvent,
     MaterializationEdge,
-    MaterializationIndexEntry,
     RunCoordinateStatus,
     ObjectReclamation,
 )
