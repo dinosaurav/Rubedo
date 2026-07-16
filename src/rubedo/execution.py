@@ -154,6 +154,11 @@ class ExecutionOutcome:
     # the parent): stored so a re-run can skip the fn, but it is not a lane —
     # no status, count, edge, or coord_step_mats entry.
     is_anchor: bool = False
+    # Arrow data already written to the lane store's arrow batch buffer —
+    # the ledger should skip serialize_output + append_filled (the Arrow
+    # table is already in the buffer).  SQLite writes (IHU, edges, RCS)
+    # still happen per-outcome.
+    arrow_batched: bool = False
 
 
 def _dep_kwarg(step: StepSpec, dep: str) -> str:
@@ -385,6 +390,123 @@ def _process_decision(
             )
         return outcomes
 
+    def _expand_table_outcomes(
+        decision: StepDecision, source_table: Any,
+        attempt: int, attempt_errors: List[str]
+    ) -> List[ExecutionOutcome]:
+        """Fan a table-return expand into content-addressed lanes, keeping
+        the data in Arrow throughout.  One ``to_pylist()`` for hashing only;
+        the struct column is written directly to the lane store's arrow batch
+        buffer — no Python dict → Arrow round trip at flush time.
+        """
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        from datetime import datetime, timezone
+        from . import lane_store
+
+        # One bulk conversion for hashing only
+        src_pa_table, _ = _to_arrow_table(source_table)
+        rows = src_pa_table.to_pylist()
+        seen: set = set()
+        children: List[tuple] = []  # (row_idx, child_hash, lane_key, input_hash, address)
+        for idx, row in enumerate(rows):
+            _validate_output(step, row)
+            child_hash = hash_json(row)
+            if child_hash in seen:
+                continue
+            seen.add(child_hash)
+            lane_key = expand_child_coord(child_hash)
+            input_hash, child_address = expand_child_identity(
+                step, child_hash, params_hash, accepts_params
+            )
+            children.append((idx, child_hash, lane_key, input_hash, child_address))
+
+        # Build the lane store Arrow table directly from the source table's
+        # struct column + computed metadata — no Python dict buffer.
+        if children:
+            ts = datetime.now(timezone.utc)
+            # Extract the struct array for the deduped rows
+            # src_pa_table is already a pa.Table (converted above)
+            # Build the struct column by selecting deduped rows
+            row_indices = [c[0] for c in children]
+            struct_type = pa.struct([
+                pa.field(name, src_pa_table.column(name).type)
+                for name in src_pa_table.column_names
+            ])
+            cols = []
+            for name in src_pa_table.column_names:
+                col = src_pa_table.column(name)
+                if isinstance(col, pa.ChunkedArray):
+                    combined = pa.concat_arrays(col.chunks)
+                else:
+                    combined = col
+                cols.append(combined)
+            struct_arr = pa.StructArray.from_arrays(
+                [pc.take(c, row_indices) for c in cols],
+                fields=[pa.field(n, c.type) for n, c in zip(src_pa_table.column_names, cols)],
+            )
+
+            lane_keys = [c[2] for c in children]
+            addresses = [c[4] for c in children]
+            input_hashes = [c[3] for c in children]
+            row_ids = [
+                lane_store._make_row_id(pipeline_id, step.name, lk, ts)
+                for lk in lane_keys
+            ]
+
+            batch_table = pa.table({
+                "row_id": pa.array(row_ids, type=pa.string()),
+                "lane_key": pa.array(lane_keys, type=pa.string()),
+                "address": pa.array(addresses, type=pa.string()),
+                "input_hash": pa.array(input_hashes, type=pa.string()),
+                "code_version": pa.array([step.version] * len(children), type=pa.string()),
+                "output": struct_arr,
+                "content_type": pa.array(["json"] * len(children), type=pa.string()),
+                "code_hash": pa.array([step.code_hash] * len(children), type=pa.string()),
+                "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
+                "run_id": pa.array([""] * len(children), type=pa.string()),  # filled by ledger
+                "filtered": pa.array([False] * len(children), type=pa.bool_()),
+                "index_values": pa.array([None] * len(children), type=pa.map_(pa.string(), pa.list_(pa.string()))),
+            }, schema=lane_store._schema(pa, struct_type))
+
+            lane_store.append_arrow_batch(pipeline_id, step.name, batch_table)
+
+        # Build outcomes — no dict values, arrow_batched=True
+        outcomes: List[ExecutionOutcome] = []
+        if step.depends_on:
+            parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
+            anchor = StepDecision(
+                coordinate=decision.coordinate,
+                action="execute",
+                input_hash=parent_hash,
+                output_address=expand_anchor_address(
+                    step, parent_hash, params_hash, accepts_params
+                ),
+                parent_mats=decision.parent_mats,
+            )
+            outcomes.append(
+                ExecutionOutcome(
+                    anchor, True, result=[c[1] for c in children],
+                    attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
+                )
+            )
+
+        for _, child_hash, lane_key, input_hash, child_address in children:
+            child = StepDecision(
+                coordinate=lane_key,
+                action="execute",
+                input_hash=input_hash,
+                output_address=child_address,
+                parent_mats=decision.parent_mats,
+            )
+            outcomes.append(
+                ExecutionOutcome(
+                    child, True, result=None, attempts=attempt,
+                    attempt_errors=attempt_errors, arrow_batched=True,
+                )
+            )
+        return outcomes
+
     def process(  # type: ignore
         decision: StepDecision, pool: Optional[Any] = None
     ) -> List[ExecutionOutcome]:
@@ -396,18 +518,18 @@ def _process_decision(
             try:
                 result = call(decision, pool)
                 if step.shape == "expand":
-                    # An expand can return a generator (yield-based) or an
-                    # Arrow-compatible table (pa.Table / polars / pandas
-                    # DataFrame).  A table return mints one lane per row —
-                    # the table IS the fan-out, no Python loop.
                     if _try_arrow(result):
-                        table, _ = _to_arrow_table(result)
-                        values = table.to_pylist()
+                        # Table-return expand: keep data in Arrow, one
+                        # to_pylist for hashing only, struct column
+                        # written directly to the arrow batch buffer.
+                        return _expand_table_outcomes(
+                            decision, result, attempt, attempt_errors
+                        )
                     else:
                         values = list(result)
-                    return _expand_outcomes(
-                        decision, values, attempt, attempt_errors
-                    )
+                        return _expand_outcomes(
+                            decision, values, attempt, attempt_errors
+                        )
                 _validate_output(step, result)
                 return [
                     ExecutionOutcome(

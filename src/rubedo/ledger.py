@@ -386,59 +386,82 @@ def _commit_execution_result(
             if is_filtered:
                 result = {"__filtered__": True, "reason": result.reason}
 
-            output_string, content_type = serialize_output(
-                ctx.run_id, decision.coordinate, result
-            )
-
-            # Determine mat_action: if the address was already fulfilled
-            # (live) and the existing Arrow row has the same output string,
-            # the step re-ran but produced identical bytes → "reused".
-            # If the address was NOT fulfilled (invalidated/missing), the
-            # step had to recompute → "created" even if bytes are identical.
-            mat_action = "created"
-            from .models import InputHashUsage
-            existing_usage = (
-                session.query(InputHashUsage)
-                .filter_by(address=str(decision.output_address))
-                .first()
-            )
-            if existing_usage and existing_usage.fulfilled:
-                existing_row = lane_store.address_row_index().get(str(decision.output_address))
-                if existing_row and _outputs_equal(
-                    existing_row.get("output"), output_string
-                ):
-                    mat_action = "reused" if not decision.stale else "refreshed"
-
-            # Write to the lane_store (Arrow) — only for new/superseded/
-            # refreshed outputs.  Pure reuse (identical bytes, was already
-            # live) doesn't need a new Arrow row.  Refreshed needs a new
-            # row to update the ts (staleness clock).
-            idx_values = _extract_index_values(step, result)
-            if mat_action != "reused":
-                lane_store.append_filled(
-                    pipeline_id=ctx.pipeline_id,
-                    step_name=step.name,
-                    lane_key=decision.coordinate,
-                    address=str(decision.output_address),
-                    input_hash=str(decision.input_hash),
-                    output=output_string,
-                    content_type=content_type,
-                    run_id=ctx.run_id,
-                    filtered=is_filtered,
-                    code_hash=step.code_hash,
-                    code_version=step.version,
-                    index_values=idx_values,
+            if outcome.arrow_batched:
+                # Arrow data already written to the lane store's arrow batch
+                # buffer by _expand_table_outcomes — skip serialize_output +
+                # append_filled.  Read the output value from the arrow batch
+                # buffer for the MatRef.  Still check mat_action: if the
+                # address was already fulfilled (same content from a previous
+                # run), it's "reused" — no new Arrow row needed.
+                mat_action = "created"
+                content_type = "json"
+                batch_row = lane_store.arrow_batch_row_by_address(
+                    ctx.pipeline_id, step.name, str(decision.output_address)
                 )
+                output_string = batch_row.get("output") if batch_row else None
+                idx_values = {}
+                from .models import InputHashUsage as _IHU
+                existing_u = (
+                    session.query(_IHU)
+                    .filter_by(address=str(decision.output_address))
+                    .first()
+                )
+                if existing_u and existing_u.fulfilled:
+                    mat_action = "reused"
+            else:
+                output_string, content_type = serialize_output(
+                    ctx.run_id, decision.coordinate, result
+                )
+
+                # Determine mat_action: if the address was already fulfilled
+                # (live) and the existing Arrow row has the same output,
+                # the step re-ran but produced identical bytes → "reused".
+                mat_action = "created"
+                from .models import InputHashUsage
+                existing_usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=str(decision.output_address))
+                    .first()
+                )
+                if existing_usage and existing_usage.fulfilled:
+                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    if existing_row and _outputs_equal(
+                        existing_row.get("output"), output_string
+                    ):
+                        mat_action = "reused" if not decision.stale else "refreshed"
+
+                idx_values = _extract_index_values(step, result)
+                if mat_action != "reused":
+                    lane_store.append_filled(
+                        pipeline_id=ctx.pipeline_id,
+                        step_name=step.name,
+                        lane_key=decision.coordinate,
+                        address=str(decision.output_address),
+                        input_hash=str(decision.input_hash),
+                        output=output_string,
+                        content_type=content_type,
+                        run_id=ctx.run_id,
+                        filtered=is_filtered,
+                        code_hash=step.code_hash,
+                        code_version=step.version,
+                        index_values=idx_values,
+                    )
 
             # Mark this address as fulfilled in input_hash_usages — the
             # liveness gate.  The planning phase checks fulfilled=True to
             # decide reuse.
-            if existing_usage:
-                existing_usage.fulfilled = True  # type: ignore[assignment]
-                existing_usage.last_run_id = ctx.run_id  # type: ignore[assignment]
+            from .models import InputHashUsage as _IHU
+            existing = (
+                session.query(_IHU)
+                .filter_by(address=str(decision.output_address))
+                .first()
+            )
+            if existing:
+                existing.fulfilled = True  # type: ignore[assignment]
+                existing.last_run_id = ctx.run_id  # type: ignore[assignment]
             else:
                 session.add(
-                    InputHashUsage(
+                    _IHU(
                         address=str(decision.output_address),
                         last_run_id=ctx.run_id,
                         fulfilled=True,

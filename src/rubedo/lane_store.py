@@ -130,20 +130,63 @@ def _get_step_file(pipeline_id: str, step_name: str) -> str:
 # without waiting for a flush.
 
 _run_buffers: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+_arrow_batch_buffers: Dict[Tuple[str, str], List["pa.Table"]] = {}
 
 
 def _buffer(pipeline_id: str, step_name: str) -> List[Dict[str, Any]]:
     return _run_buffers.setdefault((pipeline_id, step_name), [])
 
 
+def _arrow_batch_buffer(pipeline_id: str, step_name: str) -> List["pa.Table"]:
+    return _arrow_batch_buffers.setdefault((pipeline_id, step_name), [])
+
+
 def clear_run_buffers():
     """Discard all in-memory buffers (after a flush or on a fresh run)."""
     _run_buffers.clear()
+    _arrow_batch_buffers.clear()
 
 
 # ---------------------------------------------------------------------------
 # Write path
 # ---------------------------------------------------------------------------
+
+
+def append_arrow_batch(
+    pipeline_id: str,
+    step_name: str,
+    table: "pa.Table",
+):
+    """Add a pre-built Arrow table to the arrow batch buffer.
+
+    Used by table-return expand: the source table's struct column is
+    written directly to the lane store without going through Python dict
+    intermediaries.  The table must have the full lane store schema
+    (row_id, lane_key, address, input_hash, output, content_type,
+    code_hash, code_version, ts, run_id, filtered, index_values).
+
+    At flush time, the arrow batch buffer is concatenated with the dict
+    buffer and the on-disk history."""
+    _arrow_batch_buffer(pipeline_id, step_name).append(table)
+
+
+def arrow_batch_row_by_address(pipeline_id: str, step_name: str, address: str) -> Optional[Dict[str, Any]]:
+    """Look up a single row from the arrow batch buffer by address.
+    Returns the row as a dict (with 'output' as a native Python value
+    from the struct column), or None if not found."""
+    batches = _arrow_batch_buffer(pipeline_id, step_name)
+    for batch in batches:
+        addr_col = batch.column("address")
+        if isinstance(addr_col, pa.ChunkedArray):
+            addr_col = pa.concat_arrays(addr_col.chunks)
+        mask = pc.equal(addr_col, address)
+        filtered = batch.filter(mask)
+        if filtered.num_rows > 0:
+            row = filtered.to_pylist()[0]
+            row["pipeline_id"] = pipeline_id
+            row["step_name"] = step_name
+            return row
+    return None
 
 
 def append_filled(
@@ -300,31 +343,42 @@ def _buffer_table(pipeline_id: str, step_name: str):
     return pa.Table.from_pylist(rows, schema=schema)
 
 
+def _arrow_batch_table(pipeline_id: str, step_name: str):
+    """Concat all arrow batch tables for a step, or None if none."""
+    batches = _arrow_batch_buffer(pipeline_id, step_name)
+    if not batches:
+        return None
+    if len(batches) == 1:
+        return batches[0]
+    return pa.concat_tables(batches, promote_options="default")
+
+
 def _combined_table(pipeline_id: str, step_name: str):
-    """Concatenate on-disk history + in-memory buffer, or None if both
-    empty.  If the on-disk and buffer ``output`` column types are
-    compatible (e.g. structs with different fields — schema evolution),
+    """Concatenate on-disk history + arrow batch buffer + dict buffer,
+    or None if all empty.  If the output column types are compatible
+    (e.g. structs with different fields — schema evolution),
     ``pa.concat_tables`` with ``promote_options='default'`` unions the
     struct fields and fills nulls.  If the types are genuinely
-    incompatible (struct vs string, int vs string), both are converted
+    incompatible (struct vs string, int vs string), all are converted
     to ``string`` before concatenation."""
     import json
 
     disk = _read_disk_table(pipeline_id, step_name)
     buf = _buffer_table(pipeline_id, step_name)
-    if disk is None and buf is None:
+    arrow = _arrow_batch_table(pipeline_id, step_name)
+
+    tables = [t for t in (disk, arrow, buf) if t is not None]
+    if not tables:
         return None
-    if disk is None:
-        return buf
-    if buf is None:
-        return disk
+    if len(tables) == 1:
+        return tables[0]
 
     try:
-        return pa.concat_tables([disk, buf], promote_options="default")
+        return pa.concat_tables(tables, promote_options="default")
     except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError):
         pass
 
-    # Types are genuinely incompatible — convert both to string
+    # Types are genuinely incompatible — convert all to string
     def _to_string_table(table):
         col = table.column("output")
         if col.type == pa.string():
@@ -345,9 +399,8 @@ def _combined_table(pipeline_id: str, step_name: str):
             table.schema.get_field_index("output"), "output", new_col
         )
 
-    disk = _to_string_table(disk)
-    buf = _to_string_table(buf)
-    return pa.concat_tables([disk, buf], promote_options="default")
+    tables = [_to_string_table(t) for t in tables]
+    return pa.concat_tables(tables, promote_options="default")
 
 
 def _rows_for_lane(
@@ -757,35 +810,22 @@ def all_filled_rows() -> List[Dict[str, Any]]:
 
 
 def flush_step(pipeline_id: str, step_name: str):
-    """Write the in-memory buffer for one step to disk.
+    """Write the in-memory buffers (dict + arrow batch) for one step to disk.
 
-    Reads the existing on-disk file, concatenates with the buffer, and
-    writes the combined table back.  O(total history) per flush — simple
+    Reads the existing on-disk file, concatenates with both buffers, and
+    writes the combined table back.  Clears both buffers after flushing
+    so a second call is a no-op.  O(total history) per flush — simple
     for v1; the stream-append optimisation is Phase 3.
     """
     rows = _buffer(pipeline_id, step_name)
-    if not rows:
+    arrow_batches = _arrow_batch_buffer(pipeline_id, step_name)
+    if not rows and not arrow_batches:
         return
     init_tables()
 
-    buf_table = _buffer_table(pipeline_id, step_name)
-    if buf_table is None:
+    combined = _combined_table(pipeline_id, step_name)
+    if combined is None:
         return
-    disk_table = _read_disk_table(pipeline_id, step_name)
-
-    if disk_table is not None:
-        try:
-            combined = pa.concat_tables(
-                [disk_table, buf_table], promote_options="default"
-            )
-        except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError):
-            # Incompatible types — fall back to _combined_table which
-            # converts both to string
-            combined = _combined_table(pipeline_id, step_name)
-            if combined is None:
-                return
-    else:
-        combined = buf_table
     path = _get_step_file(pipeline_id, step_name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # Write to a temp file then atomically replace — crash mid-write
@@ -795,10 +835,15 @@ def flush_step(pipeline_id: str, step_name: str):
         writer.write_table(combined)
     os.replace(tmp_path, path)
 
+    # Clear both buffers for this step
+    rows.clear()
+    arrow_batches.clear()
+
 
 def flush_all():
-    """Flush every step's in-memory buffer to disk (call at run end)."""
-    for (pipeline_id, step_name) in list(_run_buffers.keys()):
+    """Flush every step's in-memory buffers to disk (call at run end)."""
+    all_keys = set(_run_buffers.keys()) | set(_arrow_batch_buffers.keys())
+    for (pipeline_id, step_name) in all_keys:
         flush_step(pipeline_id, step_name)
     clear_run_buffers()
 
