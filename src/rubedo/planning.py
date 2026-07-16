@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
-from .models import Materialization, MaterializationIndexEntry
+from .models import MaterializationIndexEntry
 from .spec import PipelineSpec, StepSpec
 from .store import read_materialization_output
 from .util import iso_age_seconds
@@ -280,6 +280,7 @@ def _reduce_group_decision(
     accepts_params: bool,
     failed_parents: Optional[List[str]] = None,
     blocked_parents: Optional[List[str]] = None,
+    pipeline_id: str = "",
 ) -> StepDecision:
     """Reuse/execute decision for one reduce group (or the sole '@all')."""
     hash_data = {}
@@ -303,15 +304,18 @@ def _reduce_group_decision(
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
 
-    existing_mat = (
-        session.query(Materialization)
-        .filter_by(output_address=output_address, is_live=True)
-        .first()
-    )
+    existing_mat = None
+    if pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        result = batch_lookup_by_address(
+            pipeline_id, step.name, {output_address}, session
+        )
+        existing_mat = result.get(output_address)
     expired = False
     if existing_mat and step.stale_after is not None:
-        freshness = existing_mat.refreshed_at or existing_mat.created_at
-        expired = iso_age_seconds(freshness) > step.stale_after
+        freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+        if freshness and iso_age_seconds(freshness) > step.stale_after:
+            expired = True
 
     if existing_mat and not force and not expired:
         return StepDecision(
@@ -320,17 +324,17 @@ def _reduce_group_decision(
             input_hash=input_hash,
             output_address=output_address,
             existing=MatRef(
-                existing_mat.id,
-                existing_mat.output_address,
-                existing_mat.output_content_hash,
-                existing_mat.content_type,
-                filtered=existing_mat.filtered,
+                existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                output_address,
+                existing_mat.get("content_hash"),
+                existing_mat.get("content_type"),
+                filtered=existing_mat.get("filtered", False),
             ),
             code_drift=(
                 step.code_mode == "warn"
                 and step.code_hash is not None
-                and existing_mat.code_hash is not None
-                and step.code_hash != existing_mat.code_hash
+                and existing_mat.get("code_hash") is not None
+                and step.code_hash != existing_mat.get("code_hash")
             ),
             failed_parents=failed_parents or [],
             blocked_parents=blocked_parents or [],
@@ -357,6 +361,7 @@ def _plan_join(
     params_hash: str,
     force: bool,
     accepts_params: bool,
+    pipeline_id: str = "",
 ) -> List[StepDecision]:
     """Plan an N-way equijoin.
 
@@ -466,21 +471,20 @@ def _plan_join(
 
     addrs = [out_addr for _, _, _, out_addr in combo_list]
     mats_by_addr = {}
-    if addrs:
-        mats = (
-            session.query(Materialization)
-            .filter(Materialization.output_address.in_(addrs), Materialization.is_live.is_(True))
-            .all()
+    if addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, set(addrs), session
         )
-        mats_by_addr = {m.output_address: m for m in mats}
 
     decisions: List[StepDecision] = []
     for pair_coord, parent_mats, input_hash, output_address in combo_list:
-        existing_mat = mats_by_addr.get(output_address)  # type: ignore
+        existing_mat = mats_by_addr.get(output_address)
         expired = False
         if existing_mat and step.stale_after is not None:
-            freshness = existing_mat.refreshed_at or existing_mat.created_at
-            expired = iso_age_seconds(freshness) > step.stale_after
+            freshness = existing_mat.get("refreshed_at") or existing_mat.get("created_at") or existing_mat.get("ts")
+            if freshness and iso_age_seconds(freshness) > step.stale_after:
+                expired = True
 
         if existing_mat and not force and not expired:
             decisions.append(
@@ -490,17 +494,17 @@ def _plan_join(
                     input_hash=input_hash,
                     output_address=output_address,
                     existing=MatRef(
-                        existing_mat.id,
-                        existing_mat.output_address,
-                        existing_mat.output_content_hash,
-                        existing_mat.content_type,
-                        filtered=existing_mat.filtered,
+                        existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                        output_address,
+                        existing_mat.get("content_hash"),
+                        existing_mat.get("content_type"),
+                        filtered=existing_mat.get("filtered", False),
                     ),
                     code_drift=(
                         step.code_mode == "warn"
                         and step.code_hash is not None
-                        and existing_mat.code_hash is not None
-                        and step.code_hash != existing_mat.code_hash
+                        and existing_mat.get("code_hash") is not None
+                        and step.code_hash != existing_mat.get("code_hash")
                     ),
                     failed_parents=failed_parents,
                     blocked_parents=blocked_parents,
@@ -605,14 +609,16 @@ def _plan_step(
         return [
             _reduce_group_decision(
                 session, step, gcoord, gmats, params_hash, force, accepts_params,
-                failed_parents=failed_parents, blocked_parents=blocked_parents
+                failed_parents=failed_parents, blocked_parents=blocked_parents,
+                pipeline_id=pipeline_id,
             )
             for gcoord, gmats in sorted(groups.items())
         ]
 
     if step.shape == "join":
         return _plan_join(
-            session, step, coord_step_mats, params_hash, force, accepts_params
+            session, step, coord_step_mats, params_hash, force, accepts_params,
+            pipeline_id=pipeline_id,
         )
 
     if step.shape == "expand" and not step.depends_on:
