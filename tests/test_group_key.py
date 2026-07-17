@@ -217,7 +217,7 @@ def test_group_key_infers_reduce_shape_but_an_explicit_conflict_still_raises():
     inferred = step(name="ok", version="1", depends_on=["x"], group_key="category")(
         lambda x: None
     )
-    assert inferred.shape == "reduce"
+    assert inferred.in_shape == "aggregate"
 
-    with pytest.raises(ValueError, match="group_key requires shape='reduce'"):
+    with pytest.raises(ValueError, match="group_key requires in_shape='aggregate' or 'fold'"):
         step(name="bad", version="1", shape="map", group_key="category")(lambda: None)

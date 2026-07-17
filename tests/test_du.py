@@ -300,7 +300,14 @@ def test_reclaimed_object_reported_separately_from_missing():
             .filter(InputHashUsage.fulfilled.is_(True)).all()
         }
     idx = lane_store.address_row_index()
-    live_row = next(idx[a] for a in fulfilled_addrs if a in idx)
+    # Pick a *child* lane (lane_key != "@root"); the expand anchor's
+    # output is a JSON list of child hashes ('["b:<hash>"]'), not an
+    # "objects:<hash>" ref string, so the un-filtered next() was flaky
+    # on set iteration order.
+    live_row = next(
+        idx[a] for a in fulfilled_addrs
+        if a in idx and idx[a].get("lane_key") != "@root"
+    )
     live_out = live_row.get("output", "")
     assert live_out.startswith("objects:")
     os.remove(_get_object_path(live_out[len("objects:"):]))

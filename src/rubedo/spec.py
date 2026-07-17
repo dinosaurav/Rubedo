@@ -363,13 +363,11 @@ def step(
                         f"Step '{step_name}': join_on= requires in_shape='join' "
                         f"(got in_shape={resolved_in!r})"
                     )
-                    resolved_in = "join"
                 if resolved_out is not None and resolved_out != "many":
                     raise ValueError(
                         f"Step '{step_name}': join_on= requires out_shape='many' "
                         f"(got out_shape={resolved_out!r})"
                     )
-                    resolved_out = "many"
                 resolved_in = resolved_in or "join"
                 resolved_out = resolved_out or "many"
             elif group_key is not None:
@@ -378,7 +376,7 @@ def step(
                         f"Step '{step_name}': group_key= requires in_shape='aggregate' or 'fold' "
                         f"(got in_shape={resolved_in!r})"
                     )
-                    resolved_in = resolved_in or "aggregate"
+                resolved_in = resolved_in or "aggregate"
                 resolved_out = resolved_out or "one"
             elif is_generator:
                 if resolved_out is not None and resolved_out != "many":
@@ -405,6 +403,13 @@ def step(
             raise ValueError(
                 f"Step '{step_name}': a generator function must have in_shape='one' "
                 f"(got in_shape={resolved_in!r}) — a collective input is 1:N, not a generator"
+            )
+        # A generator + out_shape="one" is contradictory (generators fan out).
+        if is_generator and resolved_out != "many":
+            raise ValueError(
+                f"Step '{step_name}': a generator function must have out_shape='many' "
+                f"(got out_shape={resolved_out!r}) — a generator under any other "
+                "out_shape never runs to completion as intended"
             )
 
         # Valid combination check.

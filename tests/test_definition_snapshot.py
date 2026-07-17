@@ -31,8 +31,9 @@ PINNED_DEFINITION_JSON = """\
     {
       "code": "warn",
       "depends_on": [],
+      "in_shape": "one",
       "name": "scan",
-      "shape": "expand",
+      "out_shape": "many",
       "source": "@step(name=\\"scan\\", version=\\"1\\", shape=\\"expand\\")\\n    def scan():\\n        yield {\\"path\\": \\"a.txt\\", \\"text\\": \\"hi\\"}",
       "version": "1",
       "workers": 4
@@ -59,8 +60,9 @@ PINNED_DEFINITION_JSON = """\
         "enrich"
       ],
       "group_key": "path",
+      "in_shape": "aggregate",
       "name": "rollup",
-      "shape": "reduce",
+      "out_shape": "one",
       "source": "@step(\\n        name=\\"rollup\\", version=\\"1\\", shape=\\"reduce\\", depends_on=[\\"enrich\\"],\\n        group_key=\\"path\\",\\n    )\\n    def rollup(enrich):\\n        return enrich",
       "version": "1",
       "workers": 4

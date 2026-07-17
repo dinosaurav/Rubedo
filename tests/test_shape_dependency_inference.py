@@ -84,12 +84,12 @@ def test_generator_function_infers_expand_shape():
         yield {"v": 1}
         yield {"v": 2}
 
-    assert rows.shape == "expand"
+    assert rows.out_shape == "many"
     assert rows.depends_on == []
 
 
 def test_explicit_non_expand_shape_on_generator_raises():
-    with pytest.raises(ValueError, match="generator function must use shape='expand'"):
+    with pytest.raises(ValueError, match="generator function must have out_shape='many'"):
 
         @step(shape="map")
         def rows():
@@ -98,23 +98,23 @@ def test_explicit_non_expand_shape_on_generator_raises():
 
 def test_join_on_infers_join_shape_without_explicit_shape():
     s = step(depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(lambda a, b: None)
-    assert s.shape == "join"
+    assert s.in_shape == "join"
 
 
 def test_group_key_infers_reduce_shape_without_explicit_shape():
     s = step(depends_on=["a"], group_key="g")(lambda a: None)
-    assert s.shape == "reduce"
+    assert s.in_shape == "aggregate"
 
 
 def test_conflicting_explicit_shape_with_join_on_raises():
-    with pytest.raises(ValueError, match="join_on requires shape='join'"):
+    with pytest.raises(ValueError, match="join_on requires in_shape='join'"):
         step(shape="map", depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(
             lambda a, b: None
         )
 
 
 def test_conflicting_explicit_shape_with_group_key_raises():
-    with pytest.raises(ValueError, match="group_key requires shape='reduce'"):
+    with pytest.raises(ValueError, match="group_key requires in_shape='aggregate' or 'fold'"):
         step(shape="map", depends_on=["a"], group_key="g")(lambda a: None)
 
 
@@ -142,7 +142,7 @@ def test_parentless_generator_behaves_as_a_source_with_zero_kwargs():
 
     p = pipeline(name="root-src", steps=[rows])
     assert p.spec.steps[0].depends_on == []
-    assert p.spec.steps[0].shape == "expand"
+    assert p.spec.steps[0].out_shape == "many"
 
     summary = p.run()
     assert summary.created_count == 2

@@ -345,12 +345,12 @@ def test_reduce_plan():
     assert any(i.action == "pending" for i in sum_items2)
 
 def test_registration_errors():
-    with pytest.raises(ValueError, match="skip_cache is meaningless with shape='reduce'"):
+    with pytest.raises(ValueError, match="skip_cache is meaningless with in_shape='aggregate'"):
         @step(name="sum", depends_on=["x"], shape="reduce", skip_cache=True)
         def sum_v1(x):
             pass
 
-    with pytest.raises(ValueError, match="shape must be 'map', 'reduce', 'expand', or 'join'"):
+    with pytest.raises(ValueError, match=r"shape must be one of \['expand', 'join', 'map', 'reduce'\]"):
         @step(name="sum", shape="banana")
         def sum_v2(x):
             pass

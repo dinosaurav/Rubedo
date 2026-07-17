@@ -86,10 +86,10 @@ COUNT_LINES_ASCII = (
     "┌─────────────┐\n"
     "│ count_lines │\n"
     "└─────────────┘\n"
-    "       └────┐\n"
-    "┌──────────────────────┐\n"
-    "│ total_lines [reduce] │\n"
-    "└──────────────────────┘"
+    "       └─────┐\n"
+    "┌─────────────────────────┐\n"
+    "│ total_lines [aggregate] │\n"
+    "└─────────────────────────┘"
 )
 
 NEWSROOM_ASCII = (
@@ -110,10 +110,10 @@ NEWSROOM_ASCII = (
     "┌───────────────────┐\n"
     "│ articles [expand] │\n"
     "└───────────────────┘\n"
-    "         ┌┘\n"
-    "┌─────────────────┐\n"
-    "│ digest [reduce] │\n"
-    "└─────────────────┘"
+    "          └┐\n"
+    "┌────────────────────┐\n"
+    "│ digest [aggregate] │\n"
+    "└────────────────────┘"
 )
 
 
@@ -125,7 +125,7 @@ def test_ascii_count_lines_shaped_is_byte_identical():
         assert name in COUNT_LINES_ASCII
     # non-map shape tags present
     assert "[expand]" in COUNT_LINES_ASCII
-    assert "[reduce]" in COUNT_LINES_ASCII
+    assert "[aggregate]" in COUNT_LINES_ASCII
 
 
 def test_ascii_newsroom_shaped_is_byte_identical():
@@ -135,7 +135,7 @@ def test_ascii_newsroom_shaped_is_byte_identical():
         assert name in NEWSROOM_ASCII
     assert "[join]" in NEWSROOM_ASCII
     assert "[expand]" in NEWSROOM_ASCII
-    assert "[reduce]" in NEWSROOM_ASCII
+    assert "[aggregate]" in NEWSROOM_ASCII
 
 
 def test_ascii_is_deterministic_across_calls():
