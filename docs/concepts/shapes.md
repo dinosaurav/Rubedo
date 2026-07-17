@@ -1,17 +1,26 @@
 # Shapes
 
-A step's `shape` decides how many output lanes it produces from its input
-lanes. There are four: `map` (1:1), `reduce` (N:1), `expand` (1:N), and
+A step's `in_shape`/`out_shape` decide how many output lanes it produces
+from its input lanes. There are four conceptual shapes: `map` (1:1),
+`aggregate` (N:1), `expand` (1:N), and
 `join` (N-way, minting pair lanes). Every shape is a special case of the same
 underlying idea — a producer that takes some input lanes and emits some
 output lanes — but each has a distinct planning and caching story worth
 knowing on its own. See [`../notes/producer-model.md`](../notes/producer-model.md)
 for the design behind the taxonomy.
 
-Most of the time you don't pass `shape=` at all: it's inferred from what
-the code already says — a generator function defaults to `"expand"`,
-`join_on=` defaults it to `"join"`, `group_key=` defaults it to `"reduce"`,
-and anything else is `"map"`. An explicit `shape=` always overrides the
+The four shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
+`aggregate` (`aggregate`/`one` — was "reduce"), `expand` (`one`/`many`),
+`join` (`join`/`many`). The legacy `shape=` kwarg is kept as an alias:
+`shape="map"`/`shape="reduce"`/`shape="expand"`/`shape="join"` each translate
+to the corresponding pair and are never stored on the spec.
+
+Most of the time you don't pass `shape=` (or `in_shape=`/`out_shape=`) at
+all: it's inferred from what the code already says — a generator function
+defaults to `expand` (`out_shape="many"`), `join_on=` defaults it to `join`,
+`group_key=` defaults it to `aggregate` (`in_shape="aggregate"`),
+and anything else is `map` (`one`/`one`, the default). An explicit `shape=`
+(or `in_shape=`/`out_shape=`) always overrides the
 inference, and an explicit value that contradicts the code (a generator
 decorated `shape="map"`, say) raises rather than silently misbehaving. See
 [API reference: `@step`](../reference/api.md#shape-and-depends_on-inference)
@@ -48,7 +57,8 @@ item — which is most transformation, extraction, and enrichment logic.
 
 ### The source-less `map` root
 
-A root (`no depends_on`) is usually `shape="expand"` — the ingestion shape
+A root (`no depends_on`) is usually `expand`-shaped (`out_shape="many"`,
+the `shape="expand"` alias) — the ingestion shape
 (see [sources.md](sources.md)). But a plain `map` root with **no**
 `depends_on` is also legal, and mints a single lane whose input is its
 `params` (or a constant, if the function takes none):
@@ -69,28 +79,28 @@ everyday counterpart to an `expand` root, which mints N lanes instead of
 one — a way to feed a value *into* the head of a pipeline instead of
 scanning for one. See [`../examples.md`](../examples.md)
 (`examples/pdf_digest`) for this feeding an `expand` → vision-LLM →
-`reduce` chain end to end.
+`aggregate` chain end to end.
 
-## `reduce` — N:1 (fan-in)
+## `aggregate` — N:1 (fan-in)
 
-Fans in over a parent's *surviving* lanes. A plain reduce (`group_key=None`)
+Fans in over a parent's *surviving* lanes. A plain aggregate (`group_key=None`)
 receives every lane as one `{coordinate: value}` dict and returns a single
 output at the fixed coordinate `@all`:
 
 ```python
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 ```
 
-(A plain `@all` reduce is the one shape that's always explicit: nothing
+(A plain `@all` aggregate is the one shape that's always explicit: nothing
 in the code implies it. The parent comes from the parameter name, like
-any other step.)
+any other step. `shape="reduce"` is the alias and still works.)
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of a field, read from the parent output struct
 at plan time (so planning stays value-free).
-`group_key=` implies `shape="reduce"` on its own:
+`group_key=` implies `in_shape="aggregate"` on its own:
 
 ```python
 @p.step(group_key="region")
@@ -104,14 +114,14 @@ present in the parent step's output. A lane with several values for the
 field (a list-valued field) joins every one of those groups.
 
 By default, `on_failed="use_passed"`: if a parent lane failed or was
-blocked, `reduce` drops it and proceeds with whatever survived (firing a
+blocked, `aggregate` drops it and proceeds with whatever survived (firing a
 `partial_fan_in` warning), rather than stalling the whole aggregate on one
 bad upstream item. Pass `on_failed="block"` when every parent lane must be
 present for the aggregate to mean anything — then a single missing lane
-blocks the entire reduce (or the entire group, under `group_key`).
+blocks the entire aggregate (or the entire group, under `group_key`).
 
-Reach for `reduce` for aggregation, rollups, and "sort these back into one
-document" reassembly (the `expand` → `reduce` round trip in
+Reach for `aggregate` for aggregation, rollups, and "sort these back into one
+document" reassembly (the `expand` → `aggregate` round trip in
 `examples/pdf_digest`, see [`../examples.md`](../examples.md), is exactly
 that: split a PDF into chunks, process each independently, fold back into a
 whole document).
@@ -134,7 +144,8 @@ def headline(articles: dict) -> str:
     return articles["title"].upper()
 ```
 
-(`articles` is a generator, so its `shape="expand"` is inferred; its
+(`articles` is a generator, so its `out_shape="many"` (the `shape="expand"`
+alias) is inferred; its
 `fetch` parameter names the parent step.)
 
 **The caching insight is the reason `expand` exists.** An expand can't cache
@@ -156,7 +167,8 @@ An `expand` step with **no** `depends_on` is a root — it yields the
 pipeline's initial lanes and, having no parent to cache against, **always
 re-executes**, every run (no anchor is written or checked). This *is* how
 ingestion works — there's no separate source concept, just this shape used
-with no parent. A parentless generator function infers `shape="expand"`
+with no parent. A parentless generator function infers `out_shape="many"`
+(the `shape="expand"` alias)
 automatically:
 
 ```python
@@ -187,7 +199,7 @@ DuckDB query, or any Arrow producer to lanes, with no Python iteration:
 import pyarrow as pa
 from rubedo import step
 
-@step(shape="expand")
+@step(out_shape="many")
 def load_csv():
     return pa.table({
         "name": ["alice", "bob", "carol"],
@@ -202,7 +214,7 @@ hash). The anchor caching works identically to yield-based expand — on
 re-run, if the parent is unchanged, the expand fn is not called and
 children are reused.
 
-Declare `shape="expand"` explicitly for table-return expand (a
+Declare `out_shape="many"` (or `shape="expand"`) explicitly for table-return expand (a
 non-generator function doesn't auto-infer the shape).
 
 ## `join` — N-way equijoin
@@ -239,7 +251,7 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 ```
 
-(`join_on=` implies `shape="join"`; the parents are the `join_on` keys,
+(`join_on=` implies `in_shape="join"`/`out_shape="many"`; the parents are the `join_on` keys,
 confirmed by the function's parameters at build time.)
 
 Every side named in `join_on` must carry the field it's matched by in its
@@ -251,7 +263,7 @@ name. Sides joined on *different* pairwise keys compose by chaining `join`
 steps; an arbitrary pair predicate isn't part of `join` itself — express it
 as a `filter`-style step (return `Filtered(...)`) immediately after.
 
-Like `reduce`, `join` honors `on_failed` (default `"use_passed"`): a failed
+Like `aggregate`, `join` honors `on_failed` (default `"use_passed"`): a failed
 or blocked lane on one side just drops out of that side's bucket instead of
 blocking every match.
 
@@ -265,10 +277,10 @@ for why a diamond isn't a join.
 
 ## Putting it together
 
-`join` → `expand` → `reduce` compose in one pipeline the way you'd expect:
+`join` → `expand` → `aggregate` compose in one pipeline the way you'd expect:
 two sources join to enrich each feed with its publisher's region, each feed
 expands into a lane per article (cached, so a re-run re-scrapes nothing),
-and the articles reduce by region into one digest per region. See
+and the articles aggregate by region into one digest per region. See
 `examples/newsroom` (listed in [`../examples.md`](../examples.md)) for the
 whole thing, runnable end to end.
 

@@ -86,7 +86,7 @@ p = pipeline(name="count-lines", steps=[scan, count_lines])
 
 ## Ingestion is a step
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `shape="expand"` inferred) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
+There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `out_shape="many"` inferred — the `shape="expand"` alias) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
 
 ```python
 import csv
@@ -126,7 +126,7 @@ def enrich(row: dict): ...
 - **`stale_after`** expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh the clock.
 - **`assertions`** run against the output value before it commits; if any raise, the step fails and bad data never propagates downstream.
 - **`executor="process"`** switches a step from the default thread pool to a process pool (`loky` + `cloudpickle`, so closures are fine) for CPU-bound work.
-- **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `reduce`/`join` always synchronize on all lanes either way.
+- **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `aggregate`/`join` always synchronize on all lanes either way.
 
 A step can **decline an item** by returning `Filtered(reason=...)`: downstream steps skip it with status `filtered` instead of executing, and the verdict itself is cached like any output — an expensive LLM-based filter runs once per input, not once per run. When the input changes, the decision is made fresh.
 
@@ -136,7 +136,7 @@ A step can **decline an item** by returning `Filtered(reason=...)`: downstream s
 
 By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan-out, and joins:
 
-- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
+- **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` (or the `shape="reduce"` alias) receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
 - **`join`** — an N-way equijoin across multiple `expand` roots, matched on a field of their parent outputs, minting one lane per matched tuple:
 
@@ -174,7 +174,7 @@ A pipeline doesn't need a source-shaped root at all. A `map` step with no `depen
 def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
 ```
 
-See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → reduce → two summaries.
+See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → aggregate → two summaries.
 
 ## Search and surgical invalidation
 
@@ -189,7 +189,7 @@ Selection.parse("step:extract company:acme live:true")     # query-string form (
 
 Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches a field of the step's output struct. A label is just a field a step returns — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
 
-`downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that a reduce or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
+`downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that an aggregate or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
 
 ## Code changes and caching
 

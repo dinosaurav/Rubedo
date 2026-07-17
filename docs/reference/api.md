@@ -33,6 +33,8 @@ def step(
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
     shape: Optional[str] = None,
+    in_shape: Optional[str] = None,
+    out_shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
@@ -45,7 +47,13 @@ def step(
 A decorator that turns a plain function into a `StepSpec`. The engine never
 imports your code — `@step` just builds a data object; nothing runs until
 `p.run()`. Works bare (`@step`) or called (`@step()`, `@step(version="2")`,
-...) — both mint the same `StepSpec`.
+...) — both mint the same `StepSpec`. `StepSpec` itself stores
+`in_shape`/`out_shape` as the primary fields; the legacy `shape=` kwarg is
+translated to the pair and never stored (`shape="map"` →
+`in_shape="one", out_shape="one"`, `shape="reduce"` →
+`in_shape="aggregate", out_shape="one"`, `shape="expand"` →
+`in_shape="one", out_shape="many"`, `shape="join"` →
+`in_shape="join", out_shape="many"`).
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
@@ -61,14 +69,16 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `retry_backoff` | `float` | `1.0` | Multiplier applied to `retry_delay` after each attempt. |
 | `rate_limit` | `str` \| `None` | `None` | `"10/min"`, `"2/s"`, `"500/hour"` — paces this step's executions across all its workers, retries included. Parsed by `parse_rate_limit`; raises `ValueError` on a bad format. |
 | `stale_after` | `str` \| `None` | `None` | `"24h"`, `"30min"`, `"7d"` — a cached output older than this re-executes on the next run. Different bytes supersede the old generation (downstream recomputes); identical bytes just refresh the freshness clock. Parsed by `parse_duration`. |
-| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, and `stale_after`. A `skip_cache` step must have at least one consumer. |
-| `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
+| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`/`out_shape="many"`, `shape="reduce"`/`in_shape="aggregate"`, and `stale_after`. A `skip_cache` step must have at least one consumer. |
+| `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | Legacy alias — translated to the `in_shape`/`out_shape` pair and never stored on the spec (see above). When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
+| `in_shape` | `"one"` \| `"aggregate"` \| `"join"` \| `None` | `None` (inferred) | Primary input-arity field. `"one"` (the default) takes a single parent lane; `"aggregate"` (the N:1 fan-in — was "reduce") takes a parent's *surviving* lanes as a `{lane: value}` dict; `"join"` matches lanes from independent roots on `join_on=`. Inferred alongside `out_shape` from `shape=`/the code the same way as `shape` above. |
+| `out_shape` | `"one"` \| `"many"` \| `None` | `None` (inferred) | Primary output-cardinality field. `"one"` (the default) emits one lane per input; `"many"` fans out (a generator yields payloads, or `join` mints pair lanes) — the shape behind `expand`/`join`. Inferred alongside `in_shape`. |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
-| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: a field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
-| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
+| `group_key` | `str` \| `None` | `None` | `in_shape="aggregate"` only: a field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
+| `join_on` | `dict[str, str]` \| `None` | `None` | `in_shape="join"` only: `{parent_step: field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
 | `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
 | `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
-| `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
+| `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `aggregate`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
 
 ```python
 from rubedo import step
@@ -104,7 +114,7 @@ Parameter binding: a root step (source-less `map` or root `expand`) receives
 no payload argument at all — only `params`, if declared; a dependent step
 (including a root `expand`'s own downstream consumers) receives one
 **keyword** argument per parent, named after
-that parent's step name (a `reduce` step's parent kwarg is a
+that parent's step name (an `aggregate` step's parent kwarg is a
 `{coordinate: value}` dict instead of a single value); any step may
 additionally declare a `params` argument to receive the run's validated
 params (see [Concepts: model](../concepts/model.md)). A step returns
@@ -125,12 +135,16 @@ def test_extract_uppercases():
 Both of those are also inferred when not spelled out, since a decorated
 function's own shape already implies most of this:
 
-- `shape` defaults to `"expand"` for a generator function, `"join"`/
-  `"reduce"` when `join_on=`/`group_key=` is given, `"map"` otherwise. An
-  explicit `shape=` always wins; an explicit value that contradicts what
-  the code implies (say, a generator decorated `shape="map"`, or `join_on=`
-  on a step whose explicit shape isn't `"join"`) raises at decoration time
-  rather than misbehaving mid-run.
+- `shape` (or `in_shape`/`out_shape`) defaults to `"expand"`
+  (`in_shape="one", out_shape="many"`) for a generator function, `"join"`
+  (`in_shape="join", out_shape="many"`) /
+  `"reduce"` (`in_shape="aggregate", out_shape="one"`) when `join_on=`/
+  `group_key=` is given, `"map"` (`in_shape="one", out_shape="one"`)
+  otherwise. An explicit `shape=` (or `in_shape=`/`out_shape=`) always
+  wins; an explicit value that contradicts what the code implies (say, a
+  generator decorated `shape="map"`, or `join_on=` on a step whose explicit
+  shape isn't `"join"`) raises at decoration time rather than misbehaving
+  mid-run.
 - `depends_on`, left unset, is resolved once every step in the pipeline is
   registered (`pipeline()`/`p.step()` — decoration time can't see sibling
   steps yet): every parameter of the function other than `params` must
@@ -153,7 +167,8 @@ reading as obvious, or when a parameter's name legitimately differs from
 the step it depends on.
 
 A parentless generator function is a source-shaped `expand` root, sugar-free
-— its `shape="expand"` is inferred automatically:
+— its `out_shape="many"` (the `shape="expand"` alias) is inferred
+automatically:
 
 ```python
 from rubedo import step
@@ -195,7 +210,7 @@ every run of the pipeline — `schedule=`, `home=`, `retention=`,
 | `steps` | `list[StepSpec]` \| `None` | `None` | Steps built by `@step`, if you already have them as a list. Steps can also be registered afterward via `@p.step(...)` — both forms compose freely. |
 | `params_model` | `Type[BaseModel]` \| `None` | `None` | A Pydantic model that `p.run(params={...})`/`p.plan(params={...})` validate against; steps that declare a `params` argument receive the validated, JSON-dumped dict. |
 | `retention` | `int` \| `None` | `None` | Keep only this pipeline's last N terminal runs' outputs; older, no-longer-referenced generations are pruned at the end of each successful run. Must be `>= 1` if set — validated eagerly, at construction. See [Guide: retention](../guides/retention.md). |
-| `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* for every run of this pipeline — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `reduce`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. Validated eagerly. |
+| `schedule` | `"broad"` \| `"deep"` | `"broad"` | Execution *order* for every run of this pipeline — never results (cache identity is order-independent). `"broad"` completes each step across all lanes before the next starts (paid-step-safe inspection checkpoints). `"deep"` lets each lane race ahead through consecutive 1:1 `map` steps as soon as its own inputs land. `aggregate`/`join`/`expand`/multi-parent maps always synchronize on all lanes either way. Validated eagerly. |
 | `home` | `str` \| `None` | `None` | Points this pipeline's ledger/object store at a custom root instead of the default `.rubedo`/`RUBEDO_HOME`, for every `.run()`/`.plan()` call. |
 
 There is no `.build()`: the underlying `PipelineSpec` (at least one root
@@ -242,8 +257,9 @@ count_lines_pipeline = p
 ```
 
 A pipeline needs no explicit source step at all: some root step must
-originate lanes itself — either a `shape="expand"` root (yields N lanes
-every run) or a source-less `shape="map"` root (mints a single `@root`
+originate lanes itself — either an `expand` root (`out_shape="many"` /
+`shape="expand"`; yields N lanes
+every run) or a source-less `map` root (`shape="map"`; mints a single `@root`
 lane from its `params`).
 
 ### `Pipeline.run()`
@@ -417,7 +433,7 @@ logical tombstone, never a delete. `reason` is required and recorded.
 `downstream=True` widens the tombstone to the full downstream closure over
 `MaterializationEdge` (everything *derived* from the selection's live
 matches) — preview the blast radius first with `trace()` on the same
-selection, since a `reduce`/`join` inside that closure honestly carries
+selection, since an `aggregate`/`join` inside that closure honestly carries
 everything after it too.
 
 ```python
@@ -576,7 +592,8 @@ print(json.dumps(summary.output_for("total_lines"), indent=2, default=str))
 ## Sources
 
 There is no `Source` class or protocol to implement — ingestion is a
-parentless `@step(shape="expand")` (its shape inferred automatically from
+parentless `@step(shape="expand")` (equivalently `@step(out_shape="many")`;
+its shape inferred automatically from
 a bare generator function; see [Shape and `depends_on` inference](#shape-and-depends_on-inference)
 above), and every lane it yields is
 content-addressed (`row-<hash>`): identical payloads collapse to one lane,
@@ -649,7 +666,7 @@ print(report.to_dict())       # JSON-safe dict
 
 - [Concepts: the model](../concepts/model.md) — the vocabulary (lane,
   coordinate, address, materialization) these signatures assume.
-- [Concepts: shapes](../concepts/shapes.md) — `map`/`reduce`/`expand`/`join`
+- [Concepts: shapes](../concepts/shapes.md) — `map`/`aggregate`/`expand`/`join`
   in depth, with worked examples.
 - [Concepts: sources](../concepts/sources.md) — writing a custom `Source`.
 - [Concepts: versioning](../concepts/versioning.md) — `version` vs. `code`.

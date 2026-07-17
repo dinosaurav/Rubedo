@@ -16,7 +16,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   handles them): `rm -rf .rubedo/rubedo.sqlite .rubedo/objects
   .rubedo/staging`, then repopulate by running
   `uv run python examples/count_lines/count_lines.py` twice (expect Created: 22 then
-  Reused: 22 — 7 files x 3 steps + 1 reduce; TODO 14 made the source root's
+  Reused: 22 — 7 files x 3 steps + 1 aggregate; TODO 14 made the source root's
   own per-lane commit count too). Say so in the commit message.
 - **Verification checklist**: `uv run pytest -q` (all green, no new
   warnings), `uv run ruff check src/rubedo/ tests/ examples/`,
@@ -65,15 +65,19 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/spec.py` — pure data leaf: `StepSpec`/`PipelineSpec`
   dataclasses plus `step()` and `definition()` (the JSON
   snapshot each run records). No registry: the engine never imports user
-  code. `shape` ∈ `map` (1:1, default) / `reduce` (N:1 fan-in over a
-  parent's surviving lanes; `group_key` partitions into one output per
-  field value read from the parent's output dict, else a single `"@all"`)
-  / `expand` (1:N — the fn
+  code. `StepSpec` carries `in_shape`/`out_shape` as the primary fields;
+  the legacy `shape=` kwarg on `step()` is translated to the pair and
+  never stored. The four conceptual shapes: `map`
+  (`in_shape="one", out_shape="one"`, 1:1, default) / **`aggregate`**
+  (`in_shape="aggregate", out_shape="one"` — N:1 fan-in over a parent's
+  surviving lanes; was called "reduce"; `group_key` partitions into one
+  output per field value read from the parent's output dict, else a single
+  `"@all"`) / `expand` (`in_shape="one", out_shape="many"` — 1:N; the fn
   yields payloads, minting content-addressed `row-<hash>` child lanes; **no
   `depends_on` = a root = a source** that yields the initial lanes and
   re-runs every run, so `pipeline(steps=[...])` needs no separate ingestion
   concept — a parentless generator `@step` infers this shape automatically)
-  / `join` (N-way equijoin on
+  / `join` (`in_shape="join", out_shape="many"` — N-way equijoin on
   `join_on={parent: field}`, minting `a|b|…` pair lanes; the field is
   read from the parent's output dict). A
   **source-less `map` root** (no `depends_on`) mints a single `@root` lane
@@ -107,7 +111,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
   Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
   `lane_store.find_latest_filled_by_address` (content retrieval) via
-  `batch_lookup_by_address`. Per shape: reduce → one decision per group
+  `batch_lookup_by_address`. Per shape: aggregate → one decision per group
   (`_group_reduce_lanes`, reads `group_key` field from the parent's
   output dict); expand → one execute decision per parent lane,
   reused without re-running the fn via a parent-addressed cache anchor;
@@ -149,7 +153,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   (topo order → `broad` singleton segments or `deep` runs of consecutive
   ≤1-parent map steps) and `_run_segment`, the one scheduler over (lane,
   step) cells (all ledger writes in the main thread — workers only run step
-  functions). reduce/join/expand/multi-parent maps are barrier segments.
+  functions). aggregate/join/expand/multi-parent maps are barrier segments.
   Order only — ledger rows identical either way.
 - `src/rubedo/runner.py` — orchestration: internal `run()`/`plan()`
   (`Pipeline.run()`/`Pipeline.plan()` delegate to these — not exported from
@@ -208,13 +212,14 @@ kwarg — TODO 15). `.test_*/` is gitignored.
 
 Ingestion has no separate concept (TODO 14): there is no `folder=` pipeline
 kwarg. A test folder is scanned by a bare-`@step` root — a parentless
-generator infers `shape="expand"` (the folder recipe from
+generator infers `out_shape="many"` (a `shape="expand"` alias — the folder recipe from
 `docs/concepts/sources.md`) — and the downstream step's parameter name is
 its dependency declaration. Tests use this terse form throughout: no
 `name=`/`version=`/`shape=`/`depends_on=` unless the kwarg is the test's
 subject (version bumps, drift, validation errors), the name genuinely
 differs from the function's, or the shape can't be inferred — a plain
-`@all` reduce keeps `shape="reduce"`, and reduce/join steps keep an
+`@all` aggregate keeps `shape="reduce"` (alias) or `in_shape="aggregate"`,
+and aggregate/join steps keep an
 explicit `depends_on=` (parent counts validate at decoration time, before
 build-time inference runs):
 

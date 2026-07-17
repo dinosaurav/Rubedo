@@ -1,7 +1,8 @@
 # Sources: recipes, not classes
 
 There's no `Source` protocol and no source classes to import. Ingestion is
-just a step: a parentless generator — its `shape="expand"` inferred, the
+just a step: a parentless generator — its `shape="expand"`
+(`out_shape="many"`) inferred, the
 same producer shape `expand` and `join` already use downstream — that
 `yield`s one payload per item. Each yielded payload mints its own
 content-addressed lane (`row-<hash>`); the engine never imports your code,

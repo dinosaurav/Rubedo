@@ -89,8 +89,9 @@ output struct's fields are searchable directly.
 
 Neither step spells out much at all, and every dropped kwarg is inferred
 from the code rather than defaulted blindly: `scan` is a generator
-function, so its shape defaults to `"expand"` — a plain `def` would default
-to `"map"` instead. `classify`'s only parameter, `scan`, names a registered
+function, so its shape defaults to `expand` (`out_shape="many"`) — a plain
+`def` would default to `"map"` instead. `classify`'s only parameter,
+`scan`, names a registered
 step, so it becomes a dependency (`depends_on=["scan"]`) without saying so;
 an unmatched parameter name would raise at build time instead of failing
 oddly the first time the step actually runs. Neither step passes `name=` or
@@ -99,7 +100,8 @@ oddly the first time the step actually runs. Neither step passes `name=` or
 `"0"` — see [Concepts: versioning](concepts/versioning.md) for when you'd
 bump it explicitly, which we do a few sections down. Spelling everything
 out explicitly still works and is identical once built —
-`@step(shape="expand")` / `@step(depends_on=["scan"])` —
+`@step(shape="expand")` (`@step(out_shape="many")`) /
+`@step(depends_on=["scan"])` —
 reach for it once a pipeline has enough steps that inference stops reading
 as obvious, or when a parameter's name legitimately differs from the step
 it depends on (`depends_on={"raw": "scan"}` binds a differently-named
@@ -313,7 +315,7 @@ after (to confirm what actually moved): run `trace()` with the same
 
 ## Where to go next
 
-- [Concepts: shapes](concepts/shapes.md) — `reduce`, `expand`, and `join`,
+- [Concepts: shapes](concepts/shapes.md) — `aggregate`, `expand`, and `join`,
   the three shapes beyond the `map` step used here.
 - [Concepts: sources](concepts/sources.md) — the ingestion recipes: folder,
   CSV, SQL table, cloud object storage.

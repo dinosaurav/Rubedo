@@ -2,7 +2,7 @@
 
 Status: **✅ designed and shipped** (this doc is now the design + build log).
 The whole line landed: content-addressed lanes → `expand` (cached) →
-`group_key` reduce → multi-source → N-way `join`. It superseded `TODO.md`
+`group_key` aggregate → multi-source → N-way `join`. It superseded `TODO.md`
 item 1 (Joins) and the `expand`/`flat_map` bullet. Read `invariants.md` for
 vocabulary first; the sequencing section at the bottom traces what was built.
 
@@ -10,7 +10,7 @@ vocabulary first; the sequencing section at the bottom traces what was built.
 
 Today the DAG is **coordinate-preserving**: every coordinate (lane key) is
 minted by the `Source` at scan time, and steps are only `map` (1:1) or
-`reduce` (N:1). This privileges two things — `Source` (the sole
+`aggregate` (N:1 — was "reduce"). This privileges two things — `Source` (the sole
 coordinate-creator) and a source-only removal census (the sole
 change-detector) — and it blocks everything data-dependent: `expand` (fetch
 an RSS feed, *then* yield a lane per article) and `join` (both need
@@ -19,7 +19,7 @@ coordinate creation, and join needs two independent roots).
 The generalization: **stop privileging `Source`. There are only producers
 that emit keyed items; a `Source` is the producer that emits from no input.**
 Coordinate creation moves into the core. `Source`, `map`, `filter`, `expand`,
-`reduce`, `join` all become instances of one primitive.
+`aggregate` (was "reduce"), `join` all become instances of one primitive.
 
 ## The producer
 
@@ -33,7 +33,7 @@ produce(inputs: {coord -> value}) -> Iterable[(coord, value)]
 | map     | 1           | no          | 1 → 1       | preserves |
 | filter  | 1           | no          | 1 → {0,1}   | preserves |
 | expand  | 1           | no          | 1 → N       | **mints** |
-| reduce  | 1 (grouped) | **yes**     | N → groups  | mints (group key) |
+| aggregate | 1 (grouped) | **yes**     | N → groups  | mints (group key) |
 | join    | 2+ roots    | **yes**     | N×M → pairs | **mints** |
 
 Two axes carry all the meaning: **collective?** (can this be computed one
@@ -63,7 +63,7 @@ A **join** combines two lane sets from **different roots**, whose coordinates
 are unrelated, so coordinate-equality is meaningless. It must match on a
 **declared key**, and it **mints** new pair coordinates. It is collective (you
 need both full sets to match) and coordinate-creating. That is why join is not
-a kind of reduce — reduce *collapses*, join *expands*. Join is the binary,
+a kind of aggregate — aggregate *collapses*, join *expands*. Join is the binary,
 collective member of the **expand** family, which is exactly why putting
 coordinate-creation in the core is what unblocks it.
 
@@ -119,13 +119,13 @@ per-producer record of which lanes exist each run) was never built — see the
 removal-detection section above and Sequencing step 2: silent orphaning of
 vanished lanes turned out sufficient, so no census shipped for any shape.
 
-**D — `reduce` gains a `group_key`.** Today's single `@all` lane is
+**D — `aggregate` gains a `group_key`.** Today's single `@all` lane is
 `group_key = ()` (one total group). A declared group key gives per-group
 aggregation (N → one-per-group) for free under the collective-producer
 framing.
 
 **E — Worth it.** The generalization *deletes* the Source/step distinction,
-the source-authoritative-scan invariant, and the map/reduce/expand/join zoo
+the source-authoritative-scan invariant, and the map/aggregate/expand/join zoo
 (all become one producer). It *adds* per-producer census bookkeeping, a
 removal cascade with more moving parts, and — the real cost — it makes
 **lineage load-bearing for comprehension, not just queries**: "why does lane X
@@ -158,15 +158,16 @@ core must never leak into the simple case.
 4. **Multi-root pipeline API — RESOLVED: no pipeline-level API at all.** Item
    14 settled it: a root is just any step with no `depends_on`, and a
    pipeline may declare as many as it likes (a parentless generator `@step`
-   infers a `shape="expand"` root automatically). `join`/multi-parent steps
+   infers an `out_shape="many"` (the `shape="expand"` alias) root
+   automatically). `join`/multi-parent steps
    `depends_on` whichever roots they need — no dict, no per-step routing
    kwarg. See 4a below.
-5. **Reduce/join removal — RESOLVED: just orphan.** A group that empties or a
+5. **Aggregate/join removal — RESOLVED: just orphan.** A group that empties or a
    pair whose match vanishes simply stops being emitted; its old
    materialization orphans (live, unreferenced), exactly like a vanished
    expanded lane. No census, no removal report — consistent with the step-2
    decision that reporting a removal is a low-value notification, not an
-   operation. The `ledger.py:642` skip-reduce shortcut is fine to leave as-is.
+   operation. The `ledger.py:642` skip-aggregate shortcut is fine to leave as-is.
 6. **Group-key stability** under content-addressed lanes (the same
    removed-vs-changed churn as A, one level up).
 
@@ -198,7 +199,7 @@ so it is premature abstraction. Instead ship the capability first and let the
 census follow when a concrete need (expand *caching*) pulls it in.
 
 **Expand emit contract (as shipped):**
-- `@step(shape="expand")`; the fn yields bare payload values — no subkey, no
+- `@step(out_shape="many")` (the `shape="expand"` alias); the fn yields bare payload values — no subkey, no
   pair.
 - Minted coordinate: content-addressed by decision A, always —
   `row-<hash(value)[:12]>` (`expand_child_coord`, `planning.py`). Identical
@@ -251,7 +252,7 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    deleted the `@source` sugar itself, leaving a plain parentless
    `@step`); the content-addressing behavior described above is unchanged,
    just moved into plain generator code.)*
-1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
+1. **`expand`** (`out_shape="many"` — alias `shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
    yields bare payload values (no subkey, no pair); each distinct value mints
    a content-addressed `row-<hash>` lane with address `hash(step, version,
    child-content-hash[, params])` — the child's identity is its own content,
@@ -288,17 +289,17 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    was later removed as well: today there is no removal report anywhere, only
    silent orphaning. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
-3. **`group_key` reduce** — ✅ **DONE**. `@step(shape="reduce",
-   group_key="field")` partitions the reduction's parent lanes by a named
+3. **`group_key` aggregate** — ✅ **DONE**. `@step(in_shape="aggregate",
+   group_key="field")` (alias `shape="reduce"`) partitions the aggregation's parent lanes by a named
    field of the parent output, emitting one output per
    group (coordinate = the group value); `group_key=None` is the old single
    `@all`. Grouping reads `MaterializationIndexEntry` rows at plan time — no
    value reads, plan stays value-free (`_group_reduce_lanes`,
    `_reduce_group_decision`). A lane with several values for the field joins
    each group (list-valued field); a lane with none raises (the field must
-   be present in the parent output). Also fixed reduce to gather lanes from `coord_step_mats` rather
-   than only source coordinates, so a reduce now folds in **minted/expanded
-   lanes** — `expand → group_key reduce` works. A vanished group just orphans
+   be present in the parent output). Also fixed aggregate to gather lanes from `coord_step_mats` rather
+   than only source coordinates, so an aggregate now folds in **minted/expanded
+   lanes** — `expand → group_key aggregate` works. A vanished group just orphans
    (step 2). Execution/ledger unchanged (a group is a decision whose
    `parent_mats` is scoped to that group). Verified: `tests/test_group_key.py`
    (6) + full suite (160) green, ruff clean, and a live feed → 5 story lanes →
@@ -308,15 +309,17 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      shipped here (`pipeline(sources={name: Source})`, a named-sources dict,
      and `@step(source="name")` routing) is gone: item 14 deleted the
      `Source` protocol entirely, and with it the routing kwarg. Today
-     "multi-source" is just several parentless `@step(shape="expand")` roots
+     "multi-source" is just several parentless `@step(out_shape="many")`
+     (alias `shape="expand"`) roots
      declared in the same pipeline — no pipeline-level kwarg, no
      per-root routing. A downstream step names whichever root(s) it needs in
      `depends_on`; coordinates never collide because `coord_step_mats` is
      keyed by `(coord, step)`. Live-verified in
      `examples/newsroom/newsroom.py` (two source-shaped roots joined on
      publisher) and covered by `tests/test_join.py`.
-   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
-     depends_on=[a, b, ...], join_on={a: field, b: field, ...})`: an **N-way**
+   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(in_shape="join",
+     depends_on=[a, b, ...], join_on={a: field, b: field, ...})` (alias
+     `shape="join"`): an **N-way**
       equijoin matching each side's field by value
       (plan-time, value-free, like `group_key`). It buckets each side by its
      key, intersects on shared values, and mints one lane per matched tuple
@@ -330,6 +333,6 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      suite (170) green, and a live two-source order↔customer enrichment.
 
 **The producer-model line is complete:** content-addressed lanes → `expand`
-(cached) → `group_key` reduce → multi-source → N-way `join`. Every shape
-(`map`/`filter`/`expand`/`reduce`/`join`) is now a producer, exactly as the
+(cached) → `group_key` aggregate → multi-source → N-way `join`. Every shape
+(`map`/`filter`/`expand`/`aggregate`/`join`) is now a producer, exactly as the
 taxonomy predicted.

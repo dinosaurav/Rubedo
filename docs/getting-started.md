@@ -43,9 +43,9 @@ print(f"created={summary.created_count} reused={summary.reused_count}")
 There's no `folder=` kwarg — ingestion is just a step: `scan` is a
 parentless generator that walks `./input` and `yield`s each file's own
 content (not just its path — the yielded payload is what gets hashed into
-the lane's identity), so its `shape="expand"` is inferred; `count_lines`'s
-parameter names the `scan` step, so its dependency is inferred too (see
-[Shapes](concepts/shapes.md)). `p.describe()` renders the DAG before
+the lane's identity), so its `shape="expand"` (`out_shape="many"`) is
+inferred; `count_lines`'s parameter names the `scan` step, so its
+dependency is inferred too (see [Shapes](concepts/shapes.md)). `p.describe()` renders the DAG before
 anything runs; `p.plan()` is a read-only dry-run of what `p.run()` would do to
 every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
 `p.run()` actually executes it and returns a `RunSummary`.
@@ -153,8 +153,8 @@ p = pipeline(name="count-lines", steps=[scan, count_lines])
 There's no `.build()` step: the underlying `PipelineSpec` is constructed and
 validated lazily the first time you call a verb (`.run()`/`.plan()`/
 `.describe()`), and cached from then on. `scan` above is a parentless
-generator, so its `shape="expand"` is inferred automatically (see
-[Shapes](concepts/shapes.md)) — the same recipe
+generator, so its `shape="expand"` (`out_shape="many"`) is inferred
+automatically (see [Shapes](concepts/shapes.md)) — the same recipe
 [`examples/count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)
 uses itself.
 
@@ -165,7 +165,7 @@ uses itself.
   invalidating a selection.
 - [Concepts: the model](concepts/model.md) — lanes, coordinates, addresses,
   and the vocabulary the rest of the docs assume.
-- [Concepts: shapes](concepts/shapes.md) — `map`, `reduce`, `expand`, `join`.
+- [Concepts: shapes](concepts/shapes.md) — `map`, `aggregate`, `expand`, `join`.
 - [Concepts: sources](concepts/sources.md) — the folder, CSV, SQL table, and
   cloud storage ingestion recipes.
 - [Concepts: versioning](concepts/versioning.md) — `version` vs. `code`, and
