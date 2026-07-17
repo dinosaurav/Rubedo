@@ -140,9 +140,42 @@ _arrow_batch_buffers: Dict[Tuple[str, str], List["pa.Table"]] = {}
 # Invalidated by flush_step (the file changed).  Bounds the number of
 # full-file reads: a parent step's table is read once after flush, then
 # served from cache for every subsequent lookup during the run.
+#
+# _ADDRESS_INDEX_CACHE is a companion: {address: row_index} built once
+# from the cached table's address column.  batch_lookup_by_address uses
+# it for O(matches) hash-probe lookups instead of scanning the table.
 
 _DISK_TABLE_CACHE: OrderedDict = OrderedDict()
+_ADDRESS_INDEX_CACHE: OrderedDict = OrderedDict()
 _DISK_TABLE_CACHE_MAX = 16
+
+
+def _get_address_index(pipeline_id: str, step_name: str) -> Dict[str, int]:
+    """Build (or return cached) {address: last_row_index} for a step's
+    on-disk table.  The index is built once from the address column only
+    (one to_pylist of a single string column) and amortized across every
+    subsequent lookup in the run."""
+    key = (pipeline_id, step_name)
+    if key in _ADDRESS_INDEX_CACHE:
+        _ADDRESS_INDEX_CACHE.move_to_end(key)
+        _DISK_TABLE_CACHE.move_to_end(key)
+        return _ADDRESS_INDEX_CACHE[key]
+
+    table = _read_disk_table(pipeline_id, step_name)
+    if table is None or table.num_rows == 0:
+        return {}
+
+    addrs = table.column("address").to_pylist()
+    index: Dict[str, int] = {}
+    for i, addr in enumerate(addrs):
+        if addr:
+            index[addr] = i  # last wins (newest in table order)
+
+    _ADDRESS_INDEX_CACHE[key] = index
+    _ADDRESS_INDEX_CACHE.move_to_end(key)
+    if len(_ADDRESS_INDEX_CACHE) > _DISK_TABLE_CACHE_MAX:
+        _ADDRESS_INDEX_CACHE.popitem(last=False)
+    return index
 
 
 def _buffer(pipeline_id: str, step_name: str) -> List[Dict[str, Any]]:
@@ -154,10 +187,21 @@ def _arrow_batch_buffer(pipeline_id: str, step_name: str) -> List["pa.Table"]:
 
 
 def clear_run_buffers():
-    """Discard all in-memory buffers (after a flush or on a fresh run)."""
+    """Discard in-memory write buffers (after a flush or on a fresh run).
+
+    Does NOT clear the read cache (_DISK_TABLE_CACHE / _ADDRESS_INDEX_CACHE)
+    — those are cleared by clear_read_caches at run start."""
     _run_buffers.clear()
     _arrow_batch_buffers.clear()
+
+
+def clear_read_caches():
+    """Clear the on-disk table and address-index read caches.
+
+    Called at run start so stale data from a previous run (different
+    DB/home) doesn't leak.  The cache is rebuilt on first lookup."""
     _DISK_TABLE_CACHE.clear()
+    _ADDRESS_INDEX_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -638,17 +682,47 @@ def batch_lookup_by_address(
     if not fulfilled_addrs:
         return {}
 
-    # Step 2: for each fulfilled address, retrieve the Arrow row by
-    # scanning the step's Arrow file on the address column directly.
+    # Step 2: filter the Arrow table to only fulfilled addresses using
+    # pc.is_in (C++ vectorized kernel) before converting to Python.
+    # Only the matching rows are materialized — the scan itself stays
+    # in Arrow's native compute engine, not Python dicts.
     result: Dict[str, Dict[str, Any]] = {}
-    table = _combined_table(pipeline_id, step_name)
-    if table is None or table.num_rows == 0:
-        return result
-    rows = table.to_pylist()
-    for row in rows:
-        addr = row.get("address")
-        if addr in fulfilled_addrs:
-            result[addr] = row
+
+    # Step 2: use the cached address→row_index for O(matches) lookups.
+    # The index covers the on-disk table; in-memory buffer rows (current
+    # run, not yet flushed) are scanned linearly after the index probe —
+    # they're small and buffer rows override disk rows (newest wins).
+    addr_index = _get_address_index(pipeline_id, step_name)
+
+    # 2a: index probe into the on-disk table
+    disk_indices: List[int] = []
+    for addr in fulfilled_addrs:
+        idx = addr_index.get(addr)
+        if idx is not None:
+            disk_indices.append(idx)
+
+    if disk_indices:
+        disk_table = _read_disk_table(pipeline_id, step_name)
+        if disk_table is not None:
+            matched = disk_table.take(disk_indices)
+            for row in matched.to_pylist():
+                result[row["address"]] = row
+
+    # 2b: scan in-memory buffers (current run, not yet flushed).
+    # Buffer rows override disk rows (newest wins).
+    buf_rows = _buffer(pipeline_id, step_name)
+    for row in buf_rows:
+        buf_addr: Any = row.get("address")
+        if buf_addr in fulfilled_addrs:
+            result[buf_addr] = row
+
+    arrow_batches = _arrow_batch_buffer(pipeline_id, step_name)
+    for batch in arrow_batches:
+        for row in batch.to_pylist():
+            addr = row.get("address")
+            if addr in fulfilled_addrs:
+                result[addr] = row
+
     return result
 
 
@@ -736,13 +810,27 @@ def flush_step(pipeline_id: str, step_name: str):
     os.replace(tmp_path, path)
 
     # Keep the flushed table in the disk-table cache so downstream
-    # lookups get a cache hit — no re-read from disk.  Clear the write
-    # buffers (the data is now on disk + in cache).
+    # lookups get a cache hit — no re-read from disk.  Build the address
+    # index from the combined table so batch_lookup_by_address can do
+    # O(matches) hash probes.  Clear the write buffers (data is on disk
+    # + in cache + indexed).
     key = (pipeline_id, step_name)
     _DISK_TABLE_CACHE[key] = combined
     _DISK_TABLE_CACHE.move_to_end(key)
     if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
-        _DISK_TABLE_CACHE.popitem(last=False)
+        evicted = _DISK_TABLE_CACHE.popitem(last=False)
+        _ADDRESS_INDEX_CACHE.pop(evicted[0], None)
+
+    addrs = combined.column("address").to_pylist()
+    addr_index: Dict[str, int] = {}
+    for i, addr in enumerate(addrs):
+        if addr:
+            addr_index[addr] = i
+    _ADDRESS_INDEX_CACHE[key] = addr_index
+    _ADDRESS_INDEX_CACHE.move_to_end(key)
+    if len(_ADDRESS_INDEX_CACHE) > _DISK_TABLE_CACHE_MAX:
+        _ADDRESS_INDEX_CACHE.popitem(last=False)
+
     rows.clear()
     arrow_batches.clear()
 
@@ -787,7 +875,9 @@ def compact_step(
         path = _get_step_file(pipeline_id, step_name)
         if os.path.exists(path):
             os.remove(path)
-        _DISK_TABLE_CACHE.pop((pipeline_id, step_name), None)
+        key = (pipeline_id, step_name)
+        _DISK_TABLE_CACHE.pop(key, None)
+        _ADDRESS_INDEX_CACHE.pop(key, None)
         return
     indices = sorted(latest_idx.values())
     pruned = table.take(indices)
@@ -796,4 +886,6 @@ def compact_step(
     with pa.ipc.new_file(tmp_path, pruned.schema) as writer:
         writer.write_table(pruned)
     os.replace(tmp_path, path)
-    _DISK_TABLE_CACHE.pop((pipeline_id, step_name), None)
+    key = (pipeline_id, step_name)
+    _DISK_TABLE_CACHE.pop(key, None)
+    _ADDRESS_INDEX_CACHE.pop(key, None)

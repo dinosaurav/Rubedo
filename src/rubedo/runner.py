@@ -457,6 +457,13 @@ def run_pipeline(
             if prog is not None:
                 progress_cb = prog.update
 
+            # Clear read caches at run start — they may hold stale data
+            # from a previous run with a different DB/home.  The cache
+            # is rebuilt on first lookup (one address-column scan per
+            # step, amortized across all lookups in this run).
+            from . import lane_store
+            lane_store.clear_read_caches()
+
             try:
                 params_hash = hash_json(params or {})
                 memo = _RunMemo()

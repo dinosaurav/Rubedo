@@ -229,6 +229,9 @@ def backdate_materializations(iso_timestamp):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with pa.ipc.new_file(path, table.schema) as writer:
             writer.write_table(table)
+
+    # Invalidate the read cache — the Arrow files changed on disk.
+    lane_store.clear_read_caches()
     lane_store.clear_run_buffers()
 
 
