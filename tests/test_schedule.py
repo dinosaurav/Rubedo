@@ -2,10 +2,10 @@
 
 broad (default) stages step by step — every lane of step N completes
 before any lane starts step N+1. deep pipelines each lane through
-consecutive 1:1 (map) steps as soon as its own inputs commit; reduce/join
-(and, for now, expand and multi-parent maps) remain barriers that
-synchronize on all lanes. Ledger rows — statuses, addresses, lifecycle —
-must be identical across modes.
+consecutive deep-eligible steps (1:1 maps and root expands) as soon as
+its own inputs commit; reduce/join/dependent-expand (and multi-parent
+maps) remain barriers that synchronize on all lanes. Ledger rows —
+statuses, addresses, lifecycle — must be identical across modes.
 
 schedule=/home= are Pipeline construction-time settings: a cross-mode
 comparison builds two Pipeline wrappers over the *same*
@@ -247,7 +247,7 @@ def test_deep_pipelines_lanes_across_steps():
 
     assert gate.is_set()
     assert summary.status == "completed"
-    # scan is a barrier (expand root) under deep; s1/s2 pipeline through it.
+    # scan is a root expand (deep-eligible); s1/s2 pipeline through it.
     assert (summary.created_count, summary.failed_count, summary.blocked_count) == (
         6,  # 2 files x (scan + s1 + s2)
         0,
@@ -478,3 +478,49 @@ def test_invalid_schedule_raises():
 
     with pytest.raises(ValueError, match="schedule"):
         pipeline(name="bad", steps=[scan, s1], schedule="sideways")
+
+
+# (h) Independent root expands run concurrently under deep — two sources
+# that don't depend on each other should overlap, not run sequentially.
+def test_deep_concurrent_root_expands():
+    gate_a = threading.Event()
+    gate_b = threading.Event()
+
+    @step(shape="expand")
+    def source_a():
+        gate_b.set()  # signal B that A has started
+        if not gate_a.wait(timeout=30):
+            raise RuntimeError(
+                "gate_a never opened: source_b did not start while source_a was in flight"
+            )
+        yield {"src": "a"}
+
+    @step(shape="expand")
+    def source_b():
+        gate_a.set()  # signal A that B has started
+        if not gate_b.wait(timeout=30):
+            raise RuntimeError(
+                "gate_b never opened: source_a did not start while source_b was in flight"
+            )
+        yield {"src": "b"}
+
+    @step
+    def process_a(source_a: dict):
+        return source_a["src"].upper()
+
+    @step
+    def process_b(source_b: dict):
+        return source_b["src"].upper()
+
+    pipe = pipeline(
+        name="concurrent_roots",
+        steps=[source_a, source_b, process_a, process_b],
+        schedule="deep",
+    )
+    summary = pipe.run()
+
+    assert summary.status == "completed"
+    # Both gates were set — the two root expands ran concurrently
+    assert gate_a.is_set() and gate_b.is_set()
+    # 2 sources (1 lane each) + 2 process = 4
+    assert summary.created_count == 4

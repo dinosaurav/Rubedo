@@ -11,9 +11,11 @@ order is partitioned into segments (_partition_segments) and every segment
 goes through the one segment executor (_run_segment). Under
 schedule="broad" (the default) each step is its own segment, so the
 executor degenerates to plan-all -> execute-all -> commit-each — the classic
-staged loop. Under schedule="deep", consecutive 1:1 steps share a segment
-and each lane advances through them the moment its own inputs commit;
-reduce/join/expand and multi-parent maps stay singleton barrier segments.
+staged loop. Under schedule="deep", consecutive deep-eligible steps share a
+segment and each lane advances through them the moment its own inputs
+commit; reduce/join/dependent-expand and multi-parent maps stay singleton
+barrier segments. Root expands are deep-eligible — independent sources run
+concurrently within the same segment.
 """
 
 import concurrent.futures
@@ -46,13 +48,16 @@ def _scanned_for(step: StepSpec) -> List[RootItem]:
 def _deep_eligible(step: StepSpec) -> bool:
     """Can a lane flow through this step without waiting for its siblings?
 
-    v1: only 1:1 steps — shape="map" with at most one parent (root maps and
-    skip_cache utils included; a skip_cache step never executes eagerly
-    anyway, its fusion semantics are untouched). reduce/join consume whole
-    lane sets (true barriers); expand and multi-parent maps are treated as
-    barriers for now (unlockable later).
+    1:1 map steps (including root maps and skip_cache utils) and root
+    expands (independent sources that yield their own lanes). reduce/join
+    consume whole lane sets (true barriers); dependent expands and
+    multi-parent maps are treated as barriers for now (unlockable later).
     """
-    return step.shape == "map" and len(step.depends_on) <= 1
+    if step.shape == "map" and len(step.depends_on) <= 1:
+        return True
+    if step.shape == "expand" and not step.depends_on:
+        return True
+    return False
 
 
 def _partition_segments(
