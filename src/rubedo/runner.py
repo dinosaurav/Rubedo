@@ -480,13 +480,15 @@ def run_pipeline(
                 return summary
 
             except Exception as e:
-                # Per-segment flush already wrote completed segments to
-                # disk.  Clear remaining in-memory buffers (the current
-                # segment's in-flight work) so they don't leak into the
-                # next run.  Recovery is "next run sees what did flush +
-                # retries the rest" (notes/arrow-storage.md).
+                # Flush whatever completed to disk — per-segment flush
+                # already wrote completed segments; this catches the
+                # current segment's successfully committed lanes (a
+                # catastrophic failure mid-commit leaves the Arrow row
+                # but IHU not fulfilled, so next run recomputes — the
+                # stale row is harmless history).  No reason to discard
+                # successful work.
                 from . import lane_store
-                lane_store.clear_run_buffers()
+                lane_store.flush_all()
                 with get_session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                     if err_run:
