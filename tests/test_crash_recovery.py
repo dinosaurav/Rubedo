@@ -153,3 +153,58 @@ def test_success_and_reuse(setup_teardown):
     assert summary2.status == "completed"
     assert summary2.created_count == 0
     assert summary2.reused_count == 4
+
+
+def test_per_segment_flush_preserves_earlier_steps(setup_teardown):
+    """A crash in a later segment must not lose earlier segments' outputs.
+
+    scan (expand, segment 1) -> step_a (map, segment 2) -> step_b (map, segment 2)
+    -> crash_step (map, segment 3)
+
+    If crash_step raises, scan and step_a/step_b should be on disk and
+    reused on the next run — not lost with the in-memory buffers.
+    """
+    call_count = {"crash": 0}
+
+    @step
+    def step_a(scan: dict):
+        return {"path": scan["path"], "upper": scan["text"].upper()}
+
+    @step
+    def step_b(step_a: dict):
+        return {"path": step_a["path"], "len": len(step_a["upper"])}
+
+    @step
+    def crash_step(step_b: dict):
+        call_count["crash"] += 1
+        raise RuntimeError("crash_step failed!")
+
+    p = pipeline(name="seg-flush", steps=[scan, step_a, step_b, crash_step])
+
+    summary = p.run(workers=1)
+    # scan + step_a + step_b succeed (2 lanes each = 6), crash_step fails (2)
+    assert summary.status == "completed_with_failures"
+    assert summary.failed_count == 2
+    assert summary.created_count == 6
+
+    # The key assertion: scan, step_a, step_b rows are on disk.
+    # If per-segment flush didn't work, clear_run_buffers on the error
+    # path would have wiped them and this would be 0.
+    rows = lane_store.all_filled_rows()
+    step_names = {r["step_name"] for r in rows}
+    assert "scan" in step_names
+    assert "step_a" in step_names
+    assert "step_b" in step_names
+    assert "crash_step" not in step_names
+
+    # Rerun with a non-crashing step — earlier steps should reuse
+    @step
+    def ok_step(step_b: dict):
+        return {"result": step_b["len"] * 2}
+
+    p2 = pipeline(name="seg-flush-ok", steps=[scan, step_a, step_b, ok_step])
+    summary2 = p2.run(workers=1)
+    assert summary2.status == "completed"
+    # scan, step_a, step_b all reused (2 lanes each = 6), ok_step created (2)
+    assert summary2.reused_count == 6
+    assert summary2.created_count == 2

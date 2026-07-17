@@ -480,11 +480,11 @@ def run_pipeline(
                 return summary
 
             except Exception as e:
-                # Drop any half-written lane_store buffers — the rows
-                # the run didn't finish committing are not durable.
-                # Disk state from prior flushes (this run's completed
-                # steps) is left in place; recovery is "next run sees
-                # what did flush + retries the rest" (notes/arrow-storage.md).
+                # Per-segment flush already wrote completed segments to
+                # disk.  Clear remaining in-memory buffers (the current
+                # segment's in-flight work) so they don't leak into the
+                # next run.  Recovery is "next run sees what did flush +
+                # retries the rest" (notes/arrow-storage.md).
                 from . import lane_store
                 lane_store.clear_run_buffers()
                 with get_session() as err_session:

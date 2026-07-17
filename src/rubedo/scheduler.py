@@ -230,6 +230,15 @@ def _run_segment(
                 for outcome in outcomes:
                     if not outcome.is_anchor:
                         advance(step, outcome.decision.coordinate)
+
+        # Flush this segment's steps to disk — durability per segment,
+        # not per run.  A crash in a later segment preserves earlier
+        # segments' outputs on disk.  Also bounds memory: buffers are
+        # cleared after flushing, so they don't accumulate across the
+        # whole run.
+        from . import lane_store
+        for s in seg_steps:
+            lane_store.flush_step(ctx.pipeline_id, s.name)
     finally:
         for tp in thread_pools.values():
             tp.shutdown(wait=True)

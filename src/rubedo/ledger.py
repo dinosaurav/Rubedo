@@ -528,10 +528,11 @@ def _commit_execution_result(
 
 def _finish_run(ctx: _RunContext) -> RunSummary:
     """Finalize the run status and return a summary of all outcomes."""
-    # Flush the lane_store's in-memory buffers to disk so a crashed
-    # process at least leaves the rows it wrote on disk before the run
-    # ended.  On exception paths the buffer is cleared by the next run's
-    # fresh start; here it's the normal end-of-run flush.
+    # Safety-net flush: per-segment flush in _run_segment should have
+    # already written everything, but this catches any edge case (e.g.
+    # anchor rows from expand steps that weren't in the segment's step
+    # list).  On exception paths, clear_run_buffers drops only the
+    # current segment's in-flight work; completed segments are on disk.
     lane_store.flush_all()
 
     full_summary = {
