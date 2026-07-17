@@ -8,7 +8,7 @@ that scans Arrow tables for fulfilled addresses.
 Usage:
     uv run python bench/bench_plan_lookup.py [--lanes N] [--steps M]
 
-Defaults: 5000 lanes, 4 steps (1 expand root + 3 map).
+Defaults: 5000 lanes, 4 steps (1 map root + 1 dependent expand + 3 map).
 """
 import argparse
 import os
@@ -21,6 +21,9 @@ sys.path.insert(0, "src")
 from rubedo import step, pipeline
 from rubedo.db import init_db
 from rubedo.store import init_store
+from rubedo import lane_store
+from rubedo.db import get_session
+from rubedo.models import InputHashUsage
 
 
 def run_bench(n_lanes: int, n_steps: int):
@@ -92,6 +95,49 @@ def run_bench(n_lanes: int, n_steps: int):
     print(f"  .plan() (2nd): {plan_time_2:.3f}s  reuse={plan2.counts.get('reuse', 0)} execute={plan2.counts.get('execute', 0)}")
 
     print(f"\nResult: run2={run2_time:.3f}s  plan_time={plan_time:.3f}s  plan_time_2={plan_time_2:.3f}s")
+
+    # Detailed SQLite timing
+    print("\n--- SQLite breakdown ---")
+    with get_session() as session:
+        all_fulfilled = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
+        print(f"Total fulfilled addresses: {len(all_fulfilled)}")
+
+        # Time: SELECT all fulfilled (the proposed batched approach)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            set(u.address for u in session.query(InputHashUsage)
+                .filter(InputHashUsage.fulfilled.is_(True)).all())
+        t1 = time.perf_counter()
+        print(f"SELECT all fulfilled x10: {t1-t0:.3f}s  ({(t1-t0)/10*1000:.1f}ms each)")
+
+        # Time: per-step IN query (current approach)
+        step_names = ["gen"] + [f"step_{j}" for j in range(n_steps - 2)]
+        for sn in step_names:
+            step_addrs = set()
+            idx = lane_store._get_address_index("bench", sn)
+            for addr in idx:
+                if addr in all_fulfilled:
+                    step_addrs.add(addr)
+            t0 = time.perf_counter()
+            for _ in range(10):
+                set(str(u.address) for u in session.query(InputHashUsage)
+                    .filter(InputHashUsage.address.in_(step_addrs),
+                            InputHashUsage.fulfilled.is_(True)).all())
+            t1 = time.perf_counter()
+            print(f"  IN ({len(step_addrs)}) for {sn} x10: {t1-t0:.3f}s  ({(t1-t0)/10*1000:.1f}ms each)")
+
+        # Time: Python set intersection (the proposed replacement)
+        t0 = time.perf_counter()
+        for _ in range(100):
+            for sn in step_names:
+                idx = lane_store._get_address_index("bench", sn)
+                _ = all_fulfilled & set(idx.keys())
+        t1 = time.perf_counter()
+        print(f"Python set intersection x100 ({len(step_names)} steps): {t1-t0:.3f}s  ({(t1-t0)/100*1000:.1f}ms each)")
+
     return run2_time, plan_time, plan_time_2
 
 

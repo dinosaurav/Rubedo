@@ -35,6 +35,7 @@ def isolated_env():
     rubedo.lane_store.TABLES_DIR = f"{abs_env}/tables"
     init_tables()
     clear_run_buffers()
+    rubedo.lane_store.clear_read_caches()
 
     os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_batch_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"

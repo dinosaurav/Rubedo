@@ -59,50 +59,86 @@ run again (reuse), then time `.plan()`.
 | Baseline (to_pylist + Python loop) | 0.354s | 0.381s |
 | Fix 1 (pc.is_in filter) | 0.330s | 0.350s |
 | Fix 1+2 (address index) | 0.352s | 0.374s |
+| Fix 1+2+3 (cached fulfilled set) | 0.222s | 0.229s |
 
 ### 20,000 lanes × 4 steps (80,001 lanes total)
 
 | Configuration | .plan() 1st | .plan() 2nd |
 |---|---|---|
 | Baseline (to_pylist + Python loop) | 1.797s | 1.998s |
-| Fix 1 (pc.is_in filter) | 1.696s | 1.864s |
 | Fix 1+2 (address index) | similar | similar |
+| Fix 1+2+3 (cached fulfilled set) | 1.235s | 1.181s |
+
+### Overall improvement
+
+| Scale | Baseline | Fix 1+2+3 | Improvement |
+|---|---|---|---|
+| 5K lanes | 0.354s | 0.222s | 37% |
+| 20K lanes | 1.797s | 1.235s | 31% |
+
+### SQLite breakdown (5K lanes)
+
+| Operation | Time |
+|---|---|
+| Per-step `IN (5K)` query × 4 (old approach) | 128ms total (32ms each) |
+| `SELECT all fulfilled` once (new approach) | 112ms |
+| Python set intersection (4 steps) | 3.2ms |
+
+### SQLite breakdown (20K lanes)
+
+| Operation | Time |
+|---|---|
+| Per-step `IN (20K)` query × 4 (old approach) | 816ms total (204ms each) |
+| `SELECT all fulfilled` once (new approach) | 606ms |
+| Python set intersection (4 steps) | 24ms |
 
 ### Arrow lookup in isolation (5,000 lanes)
 
 | Operation | Time |
 |---|---|
 | `table.take(indices)` + `to_pylist()` (5K rows) | 28ms |
-| SQLite `IN (20K addresses)` query | 127ms |
 
 ## Analysis
 
 The Arrow lookup is already fast with the index — `table.take` +
-`to_pylist` is 28ms for 5K rows. The remaining bottleneck is the
-SQLite `input_hash_usages` query: `WHERE address IN (20K values)` takes
-~127ms, and `.plan()` makes 4 of these queries (one per step).
+`to_pylist` is 28ms for 5K rows. The cached fulfilled set eliminates
+3 of 4 SQLite queries (one `SELECT all` replaces 4 per-step `IN`
+queries). The remaining `.plan()` time is the single SQLite query +
+Arrow lookups + planning logic (address computation, MatRef
+construction, etc.).
 
-The SQLite `IN` clause with 20K values is the dominant cost, not the
-Arrow scan. Future optimization options:
+### Fix 3: cached fulfilled set
 
-1. **Batch all steps into one SQLite query** — currently each step
-   queries IHU separately. A single `UNION ALL` or temp table for all
-   steps' addresses would halve the SQLite round-trips.
+`_FULFILLED_CACHE` — a module-level set of all fulfilled addresses,
+loaded once per run (via `clear_read_caches()` at run start) and
+updated incrementally by `mark_fulfilled()` when new lanes are
+committed. `batch_lookup_by_address` does a Python set intersection
+(`addresses & all_fulfilled`) instead of a SQLite `IN (...)` query.
 
-2. **Store `output_identity` and `content_type` in IHU** — the IHU row
+The cache is NOT cleared in `plan()` — it persists across plan calls
+within the same run, so the 2nd `.plan()` is even faster (warm
+cache). Tests that need isolation call `clear_read_caches()` in their
+fixtures or in helpers like `backdate_materializations()`.
+
+## Future optimization options
+
+1. **Store `output_identity` and `content_type` in IHU** — the IHU row
    is already written at fulfill time. Adding the identity hash and
    content type would let planning skip the Arrow read entirely when it
    only needs the identity (which is most of the time — the output
    value is only needed for join/group_key field extraction and
    expand-anchor child hash reading).
 
-3. **Bloom filter in front of IHU** — for cold-cache lanes that have
+2. **Bloom filter in front of IHU** — for cold-cache lanes that have
    never been seen, a bloom filter would skip the SQLite lookup
    entirely.
 
+3. **Sort-by-address at flush + binary search** — helps when tables no
+   longer fit in memory.
+
 ## What shipped
 
-Fix 1 (pc.is_in) and Fix 2 (address index) are both implemented. The
-Arrow lookup path is now O(matches) instead of O(total rows). The
-remaining `.plan()` time is dominated by SQLite, which is a separate
-optimization.
+Fix 1 (pc.is_in), Fix 2 (address index), and Fix 3 (cached fulfilled
+set) are all implemented. The Arrow lookup path is O(matches) instead
+of O(total rows). The SQLite query is done once per run (not per step).
+Overall `.plan()` is 31-37% faster.

@@ -414,6 +414,9 @@ def _commit_execution_result(
                         fulfilled=True,
                     )
                 )
+            # Update the fulfilled cache so the next planning phase
+            # sees this address as live without a SQLite re-query.
+            lane_store.mark_fulfilled(str(decision.output_address))
 
             if outcome.is_anchor:
                 # Cache anchor only: stored so a re-run's plan can skip the

@@ -196,12 +196,14 @@ def clear_run_buffers():
 
 
 def clear_read_caches():
-    """Clear the on-disk table and address-index read caches.
+    """Clear the on-disk table, address-index, and fulfilled-set read caches.
 
     Called at run start so stale data from a previous run (different
-    DB/home) doesn't leak.  The cache is rebuilt on first lookup."""
+    DB/home) doesn't leak.  The caches are rebuilt on first lookup."""
+    global _FULFILLED_CACHE
     _DISK_TABLE_CACHE.clear()
     _ADDRESS_INDEX_CACHE.clear()
+    _FULFILLED_CACHE = None
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +651,36 @@ def find_by_row_id(
     return filtered.to_pylist()[0]
 
 
+_FULFILLED_CACHE: Optional[set] = None
+
+
+def _get_fulfilled_addresses(session) -> set:
+    """Return the set of all fulfilled addresses, cached for the duration
+    of a plan/run.  The cache is cleared by clear_read_caches() and
+    updated incrementally by mark_fulfilled().  Loading all fulfilled
+    addresses once and doing Python set intersections is cheaper than
+    per-step SQLite IN queries (one ~112ms query vs N ~32ms queries)."""
+    global _FULFILLED_CACHE
+    if _FULFILLED_CACHE is not None:
+        return _FULFILLED_CACHE
+    from .models import InputHashUsage
+    _FULFILLED_CACHE = {
+        str(u.address) for u in session.query(InputHashUsage)
+        .filter(InputHashUsage.fulfilled.is_(True))
+        .all()
+    }
+    return _FULFILLED_CACHE
+
+
+def mark_fulfilled(address: str) -> None:
+    """Update the fulfilled cache when a new address is committed.
+    No-op if the cache hasn't been loaded yet (it'll pick up the new
+    address when it is loaded)."""
+    global _FULFILLED_CACHE
+    if _FULFILLED_CACHE is not None:
+        _FULFILLED_CACHE.add(address)
+
+
 def batch_lookup_by_address(
     pipeline_id: str,
     step_name: str,
@@ -665,20 +697,14 @@ def batch_lookup_by_address(
     to build a MatRef: ``row_id``, ``output_identity``, ``content_type``,
     ``output``, ``filtered``, ``code_hash``, ``ts``.
     """
-    from .models import InputHashUsage
-
     if not addresses:
         return {}
 
-    # Step 1: find which addresses are fulfilled (liveness gate)
-    fulfilled_addrs = {
-        str(u.address) for u in session.query(InputHashUsage)
-        .filter(
-            InputHashUsage.address.in_(addresses),
-            InputHashUsage.fulfilled.is_(True),
-        )
-        .all()
-    }
+    # Step 1: find which requested addresses are fulfilled (liveness gate).
+    # Uses a cached set of ALL fulfilled addresses — one SQLite query
+    # per plan/run, then O(1) set intersection per step.
+    all_fulfilled = _get_fulfilled_addresses(session)
+    fulfilled_addrs = addresses & all_fulfilled
     if not fulfilled_addrs:
         return {}
 
