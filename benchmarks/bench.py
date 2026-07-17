@@ -69,8 +69,8 @@ MICRO_PIPELINE = "bench_micro"
 # Harness
 # ---------------------------------------------------------------------------
 
-# name -> (fn(params, repeats) -> times, default_repeats)
-SCENARIOS: List[Tuple[str, Callable[..., List[float]], int]] = []
+# name -> (fn(params, repeats) -> times | (times, counters), default_repeats)
+SCENARIOS: List[Tuple[str, Callable[..., Any], int]] = []
 
 
 def scenario(name: str, repeats: int):
@@ -87,6 +87,91 @@ def timed(fn: Callable[[], Any]) -> float:
     return time.perf_counter() - t0
 
 
+class WorkCounters:
+    """Count the *work* the engine does while a block runs — Arrow rows
+    written (per step), flushes, disk-table cache misses, reuse lookups.
+
+    Timing tells you a change is faster; counters tell you it did less
+    (or, for shape comparisons like skip_cache, that a shape does zero
+    extra work).  Implemented by wrapping ``lane_store`` module
+    attributes — every engine call site resolves them at call time, so
+    the wrappers see all traffic.  Use as a context manager; counts are
+    in ``.counts`` afterwards."""
+
+    def __init__(self):
+        self.counts: Dict[str, int] = {}
+
+    def _bump(self, key: str, by: int = 1):
+        self.counts[key] = self.counts.get(key, 0) + by
+
+    def __enter__(self):
+        from rubedo import lane_store
+
+        self._ls = lane_store
+        self._orig = {
+            name: getattr(lane_store, name)
+            for name in (
+                "append_filled",
+                "flush_step",
+                "_read_disk_table",
+                "batch_lookup_by_address",
+                "find_latest_filled_by_address",
+            )
+        }
+        orig = self._orig
+
+        def append_filled(pipeline_id, step_name, *a, **kw):
+            self._bump("rows_written_total")
+            self._bump(f"rows_written[{step_name}]")
+            return orig["append_filled"](pipeline_id, step_name, *a, **kw)
+
+        def flush_step(pipeline_id, step_name, *a, **kw):
+            key = (pipeline_id, step_name)
+            if lane_store._run_buffers.get(key) or lane_store._arrow_batch_buffers.get(key):
+                self._bump("flushes")  # no-op flushes on empty buffers don't count
+            return orig["flush_step"](pipeline_id, step_name, *a, **kw)
+
+        def _read_disk_table(pipeline_id, step_name, *a, **kw):
+            if (pipeline_id, step_name) not in lane_store._DISK_TABLE_CACHE:
+                self._bump("disk_table_reads")
+            return orig["_read_disk_table"](pipeline_id, step_name, *a, **kw)
+
+        def batch_lookup_by_address(pipeline_id, step_name, addresses, *a, **kw):
+            self._bump("batch_lookups")
+            self._bump("batch_lookup_addrs", len(addresses))
+            return orig["batch_lookup_by_address"](
+                pipeline_id, step_name, addresses, *a, **kw
+            )
+
+        def find_latest_filled_by_address(*a, **kw):
+            self._bump("single_lookups")
+            return orig["find_latest_filled_by_address"](*a, **kw)
+
+        for name, fn in {
+            "append_filled": append_filled,
+            "flush_step": flush_step,
+            "_read_disk_table": _read_disk_table,
+            "batch_lookup_by_address": batch_lookup_by_address,
+            "find_latest_filled_by_address": find_latest_filled_by_address,
+        }.items():
+            setattr(lane_store, name, fn)
+        return self
+
+    def __exit__(self, *exc):
+        for name, fn in self._orig.items():
+            setattr(self._ls, name, fn)
+        return False
+
+
+def timed_counted(fn: Callable[[], Any]) -> Tuple[float, Dict[str, int]]:
+    """Time fn and count the engine work it did."""
+    with WorkCounters() as wc:
+        t0 = time.perf_counter()
+        fn()
+        elapsed = time.perf_counter() - t0
+    return elapsed, wc.counts
+
+
 def fresh_env():
     """Wipe and re-init the data folder, rubedo home, and all module-level
     engine state (DB engine, object store paths, lane_store buffers/cache)."""
@@ -98,15 +183,18 @@ def fresh_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
     lane_store.clear_run_buffers()
+    lane_store.clear_read_caches()
     _init_home(ENV_DIR)
 
 
 def drop_table_cache():
-    """Simulate a new process: drop lane_store's in-memory buffers and
-    disk-table cache (the on-disk files and SQLite survive)."""
+    """Simulate a new process: drop lane_store's in-memory buffers AND the
+    read caches (disk-table + address-index — clear_run_buffers alone no
+    longer drops those).  On-disk files and SQLite survive."""
     from rubedo import lane_store
 
     lane_store.clear_run_buffers()
+    lane_store.clear_read_caches()
 
 
 def make_files(n: int, gen: int):
@@ -448,6 +536,90 @@ def bench_run_history_deep(p, repeats):
 
 
 # ---------------------------------------------------------------------------
+# Shape scenarios — same workload, different pipeline shapes, with work
+# counters.  The pattern for "does shape X do extra work?" questions:
+# build two pipelines differing in exactly one shape knob, run the same
+# phase (cold or warm), and compare both the times and the counters.
+# ---------------------------------------------------------------------------
+
+
+def make_util_pipeline(n_rows: int, skip_cache: bool, util_calls: List[int]):
+    """Big expand source → a util map (the skip_cache knob) → consumer.
+
+    skip_cache is invalid on expand/reduce shapes (spec validation), so
+    "a big expand I never want to cache" is expressed as the expand's
+    downstream util being skip_cache — the expand's lanes stay the cache
+    anchors.  ``util_calls`` observes actual fn executions."""
+    from rubedo import pipeline, step
+
+    @step
+    def gen():
+        for i in range(n_rows):
+            yield {"i": i, "text": f"payload {i} " + "lorem ipsum dolor " * 6}
+
+    @step(skip_cache=skip_cache)
+    def normalize(gen: dict):
+        util_calls.append(1)
+        return {"i": gen["i"], "t": gen["text"].strip().upper()}
+
+    @step
+    def report(normalize: dict):
+        return {"i": normalize["i"], "length": len(normalize["t"])}
+
+    return pipeline(name="bench_util", steps=[gen, normalize, report], home=ENV_DIR)
+
+
+def _bench_util_shape(p, repeats, skip_cache: bool, warm: bool):
+    times = []
+    counters: Dict[str, int] = {}
+    n = p["n_files"]
+
+    if warm:
+        fresh_env()
+        make_util_pipeline(n, skip_cache, []).run(workers=1)
+    for _ in range(repeats):
+        if warm:
+            drop_table_cache()  # fresh process on a warm store
+        else:
+            fresh_env()
+        calls: List[int] = []
+        pipe = make_util_pipeline(n, skip_cache, calls)
+        t, counters = timed_counted(lambda: pipe.run(workers=1))
+        counters["util_fn_calls"] = len(calls)
+        times.append(t)
+    return times, counters
+
+
+@scenario("shape_util_cached_cold", repeats=3)
+def bench_util_cached_cold(p, repeats):
+    """Materialized util downstream of a big expand, first run — the
+    baseline the skip_cache variant is compared against."""
+    return _bench_util_shape(p, repeats, skip_cache=False, warm=False)
+
+
+@scenario("shape_util_skipcache_cold", repeats=3)
+def bench_util_skipcache_cold(p, repeats):
+    """skip_cache util, first run — expect zero rows_written for the
+    util step (fused into its consumer, never materialized)."""
+    return _bench_util_shape(p, repeats, skip_cache=True, warm=False)
+
+
+@scenario("shape_util_cached_warm", repeats=3)
+def bench_util_cached_warm(p, repeats):
+    """Materialized util, unchanged rerun — pays a reuse lookup for the
+    util step's own lanes."""
+    return _bench_util_shape(p, repeats, skip_cache=False, warm=True)
+
+
+@scenario("shape_util_skipcache_warm", repeats=3)
+def bench_util_skipcache_warm(p, repeats):
+    """skip_cache util, unchanged rerun — expect zero util_fn_calls (the
+    consumer reuses, so the fused util never runs) and no util-step
+    lookups or writes."""
+    return _bench_util_shape(p, repeats, skip_cache=True, warm=True)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -501,19 +673,28 @@ def cmd_run(args):
         for name, fn, default_repeats in selected:
             repeats = args.repeats or default_repeats
             print(f"  {name} (x{repeats}) ...", end="", flush=True)
-            times = fn(params, repeats)
+            out = fn(params, repeats)
+            counters: Dict[str, int] = {}
+            if isinstance(out, tuple):
+                times, counters = out
+            else:
+                times = out
             med = statistics.median(times)
             print(f"  median {fmt_time(med).strip()}  min {fmt_time(min(times)).strip()}")
-            results.append(
-                {
-                    "name": name,
-                    "repeats": repeats,
-                    "times": times,
-                    "min": min(times),
-                    "median": med,
-                    "mean": statistics.fmean(times),
-                }
-            )
+            if counters:
+                shown = "  ".join(f"{k}={v}" for k, v in sorted(counters.items()))
+                print(f"      work: {shown}")
+            entry = {
+                "name": name,
+                "repeats": repeats,
+                "times": times,
+                "min": min(times),
+                "median": med,
+                "mean": statistics.fmean(times),
+            }
+            if counters:
+                entry["counters"] = counters
+            results.append(entry)
     finally:
         cleanup()
 
@@ -566,6 +747,13 @@ def cmd_compare(args):
         print(
             f"{name:<30} {fmt_time(am)} {fmt_time(bm)} {delta:+7.1f}% {speedup:7.2f}x{marker}"
         )
+        # Work-counter drift is the "it got faster but does more/less
+        # work" signal — print only the keys that changed.
+        ac = a_by_name[name].get("counters", {})
+        bc = b_by_name[name].get("counters", {})
+        for key in sorted(set(ac) | set(bc)):
+            if ac.get(key, 0) != bc.get(key, 0):
+                print(f"{'':<30} {key}: {ac.get(key, 0)} -> {bc.get(key, 0)}")
     for name in b_by_name:
         if name not in a_by_name:
             print(f"{name:<30} {'(missing)':>10} {fmt_time(b_by_name[name]['median'])}")

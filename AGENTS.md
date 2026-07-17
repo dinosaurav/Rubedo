@@ -244,6 +244,42 @@ from the output dict and looks it up rather than asserting a
 through a one-step chain now reports 2 (the `scan` lane *and* the
 downstream lane), not 1.
 
+## Performance changes
+
+`benchmarks/` is the before/after harness (not part of pytest; docs in
+`benchmarks/README.md`). For any perf-motivated change:
+
+- **Measure both sides**: `uv run python benchmarks/bench.py run --label
+  before` on the baseline commit, `--label after` on your change, then
+  `compare before after` (same `--scale` both sides; results are
+  gitignored JSON tagged with the git sha, so labels survive checkouts).
+  Quote the relevant compare lines in the commit body.
+- **Scenario families**: `micro_*` isolate lane_store + SQLite hot paths
+  with synthetic history; `run_*` drive a real pipeline end-to-end;
+  `shape_*` pit two pipeline shapes against each other (e.g. the
+  skip_cache quartet) and also report **work counters** — Arrow rows
+  written per step, reuse lookups, disk-table cache misses,
+  `util_fn_calls`. Counters, not timing, are how you show a shape or
+  change "does no extra work"; `compare` prints any counter that drifted.
+- **If your hot path isn't covered, add a scenario** — it's ~15 lines:
+  `@scenario("name", repeats=N)` taking `(params, repeats)` and returning
+  `times` or `(times, counters)`; build state with `fresh_env()` /
+  `make_files()` / `seed_step_history()`, time with `timed()` or
+  `timed_counted()`, and use `drop_table_cache()` to model a fresh
+  process on a warm store. Copy the `make_util_pipeline` +
+  `_bench_util_shape` pattern for shape pairs; count step-fn executions
+  with a closure list. Keep scenario names stable — `compare` aligns by
+  name.
+- Counters are visibility, not assertions: when a guarantee is
+  load-bearing ("skip_cache never materializes"), pin it in pytest too
+  (`tests/test_skip_cache.py` shows the closure-counting trick).
+- Harness caveat: `WorkCounters` wraps `lane_store` **module
+  attributes** — it sees all current call sites because they resolve at
+  call time (`lane_store.append_filled(...)` or function-local `from
+  .lane_store import ...`). A module-top `from .lane_store import X` in
+  engine code would silently bypass the counters; keep the existing
+  import style.
+
 ## Known sharp edges
 
 - Redefining a step function with the same version in one test triggers the

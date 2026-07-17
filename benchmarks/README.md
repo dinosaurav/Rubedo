@@ -60,6 +60,65 @@ user code, so everything downstream reports `pending` and the reuse
 lookup never fires. The warm/incremental/deep runs cover the real
 plan-phase cost (each segment plans before executing).
 
+## Shape comparisons and work counters
+
+**shape_*** scenarios compare pipeline *shapes* rather than code
+versions: two pipelines differing in exactly one knob, same workload,
+same phase. Timing alone can't prove a shape "isn't doing extra work" —
+a fast implementation could still write rows it shouldn't — so these
+scenarios also report **work counters**: Arrow rows written (total and
+per step), flushes, disk-table cache misses, batch/single reuse
+lookups, and scenario-specific counts like `util_fn_calls`. Counters
+land in the JSON and in the `run` output (`work: ...` line); `compare`
+prints any counter that changed between two results — the "it got
+faster but now does different work" signal.
+
+The built-in quartet covers the skip_cache question:
+
+| scenario | expectation |
+| --- | --- |
+| `shape_util_cached_cold` / `shape_util_skipcache_cold` | first run; skip_cache writes **zero** Arrow rows for the util step |
+| `shape_util_cached_warm` / `shape_util_skipcache_warm` | unchanged rerun; skip_cache has **zero** `util_fn_calls` and no util-step lookups |
+
+Note the shape being tested: `skip_cache` is rejected by spec
+validation on `expand` (its lanes are the cache anchors) and on
+`reduce` — so "a big expand I never want to cache" is expressed as the
+expand's downstream util map being `skip_cache`.
+
+### Writing your own shape scenario
+
+Copy the `make_util_pipeline` + `_bench_util_shape` pattern:
+
+```python
+def make_my_pipeline(n, the_knob):
+    @step
+    def gen():
+        for i in range(n):
+            yield {"i": i}
+    # ... steps differing only in the_knob ...
+    return pipeline(name="bench_my", steps=[...], home=ENV_DIR)
+
+@scenario("shape_my_variant", repeats=3)
+def bench_my_variant(p, repeats):
+    times = []
+    for _ in range(repeats):
+        fresh_env()                      # or warm-store setup + drop_table_cache()
+        pipe = make_my_pipeline(p["n_files"], the_knob=True)
+        t, counters = timed_counted(lambda: pipe.run(workers=1))
+        times.append(t)
+    return times, counters               # counters from the last rep
+```
+
+That's the whole contract: return `times` or `(times, counters)`.
+Register one scenario per variant so `compare` aligns them by name, and
+add closure counters (a list the step fn appends to) for anything the
+harness can't see from `lane_store` traffic.
+
+Counters make a shape's work *visible*; they are not assertions. When a
+shape guarantee is load-bearing ("skip_cache never materializes"),
+pin it in pytest — `tests/test_skip_cache.py` already does this with
+the same closure-counting trick.
+
 Working state uses `.test_bench_data` / `.test_bench_env` at the repo
 root (same layout as the test suite, gitignored via `.test_*/`), wiped
 per repetition and removed when the run finishes.
