@@ -24,7 +24,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import ProcessResult, Selection, Filtered, invalidate, pipeline, step
+from rubedo import Selection, Filtered, invalidate, pipeline, step
 from rubedo.db import init_db
 
 TEST_FOLDER = ".test_planning_reuse_data"
@@ -77,11 +77,11 @@ def test_basic_reuse():
     def producer():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"n": call_count})
+        return {"n": call_count}
 
     @step
     def consumer(producer):
-        return ProcessResult(value=producer["n"] * 10)
+        return producer["n"] * 10
 
     p = pipeline(name="reuse-test", steps=[producer, consumer])
     s1 = p.run(workers=1)
@@ -107,7 +107,7 @@ def test_version_bump_recomputes():
     def gen_v0():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"v": 0})
+        return {"v": 0}
 
     p = pipeline(name="ver-test", steps=[gen_v0])
     p.run(workers=1)
@@ -117,7 +117,7 @@ def test_version_bump_recomputes():
     def gen_v1():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"v": 1})
+        return {"v": 1}
 
     p2 = pipeline(name="ver-test", steps=[gen_v1])
     s = p2.run(workers=1)
@@ -141,14 +141,14 @@ def test_params_change_recomputes():
 
     @step
     def data_src():
-        return ProcessResult(value={"x": 5})
+        return {"x": 5}
 
     @step
     def filter_step(data_src, params: Params):
         nonlocal call_count
         call_count += 1
         threshold = params["threshold"] if isinstance(params, dict) else params.threshold
-        return ProcessResult(value={"passed": data_src["x"] > threshold})
+        return {"passed": data_src["x"] > threshold}
 
     p = pipeline(name="params-test", steps=[data_src, filter_step], params_model=Params)
     s1 = p.run(workers=1, params={"threshold": 10})
@@ -179,11 +179,11 @@ def test_invalidation_recomputes():
     def producer():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"value": "acme"})
+        return {"value": "acme"}
 
     @step
     def consumer(producer):
-        return ProcessResult(value={"doubled": producer["value"] * 2})
+        return {"doubled": producer["value"] * 2}
 
     p = pipeline(name="inval-test", steps=[producer, consumer])
     p.run(workers=1)
@@ -210,17 +210,17 @@ def test_filtered_output_cached_and_reused():
     def source():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"n": 5})
+        return {"n": 5}
 
     @step
     def filter_step(source):
         if source["n"] < 10:
             return Filtered(reason="too small")
-        return ProcessResult(value=source)
+        return source
 
     @step
     def consumer(filter_step):
-        return ProcessResult(value=filter_step)
+        return filter_step
 
     p = pipeline(name="filter-test", steps=[source, filter_step, consumer])
     s1 = p.run(workers=1)
@@ -241,7 +241,7 @@ def test_filtered_output_cached_and_reused():
 def test_code_warn_reuses_with_warning():
     @step(code="warn")
     def gen():
-        return ProcessResult(value={"n": 1})
+        return {"n": 1}
 
     p = pipeline(name="drift-test", steps=[gen])
     p.run(workers=1)
@@ -249,7 +249,7 @@ def test_code_warn_reuses_with_warning():
     # Redefine with same version but different code → drift warning, but reuse
     @step(code="warn")
     def gen():  # noqa: F811 — intentional redefinition for drift test
-        return ProcessResult(value={"n": 2})
+        return {"n": 2}
 
     p2 = pipeline(name="drift-test", steps=[gen])
     with pytest.warns(UserWarning, match="source code changed"):
@@ -281,7 +281,7 @@ def test_partial_recompute_on_input_change():
 
     @step(index=["path"])
     def count(scan: dict):
-        return ProcessResult(value={"path": scan["path"], "lines": len(scan["text"].splitlines())})
+        return {"path": scan["path"], "lines": len(scan["text"].splitlines())}
 
     p = pipeline(name="partial-test", steps=[scan, count])
     s1 = p.run(workers=1)

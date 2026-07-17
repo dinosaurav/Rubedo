@@ -26,7 +26,7 @@ Rubedo is that the second run recomputes only what actually changed.
 |---|---|---|---|
 | [`count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines) | local files | map → reduce | the basics: `params_model`, a reduce step |
 | [`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest) | Hacker News + an LLM | filter → LLM → LLM reduce | a source-shaped `@p.step` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
-| [`github_health`](https://github.com/dinosaurav/Rubedo/tree/main/examples/github_health) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, `ProcessResult`, reduce |
+| [`github_health`](https://github.com/dinosaurav/Rubedo/tree/main/examples/github_health) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, reduce |
 | [`weather_advisory`](https://github.com/dinosaurav/Rubedo/tree/main/examples/weather_advisory) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
 | [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → reduce | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |

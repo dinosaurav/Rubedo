@@ -248,12 +248,6 @@ for _model, _allowed in _PROJECTION_COLUMNS.items():  # type: ignore
     event.listen(_model, "before_delete", _reject_delete)
 
 
-class ProcessResult(BaseModel):
-    """The successful output of a step, carrying the value and optional metadata."""
-    value: Any
-    metadata: Optional[Dict[str, Any]] = None
-
-
 class Filtered:
     """Return this from a step to decline a coordinate.
 

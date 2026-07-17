@@ -18,7 +18,6 @@ from .execution import ExecutionOutcome, _materialized_ancestors
 from .models import (
     Filtered,
     MaterializationEdge,
-    ProcessResult,
     Run,
     RunCoordinateStatus,
     RunEvent,
@@ -268,7 +267,7 @@ def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
     ``index_values`` map column."""
     if not step.index:
         return {}
-    value = result.value if isinstance(result, ProcessResult) else result
+    value = result
     if not isinstance(value, dict):
         return {}
     out: Dict[str, List[str]] = {}

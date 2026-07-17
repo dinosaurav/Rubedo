@@ -24,7 +24,7 @@ The default. One input lane in, one output lane out, same coordinate. This
 is almost every step you'll write:
 
 ```python
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
@@ -37,8 +37,8 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
+def count_lines(scan: dict):
+    return {"line_count": len(scan["text"].splitlines())}
 
 p.run()
 ```

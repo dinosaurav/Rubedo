@@ -36,7 +36,7 @@ Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for
 Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
@@ -49,8 +49,8 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
+def count_lines(scan: dict):
+    return {"line_count": len(scan["text"].splitlines())}
 
 print(p.describe())           # the DAG, before ever running (also: format="mermaid", format="ascii")
 print(p.plan())                # dry-run: what would p.run() do to my data, and why

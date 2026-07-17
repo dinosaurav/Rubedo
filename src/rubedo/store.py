@@ -13,7 +13,6 @@ from .util import _ensure_gitignore
 import json
 from typing import Any, Optional, Protocol, Tuple
 import pyarrow as pa
-from .models import ProcessResult
 from .hashing import hash_bytes
 
 SPILL_THRESHOLD = 4096  # bytes; serialized values larger than this spill
@@ -133,6 +132,28 @@ def _get_staging_path(run_id: str, coordinate: str, content_hash: str) -> str:
     return os.path.join(STAGING_DIR, run_id, safe_coord, f"{content_hash}.tmp")
 
 
+def _coerce(value: Any) -> Any:
+    """Coerce a step output value to a JSON-storable form.
+
+    Checks for a ``.model_dump()`` method (Pydantic v2) or ``.to_dict()``
+    method (general protocol) and calls it to produce a dict.  Plain
+    JSON-compatible values (dict, list, int, str, etc.) pass through
+    unchanged.  Arrow-compatible values (pa.Table, polars/pandas
+    DataFrames) also pass through — they have their own serialization
+    path (Arrow IPC) and some have a ``.to_dict()`` method that would
+    interfere.  Deserialization is one-way: the downstream step receives
+    the dict, not the original class — reconstruct in the step function
+    if needed (``MyModel(**parent_dict)``).
+    """
+    if _try_arrow(value):
+        return value
+    if hasattr(value, "model_dump") and callable(value.model_dump):
+        return value.model_dump()
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return value.to_dict()
+    return value
+
+
 def _serialize(result: Any) -> Tuple[bytes, str]:
     """Serialize an output value to bytes and return its content type.
 
@@ -141,7 +162,7 @@ def _serialize(result: Any) -> Tuple[bytes, str]:
     original Python type so the round-trip reconstructs it), `json`
     (fallback for dicts and anything else JSON can carry).
     """
-    value = result.value if isinstance(result, ProcessResult) else result
+    value = _coerce(result)
 
     if isinstance(value, bytes):
         return value, "bytes"
@@ -183,7 +204,7 @@ def serialize_output(
     """
     init_store()
 
-    value = result.value if isinstance(result, ProcessResult) else result
+    value = _coerce(result)
 
     # Type-based spill: bytes always spill
     if isinstance(value, bytes):

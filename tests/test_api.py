@@ -6,7 +6,7 @@ from rubedo import step, pipeline
 from rubedo.server import app
 from rubedo.db import init_db
 import rubedo.db as db
-from rubedo.models import Base, ProcessResult
+from rubedo.models import Base
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -26,13 +26,9 @@ def scan():
 
 
 @step(name="count-lines", index=["path"])
-def count_lines(scan: dict) -> ProcessResult:
+def count_lines(scan: dict):
     text = scan["text"]
-    lines = text.split("\n")
-    return ProcessResult(
-        value={"text": text, "path": scan["path"]},
-        metadata={"line_count": len(lines), "empty": len(text) == 0},
-    )
+    return {"text": text, "path": scan["path"]}
 
 
 test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])

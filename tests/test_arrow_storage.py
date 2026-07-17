@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import ProcessResult, pipeline, step
+from rubedo import pipeline, step
 from rubedo.db import init_db
 
 TEST_FOLDER = ".test_arrow_data"
@@ -156,9 +156,7 @@ def test_dataframe_step_caches_and_reuses():
     def make_df():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(
-            value=pl.DataFrame({"amount": [0, 500_000, 10], "name": ["X", "Y", "Z"]})
-        )
+        return pl.DataFrame({"amount": [0, 500_000, 10], "name": ["X", "Y", "Z"]})
 
     p = pipeline(name="arrow-cached", steps=[make_df])
     p.run(workers=1)
@@ -188,7 +186,7 @@ def test_dataframe_recompute_on_version_bump():
     def gen():
         nonlocal calls
         calls += 1
-        return ProcessResult(value=pl.DataFrame({"v": [calls]}))
+        return pl.DataFrame({"v": [calls]})
 
     p = pipeline(name="arrow-ver", steps=[gen])
     p.run(workers=1)
@@ -198,7 +196,7 @@ def test_dataframe_recompute_on_version_bump():
     def gen2():
         nonlocal calls
         calls += 1
-        return ProcessResult(value=pl.DataFrame({"v": [calls]}))
+        return pl.DataFrame({"v": [calls]})
 
     p2 = pipeline(name="arrow-ver", steps=[gen2])
     s = p2.run(workers=1)

@@ -73,7 +73,7 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
 
 ```python
-from rubedo import ProcessResult, step
+from rubedo import step
 
 def check_price_positive(val: dict):
     if val["price"] < 0:
@@ -90,7 +90,7 @@ def check_price_positive(val: dict):
     stale_after="24h",
     assertions=[check_price_positive],
 )
-def enrich(row: dict) -> ProcessResult:
+def enrich(row: dict):
     ...
 ```
 
@@ -110,8 +110,8 @@ that parent's step name (a `reduce` step's parent kwarg is a
 `{coordinate: value}` dict instead of a single value); any step may
 additionally declare a `params` argument to receive the run's validated
 params (see [Concepts: model](../concepts/model.md)). A step returns
-either a plain JSON-serializable value, a `ProcessResult` (value +
-metadata), or `Filtered(reason=...)` to decline the lane.
+either a plain JSON-serializable value or `Filtered(reason=...)` to
+decline the lane.
 
 A `StepSpec` is itself callable — `extract(scan={"text": "hi"})` is a pure
 passthrough to the decorated function, so a step is directly unit-testable
@@ -482,30 +482,48 @@ Selection(index={"company": "acme"})
 See [Guide: search and invalidation](../guides/search-and-invalidation.md)
 for the full query language and CLI equivalents.
 
-## `ProcessResult`
+## Step return values
+
+A step returns a plain JSON-serializable value (a dict, list, string,
+number, etc.) directly — no wrapper required. Downstream steps receive
+that value as their parent argument. To decline a lane instead of
+producing one, return `Filtered(reason=...)` (see below).
 
 ```python
-class ProcessResult(BaseModel):
-    value: Any
-    metadata: Optional[Dict[str, Any]] = None
-```
-
-The successful output of a step, carrying the value that downstream steps
-receive plus optional metadata that rides along in the ledger but isn't
-passed to consumers. A step may also return a plain JSON-serializable value
-directly instead of wrapping it — `ProcessResult` is for when you want to
-attach metadata alongside the value.
-
-```python
-from rubedo import ProcessResult
+from rubedo import step
 
 @step
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(
-        value={"line_count": len(read_lines["lines"])},
-        metadata={"source": "count_lines step"},
-    )
+def count_lines(read_lines: dict):
+    return {"line_count": len(read_lines["lines"])}
 ```
+
+Custom classes with a `.model_dump()` method (Pydantic v2) or `.to_dict()`
+method are automatically coerced to a dict at storage time. Deserialization
+is one-way: downstream steps receive the dict, not the original class —
+reconstruct in the step function if needed (`MyModel(**parent_dict)`).
+
+```python
+from pydantic import BaseModel
+from rubedo import step
+
+class Summary(BaseModel):
+    line_count: int
+
+@step
+def count_lines(read_lines: dict) -> Summary:
+    return Summary(line_count=len(read_lines["lines"]))
+
+@step
+def report(count_lines: dict):
+    # count_lines is a dict here: {"line_count": 42}
+    # reconstruct if you want the model:
+    # summary = Summary(**count_lines)
+    return {"report": f"{count_lines['line_count']} lines"}
+```
+
+Bytes and Arrow-compatible types (`pa.Table`, polars/pandas DataFrames)
+are always spilled to the content-addressed object store and read back
+as their original type.
 
 ## `Filtered`
 

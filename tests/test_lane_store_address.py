@@ -22,7 +22,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from rubedo import ProcessResult, pipeline, step
+from rubedo import pipeline, step
 from rubedo.db import init_db
 from rubedo.lane_store import (
     append_filled,
@@ -163,11 +163,11 @@ def test_lane_store_address_matches_compute_output_address():
     def producer():
         nonlocal call_count
         call_count += 1
-        return ProcessResult(value={"n": call_count})
+        return {"n": call_count}
 
     @step
     def consumer(producer):
-        return ProcessResult(value=producer["n"] * 2)
+        return producer["n"] * 2
 
     p_home = os.path.abspath(".test_addr_e2e_env")
     if os.path.exists(p_home):

@@ -17,7 +17,7 @@ let serverProcess: ChildProcess | null = null;
 const pipelineScript = `
 import os, sys
 from pydantic import BaseModel
-from rubedo import pipeline, ProcessResult
+from rubedo import pipeline
 
 p = pipeline(name="e2e-demo")
 

@@ -1,20 +1,23 @@
 """Per-step Arrow lane store — pure computed-output history.
 
 One Arrow IPC file per step.  Each row is one successful computation:
-``(row_id, lane_key, address, input_hash, output, content_type,
-code_hash, ts, run_id, filtered, index_values)``.  The ``output`` column
-holds the value itself in a native Arrow type (struct for dicts, int64
-for ints, string) when all lanes in a step are inline; falls back to
-``string`` (JSON-serialized inline + ``"objects:<hash>"`` ref strings)
-when any value spills to the object store.
+``(row_id, lane_key, address, input_hash, code_version, output,
+output_identity, content_type, code_hash, ts, run_id, filtered,
+index_values)``.  The ``output`` column holds the value itself in a
+native Arrow type (struct for dicts, int64 for ints, string) when all
+lanes in a step are inline; falls back to ``string`` (JSON-serialized
+inline + ``"objects:<hash>"`` ref strings) when any value spills to the
+object store.  ``output_identity`` is the content identity hash (for
+downstream ``input_hash`` computation), computed once at commit time
+from the original output value — plan time reads it from the column
+instead of recomputing from the Arrow-read-back value.
 
 **No tombstones here.**  Liveness (reuse vs. recompute) is the
 ``input_hash_usages`` SQLite table's job — ``fulfilled=True`` means a
 filled Arrow row exists for this address; ``fulfilled=False`` means
 recompute (crash, in-flight claim, or invalidation).  The Arrow file is
-pure data: every row has a non-null content_hash and output_path.
-Invalidation flips ``fulfilled=False`` in SQLite; the old Arrow row
-stays as history but is not reused.
+pure data.  Invalidation flips ``fulfilled=False`` in SQLite; the old
+Arrow row stays as history but is not reused.
 
 During a run, rows accumulate in an in-memory buffer.  Reads combine the
 on-disk history (previous runs) with the in-memory buffer (current run),

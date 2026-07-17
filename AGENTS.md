@@ -119,18 +119,23 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   skip_cache utils.
 - `src/rubedo/lane_store.py` — per-step Arrow IPC files under
   `.rubedo/tables/`: append-only rows of lane metadata (row_id, lane_key,
-  address, input_hash, output, content_type, code_hash, ts, run_id,
-  filtered, index_values). `output` holds the value itself in native
-  Arrow type (struct for dicts, int64 for ints, string) when all lanes
-  in a step are inline; falls back to `string` (JSON-serialized inline +
-  `"objects:<hash>"` ref strings) when any value spills. `content_type`
-  distinguishes `"text"` (native string return), `"json"` (inline or
-  JSON-serialized), and `"bytes"`/`"arrow-ipc:<kind>"` (spilled).
+  address, input_hash, code_version, output, output_identity, content_type,
+  code_hash, ts, run_id, filtered, index_values). `output` holds the value
+  itself in native Arrow type (struct for dicts, int64 for ints, string) when
+  all lanes in a step are inline; falls back to `string` (JSON-serialized
+  inline + `"objects:<hash>"` ref strings) when any value spills.
+  `output_identity` is the content identity hash (for downstream
+  `input_hash` computation), computed once at commit time from the original
+  output value and stored directly — plan time reads it from the column
+  instead of recomputing from the Arrow-read-back value, so the union struct
+  null-fill (heterogeneous dict key sets) doesn't shift the identity.
+  `content_type` distinguishes `"text"` (native string return), `"json"`
+  (inline or JSON-serialized), and `"bytes"`/`"arrow-ipc:<kind>"` (spilled).
   `index_values` is a `map<string, list<string>>` column holding the
   `@step(index=[...])` field→values dict — the sole source of truth for
   indexed fields. Pure data — no tombstones, no liveness. The
-  `batch_lookup_by_address` function is the planning phase's reuse
-  lookup (SQLite `input_hash_usages` for liveness, Arrow for content).
+  `batch_lookup_by_address` function is the planning phase's reuse lookup
+  (SQLite `input_hash_usages` for liveness, Arrow for content).
   `scan_indexed_field` / `scan_indexed_field_all` /
   `search_indexed_values` / `get_index_values` serve selection, server
   search, and detail endpoints.
@@ -141,8 +146,10 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   claim (plan time, records `last_run_id` only — does NOT flip
   `fulfilled=False`) / fulfill (commit time, `fulfilled=True`) lifecycle.
   `mat_action` is determined by checking if the address was already
-  fulfilled with matching content_hash (→ "reused"/"refreshed") or not
-  (→ "created"). Arrow row only written for created/superseded/refreshed
+  fulfilled with matching `output_identity` (→ "reused"/"refreshed") or not
+  (→ "created"). `output_identity` is computed once at commit time via
+  `_identity_of` and stored in the Arrow column — no recompute at plan time.
+  Arrow row only written for created/superseded/refreshed
   — pure reuse is a no-op.
 - `src/rubedo/scheduler.py` — the segment machinery: `_partition_segments`
   (topo order → `broad` singleton segments or `deep` runs of consecutive

@@ -23,7 +23,7 @@ that the second run recomputes only what actually changed.
 |---|---|---|---|
 | [`count_lines`](count_lines/) | local files | map → reduce | the basics: `params_model`, a reduce step |
 | [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM reduce | a source-shaped `@p.step` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
-| [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, `ProcessResult`, reduce |
+| [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, reduce |
 | [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
 | [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |

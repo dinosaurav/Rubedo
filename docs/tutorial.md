@@ -39,7 +39,7 @@ meh
 ## An expand root and a map step over a folder
 
 ```python title="pipeline.py"
-from rubedo import Filtered, ProcessResult, step, pipeline
+from rubedo import Filtered, step, pipeline
 
 POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
@@ -55,14 +55,14 @@ def scan():
 
 
 @step(index=["rating"])
-def classify(scan: dict) -> ProcessResult:
+def classify(scan: dict):
     words = scan["text"].lower().split()
     if len(words) < 3:
         return Filtered(reason="too short to classify")
     pos = sum(1 for w in words if w.strip(".,!'\"") in POSITIVE)
     neg = sum(1 for w in words if w.strip(".,!'\"") in NEGATIVE)
     rating = "positive" if pos > neg else "negative" if neg > pos else "neutral"
-    return ProcessResult(value={"rating": rating, "word_count": len(words)})
+    return {"rating": rating, "word_count": len(words)}
 
 
 p = pipeline(name="reviews", steps=[scan, classify])
@@ -130,7 +130,7 @@ unknowable until it runs. `classify` shows `pending`, not `execute`: its
 output address depends on lanes `scan` hasn't minted yet. `p.run()` resolves
 both: 7 materializations get created (4 `scan` file-lanes + 3 `classify`
 lanes) and `review4.txt` — "meh", one word — gets **filtered**: its step
-returned `Filtered(reason=...)` instead of a `ProcessResult`. That verdict
+returned `Filtered(reason=...)` instead of a value. That verdict
 is cached like any other output; it isn't an error, and it isn't
 re-decided every run.
 

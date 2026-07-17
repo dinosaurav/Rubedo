@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 from .hashing import hash_json, hash_bytes
-from .models import Filtered, ProcessResult
+from .models import Filtered
 from .planning import (
     EphemeralRef,
     MatRef,
@@ -212,10 +212,6 @@ def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo
                 f"skip_cache step '{step.name}' returned Filtered: filtering "
                 "is a cacheable decision, so filter steps must be materialized"
             )
-        # Consumers of materialized steps receive the unwrapped value;
-        # keep the contract identical (minus the serialization round-trip)
-        if isinstance(result, ProcessResult):
-            result = result.value
         return result
 
     return memo.compute((ref.step.name, ref.item.coordinate), produce)

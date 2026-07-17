@@ -17,7 +17,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 ## Step Contract
 - A step's parameters name its parents: with no `depends_on=`, every parameter other than `params` must match a registered step's name and becomes a dependency in signature order (parents bind as kwargs keyed by step name; an unmatched parameter raises at pipeline-build time). Passing `depends_on=[...]` explicitly disables inference; the dict form `depends_on={"param": "step"}` binds a parent's output to a differently-named parameter. A root step (`map` or `expand` with no parents) takes no payload argument at all — it mints its own lane(s).
 - A parameter literally named `params` (any position) receives the pipeline's run params: validated against `pipeline(params_model=...)` when declared (as a plain `dict`, not a model instance — see `params.model_dump()` under the hood), else whatever dict was passed to `.run(params=...)`. It participates in the cache key only for steps that declare it. `params` is never treated as a dependency.
-- A step returns a JSON-serializable value (commonly a `dict`), or `ProcessResult(value=..., metadata=...)`, or `Filtered("reason")`.
+- A step returns a JSON-serializable value (commonly a `dict`), or `Filtered("reason")`. Custom classes with a `.model_dump()` method (Pydantic v2) or `.to_dict()` method are automatically coerced to a dict. Deserialization is one-way: downstream steps receive the dict, not the original class.
 
 ## Cache Identity Rules
 A step's output is cached based on:
@@ -38,7 +38,7 @@ A step's output is cached based on:
 
 ## Complete Worked Example
 ```python
-from rubedo import Filtered, ProcessResult, pipeline
+from rubedo import Filtered, pipeline
 from pydantic import BaseModel
 
 class EnrichParams(BaseModel):
@@ -58,7 +58,7 @@ def screen():
 def enrich(screen: dict, params: dict):
     if not screen.get("url"):
         return Filtered("No URL")
-    return ProcessResult(value={"company": screen["company"], "summary": f"...{params['prompt_mode']}"})
+    return {"company": screen["company"], "summary": f"...{params['prompt_mode']}"}
 
 @p.step(shape="reduce")
 def summarize(enrich: dict) -> dict:

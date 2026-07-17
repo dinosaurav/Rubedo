@@ -27,7 +27,7 @@ import networkx as nx
 from networkx.algorithms import community
 from dotenv import load_dotenv
 
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env"))
 
@@ -43,11 +43,11 @@ def src_files():
 
 
 @p.step
-def extract_code_nodes(src_files: str) -> ProcessResult:
+def extract_code_nodes(src_files: str):
     """Extract classes, functions, and import edges using Tree-sitter."""
     path = src_files
     if not path.endswith(".py"):
-        return ProcessResult(value={"nodes": [], "edges": []})
+        return {"nodes": [], "edges": []}
         
     import tree_sitter_python as tspython
     from tree_sitter import Language, Parser
@@ -60,7 +60,7 @@ def extract_code_nodes(src_files: str) -> ProcessResult:
         parser = Parser(PY_LANGUAGE)
         tree = parser.parse(bytes(code, "utf8"))
     except Exception:
-        return ProcessResult(value={"nodes": [], "edges": []})
+        return {"nodes": [], "edges": []}
 
     file_id = os.path.relpath(path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     nodes = [{"id": file_id, "type": "file", "name": os.path.basename(path)}]
@@ -100,14 +100,14 @@ def extract_code_nodes(src_files: str) -> ProcessResult:
 
     walk(tree.root_node)
 
-    return ProcessResult(value={"nodes": nodes, "edges": edges, "file_id": file_id})
+    return {"nodes": nodes, "edges": edges, "file_id": file_id}
 
 @p.step(retries=2, rate_limit="1000/min")
-def extract_semantic_nodes(src_files: str) -> ProcessResult:
+def extract_semantic_nodes(src_files: str):
     """Use an LLM to generate a semantic summary of the file."""
     path = src_files
     if not path.endswith(".py") and not path.endswith(".md"):
-        return ProcessResult(value={"summary": ""})
+        return {"summary": ""}
 
     file_id = os.path.relpath(path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
@@ -115,7 +115,7 @@ def extract_semantic_nodes(src_files: str) -> ProcessResult:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()[:3000]
     except Exception:
-        return ProcessResult(value={"summary": ""})
+        return {"summary": ""}
 
     prompt = (
         f"Summarize the following file ({os.path.basename(path)}) in 1-2 sentences. "
@@ -131,10 +131,10 @@ def extract_semantic_nodes(src_files: str) -> ProcessResult:
     except Exception as e:
         summary = f"Error: {e}"
 
-    return ProcessResult(value={"file_id": file_id, "summary": summary})
+    return {"file_id": file_id, "summary": summary}
 
 @p.step(shape="reduce")
-def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict) -> ProcessResult:
+def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict):
     """Fan-in all the nodes and edges, merging semantic summaries into the Graph."""
     G = nx.DiGraph()
 
@@ -142,7 +142,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
     valid_files = set()
     module_to_file = {}
     for res in extract_code_nodes.values():
-        val = res.value if isinstance(res, ProcessResult) else res
+        val = res
         for node in val.get("nodes", []):
             if node.get("type") == "file":
                 fid = node["id"]
@@ -156,7 +156,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
                 module_to_file[parts[-1]] = fid
 
     for res in extract_code_nodes.values():
-        val = res.value if isinstance(res, ProcessResult) else res
+        val = res
         for node in val.get("nodes", []):
             G.add_node(node["id"], **node)
         for edge in val.get("edges", []):
@@ -172,7 +172,7 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
             G.add_edge(edge["source"], target, type=edge["type"])
 
     for res in extract_semantic_nodes.values():
-        val = res.value if isinstance(res, ProcessResult) else res
+        val = res
         file_id = val.get("file_id")
         summary = val.get("summary")
         if file_id and summary and G.has_node(file_id):
@@ -185,12 +185,12 @@ def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict)
             attr["name"] = n
 
     # Rubedo serializes outputs to JSON, so we must return node_link_data, not the DiGraph object.
-    return ProcessResult(value=nx.node_link_data(G))
+    return nx.node_link_data(G)
 
 @p.step
-def detect_communities(build_networkx_graph) -> ProcessResult:
+def detect_communities(build_networkx_graph):
     """Run Louvain clustering to find architectural boundaries."""
-    data = build_networkx_graph.value if isinstance(build_networkx_graph, ProcessResult) else build_networkx_graph
+    data = build_networkx_graph
     G = nx.node_link_graph(data)
     
     # Undirected graph is required for Louvain
@@ -203,12 +203,12 @@ def detect_communities(build_networkx_graph) -> ProcessResult:
     except Exception:
         pass
 
-    return ProcessResult(value=nx.node_link_data(G))
+    return nx.node_link_data(G)
 
 @p.step
-def find_god_nodes(detect_communities) -> ProcessResult:
+def find_god_nodes(detect_communities):
     """Find central 'God nodes' using PageRank, excluding external libraries."""
-    data = detect_communities.value if isinstance(detect_communities, ProcessResult) else detect_communities
+    data = detect_communities
     G = nx.node_link_graph(data)
     
     # Exclude external libraries (e.g. typing) from sucking up all the centrality
@@ -225,22 +225,19 @@ def find_god_nodes(detect_communities) -> ProcessResult:
     except Exception as e:
         print(f"PAGERANK ERROR: {e}")
 
-    return ProcessResult(value=nx.node_link_data(G))
+    return nx.node_link_data(G)
 
 @p.step
-def export_graph(find_god_nodes) -> ProcessResult:
+def export_graph(find_god_nodes):
     """Export the fully enriched graph to JSON."""
-    data = find_god_nodes.value if isinstance(find_god_nodes, ProcessResult) else find_god_nodes
+    data = find_god_nodes
     G = nx.node_link_graph(data)
-    
+
     out_path = os.path.join(os.path.dirname(__file__), "graph.json")
     with open(out_path, "w") as f:
         json.dump(data, f, indent=2)
 
-    return ProcessResult(
-        value={"nodes_count": G.number_of_nodes(), "edges_count": G.number_of_edges(), "path": out_path},
-        metadata={"nodes": G.number_of_nodes()}
-    )
+    return {"nodes_count": G.number_of_nodes(), "edges_count": G.number_of_edges(), "path": out_path}
 
 def main():
     print(p.describe())

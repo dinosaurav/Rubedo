@@ -21,7 +21,7 @@ import tempfile
 
 from sqlalchemy import create_engine, text
 
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 
 DB_PATH = os.path.join(tempfile.gettempdir(), "rubedo_demo_orders.db")
@@ -62,15 +62,12 @@ def orders():
 
 
 @p.step(index=["tier"])
-def classify(orders: dict) -> ProcessResult:
+def classify(orders: dict):
     """Bucket each order by size."""
     row = orders
     amount = row["amount"]
     tier = "whale" if amount >= 1000 else "mid" if amount >= 200 else "small"
-    return ProcessResult(
-        value={"customer": row["customer"], "amount": amount, "tier": tier},
-        metadata={"tier": tier},
-    )
+    return {"customer": row["customer"], "amount": amount, "tier": tier}
 
 
 @p.step(shape="reduce")
