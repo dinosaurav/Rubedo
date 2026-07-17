@@ -41,6 +41,9 @@ MANIFEST
 /test_*.txt
 /print_errors.py
 
+# Benchmark results (per-machine, compared across commits)
+benchmarks/results/
+
 # Testing and Coverage
 .test_*/
 .pytest_cache/
