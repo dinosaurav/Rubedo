@@ -640,11 +640,6 @@ def _plan_step(
             pipeline_id=pipeline_id,
         )
 
-    if step.shape == "expand" and not step.depends_on:
-        # Root expand = source: no parent to cache against, so it always
-        # executes (re-scan the world every run). Execution mints the lanes.
-        return [StepDecision(coordinate="@root", action="execute", parent_mats={})]
-
     decisions = []
     
     if not step.depends_on:
@@ -764,7 +759,10 @@ def _plan_step(
             continue
 
         if step.shape == "expand":
-            parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
+            if step.depends_on:
+                parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
+            else:
+                parent_hash = ROOT_LANE  # root expand: anchor keyed on the constant
             anchor_address = expand_anchor_address(
                 step, parent_hash, params_hash, accepts_params
             )

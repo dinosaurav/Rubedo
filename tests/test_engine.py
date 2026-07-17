@@ -22,7 +22,7 @@ from sqlalchemy import create_engine
 # file's content. The `path` field in the output lets tests find "the lane
 # for a.txt" without the coordinate being that literal string (coordinates
 # are content-addressed: row-<hash>).
-@step
+@step(check_cache=False)
 def scan():
     for name in sorted(os.listdir("test_input")):
         path = os.path.join("test_input", name)
@@ -117,7 +117,7 @@ def test_first_run_creates_all():
         for c in coords:
             assert c.status == "created"
 
-        assert len(lane_store.all_filled_rows()) == 4
+        assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
 
 def test_second_run_reuses_all():
@@ -271,7 +271,7 @@ def test_logical_deletion():
     assert res1.created_count == 4  # 2 files x (scan lane + count-lines lane)
     assert res1.reused_count == 0
 
-    assert len(lane_store.all_filled_rows()) == 4
+    assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
     # 2. Delete one file
     os.remove("test_input/a.txt")
@@ -294,12 +294,12 @@ def test_logical_deletion():
 
         # a.txt's materialization is untouched and still live — a re-add reuses it.
         rows = lane_store.all_filled_rows()
-        assert len(rows) == 4
+        assert len(rows) == 6  # 4 original lanes + old anchor + new anchor (b.txt only)
         assert (
             session.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(True))
             .count()
-            == 4
+            == 5  # 4 live lanes + 1 live anchor (old anchor demoted by IHU flip)
         )
 
 

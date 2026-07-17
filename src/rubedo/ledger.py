@@ -357,6 +357,41 @@ def _commit_execution_result(
                 )
                 output_string = batch_row.get("output") if batch_row else None
                 identity = batch_row.get("output_identity") if batch_row else None
+            elif outcome.is_anchor:
+                # Expand anchor: store in a separate file (<step>.anchor.arrow)
+                # via append_anchor, so the anchor's output (a list of child
+                # hashes) doesn't pollute the step's output column type.
+                # Always serialize as a JSON string — the anchor file's output
+                # column is always string type.
+                import json as _json
+                output_string = _json.dumps(result, sort_keys=True, separators=(",", ":"))
+                content_type = "json"
+                identity = _identity_of(output_string)
+                mat_action = "created"
+                from .models import InputHashUsage
+                existing_usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=str(decision.output_address))
+                    .first()
+                )
+                if existing_usage and existing_usage.fulfilled:
+                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    if existing_row and existing_row.get("output_identity") == identity:
+                        mat_action = "reused"
+                if mat_action != "reused":
+                    lane_store.append_anchor(
+                        pipeline_id=ctx.pipeline_id,
+                        step_name=step.name,
+                        lane_key=decision.coordinate,
+                        address=str(decision.output_address),
+                        input_hash=str(decision.input_hash),
+                        output=output_string,
+                        content_type=content_type,
+                        run_id=ctx.run_id,
+                        code_hash=step.code_hash,
+                        code_version=step.version,
+                        output_identity=identity,
+                    )
             else:
                 output_string, content_type = serialize_output(
                     ctx.run_id, decision.coordinate, result

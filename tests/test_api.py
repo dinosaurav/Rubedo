@@ -114,7 +114,7 @@ def test_get_materializations():
     response = client.get("/api/materializations?limit=10&offset=0")
     assert response.status_code == 200
     mats = response.json()
-    assert len(mats) == 4
+    assert len(mats) == 5  # 4 lanes + 1 root-anchor
     assert mats[0]["output_address"] is not None
 
 

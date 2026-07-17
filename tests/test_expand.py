@@ -85,7 +85,7 @@ def assert_run(pipe):
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -253,7 +253,7 @@ def test_source_decorator():
 
     @step
     def things():
-        calls.append(1)  # a source-shaped root re-scans each run
+        calls.append(1)  # a source-shaped root; reuses on re-run
         for x in ["a", "b", "c"]:
             yield {"x": x}
 
@@ -268,7 +268,7 @@ def test_source_decorator():
 
     s2 = assert_run(pipe)
     assert (s2.created_count, s2.reused_count) == (0, 6)
-    assert calls == [1, 1]  # re-scanned, but every lane reused
+    assert calls == [1]  # reused via anchor — generator not re-run
 
     with get_session() as session:
         addr_index = lane_store.address_row_index()

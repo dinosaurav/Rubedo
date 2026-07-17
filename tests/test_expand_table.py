@@ -89,10 +89,9 @@ def test_root_expand_table_rerun_reuses():
     assert s1.created_count == 4
 
     s2 = pipe.run(workers=1)
-    # Expand root always re-runs (source) — children are "created"
-    # but downstream process lanes reuse (same addresses, IHU fulfilled)
-    assert s2.created_count == 2  # 2 expand children
-    assert s2.reused_count == 2  # 2 process lanes
+    # Root expand reuses via anchor — both children and process lanes reuse
+    assert s2.created_count == 0
+    assert s2.reused_count == 4  # 2 expand children + 2 process lanes
 
 
 def test_dependent_expand_returns_table():

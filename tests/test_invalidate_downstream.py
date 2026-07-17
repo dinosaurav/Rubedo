@@ -77,7 +77,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step
+@step(check_cache=False)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -145,7 +145,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     # downstream invalidation).
     survivors = {step_name for mid, (step_name, live) in liveness.items() if live}
     assert survivors == {"scan", "extract", "summarize"}
-    assert sum(1 for _, (_, live) in liveness.items() if live) == 4
+    assert sum(1 for _, (_, live) in liveness.items() if live) == 5  # +1 root-anchor
 
     # Lazy heal: the next run recomputes exactly the invalidated set; both
     # scan lanes plus the surviving globex extract/summarize are reused.
@@ -209,7 +209,7 @@ def test_default_invalidation_touches_only_direct_matches():
     # (upstream of extract, never touched).
     live_steps = sorted(step_name for _, (step_name, live) in liveness.items() if live)
     assert live_steps == [
-        "extract", "scan", "scan", "summarize", "summarize", "total",
+        "extract", "scan", "scan", "scan", "summarize", "summarize", "total",
     ]
 
 

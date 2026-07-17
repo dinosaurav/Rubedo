@@ -80,7 +80,7 @@ def assert_run(pipe):
     return summary
 
 
-@step
+@step(check_cache=False)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):

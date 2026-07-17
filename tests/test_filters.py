@@ -70,7 +70,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step
+@step(check_cache=False)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -179,7 +179,7 @@ def test_filter_decision_is_cached():
 
     with get_session() as session:
         rows = lane_store.all_filled_rows()
-        assert len(rows) == 2  # scan's real lane + screen's filtered marker
+        assert len(rows) == 3  # scan's real lane + root-anchor + screen's filtered marker
         screen_row = next(r for r in rows if r.get("step_name") == "screen")
         assert screen_row.get("filtered") is True
         ihu = session.query(InputHashUsage).filter_by(address=screen_row["address"]).first()

@@ -230,11 +230,10 @@ def plan(
     "execute" means the step function would run for that coordinate;
     "pending" means the answer depends on an upstream execution whose output
     (and therefore this coordinate's address) is unknowable without running.
-    A root *expand* step (a parentless generator) always plans as one
-    "execute" — it has no parent to cache its enumeration against, so its
-    lanes are unknowable
-    until it actually runs (a second `plan()` sees them via the expand
-    anchor without re-running the generator).
+    A root *expand* step (a parentless generator) plans as "reuse" for each
+    cached child lane if the ROOT_LANE-keyed anchor is present, or one
+    "execute" for @root if it isn't (first run) or the step has
+    check_cache=False.
 
     home, if given, points the ledger/object store at a custom root instead
     of the default `.rubedo`/RUBEDO_HOME.

@@ -33,14 +33,14 @@ SCHEDULES = ("broad", "deep")
 
 
 def _scanned_for(step: StepSpec) -> List[RootItem]:
-    """The synthetic items feeding a source-less map root's plan.
+    """The synthetic items feeding a source-less root's plan.
 
-    A non-expand root mints a single synthetic '@root' item (its input is a
-    constant, so it runs once and then reuses); everything else (dependent
-    steps, root expands — which yield their own lanes via the generator)
-    gets nothing. Shared by runner.plan() and _run_segment below.
+    A root step (no depends_on) mints a single synthetic '@root' item —
+    its input is a constant (map) or the generator's own yields (expand),
+    so it runs once and then reuses via the ROOT_LANE-keyed anchor. Shared
+    by runner.plan() and _run_segment below.
     """
-    if not step.depends_on and step.shape != "expand":
+    if not step.depends_on:
         return [RootItem(coordinate=ROOT_LANE, content_hash=ROOT_LANE)]
     return []
 

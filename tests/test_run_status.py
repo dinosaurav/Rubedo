@@ -61,7 +61,7 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 
-@step
+@step(check_cache=False)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -152,7 +152,7 @@ def test_second_run_reuses_statuses(setup_teardown):
         assert summary["created"] == 0
 
         rows = lane_store.all_filled_rows()
-        assert len(rows) == 6  # No new materializations
+        assert len(rows) == 7  # 6 lanes + 1 root-anchor (no new materializations)
 
 
 def test_changed_file_creates_one(setup_teardown):
@@ -187,7 +187,7 @@ def test_changed_file_creates_one(setup_teardown):
         assert summary["reused"] == 4  # scan/dummy for b, c
 
         rows = lane_store.all_filled_rows()
-        assert len(rows) == 8  # 6 original + 2 new (scan-a, dummy-a)
+        assert len(rows) == 10  # 6 original + 2 anchors + 2 new (scan-a, dummy-a)
 
 
 def test_deleted_file_absent_from_next_run(setup_teardown):
@@ -257,7 +257,7 @@ def test_failed_coordinate_records_failed(setup_teardown):
 
         # Ensure no materialization created for b.txt's failing step
         mats = [r for r in lane_store.all_filled_rows() if r.get("run_id") == res.run_id]
-        assert len(mats) == 5
+        assert len(mats) == 6  # 5 lanes + 1 root-anchor
 
 
 def test_event_log_populated(setup_teardown):

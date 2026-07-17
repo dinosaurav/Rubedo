@@ -176,6 +176,15 @@ def trace(
 
         # Build nodes from Arrow rows + RCS coordinates
         arrow_idx = lane_store.address_row_index()
+        # Filter out expand-anchor rows — they're cache entries (the child
+        # hashes), not real lanes. They have no RCS, no edges, and their
+        # output is {"_children": [...]} — not a user payload.
+        all_addrs = {
+            a for a in all_addrs
+            if arrow_idx.get(a, {}).get("lane_key") != "@root"
+        }
+        if not all_addrs:
+            return TraceResult(nodes=[], edges=[])
         # Coordinates from RCS (latest per address)
         addr_coords: Dict[str, str] = {}
         for addr, coord in (
@@ -206,6 +215,10 @@ def trace(
             for addr in all_addrs - parented:
                 row = arrow_idx.get(addr)
                 if row:
+                    # Skip expand-anchor rows — they're cache entries (the
+                    # child hashes), not real lanes with a user payload.
+                    if row.get("lane_key") == "@root":
+                        continue
                     try:
                         root_values[addr] = read_output(
                             row.get("output"), row.get("content_type")

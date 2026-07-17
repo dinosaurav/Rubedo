@@ -125,6 +125,24 @@ def _get_step_file(pipeline_id: str, step_name: str) -> str:
     return os.path.join(TABLES_DIR, safe_pipe, f"{safe_step}.arrow")
 
 
+def _get_anchor_file(pipeline_id: str, step_name: str) -> str:
+    """Path to the per-step anchor Arrow IPC file.
+
+    Expand anchors are stored separately from child lanes so their output
+    type (a list of child hashes) doesn't pollute the step's ``output``
+    column type (child dicts).  See ``_commit_execution_result`` in
+    ledger.py for the anchor commit path.
+    """
+    safe_pipe = pipeline_id.replace("/", "_")
+    safe_step = step_name.replace("/", "_")
+    return os.path.join(TABLES_DIR, safe_pipe, f"{safe_step}.anchor.arrow")
+
+
+def _anchor_key(pipeline_id: str, step_name: str) -> Tuple[str, str]:
+    """Buffer/cache key for anchor rows — distinct from the main step key."""
+    return (pipeline_id, f"{step_name}#anchor")
+
+
 # ---------------------------------------------------------------------------
 # In-memory run buffer
 # ---------------------------------------------------------------------------
@@ -301,6 +319,49 @@ def append_filled(
     )
 
 
+def append_anchor(
+    pipeline_id: str,
+    step_name: str,
+    lane_key: str,
+    address: str,
+    input_hash: str,
+    output: Any,
+    content_type: str,
+    run_id: str,
+    code_hash: Optional[str] = None,
+    code_version: Optional[str] = None,
+    output_identity: Optional[str] = None,
+    ts: Optional[Any] = None,
+):
+    """Append an expand anchor row to the step's *anchor* buffer.
+
+    Anchors are stored in a separate file (``<step>.anchor.arrow``) so
+    their output type (a list of child hashes, serialized as a JSON
+    string) doesn't pollute the child lanes' ``output`` column type.
+    """
+    from datetime import datetime, timezone
+
+    if ts is None:
+        ts = datetime.now(timezone.utc)
+    akey = _anchor_key(pipeline_id, step_name)
+    _run_buffers.setdefault(akey, []).append(
+        {
+            "row_id": _make_row_id(pipeline_id, step_name, lane_key, ts),
+            "lane_key": lane_key,
+            "address": address,
+            "input_hash": input_hash,
+            "code_version": code_version,
+            "output": output,
+            "output_identity": output_identity,
+            "content_type": content_type,
+            "code_hash": code_hash,
+            "ts": ts,
+            "run_id": run_id,
+            "filtered": False,
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Read path
 # ---------------------------------------------------------------------------
@@ -331,6 +392,32 @@ def _read_disk_table(pipeline_id: str, step_name: str):
         return None
 
     _DISK_TABLE_CACHE[key] = table
+    if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
+        _DISK_TABLE_CACHE.popitem(last=False)
+    return table
+
+
+def _read_anchor_disk_table(pipeline_id: str, step_name: str):
+    """Read the on-disk anchor Arrow file, or None if absent.
+
+    Uses the same _DISK_TABLE_CACHE as the main file, keyed by the anchor
+    key so the two files don't collide."""
+    akey = _anchor_key(pipeline_id, step_name)
+    if akey in _DISK_TABLE_CACHE:
+        _DISK_TABLE_CACHE.move_to_end(akey)
+        return _DISK_TABLE_CACHE[akey]
+
+    path = _get_anchor_file(pipeline_id, step_name)
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with pa.ipc.open_file(path) as reader:
+            table = reader.read_all()
+    except Exception:
+        return None
+
+    _DISK_TABLE_CACHE[akey] = table
     if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
         _DISK_TABLE_CACHE.popitem(last=False)
     return table
@@ -757,6 +844,24 @@ def batch_lookup_by_address(
             if addr in fulfilled_addrs:
                 result[addr] = row
 
+    # 2c: check the anchor file/buffer for anchor addresses.
+    # Anchors are stored separately to avoid output-type pollution.
+    anchor_addrs = fulfilled_addrs - set(result)
+    if anchor_addrs:
+        akey = _anchor_key(pipeline_id, step_name)
+        anchor_buf = _run_buffers.get(akey, [])
+        for row in anchor_buf:
+            a_addr: Any = row.get("address")
+            if a_addr in anchor_addrs:
+                result[a_addr] = row
+        # Check anchor disk table
+        anchor_disk = _read_anchor_disk_table(pipeline_id, step_name)
+        if anchor_disk is not None:
+            for row in anchor_disk.to_pylist():
+                addr = row.get("address")
+                if addr in anchor_addrs:
+                    result[addr] = row
+
     return result
 
 
@@ -799,8 +904,12 @@ def all_filled_rows() -> List[Dict[str, Any]]:
         for fname in os.listdir(pipe_dir):
             if not fname.endswith(".arrow"):
                 continue
-            step_name = fname[:-len(".arrow")]
-            table = _combined_table(entry, step_name)
+            if fname.endswith(".anchor.arrow"):
+                step_name = fname[:-len(".anchor.arrow")]
+                table = _read_anchor_disk_table(entry, step_name)
+            else:
+                step_name = fname[:-len(".arrow")]
+                table = _combined_table(entry, step_name)
             if table is None or table.num_rows == 0:
                 continue
             for row in table.to_pylist():
@@ -824,55 +933,85 @@ def flush_step(pipeline_id: str, step_name: str):
     — no re-read from disk.  The write buffers are cleared (the data is
     now on disk + in cache).  O(total history) per flush — simple for
     v1; the stream-append optimisation is Phase 3.
+
+    Also flushes the step's anchor buffer (if any) to ``<step>.anchor.arrow``.
     """
+    # --- Main step file ---
     rows = _buffer(pipeline_id, step_name)
     arrow_batches = _arrow_batch_buffer(pipeline_id, step_name)
-    if not rows and not arrow_batches:
-        return
-    init_tables()
+    if rows or arrow_batches:
+        init_tables()
+        combined = _combined_table(pipeline_id, step_name)
+        if combined is not None:
+            path = _get_step_file(pipeline_id, step_name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp_path = f"{path}.tmp"
+            with pa.ipc.new_file(tmp_path, combined.schema) as writer:
+                writer.write_table(combined)
+            os.replace(tmp_path, path)
 
-    combined = _combined_table(pipeline_id, step_name)
-    if combined is None:
-        return
-    path = _get_step_file(pipeline_id, step_name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Write to a temp file then atomically replace — crash mid-write
-    # leaves the old file intact.
-    tmp_path = f"{path}.tmp"
-    with pa.ipc.new_file(tmp_path, combined.schema) as writer:
-        writer.write_table(combined)
-    os.replace(tmp_path, path)
+            key = (pipeline_id, step_name)
+            _DISK_TABLE_CACHE[key] = combined
+            _DISK_TABLE_CACHE.move_to_end(key)
+            if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
+                evicted = _DISK_TABLE_CACHE.popitem(last=False)
+                _ADDRESS_INDEX_CACHE.pop(evicted[0], None)
 
-    # Keep the flushed table in the disk-table cache so downstream
-    # lookups get a cache hit — no re-read from disk.  Build the address
-    # index from the combined table so batch_lookup_by_address can do
-    # O(matches) hash probes.  Clear the write buffers (data is on disk
-    # + in cache + indexed).
-    key = (pipeline_id, step_name)
-    _DISK_TABLE_CACHE[key] = combined
-    _DISK_TABLE_CACHE.move_to_end(key)
-    if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
-        evicted = _DISK_TABLE_CACHE.popitem(last=False)
-        _ADDRESS_INDEX_CACHE.pop(evicted[0], None)
+            addrs = combined.column("address").to_pylist()
+            addr_index: Dict[str, int] = {}
+            for i, addr in enumerate(addrs):
+                if addr:
+                    addr_index[addr] = i
+            _ADDRESS_INDEX_CACHE[key] = addr_index
+            _ADDRESS_INDEX_CACHE.move_to_end(key)
+            if len(_ADDRESS_INDEX_CACHE) > _DISK_TABLE_CACHE_MAX:
+                _ADDRESS_INDEX_CACHE.popitem(last=False)
 
-    addrs = combined.column("address").to_pylist()
-    addr_index: Dict[str, int] = {}
-    for i, addr in enumerate(addrs):
-        if addr:
-            addr_index[addr] = i
-    _ADDRESS_INDEX_CACHE[key] = addr_index
-    _ADDRESS_INDEX_CACHE.move_to_end(key)
-    if len(_ADDRESS_INDEX_CACHE) > _DISK_TABLE_CACHE_MAX:
-        _ADDRESS_INDEX_CACHE.popitem(last=False)
+            rows.clear()
+            arrow_batches.clear()
 
-    rows.clear()
-    arrow_batches.clear()
+    # --- Anchor file ---
+    akey = _anchor_key(pipeline_id, step_name)
+    anchor_rows = _run_buffers.get(akey, [])
+    if anchor_rows:
+        init_tables()
+        # Read existing anchor table and concat with new rows.
+        existing = _read_anchor_disk_table(pipeline_id, step_name)
+        new_table = pa.Table.from_pylist(anchor_rows, schema=_schema(pa, pa.string()))
+        if existing is not None and existing.num_rows > 0:
+            try:
+                combined_anchor = pa.concat_tables([existing, new_table], promote_options="default")
+            except (pa.lib.ArrowInvalid, pa.lib.ArrowTypeError):
+                combined_anchor = new_table
+        else:
+            combined_anchor = new_table
+        path = _get_anchor_file(pipeline_id, step_name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with pa.ipc.new_file(tmp_path, combined_anchor.schema) as writer:
+            writer.write_table(combined_anchor)
+        os.replace(tmp_path, path)
+
+        _DISK_TABLE_CACHE[akey] = combined_anchor
+        _DISK_TABLE_CACHE.move_to_end(akey)
+        if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
+            evicted = _DISK_TABLE_CACHE.popitem(last=False)
+            _ADDRESS_INDEX_CACHE.pop(evicted[0], None)
+
+        anchor_rows.clear()
 
 
 def flush_all():
     """Flush every step's in-memory buffers to disk (call at run end)."""
-    all_keys = set(_run_buffers.keys()) | set(_arrow_batch_buffers.keys())
-    for (pipeline_id, step_name) in all_keys:
+    # Collect unique (pipeline_id, step_name) pairs — anchor buffer keys
+    # (step_name + "#anchor") map back to their parent step.
+    step_keys: set = set()
+    for (pipeline_id, step_name) in _run_buffers:
+        if step_name.endswith("#anchor"):
+            step_keys.add((pipeline_id, step_name[:-len("#anchor")]))
+        else:
+            step_keys.add((pipeline_id, step_name))
+    for (pipeline_id, step_name) in step_keys:
         flush_step(pipeline_id, step_name)
     clear_run_buffers()
 
@@ -923,3 +1062,5 @@ def compact_step(
     key = (pipeline_id, step_name)
     _DISK_TABLE_CACHE.pop(key, None)
     _ADDRESS_INDEX_CACHE.pop(key, None)
+    akey = _anchor_key(pipeline_id, step_name)
+    _DISK_TABLE_CACHE.pop(akey, None)

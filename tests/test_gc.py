@@ -97,7 +97,7 @@ def _shout(folder=TEST_FOLDER):
     # not off address stability, so a plain content-addressed expand root
     # (no separate scan step) is enough here. Yields bytes so outputs spill
     # to the content-addressed object store (small strings would be inline).
-    @step
+    @step(check_cache=False)
     def shout():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -117,7 +117,7 @@ def _norm_chain(folder=TEST_FOLDER):
     returns bytes so it spills to the object store (scan's small dict is
     inline JSON)."""
 
-    @step
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -430,7 +430,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -534,4 +534,4 @@ def test_gc_applies_recorded_retention_policy_manually():
     # gen1 already auto-pruned; nothing left to do.
     assert report.demoted_count == 0
     with get_session() as s:
-        assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count() == 2
+        assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count() == 3  # 2 lanes + 1 root-anchor

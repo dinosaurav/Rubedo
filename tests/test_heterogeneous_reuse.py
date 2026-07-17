@@ -185,7 +185,7 @@ def test_arrow_row_count_stable_across_runs():
 
     pipe.run(workers=1)
     rows_after_r1 = lane_store.get_filled_rows("hetero_rows", "source")
-    assert len(rows_after_r1) == 2
+    assert len(rows_after_r1) == 2  # 2 children (anchor in separate file)
 
     pipe.run(workers=1)
     rows_after_r2 = lane_store.get_filled_rows("hetero_rows", "source")

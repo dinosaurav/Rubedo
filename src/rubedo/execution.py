@@ -26,6 +26,7 @@ from .planning import (
     expand_anchor_address,
     expand_child_coord,
     expand_child_identity,
+    ROOT_LANE,
 )
 from .spec import StepSpec
 from .store import _try_arrow, _to_arrow_table, read_output
@@ -328,11 +329,10 @@ def _process_decision(
     ) -> List[ExecutionOutcome]:
         """Fan one parent lane's yielded payloads into content-addressed lanes.
 
-        A dependent expand emits the cache anchor first (the child content
-        hashes, addressed by the parent so a re-run can skip the fn). A *root*
-        expand (a source) has no parent to cache against, so it writes no
-        anchor and always re-runs. Then one child per distinct payload — each a
-        content-addressed lane `row-<hash>`; identical payloads collapse.
+        Emits the cache anchor first (the child content hashes, addressed by
+        the parent — or ROOT_LANE for a root expand — so a re-run can skip
+        the fn). Then one child per distinct payload — each a content-
+        addressed lane `row-<hash>`; identical payloads collapse.
         """
         seen: set = set()
         children: List[tuple] = []  # (child_hash, value)
@@ -348,24 +348,28 @@ def _process_decision(
             children.append((child_hash, value))
 
         outcomes: List[ExecutionOutcome] = []
+        # Anchor: the child hashes, addressed by the parent (or ROOT_LANE
+        # for a root expand). Not a lane — just the cache entry that lets
+        # a re-run skip the generator.
         if step.depends_on:
-            # Anchor: the child hashes, addressed by the parent. Not a lane.
             parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
-            anchor = StepDecision(
-                coordinate=decision.coordinate,
-                action="execute",
-                input_hash=parent_hash,
-                output_address=expand_anchor_address(
-                    step, parent_hash, params_hash, accepts_params
-                ),
-                parent_mats=decision.parent_mats,
+        else:
+            parent_hash = ROOT_LANE
+        anchor = StepDecision(
+            coordinate=decision.coordinate,
+            action="execute",
+            input_hash=parent_hash,
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            parent_mats=decision.parent_mats,
+        )
+        outcomes.append(
+            ExecutionOutcome(
+                anchor, True, result=[h for h, _ in children],
+                attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
             )
-            outcomes.append(
-                ExecutionOutcome(
-                    anchor, True, result=[h for h, _ in children],
-                    attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
-                )
-            )
+        )
 
         for child_hash, value in children:
             input_hash, child_address = expand_child_identity(
@@ -472,21 +476,23 @@ def _process_decision(
         outcomes: List[ExecutionOutcome] = []
         if step.depends_on:
             parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
-            anchor = StepDecision(
-                coordinate=decision.coordinate,
-                action="execute",
-                input_hash=parent_hash,
-                output_address=expand_anchor_address(
-                    step, parent_hash, params_hash, accepts_params
-                ),
-                parent_mats=decision.parent_mats,
+        else:
+            parent_hash = ROOT_LANE
+        anchor = StepDecision(
+            coordinate=decision.coordinate,
+            action="execute",
+            input_hash=parent_hash,
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            parent_mats=decision.parent_mats,
+        )
+        outcomes.append(
+            ExecutionOutcome(
+                anchor, True, result=[c[1] for c in children],
+                attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
             )
-            outcomes.append(
-                ExecutionOutcome(
-                    anchor, True, result=[c[1] for c in children],
-                    attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
-                )
-            )
+        )
 
         for _, child_hash, lane_key, input_hash, child_address in children:
             child = StepDecision(

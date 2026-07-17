@@ -80,7 +80,7 @@ def make_shout_pipeline():
     # hand-countable (no extra scan-step materialization inflating the byte
     # totals below). Yields bytes so outputs spill to the content-addressed
     # object store (small strings would be inline JSON, not on disk).
-    @step
+    @step(check_cache=False)
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -100,19 +100,19 @@ def test_sizes_and_counts_for_populated_store():
     report = storage_report()
     assert report.total_objects == 2
     assert report.total_bytes == 7  # hand-count: 5 + 2
-    assert report.total_materializations == 2
-    assert report.live_materializations == 2
+    assert report.total_materializations == 3  # 2 lanes + 1 root-anchor
+    assert report.live_materializations == 3
     assert report.missing_objects == 0
     assert report.reclaimable_objects == 0
     assert report.reclaimable_bytes == 0
 
     (pipe,) = report.pipelines
     assert pipe.pipeline_id == "du"
-    assert (pipe.objects, pipe.bytes, pipe.materializations) == (2, 7, 2)
+    assert (pipe.objects, pipe.bytes, pipe.materializations) == (2, 7, 3)
     (usage,) = pipe.steps
     assert usage.step_name == "shout"
     assert (usage.objects, usage.bytes) == (2, 7)
-    assert usage.live_materializations == 2
+    assert usage.live_materializations == 3
 
     # --json surface: plain dict, round-trippable
     d = report.to_dict()
@@ -125,7 +125,7 @@ def test_invalidated_only_object_is_reclaimable():
     make_shout_pipeline().run(workers=1)
 
     res = invalidate(Selection(step="shout"), reason="test")
-    assert res["invalidated_count"] == 1
+    assert res["invalidated_count"] == 2  # 1 child lane + 1 root-anchor
 
     report = storage_report()
     assert report.total_objects == 1
@@ -156,7 +156,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     create_file("a.txt", "same")
     create_file("b.txt", "same\n")
 
-    @step
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -172,7 +172,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     assert summary.created_count == 4  # 2 files x (scan + norm)
 
     report = storage_report()
-    assert report.total_materializations == 4  # 2 scan + 2 norm
+    assert report.total_materializations == 5  # 2 scan + 2 norm + 1 root-anchor
     # scan yields small dicts -> inline JSON (no object-store bytes); norm's
     # two materializations dedupe to one physical bytes object.
     assert report.total_objects == 1
@@ -202,7 +202,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
         from rubedo.planning import _ArrowRowRef
 
         with get_session() as session:
-            for r in [row for row in lane_store.all_filled_rows() if row.get("step_name") == "scan"]:
+            for r in [row for row in lane_store.all_filled_rows() if row.get("step_name") == "scan" and row.get("lane_key") != "@root"]:
                 if read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
                     from rubedo.models import RunCoordinateStatus
 
@@ -245,8 +245,10 @@ def test_missing_object_file_is_reported_not_crashed():
 
     with get_session():
         rows = lane_store.all_filled_rows()
-        assert len(rows) == 1
-        out = rows[0].get("output", "")
+        assert len(rows) == 2  # 1 child lane + 1 root-anchor
+        # The child is bytes-spilled; the anchor is inline JSON.
+        child_row = next(r for r in rows if r.get("lane_key") != "@root")
+        out = child_row.get("output", "")
         assert out.startswith("objects:")
         content_hash = out[len("objects:"):]
     os.remove(_get_object_path(content_hash))
