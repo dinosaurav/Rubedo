@@ -559,7 +559,13 @@ def _plan_step(
     map-shaped steps support a subset (collective shapes consume whole lane
     sets); the decisions are byte-identical to what whole-step planning
     would produce for those coordinates at the same ledger state.
+
+    `force` is the run-level override (``--force``); `step.check_cache=False`
+    is the per-step equivalent. Both make plan skip reuse and emit "execute",
+    but the commit path is unaffected — results still land in cache.
     """
+    # check_cache=False on the step is a per-step force: skip reuse, still commit.
+    force = force or not step.check_cache
     if lanes is not None and step.shape != "map":
         raise ValueError(
             f"lane-subset planning requires shape='map' (step '{step.name}' "

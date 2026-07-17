@@ -69,6 +69,7 @@ class StepSpec:
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
+    check_cache: bool = True  # when False, always re-execute (still commits, like --force for one step)
     shape: str = "map"  # map | reduce | expand | join
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
@@ -161,6 +162,7 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
+    check_cache: bool = True,
     shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
@@ -242,6 +244,16 @@ def step(
     exist to keep other steps readable. Values pass in memory without a
     serialization round-trip, and execution policies (retries, rate_limit)
     are not applied — if a step needs those, it deserves materialization.
+
+    check_cache (default True) controls whether a step's plan phase checks
+    the cache for a reusable output. When False, the step always re-executes
+    — but still commits its result to cache, so downstream steps can reuse
+    and a subsequent run with check_cache=True sees the fresh output. This
+    is the per-step equivalent of `force=True`: right for source roots that
+    must re-scan the world every run (a filesystem crawl, an API poll) but
+    whose outputs are stable when the upstream hasn't changed (content-
+    addressed lanes collapse onto the same addresses, so downstream reuse
+    is unaffected).
 
     on_failed controls the partial fan-in behavior for collective steps
     (reduce/join). "use_passed" (default) allows the step to proceed with
@@ -354,6 +366,16 @@ def step(
                 f"Step '{step_name}': stale_after is meaningless with skip_cache — "
                 "nothing is stored to expire"
             )
+        if not check_cache and skip_cache:
+            raise ValueError(
+                f"Step '{step_name}': check_cache=False is contradictory with skip_cache "
+                "— a skip_cache step is never materialized, so there is no cache to skip"
+            )
+        if not check_cache and stale_after is not None:
+            raise ValueError(
+                f"Step '{step_name}': stale_after is meaningless with check_cache=False "
+                "— the step always re-executes anyway"
+            )
         if on_failed not in ("use_passed", "block"):
             raise ValueError(
                 f"Step '{step_name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
@@ -393,6 +415,7 @@ def step(
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
             skip_cache=skip_cache,
+            check_cache=check_cache,
             shape=resolved_shape,
             executor=executor,
             group_key=group_key,
@@ -431,6 +454,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["depends_on_aliases"] = dict(s.depends_on_aliases)
         if s.skip_cache:
             entry["skip_cache"] = True
+        if not s.check_cache:
+            entry["check_cache"] = False
         if s.retries:
             entry["retries"] = s.retries
             entry["retry_on"] = [e.__name__ for e in s.retry_on]
