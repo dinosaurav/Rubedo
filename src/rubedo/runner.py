@@ -461,27 +461,7 @@ def run_pipeline(
                 params_hash = hash_json(params or {})
                 memo = _RunMemo()
 
-                segments = _partition_segments(topo_steps, schedule)
-                # Precompute: after segment i completes, which step names
-                # are still needed as parents by segments i+1..end?
-                # A step is needed if any future segment contains a step
-                # that depends on it.
-                all_step_names = {s.name for s in topo_steps}
-                dep_map = {s.name: set(s.depends_on) for s in topo_steps}
-                for i, seg_steps in enumerate(segments):
-                    future_steps = {
-                        s.name
-                        for seg in segments[i + 1:]
-                        for s in seg
-                    }
-                    still_needed = {
-                        name
-                        for name in all_step_names
-                        if any(
-                            name in dep_map.get(fs, set())
-                            for fs in future_steps
-                        )
-                    }
+                for seg_steps in _partition_segments(topo_steps, schedule):
                     _run_segment(
                         session,
                         ctx,
@@ -493,7 +473,6 @@ def run_pipeline(
                         workers,
                         memo,
                         progress_cb,
-                        steps_still_needed=still_needed,
                     )
 
                 summary = _finish_run(ctx)

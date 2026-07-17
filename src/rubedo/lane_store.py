@@ -711,9 +711,11 @@ def flush_step(pipeline_id: str, step_name: str):
     """Write the in-memory buffers (dict + arrow batch) for one step to disk.
 
     Reads the existing on-disk file, concatenates with both buffers, and
-    writes the combined table back.  Clears both buffers after flushing
-    so a second call is a no-op.  O(total history) per flush — simple
-    for v1; the stream-append optimisation is Phase 3.
+    writes the combined table back.  After flushing, the combined table
+    stays in the disk-table cache so downstream lookups get a cache hit
+    — no re-read from disk.  The write buffers are cleared (the data is
+    now on disk + in cache).  O(total history) per flush — simple for
+    v1; the stream-append optimisation is Phase 3.
     """
     rows = _buffer(pipeline_id, step_name)
     arrow_batches = _arrow_batch_buffer(pipeline_id, step_name)
@@ -733,11 +735,14 @@ def flush_step(pipeline_id: str, step_name: str):
         writer.write_table(combined)
     os.replace(tmp_path, path)
 
-    # Invalidate the disk-table cache for this step — the file changed.
+    # Keep the flushed table in the disk-table cache so downstream
+    # lookups get a cache hit — no re-read from disk.  Clear the write
+    # buffers (the data is now on disk + in cache).
     key = (pipeline_id, step_name)
-    _DISK_TABLE_CACHE.pop(key, None)
-
-    # Clear both buffers for this step
+    _DISK_TABLE_CACHE[key] = combined
+    _DISK_TABLE_CACHE.move_to_end(key)
+    if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
+        _DISK_TABLE_CACHE.popitem(last=False)
     rows.clear()
     arrow_batches.clear()
 

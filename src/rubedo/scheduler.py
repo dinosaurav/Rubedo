@@ -98,7 +98,6 @@ def _run_segment(
     workers: Optional[int],
     memo: _RunMemo,
     progress_cb: Optional[Callable[[str, str, str], None]],
-    steps_still_needed: Optional[set] = None,
 ) -> None:
     """Drive one segment of the DAG to completion — the one scheduler.
 
@@ -232,14 +231,13 @@ def _run_segment(
                     if not outcome.is_anchor:
                         advance(step, outcome.decision.coordinate)
 
-        # Flush steps no longer needed by future segments to disk.
-        # Steps still needed as parents stay in memory (no disk write +
-        # re-read round-trip).  This bounds memory to the set of steps
-        # with pending consumers, not the whole run's history.
+        # Flush this segment's steps to disk — durability per segment.
+        # The flushed table stays in the disk-table cache so downstream
+        # lookups get a cache hit (no re-read).  The write buffers are
+        # cleared (data is on disk + in cache).
         from . import lane_store
         for s in seg_steps:
-            if steps_still_needed is None or s.name not in steps_still_needed:
-                lane_store.flush_step(ctx.pipeline_id, s.name)
+            lane_store.flush_step(ctx.pipeline_id, s.name)
     finally:
         for tp in thread_pools.values():
             tp.shutdown(wait=True)
