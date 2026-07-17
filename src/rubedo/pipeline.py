@@ -175,9 +175,9 @@ def _build_spec(
     # depends_on= gets its parent from signature inference above — the
     # decoration-time check would fire before inference runs.
     for s in steps:
-        if s.shape == "reduce" and not s.depends_on:
+        if s.in_shape == "aggregate" and not s.depends_on:
             raise ValueError(
-                f"Step '{s.name}': shape='reduce' requires at least one parent "
+                f"Step '{s.name}': in_shape='aggregate' requires at least one parent "
                 "in depends_on (or a parameter naming a parent step)"
             )
 
@@ -193,14 +193,14 @@ def _build_spec(
                 f"Step '{s.name}' has skip_cache but no consumer: its output "
                 "would never be computed or stored"
             )
-        if s.shape == "join":
+        if s.in_shape == "join":
             for dep in s.join_on or {}:
                 parent = name_to_step.get(dep)
                 if parent and parent.skip_cache:
                     raise ValueError(
-                        f"Step '{s.name}': shape='join' cannot have a skip_cache parent ('{dep}')"
+                        f"Step '{s.name}': in_shape='join' cannot have a skip_cache parent ('{dep}')"
                     )
-        if s.shape == "reduce" and s.group_key is not None:
+        if s.in_shape == "aggregate" and s.group_key is not None:
             for dep in s.depends_on:
                 parent = name_to_step.get(dep)
                 if parent and parent.skip_cache:
@@ -311,7 +311,8 @@ class Pipeline:
             version=version,
             depends_on=list(join_on.keys()),
             depends_on_explicit=True,
-            shape="join",
+            in_shape="join",
+            out_shape="many",
             join_on=join_on,
             declarative=True,
             on_failed=on_failed,  # type: ignore[arg-type]
@@ -335,7 +336,8 @@ class Pipeline:
             version=version,
             depends_on=list(depends_on),
             depends_on_explicit=True,
-            shape="map",
+            in_shape="one",
+            out_shape="one",
             declarative=True,
             on_failed=on_failed,  # type: ignore[arg-type]
         )

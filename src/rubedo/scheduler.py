@@ -49,13 +49,10 @@ def _deep_eligible(step: StepSpec) -> bool:
     """Can a lane flow through this step without waiting for its siblings?
 
     1:1 map steps (including root maps and skip_cache utils) and root
-    expands (independent sources that yield their own lanes). reduce/join
-    consume whole lane sets (true barriers); dependent expands and
-    multi-parent maps are treated as barriers for now (unlockable later).
+    expands (independent sources that yield their own lanes). aggregate/join
+    consume whole lane sets (true barriers).
     """
-    if step.shape == "map" and len(step.depends_on) <= 1:
-        return True
-    if step.shape == "expand" and not step.depends_on:
+    if step.in_shape == "one" and len(step.depends_on) <= 1:
         return True
     return False
 

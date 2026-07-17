@@ -566,12 +566,12 @@ def _plan_step(
     """
     # check_cache=False on the step is a per-step force: skip reuse, still commit.
     force = force or not step.check_cache
-    if lanes is not None and step.shape != "map":
+    if lanes is not None and step.in_shape != "one":
         raise ValueError(
-            f"lane-subset planning requires shape='map' (step '{step.name}' "
-            f"is shape='{step.shape}')"
+            f"lane-subset planning requires in_shape='one' (step '{step.name}' "
+            f"is in_shape='{step.in_shape}')"
         )
-    if step.shape == "reduce":
+    if step.in_shape == "aggregate":
         parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
@@ -634,7 +634,7 @@ def _plan_step(
             for gcoord, gmats in sorted(groups.items())
         ]
 
-    if step.shape == "join":
+    if step.in_shape == "join":
         return _plan_join(
             session, step, coord_step_mats, params_hash, force, accepts_params,
             pipeline_id=pipeline_id,
@@ -688,7 +688,7 @@ def _plan_step(
                     # Declarative union: a lane only needs to exist in one
                     # parent, not all — skip missing parents
                     continue
-                raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use shape='join'")
+                raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use in_shape='join'")
             parent_mat = coord_step_mats[(coord, dep)]
             if parent_mat == "blocked":
                 blocked_parents.append(dep)
@@ -758,7 +758,7 @@ def _plan_step(
             decisions.append(StepDecision(coordinate=coord, action="pending", item=it))
             continue
 
-        if step.shape == "expand":
+        if step.out_shape == "many" and step.in_shape == "one":
             if step.depends_on:
                 parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
             else:

@@ -260,7 +260,7 @@ def _process_decision(
     calling (thread) layer.
 
     Returns a list because an expand fans one parent lane into an anchor
-    plus N children; every other shape returns exactly one outcome.
+    plus N children; every other in_shape/out_shape returns exactly one outcome.
     """
 
     def _declarative_result(decision: StepDecision) -> Any:
@@ -272,7 +272,7 @@ def _process_decision(
         - Declarative union (map shape): pass through the single present
           parent's output unchanged
         """
-        if step.shape == "join":
+        if step.in_shape == "join":
             return {
                 dep: _resolve_parent_value(
                     decision.parent_mats[dep], params, memo
@@ -294,8 +294,8 @@ def _process_decision(
         args: List[Any] = []
         if not step.depends_on:
             kwargs = {}
-        elif step.shape == "reduce":
-            if step.arrow_reduce:
+        elif step.in_shape == "aggregate":
+            if step.arrow_aggregate:
                 kwargs = {
                     _dep_kwarg(step, dep): _resolve_parent_table(
                         pipeline_id, dep, decision.parent_mats[dep]
@@ -520,7 +520,7 @@ def _process_decision(
                 limiter.acquire()
             try:
                 result = call(decision, pool)
-                if step.shape == "expand":
+                if step.out_shape == "many" and step.in_shape == "one":
                     if _try_arrow(result):
                         # Table-return expand: keep data in Arrow, one
                         # to_pylist for hashing only, struct column

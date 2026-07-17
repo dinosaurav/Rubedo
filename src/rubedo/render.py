@@ -12,6 +12,19 @@ from .planning import topological_sort
 from .spec import PipelineSpec, StepSpec
 
 
+_SHAPE_LABELS = {
+    ("one", "one"): "map",
+    ("one", "many"): "expand",
+    ("aggregate", "one"): "aggregate",
+    ("fold", "one"): "fold",
+    ("join", "many"): "join",
+}
+
+
+def _shape_label(s: StepSpec) -> str:
+    return _SHAPE_LABELS.get((s.in_shape, s.out_shape), f"{s.in_shape}/{s.out_shape}")
+
+
 def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
     """Render a pipeline's DAG before ever running it.
 
@@ -69,7 +82,7 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
             policies.append("code=auto")
         if s.params_model is not None:
             policies.append(f"params={s.params_model.__name__}")
-        if s.shape in ("reduce", "join") and s.on_failed == "block":
+        if s.in_shape in ("aggregate", "fold", "join") and s.on_failed == "block":
             policies.append("on_failed=block")
         policy_str = f"  [{', '.join(policies)}]" if policies else ""
         lines.append(f"  {s.name} ({s.version}){deps}{policy_str}")
@@ -125,7 +138,7 @@ def _ascii_layers(
 
     layers: List[List[_AsciiNode]] = [[] for _ in range(max_depth + 1)]
     for s in topo:
-        label = s.name if s.shape == "map" else f"{s.name} [{s.shape}]"
+        label = s.name if (s.in_shape, s.out_shape) == ("one", "one") else f"{s.name} [{_shape_label(s)}]"
         layers[depth[s.name]].append(
             _AsciiNode(id=("s", s.name), width=len(label) + 4, label=label)
         )
