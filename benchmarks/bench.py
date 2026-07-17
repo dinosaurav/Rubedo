@@ -8,9 +8,13 @@ Two layers of scenarios:
   ``flush_step``, ``all_filled_rows``) from engine overhead.
 - **run_***: drive a real 4-step pipeline (expand source → two maps →
   reduce) end-to-end through ``Pipeline.run()`` — cold, warm,
-  incremental, and deep-history variants.  (No ``.plan()`` scenario: on
-  an expand-source pipeline a dry run can't know the source's lanes, so
-  the reuse lookup never fires — the warm runs cover plan-phase cost.)
+  incremental, and deep-history variants.
+- **plan_deep_***: pure ``.plan()`` on a map-root → dependent-expand →
+  map-chain pipeline.  That shape (unlike an expand *source*, which
+  must re-run to yield its lanes) resolves every lane from history at
+  plan time, so a dry run genuinely exercises the reuse lookup.
+- **shape_***: same workload, two pipeline shapes differing in one knob,
+  compared on time *and* work counters.
 
 Usage:
 
@@ -58,9 +62,10 @@ SCALES: Dict[str, Dict[str, int]] = {
     #                     |        |         |      micro: buffered rows per flush
     #                     |        |         |      |      micro: step files for gc paths
     #                     |        |         |      |      |   macro: prior runs of history
-    "small":  dict(n_files=20,  hist_rows=2_000,   n_addrs=200,   new_rows=200,   n_steps=5,  deep_runs=3),
-    "medium": dict(n_files=100, hist_rows=20_000,  n_addrs=1_000, new_rows=1_000, n_steps=10, deep_runs=5),
-    "large":  dict(n_files=400, hist_rows=100_000, n_addrs=5_000, new_rows=2_000, n_steps=10, deep_runs=8),
+    #                     |   plan_deep: expand fan-out lanes / map-chain length
+    "small":  dict(n_files=20,  hist_rows=2_000,   n_addrs=200,   new_rows=200,   n_steps=5,  deep_runs=3, n_lanes=500,    chain_depth=3),
+    "medium": dict(n_files=100, hist_rows=20_000,  n_addrs=1_000, new_rows=1_000, n_steps=10, deep_runs=5, n_lanes=5_000,  chain_depth=3),
+    "large":  dict(n_files=400, hist_rows=100_000, n_addrs=5_000, new_rows=2_000, n_steps=10, deep_runs=8, n_lanes=20_000, chain_depth=5),
 }
 
 MICRO_PIPELINE = "bench_micro"
@@ -155,9 +160,25 @@ class WorkCounters:
             "find_latest_filled_by_address": find_latest_filled_by_address,
         }.items():
             setattr(lane_store, name, fn)
+
+        # Count every SQL statement, engine-wide.  Class-level listener so
+        # it survives the engine being disposed/recreated inside the timed
+        # region (_init_home does that on every run/plan with home=).
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
+
+        def _count_stmt(conn, cursor, statement, parameters, context, executemany):
+            self._bump("sqlite_stmts")
+
+        self._stmt_listener = _count_stmt
+        event.listen(Engine, "before_cursor_execute", _count_stmt)
         return self
 
     def __exit__(self, *exc):
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
+
+        event.remove(Engine, "before_cursor_execute", self._stmt_listener)
         for name, fn in self._orig.items():
             setattr(self._ls, name, fn)
         return False
@@ -533,6 +554,83 @@ def bench_run_history_deep(p, repeats):
         pipe = make_pipeline()
         times.append(timed(lambda: pipe.run(workers=1)))
     return times
+
+
+# ---------------------------------------------------------------------------
+# Plan scenarios — pure .plan() on the one shape where a dry run resolves
+# every lane: map root (params-addressed @root) → dependent expand → map
+# chain.  An expand *source* must re-run to yield its lanes, so the folder
+# pipelines above report `pending` downstream and never hit the reuse
+# lookup; here the expand's children reuse via the parent-addressed anchor
+# and .plan() is a real reuse-lookup benchmark.  (Shape ported from the
+# exploratory bench/bench_plan_lookup.py, since retired.)
+# ---------------------------------------------------------------------------
+
+
+def make_deep_pipeline(n_lanes: int, chain_depth: int):
+    from rubedo import pipeline, step
+
+    @step
+    def root():
+        return {"lanes": n_lanes}
+
+    def fan_fn(parent: dict):
+        for i in range(parent["lanes"]):
+            yield {"id": i, "text": f"lane {i} payload"}
+
+    fan_fn.__name__ = "fan"
+    fan = step(fn=fan_fn, name="fan", shape="expand", depends_on={"parent": "root"})
+
+    steps = [root, fan]
+    prev = "fan"
+    for j in range(chain_depth):
+        name = f"link_{j}"
+
+        def make_fn(nm):
+            def fn(parent: dict):
+                return {"id": parent["id"], "text": parent["text"] + "."}
+
+            fn.__name__ = nm
+            return fn
+
+        steps.append(step(fn=make_fn(name), name=name, depends_on={"parent": prev}))
+        prev = name
+    return pipeline(name="bench_deep", steps=steps, home=ENV_DIR)
+
+
+@scenario("plan_deep_coldcache", repeats=5)
+def bench_plan_deep_coldcache(p, repeats):
+    """Pure .plan() over n_lanes × chain_depth of warm history with cold
+    read caches — the new-process dry run, end-to-end reuse lookup
+    (liveness gate + Arrow retrieval + file reads)."""
+    fresh_env()
+    pipe = make_deep_pipeline(p["n_lanes"], p["chain_depth"])
+    pipe.run(workers=1)
+
+    times = []
+    counters: Dict[str, int] = {}
+    for _ in range(repeats):
+        drop_table_cache()
+        t, counters = timed_counted(lambda: pipe.plan())
+        times.append(t)
+    return times, counters
+
+
+@scenario("plan_deep_hotcache", repeats=5)
+def bench_plan_deep_hotcache(p, repeats):
+    """Same, with read caches primed — isolates planning logic + the
+    liveness gate from Arrow file reads."""
+    fresh_env()
+    pipe = make_deep_pipeline(p["n_lanes"], p["chain_depth"])
+    pipe.run(workers=1)
+    pipe.plan()  # prime
+
+    times = []
+    counters: Dict[str, int] = {}
+    for _ in range(repeats):
+        t, counters = timed_counted(lambda: pipe.plan())
+        times.append(t)
+    return times, counters
 
 
 # ---------------------------------------------------------------------------

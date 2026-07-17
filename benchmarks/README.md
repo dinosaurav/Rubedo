@@ -54,11 +54,22 @@ reduce over `n_files` files) through `Pipeline.run()` / `.plan()`:
 | `run_incremental` | one file changed out of n — surgical invalidation |
 | `run_history_deep` | warm run after several full-invalidation generations — cost scaling with accumulated history rather than live lanes |
 
-There is deliberately no `.plan()` scenario: on an expand-source
-pipeline a dry-run plan can't know the source's lanes without running
-user code, so everything downstream reports `pending` and the reuse
-lookup never fires. The warm/incremental/deep runs cover the real
-plan-phase cost (each segment plans before executing).
+**plan_deep_*** — pure `.plan()` benchmarks on the one shape where a
+dry run resolves every lane: map root (params-addressed `@root`) →
+dependent expand (`n_lanes` fan-out) → map chain (`chain_depth`). An
+expand *source* must re-run to yield its lanes, so the folder pipelines
+above report `pending` downstream and never hit the reuse lookup; here
+the expand's children reuse via the parent-addressed anchor, making
+`.plan()` a real end-to-end reuse-lookup measurement:
+
+| scenario | measures |
+| --- | --- |
+| `plan_deep_coldcache` | new-process dry run: liveness gate + Arrow retrieval + file reads |
+| `plan_deep_hotcache` | read caches primed: planning logic + liveness gate only |
+
+Both report counters, including `sqlite_stmts` (every SQL statement,
+engine-wide) — the direct signal for liveness-gate strategy changes
+(per-step `IN` queries vs one cached fulfilled-set load).
 
 ## Shape comparisons and work counters
 
@@ -67,8 +78,9 @@ versions: two pipelines differing in exactly one knob, same workload,
 same phase. Timing alone can't prove a shape "isn't doing extra work" —
 a fast implementation could still write rows it shouldn't — so these
 scenarios also report **work counters**: Arrow rows written (total and
-per step), flushes, disk-table cache misses, batch/single reuse
-lookups, and scenario-specific counts like `util_fn_calls`. Counters
+per step), flushes with data, disk-table cache misses, batch/single
+reuse lookups, SQL statements executed (`sqlite_stmts`), and
+scenario-specific counts like `util_fn_calls`. Counters
 land in the JSON and in the `run` output (`work: ...` line); `compare`
 prints any counter that changed between two results — the "it got
 faster but now does different work" signal.

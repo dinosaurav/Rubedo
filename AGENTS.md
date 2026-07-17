@@ -256,10 +256,14 @@ downstream lane), not 1.
   Quote the relevant compare lines in the commit body.
 - **Scenario families**: `micro_*` isolate lane_store + SQLite hot paths
   with synthetic history; `run_*` drive a real pipeline end-to-end;
+  `plan_deep_*` measure a pure `.plan()` on the map-root →
+  dependent-expand shape (the one shape where a dry run resolves every
+  lane — an expand *source* reports `pending` downstream);
   `shape_*` pit two pipeline shapes against each other (e.g. the
-  skip_cache quartet) and also report **work counters** — Arrow rows
-  written per step, reuse lookups, disk-table cache misses,
-  `util_fn_calls`. Counters, not timing, are how you show a shape or
+  skip_cache quartet). Scenarios report **work counters** alongside
+  times — Arrow rows written per step, reuse lookups, disk-table cache
+  misses, SQL statements (`sqlite_stmts`), `util_fn_calls`. Counters,
+  not timing, are how you show a shape or
   change "does no extra work"; `compare` prints any counter that drifted.
 - **If your hot path isn't covered, add a scenario** — it's ~15 lines:
   `@scenario("name", repeats=N)` taking `(params, repeats)` and returning
