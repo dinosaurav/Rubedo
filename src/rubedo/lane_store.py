@@ -31,6 +31,7 @@ dance).
 """
 
 import os
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 import pyarrow as pa
@@ -128,12 +129,20 @@ def _get_step_file(pipeline_id: str, step_name: str) -> str:
 # In-memory run buffer
 # ---------------------------------------------------------------------------
 # Keyed by (pipeline_id, step_name) → list of row dicts.  Populated during a
-# run as lanes commit; flushed to disk at run end.  Reads consult both the
+# run as lanes commit; flushed to disk per segment.  Reads consult both the
 # buffer and the on-disk history so downstream steps see current-run outputs
 # without waiting for a flush.
 
 _run_buffers: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 _arrow_batch_buffers: Dict[Tuple[str, str], List["pa.Table"]] = {}
+
+# Cache of on-disk Arrow tables, keyed by (pipeline_id, step_name).
+# Invalidated by flush_step (the file changed).  Bounds the number of
+# full-file reads: a parent step's table is read once after flush, then
+# served from cache for every subsequent lookup during the run.
+
+_DISK_TABLE_CACHE: OrderedDict = OrderedDict()
+_DISK_TABLE_CACHE_MAX = 16
 
 
 def _buffer(pipeline_id: str, step_name: str) -> List[Dict[str, Any]]:
@@ -148,6 +157,7 @@ def clear_run_buffers():
     """Discard all in-memory buffers (after a flush or on a fresh run)."""
     _run_buffers.clear()
     _arrow_batch_buffers.clear()
+    _DISK_TABLE_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -251,19 +261,33 @@ def append_filled(
 
 
 def _read_disk_table(pipeline_id: str, step_name: str):
-    """Read the on-disk Arrow file as a pa.Table, or None if absent."""
+    """Read the on-disk Arrow file as a pa.Table, or None if absent.
+
+    Results are cached in _DISK_TABLE_CACHE (LRU, bounded) so repeated
+    lookups during a run don't re-read the same file.  The cache is
+    invalidated by flush_step when the file changes."""
+    key = (pipeline_id, step_name)
+    if key in _DISK_TABLE_CACHE:
+        _DISK_TABLE_CACHE.move_to_end(key)
+        return _DISK_TABLE_CACHE[key]
+
     path = _get_step_file(pipeline_id, step_name)
     if not os.path.exists(path):
         return None
-    
+
     try:
         with pa.ipc.open_file(path) as reader:
-            return reader.read_all()
+            table = reader.read_all()
     except Exception:
         # A corrupt/partially-written file (crash mid-flush) — treat as
         # absent.  The run's input_hash_usages entries will detect the
         # crash and_retry; losing the file is recoverable.
         return None
+
+    _DISK_TABLE_CACHE[key] = table
+    if len(_DISK_TABLE_CACHE) > _DISK_TABLE_CACHE_MAX:
+        _DISK_TABLE_CACHE.popitem(last=False)
+    return table
 
 
 def _infer_output_type(rows: List[Dict[str, Any]]):
@@ -709,6 +733,10 @@ def flush_step(pipeline_id: str, step_name: str):
         writer.write_table(combined)
     os.replace(tmp_path, path)
 
+    # Invalidate the disk-table cache for this step — the file changed.
+    key = (pipeline_id, step_name)
+    _DISK_TABLE_CACHE.pop(key, None)
+
     # Clear both buffers for this step
     rows.clear()
     arrow_batches.clear()
@@ -754,6 +782,7 @@ def compact_step(
         path = _get_step_file(pipeline_id, step_name)
         if os.path.exists(path):
             os.remove(path)
+        _DISK_TABLE_CACHE.pop((pipeline_id, step_name), None)
         return
     indices = sorted(latest_idx.values())
     pruned = table.take(indices)
@@ -762,3 +791,4 @@ def compact_step(
     with pa.ipc.new_file(tmp_path, pruned.schema) as writer:
         writer.write_table(pruned)
     os.replace(tmp_path, path)
+    _DISK_TABLE_CACHE.pop((pipeline_id, step_name), None)
