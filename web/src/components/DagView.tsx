@@ -20,7 +20,8 @@ interface StepDef {
   stale_after_seconds?: number;
   params_schema?: any;
   code?: string;
-  shape?: string;
+  in_shape?: string;
+  out_shape?: string;
   source?: string;
   executor?: string;
   group_key?: string;
@@ -73,7 +74,7 @@ function countsLine(counts?: Record<string, number>): { label: string; color: st
 
 function policyBadges(s: StepDef): string[] {
   const badges: string[] = [];
-  if (s.shape === 'reduce') badges.push('reduce');
+  if (s.in_shape === 'aggregate') badges.push('reduce');
   if (s.skip_cache) badges.push('util');
   if (s.retries) badges.push(`retries ${s.retries}`);
   if (s.rate_limit) badges.push(s.rate_limit);
@@ -90,10 +91,10 @@ function computeExpectedTotal(
 ): number {
   const parents = (step.depends_on ?? []).filter((d) => byName[d]);
   if (parents.length === 0) {
-    if (step.shape === 'expand') return sumCounts(stepCounts?.[step.name]);
+    if (step.out_shape === 'many') return sumCounts(stepCounts?.[step.name]);
     return 1;
   }
-  if (step.shape === 'reduce') return 1;
+  if (step.in_shape === 'aggregate') return 1;
   return parents.reduce((total, p) => total + survivingLanes(stepCounts?.[p]), 0);
 }
 
@@ -339,7 +340,8 @@ function StepDetail({ step, pipelineId }: { step: StepDef; pipelineId?: string }
   const specs: { label: string; value: string }[] = [
     { label: 'name', value: step.name },
     { label: 'version', value: step.version },
-    { label: 'shape', value: step.shape ?? 'map' },
+    { label: 'in_shape', value: step.in_shape ?? 'one' },
+    { label: 'out_shape', value: step.out_shape ?? 'one' },
     { label: 'depends_on', value: step.depends_on.length ? step.depends_on.join(', ') : '(root)' },
     { label: 'workers', value: String(step.workers) },
     { label: 'code', value: step.code ?? 'warn' },
