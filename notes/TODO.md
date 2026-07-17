@@ -26,7 +26,9 @@ deleting `content_hash`/`output_path`; gated on Phase 3 (delete the
 is independently buildable (workers never touch the ledger/store; item 7
 is its throughput story, not a prerequisite), and **6 needs a respec
 post-14** (see its note). (**10b** retention GC shipped — see the Done
-changelog.) Unsettled ideas live in **Parked** at the bottom — do not
+changelog.) **28** (shape split: `in_shape`/`out_shape` + `aggregate`
+rename + `fold`) is the next big change — design settled, build-ready.
+Unsettled ideas live in **Parked** at the bottom — do not
 build those without a design session.
 
 ## 25. Did-you-mean suggestions  **[DEFERRED — owner 2026-07-14: queued, do not build until asked]**
@@ -500,7 +502,310 @@ the re-run heals.
   surface (CLI + dashboard) turns an engine fact into a refinement
   workflow (2026-07-13).
 
-──────────────────────────────────────────────────────────────────────
+## 28. Shape split: `in_shape`/`out_shape` + `aggregate` rename + `fold`
+
+**[design settled 2026-07-17 — do not re-litigate; flag genuine
+contradictions]**
+
+Today `shape` conflates two orthogonal axes — how a step *consumes* its
+inputs (one lane at a time vs. all lanes gathered) and how it *produces*
+outputs (one lane vs. N minted lanes). The current `reduce` name is
+misleading: it's a batch aggregate (SQL `GROUP BY`), not a functional
+reduce/fold. And there's no real fold (sequential accumulator) at all.
+
+This item splits `shape` into `in_shape` (input arity) and `out_shape`
+(output cardinality), renames `reduce` → `aggregate`, and adds `fold`
+(a true sequential accumulator) as a separate `in_shape` — `fold` is
+**built last**, after the split + rename land.
+
+### The two axes
+
+**`in_shape`** — how many input lanes the step needs before it can run:
+
+| value | meaning | current shape |
+|-------|---------|---------------|
+| `"one"` | 1:1 — one lane per parent | `map`, `expand` |
+| `"aggregate"` | N:1 collective — all surviving lanes gathered as `{coord: value}` dict | `reduce` |
+| `"fold"` | N:1 collective — lanes processed one at a time through an accumulator | *(new — build last)* |
+| `"join"` | N-way collective — multi-parent, bucket-matched on declared keys | `join` |
+
+**`out_shape`** — how many output lanes the step produces:
+
+| value | meaning | current shape |
+|-------|---------|---------------|
+| `"one"` | 1 output per input coordinate (map) or per group (aggregate/fold) | `map`, `reduce` |
+| `"many"` | N content-addressed output lanes minted from yielded/returned values | `expand`, `join` |
+
+The matrix:
+
+| `in_shape` \ `out_shape` | `"one"` | `"many"` |
+|--------------------------|---------|----------|
+| `"one"` | map | expand |
+| `"aggregate"` | aggregate | *(future)* |
+| `"fold"` | fold *(later)* | *(future)* |
+| `"join"` | *(future: join→table)* | join |
+
+### `shape=` compatibility alias
+
+`shape=` stays as a convenience kwarg. It is **never stored on
+`StepSpec`** — `step()` translates it to the pair via:
+
+```python
+_SHAPE_MAP = {
+    "map":    ("one",       "one"),
+    "reduce": ("aggregate", "one"),
+    "expand": ("one",       "many"),
+    "join":   ("join",      "many"),
+}
+```
+
+Users can also pass `in_shape=`/`out_shape=` directly (for combinations
+`shape=` can't express, like future `join`+`one`). Internal code reads
+`step.in_shape` / `step.out_shape` exclusively — `step.shape` does not
+exist on `StepSpec`.
+
+### Inference (same precedence, split output)
+
+1. `join_on=` → **explicit translation code** sets `in_shape="join"`,
+   `out_shape="many"` (not just inference — the validation code
+   explicitly checks `join_on` and sets the pair, so a conflicting
+   `out_shape="one"` raises with a clear error, not a silent default).
+2. `group_key=` → `in_shape="aggregate"`, `out_shape="one"`.
+3. Generator function → `out_shape="many"` (`in_shape` stays `"one"`).
+4. Default → `in_shape="one"`, `out_shape="one"`.
+
+Conflicts raise (same as today): a generator with `group_key=` is
+contradictory; `join_on=` with explicit `out_shape="one"` is
+contradictory; etc. A generator + `in_shape="aggregate"` is
+contradictory (an aggregate is collective, a generator is 1:1 fan-out).
+
+### Validation
+
+Valid combinations (raise `ValueError` for anything else):
+
+| `in_shape` | `out_shape` |
+|------------|-------------|
+| `one` | `one` |
+| `one` | `many` |
+| `aggregate` | `one` |
+| `fold` | `one` |
+| `join` | `many` |
+
+Meaningful but unimplemented (raise `NotImplementedError`, not
+`ValueError`, so the error says "not yet supported" not "invalid"):
+`(aggregate, many)`, `(fold, many)`, `(join, one)`.
+
+### `arrow_reduce` → `arrow_aggregate`
+
+`arrow_reduce` renamed to `arrow_aggregate`. Flag on
+`in_shape="aggregate"` steps: pass parent values as a `pa.Table`
+instead of a `{coord: value}` dict. Same behavior, just renamed.
+`arrow_aggregate=True` on a non-aggregate step raises.
+
+### `fold` (build last — separate from the split + rename)
+
+A new `in_shape="fold"` that processes lanes one at a time through an
+accumulator:
+
+```python
+@p.step(in_shape="fold", init=0, group_key="region")
+def total(acc: int, articles: dict) -> int:
+    return acc + articles["count"]
+```
+
+- `init` is the starting accumulator (required, any JSON-serializable
+  value).
+- Function receives `(acc, one_lane_value)`, returns new accumulator.
+- Lanes **sorted by coordinate** before folding (deterministic —
+  invariant 3.1).
+- `group_key=` works the same — one fold per group, each with its own
+  accumulator reset to `init`.
+- **Caching identical to aggregate**: output address =
+  `hash(step, version, input_hash, ...)` where `input_hash` is the
+  sorted set of parent content hashes in the group. The fold runs once
+  per unique group, then reuses. The accumulator is NOT cached per-lane
+  — true incremental caching (fold only new lanes) would require
+  caching the accumulator itself, a much bigger design change. For
+  now, fold is a different execution strategy for the same caching
+  semantics as aggregate.
+- **Plan/ledger/addressing identical to aggregate** — only execution
+  differs (call fn once per lane instead of once with the full dict).
+- Bounded memory: holds 1 accumulator, not N values in a dict.
+- Tree-reduce (parked TODO) falls out: fold in hash-bucketed batches,
+  then fold the bucket outputs.
+
+### Code changes (Phase 1: split + rename, no fold yet)
+
+**`spec.py`** (the flagship — keep readable):
+- `StepSpec`: replace `shape: str` with `in_shape: str` + `out_shape:
+  str`. Replace `arrow_reduce: bool` with `arrow_aggregate: bool`.
+- `step()`: accept `shape=` (translate via `_SHAPE_MAP`), `in_shape=`,
+  `out_shape=`. Inference produces the pair directly. The `join_on=`
+  translation is **explicit code** (not just a default) — it sets
+  `in_shape="join"`, `out_shape="many"` and then validates the pair,
+  so a conflicting explicit `out_shape=` raises. Validation checks the
+  pair against the valid-combinations table.
+- `definition()`: snapshot `in_shape`/`out_shape` (not `shape`).
+
+**`planning.py`**:
+- `_plan_step`: dispatch on `in_shape`:
+  - `in_shape == "aggregate"` → current `shape == "reduce"` branch
+  - `in_shape == "join"` → current `shape == "join"` branch
+  - `in_shape == "fold"` → (Phase 2) same plan path as aggregate;
+    execution differs
+  - `in_shape == "one"` → current general branch (map/expand)
+- Expand detection: `out_shape == "many"` (instead of
+  `shape == "expand"`).
+- Lane-subset planning guard: `lanes is not None and in_shape != "one"`
+  raises (same as today's `shape != "map"`).
+
+**`execution.py`**:
+- `call()`: dispatch on `in_shape` for parent value gathering:
+  - `in_shape == "aggregate"` → dict of lanes (or `pa.Table` if
+    `arrow_aggregate`)
+  - `in_shape == "fold"` → (Phase 2) call fn once per sorted lane
+    with accumulator
+  - `in_shape == "join"` → matched pairs (execution treats as
+    multi-parent map — same as today)
+  - `in_shape == "one"` → single value
+- `_expand_outcomes` / `_expand_table_outcomes`: triggered by
+  `out_shape == "many"` and `in_shape == "one"`.
+
+**`scheduler.py`**:
+- `_deep_eligible`: `in_shape == "one"` and `len(depends_on) <= 1`
+  (covers both `out_shape` values — map and root expand — in one
+  check; collective steps `aggregate`/`fold`/`join` are barriers).
+
+**`ledger.py`**:
+- `step.shape == "reduce"` → `step.in_shape == "aggregate"` (the
+  `flat_parents` branch for collective steps).
+
+**`pipeline.py`**:
+- `_build_spec` validation: `s.in_shape == "aggregate" and not
+  s.depends_on` raises (reduce needs a parent); `s.in_shape == "join"`
+  skip_cache parent check; internal declarative step construction uses
+  `in_shape=`/`out_shape=` instead of `shape=`.
+
+**`render.py`**:
+- `describe()`: map `(in_shape, out_shape)` back to a readable name
+  for labels: `("one","one")` → no label (map is default);
+  `("one","many")` → `[expand]`; `("aggregate","one")` → `[aggregate]`;
+  `("join","many")` → `[join]`. (Lines 39–40 use a *local variable*
+  named `shape` for ascii rendering — leave that alone.)
+
+**`web/src/components/DagView.tsx`**:
+- Read `in_shape`/`out_shape` off the definition JSON instead of
+  `shape`. Derive the shape name for badges from the pair.
+
+**Tests/Examples/Benchmarks:**
+- All `shape="reduce"` → keep as `shape="reduce"` (the alias works) OR
+  change to `in_shape="aggregate"` (cleaner, more explicit). The
+  alias means existing code works unchanged, but updating to the new
+  form is clearer for new readers.
+- `arrow_reduce=True` → `arrow_aggregate=True`.
+- All `step.shape` attribute reads in tests → `step.in_shape` /
+  `step.out_shape`.
+- `tests/test_definition_snapshot.py`: the pinned JSON key changes
+  from `"shape"` to `"in_shape"`/`"out_shape"`, and the source string
+  inside the snapshot changes if the `@step(...)` kwargs change.
+  Update in lockstep.
+- `tests/test_shape_dependency_inference.py`: assertions change from
+  `s.shape == "expand"` to `s.out_shape == "many"` (or
+  `s.in_shape == "one" and s.out_shape == "many"`).
+- `tests/test_reduce.py` → consider renaming to
+  `tests/test_aggregate.py` (or keep and just update the kwargs).
+- `tests/test_arrow_reduce.py` → `tests/test_arrow_aggregate.py`.
+
+**Docs** (`shapes.md`, `api.md`, `tutorial.md`, `getting-started.md`,
+`llms.txt`, `README.md`, `AGENTS.md`, `invariants.md`,
+`producer-model.md`):
+- Replace `reduce` with `aggregate` throughout.
+- Document `in_shape`/`out_shape` as the primary fields, `shape=` as
+  the convenience alias.
+- `shapes.md` gets a new section structure: map (one,one), expand
+  (one,many), aggregate (aggregate,one), join (join,many), fold
+  (fold,one) — marked as upcoming.
+- `llms.txt` line 15: update the shapes summary.
+
+### Trap (part of the spec)
+
+**(1) `definition()` snapshots break.** Existing run rows have
+`"shape"` in their `definition_json`; new runs will have
+`"in_shape"`/`"out_shape"`. Dev-stage: `rm -rf .rubedo` — no
+backwards compat needed. The server/DagView must read the new keys.
+
+**(2) `shape=` is an alias, not a field.** `StepSpec` has no `shape`
+attribute. Code that reads `step.shape` (engine, tests, web) must
+switch to `step.in_shape`/`step.out_shape`. The `shape=` kwarg on
+`step()` is translated and discarded — it never reaches `StepSpec`.
+
+**(3) `join_on=` translation is explicit code, not inference.** The
+owner wants the `join_on` → `in_shape="join", out_shape="many"` path
+to be explicit validation code that catches conflicting `out_shape=`
+values, not just a default that silently wins. So: if `join_on=` is
+given AND `out_shape=` is explicitly given AND it's not `"many"`,
+raise. Same for `group_key=` + conflicting `in_shape=`.
+
+**(4) `_deep_eligible` simplifies.** Today it checks two branches
+(`shape == "map"` OR `shape == "expand" and not depends_on`). After
+the split, one check covers both: `in_shape == "one"` (both map and
+expand are 1:1 input — no barrier). Don't accidentally regress the
+root-expand deep eligibility.
+
+**(5) `render.py` lines 39–40** use a *local variable* named `shape`
+for ascii rendering — that is NOT the `StepSpec.shape` field. Leave
+it alone.
+
+**(6) `tests/test_arrow_storage.py` line 78**
+(`restored.shape == (3, 2)`) is a pandas DataFrame `.shape` tuple —
+unrelated to the migration. Do not touch.
+
+### Acceptance
+
+- `shape="reduce"` still works (alias translated to
+  `in_shape="aggregate", out_shape="one"`).
+- `shape="expand"` still works (alias → `in_shape="one",
+  out_shape="many"`).
+- `shape="map"` and `shape="join"` still work (alias).
+- `in_shape="aggregate"` works identically to today's
+  `shape="reduce"`.
+- `group_key=` infers `in_shape="aggregate"`.
+- `join_on=` explicitly sets `in_shape="join", out_shape="many"` and
+  raises on conflicting `out_shape=`.
+- `arrow_aggregate=True` works identically to today's
+  `arrow_reduce=True`.
+- All examples produce identical results (same Created/Reused counts).
+- Full test suite green, ruff + mypy clean.
+- `definition()` snapshots show `in_shape`/`out_shape` (not `shape`).
+- `StepSpec` has no `shape` attribute (only `in_shape`/`out_shape`).
+- `_deep_eligible` covers map + root expand in one `in_shape == "one"`
+  check.
+- Dev-stage reset: `rm -rf .rubedo` (definition_json format changed).
+
+### Phase 2: `fold` (separate, after Phase 1 lands)
+
+- New `in_shape="fold"` with `init=` kwarg on `step()`.
+- Execution: sort lanes by coordinate, call fn per lane with
+  accumulator, return final accumulator.
+- Plan/ledger/addressing: identical to aggregate (same input_hash
+  computation, same output address, same group_key partitioning).
+- `init` is stored on `StepSpec` (a new field, any JSON-serializable
+  value).
+- `arrow_aggregate` does not apply to fold (fold is inherently
+  one-at-a-time — a table doesn't make sense).
+- Bounded memory, tree-reduce (parked TODO) falls out.
+
+### Not in scope
+
+- Bucketed reduce (parked) — fold makes it possible but the batching
+  machinery is a separate item.
+- `(aggregate, many)` — an aggregate that mints lanes per group.
+  Meaningful but unimplemented; raise `NotImplementedError`.
+- `(join, one)` — a join that produces one combined table. Meaningful
+  (the `join_table` shape from `arrow-storage.md`); raise
+  `NotImplementedError`.
+- Removing `shape=` alias — it stays permanently as ergonomic sugar
+  for the four common combinations.
 
 ## Done (compressed changelog — context for the above; git log has the detail)
 
