@@ -62,6 +62,7 @@ def _inject_competing(pipeline_id, output_address, output_string, content_type):
     Writes an Arrow row and flips IHU ``fulfilled=True`` — the two artifacts
     the ledger's mat_action check looks at.  The Arrow row is flushed to disk
     so ``address_row_index`` (which scans disk files) can see it."""
+    from rubedo.ledger import _identity_of
     lane_store.append_filled(
         pipeline_id=pipeline_id,
         step_name="my_step",
@@ -74,6 +75,7 @@ def _inject_competing(pipeline_id, output_address, output_string, content_type):
         code_hash="dummy",
         code_version="1",
         index_values=None,
+        output_identity=_identity_of(output_string),
     )
     lane_store.flush_step(pipeline_id, "my_step")
     with get_session() as session:

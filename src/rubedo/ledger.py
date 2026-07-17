@@ -246,47 +246,19 @@ def _record_planned(
                     )
 
 
-def _outputs_equal(existing: Any, new: Any) -> bool:
-    """Compare two output values for the mat_action reuse check.  Handles
-    the case where one is a native Arrow value (dict from struct, int
-    from int64) and the other is a JSON string (from a string column
-    fallback), or both are the same type.  Dicts are canonicalized
-    (None-valued keys stripped) before comparison so the Arrow union
-    struct null-fill doesn't cause false mismatches."""
-    import json
-    from .hashing import canonicalize_output
-
-    if existing is None or new is None:
-        return existing is new
-    if isinstance(existing, dict):
-        existing = canonicalize_output(existing)
-    if isinstance(new, dict):
-        new = canonicalize_output(new)
-    if type(existing) is type(new):
-        return existing == new
-    def _canon(v):
-        if isinstance(v, str):
-            return v
-        return json.dumps(v, sort_keys=True, separators=(",", ":"))
-    return _canon(existing) == _canon(new)
-
-
 def _identity_of(output_value: Any) -> str:
     """Compute a content identity hash from an output value (for
     downstream ``input_hash`` computation).  Same value → same identity →
     downstream reuses, regardless of inline (native Arrow) vs spilled
-    (ref string).  Dicts are canonicalized (None-valued keys stripped)
-    so identity is stable across the Arrow write/read round-trip."""
-    from .hashing import hash_bytes, canonicalize_output
+    (ref string).  Computed once at commit time from the original output
+    value and stored in the ``output_identity`` Arrow column."""
+    from .hashing import hash_bytes
     import json
 
     if isinstance(output_value, str):
         return hash_bytes(output_value.encode("utf-8"))
     return hash_bytes(
-        json.dumps(
-            canonicalize_output(output_value),
-            sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
+        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
 
 
@@ -400,25 +372,27 @@ def _commit_execution_result(
             if outcome.arrow_batched:
                 # Arrow data already written to the lane store's arrow batch
                 # buffer by _expand_table_outcomes — skip serialize_output +
-                # append_filled.  Read the output value from the arrow batch
-                # buffer for the MatRef.  Always "created" — re-running an
-                # expand root and producing the same content is a new
-                # generation, not a reuse.
+                # append_filled.  Read the output value and identity from the
+                # arrow batch buffer for the MatRef.  Always "created" —
+                # re-running an expand root and producing the same content
+                # is a new generation, not a reuse.
                 mat_action = "created"
                 content_type = "json"
                 batch_row = lane_store.arrow_batch_row_by_address(
                     ctx.pipeline_id, step.name, str(decision.output_address)
                 )
                 output_string = batch_row.get("output") if batch_row else None
+                identity = batch_row.get("output_identity") if batch_row else None
                 idx_values = {}
             else:
                 output_string, content_type = serialize_output(
                     ctx.run_id, decision.coordinate, result
                 )
+                identity = _identity_of(output_string)
 
                 # Determine mat_action: if the address was already fulfilled
-                # (live) and the existing Arrow row has the same output,
-                # the step re-ran but produced identical bytes → "reused".
+                # (live) and the existing Arrow row has the same identity,
+                # the step re-ran but produced identical output → "reused".
                 mat_action = "created"
                 from .models import InputHashUsage
                 existing_usage = (
@@ -428,9 +402,7 @@ def _commit_execution_result(
                 )
                 if existing_usage and existing_usage.fulfilled:
                     existing_row = lane_store.address_row_index().get(str(decision.output_address))
-                    if existing_row and _outputs_equal(
-                        existing_row.get("output"), output_string
-                    ):
+                    if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused" if not decision.stale else "refreshed"
 
                 idx_values = _extract_index_values(step, result)
@@ -448,6 +420,7 @@ def _commit_execution_result(
                         code_hash=step.code_hash,
                         code_version=step.version,
                         index_values=idx_values,
+                        output_identity=identity,
                     )
 
             # Mark this address as fulfilled in input_hash_usages — the
@@ -558,7 +531,7 @@ def _commit_execution_result(
             ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
                 0,
                 str(decision.output_address),
-                _identity_of(output_string),
+                identity,
                 content_type,
                 filtered=is_filtered,
                 index_values=idx_values,

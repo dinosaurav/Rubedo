@@ -449,6 +449,7 @@ def _process_decision(
             lane_keys = [c[2] for c in children]
             addresses = [c[4] for c in children]
             input_hashes = [c[3] for c in children]
+            output_identities = [c[1] for c in children]  # child_hash == _identity_of(row)
             row_ids = [
                 lane_store._make_row_id(pipeline_id, step.name, lk, ts)
                 for lk in lane_keys
@@ -461,6 +462,7 @@ def _process_decision(
                 "input_hash": pa.array(input_hashes, type=pa.string()),
                 "code_version": pa.array([step.version] * len(children), type=pa.string()),
                 "output": struct_arr,
+                "output_identity": pa.array(output_identities, type=pa.string()),
                 "content_type": pa.array(["json"] * len(children), type=pa.string()),
                 "code_hash": pa.array([step.code_hash] * len(children), type=pa.string()),
                 "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),

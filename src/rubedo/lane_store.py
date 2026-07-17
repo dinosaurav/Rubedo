@@ -42,6 +42,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("input_hash", "string", False),
     ("code_version", "string", True),  # step version string, for selection queries
     ("output", "dynamic", True),  # native Arrow type per-step, or string for mixed/spilled
+    ("output_identity", "string", True),  # content identity hash, stored at commit time
     ("content_type", "string", True),  # "json" for inline; "bytes"/"text"/"arrow-ipc:..." for spilled
     ("code_hash", "string", True),  # source hash at creation time, for drift detection
     ("ts", "timestamp[us]", False),
@@ -202,6 +203,7 @@ def append_filled(
     code_hash: Optional[str] = None,
     code_version: Optional[str] = None,
     index_values: Optional[Dict[str, List[str]]] = None,
+    output_identity: Optional[str] = None,
     ts: Optional[Any] = None,
 ):
     """Append a filled row (a successful computation) to the step's buffer.
@@ -213,8 +215,13 @@ def append_filled(
     store I/O) or a ref string ``"objects:<hash>"`` pointing to the
     serialized value bytes in the content-addressed object store (large
     values, bytes, DataFrames).  ``content_type`` tells the reader how to
-    deserialize: ``"json"`` for inline, ``"bytes"``/``"text"``/
+    deserialize: ``"json"`` for inline, ``"bytes"``/``"text"``
     ``"arrow-ipc:<kind>"`` for spilled.
+
+    ``output_identity`` is the content identity hash (for downstream
+    ``input_hash`` computation), computed once at commit time from the
+    original output value — stored directly so plan time reads it from
+    the column instead of recomputing from the Arrow-read-back value.
 
     ``index_values`` is the @step(index=[...]) field→values dict, stored
     as a map<string, list<string>> column — the sole source of truth for
@@ -231,6 +238,7 @@ def append_filled(
             "input_hash": input_hash,
             "code_version": code_version,
             "output": output,
+            "output_identity": output_identity,
             "content_type": content_type,
             "code_hash": code_hash,
             "ts": ts,

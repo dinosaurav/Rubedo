@@ -31,34 +31,6 @@ def hash_json(data: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def canonicalize_output(v: Any) -> Any:
-    """Strip ``None``-valued keys from dicts recursively (including dicts
-    inside lists) so identity is stable across the Arrow write/read
-    round-trip.
-
-    Arrow's union struct null-fills missing keys: a dict ``{"a": 1}``
-    stored alongside ``{"a": 1, "b": 2}`` reads back as
-    ``{"a": 1, "b": None}``.  Without canonicalization,
-    :func:`_identity_of` (commit time, original dict) and
-    :func:`_identity_from_output` (plan time, read-back dict) would
-    compute different hashes, causing unnecessary downstream
-    recomputation and permanent phantom churn on expand children.
-
-    Arrow cannot distinguish "absent" from "null", so stripping
-    ``None``-valued keys loses nothing that storage does not already
-    lose.
-    """
-    if isinstance(v, dict):
-        return {
-            k: canonicalize_output(val)
-            for k, val in v.items()
-            if val is not None
-        }
-    if isinstance(v, list):
-        return [canonicalize_output(item) for item in v]
-    return v
-
-
 def compute_output_address(
     step: str,
     code_version: str,

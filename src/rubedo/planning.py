@@ -9,35 +9,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 
 from sqlalchemy.orm import Session
 
-from .hashing import compute_output_address, hash_json, canonicalize_output
+from .hashing import compute_output_address, hash_json
 from .spec import PipelineSpec, StepSpec
 from .store import read_output
 from .util import iso_age_seconds
 
 
 def _identity_from_output(row: dict) -> str:
-    """Compute the content identity (for downstream input_hash) from an
-    Arrow row's ``output`` column.  Same output value → same identity →
-    downstream reuses, regardless of inline (native Arrow) vs spilled
-    (ref string).  Dicts are canonicalized (None-valued keys stripped)
-    so identity matches what :func:`_identity_of` computed at commit
-    time from the original dict — Arrow's union struct null-fills
-    missing keys, so without canonicalization the read-back dict would
-    have extra ``None``-valued keys that shift the hash."""
-    import json
-    from .hashing import hash_bytes as _hb
-
-    output = row.get("output")
-    if output is None:
-        return _hb(b"")
-    if isinstance(output, str):
-        return _hb(output.encode("utf-8"))
-    return _hb(
-        json.dumps(
-            canonicalize_output(output),
-            sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    )
+    """Read the content identity (for downstream input_hash) from an
+    Arrow row's ``output_identity`` column.  This is computed once at
+    commit time from the original output value and stored directly —
+    no recompute from the Arrow-read-back value, so the union struct
+    null-fill (``{"a": 1}`` → ``{"a": 1, "b": None}``) doesn't shift
+    the identity."""
+    return row.get("output_identity") or ""
 
 
 def _field_values_from_ref(ref, field: str) -> List[str]:
@@ -102,14 +87,13 @@ class _ArrowRowRef:
     children list.
 
     The ``output_content_hash`` (identity for downstream ``input_hash``
-    computation) is derived from the ``output`` column: hash of the inline
-    JSON string or the ref string.  Same bytes → same output string →
-    same identity → downstream reuses."""
+    computation) is read directly from the ``output_identity`` column —
+    computed once at commit time from the original output value."""
 
     def __init__(self, row: dict):
         self._row = row
         self.output = row.get("output")
-        self.output_content_hash = _identity_from_output(row)
+        self.output_content_hash = row.get("output_identity") or ""
         self.content_type = row.get("content_type")
 
 
@@ -383,7 +367,7 @@ def _reduce_group_decision(
             existing=MatRef(
                 existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                 output_address,
-                _identity_from_output(existing_mat),
+                existing_mat.get("output_identity", ""),
                 existing_mat.get("content_type"),
                 filtered=existing_mat.get("filtered", False),
                 index_values=existing_mat.get("index_values", {}),
@@ -539,7 +523,7 @@ def _plan_join(
                     existing=MatRef(
                         existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                         output_address,
-                        _identity_from_output(existing_mat),
+                        existing_mat.get("output_identity", ""),
                         existing_mat.get("content_type"),
                         filtered=existing_mat.get("filtered", False),
                         index_values=existing_mat.get("index_values", {}),
@@ -882,7 +866,7 @@ def _plan_step(
                         existing=MatRef(
                             child.get("mat_id") or child.get("row_id", ""),
                             child_addr,
-                            _identity_from_output(child),
+                            child.get("output_identity", ""),
                             child.get("content_type"),
                             filtered=child.get("filtered", False),
                             index_values=child.get("index_values", {}),
@@ -924,7 +908,7 @@ def _plan_step(
                         existing=MatRef(
                             existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
                             output_address,
-                            _identity_from_output(existing_mat),
+                            existing_mat.get("output_identity", ""),
                             existing_mat.get("content_type"),
                             filtered=existing_mat.get("filtered", False),
                             index_values=existing_mat.get("index_values", {}),

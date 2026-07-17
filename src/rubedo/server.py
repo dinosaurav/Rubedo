@@ -187,7 +187,7 @@ def get_materializations(
                 "code_version": r.get("code_version") or "",
                 "input_hash": r.get("input_hash", ""),
                 "output_address": r.get("address", ""),
-                "output_content_hash": _hash_of_output(r.get("output", "")),
+                "output_content_hash": r.get("output_identity", ""),
                 "content_type": r.get("content_type"),
                 "metadata_json": None,
                 "created_at": str(r.get("ts", "")),
@@ -407,25 +407,6 @@ def _resolve_arrow_row(output_address: str) -> Optional[Dict[str, Any]]:
     return lane_store.address_row_index().get(output_address)
 
 
-def _hash_of_output(output_value) -> str:
-    """Compute a display hash from the output column value (native Arrow
-    value or string).  Dicts are canonicalized (None-valued keys
-    stripped) so the display hash matches the engine's internal
-    identity hash."""
-    import json
-    from .hashing import hash_bytes, canonicalize_output
-    if output_value is None:
-        return ""
-    if isinstance(output_value, str):
-        return hash_bytes(output_value.encode("utf-8"))
-    return hash_bytes(
-        json.dumps(
-            canonicalize_output(output_value),
-            sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    )
-
-
 def _resolve_object_path(arrow_row: Dict[str, Any]) -> Optional[str]:
     """If the output is a spilled ref string, return the object store path.
     Returns None for inline values (no on-disk file)."""
@@ -516,7 +497,7 @@ def get_object_metadata(output_address: str):
             "is_live": is_live,
             "invalidated_at": invalidated_at,
             "invalidation_reason": invalidation_reason,
-            "output_content_hash": _hash_of_output(arrow_row.get("output", "")),
+            "output_content_hash": arrow_row.get("output_identity", ""),
             "content_type": arrow_row.get("content_type"),
             "index": [
                 {"field": field, "value": val}
@@ -601,7 +582,7 @@ async def preview_selection(request: Request):
                     "step_name": row.get("step_name", ""),
                     "code_version": row.get("code_version") or "",
                     "output_address": addr,
-                    "output_content_hash": _hash_of_output(row.get("output", "")),
+                    "output_content_hash": row.get("output_identity", ""),
                     "metadata": {},
                     "invalidated": not _is_fulfilled(session, addr),
                 }

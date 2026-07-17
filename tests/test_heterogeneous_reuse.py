@@ -29,7 +29,6 @@ from rubedo import step, pipeline
 from rubedo.db import init_db
 from rubedo import lane_store
 from rubedo.store import init_store
-from rubedo.hashing import canonicalize_output
 
 TEST_FOLDER = ".test_hetero_data"
 ENV_FOLDER = ".test_hetero_env"
@@ -79,21 +78,6 @@ def isolated_env():
     for d in (abs_test, abs_env):
         if os.path.exists(d):
             shutil.rmtree(d)
-
-
-def test_canonicalize_output_strips_none_keys():
-    """Unit test: canonicalize_output removes None-valued keys recursively."""
-    assert canonicalize_output({"a": 1, "b": None}) == {"a": 1}
-    assert canonicalize_output({"a": 1}) == {"a": 1}
-    assert canonicalize_output({"a": {"x": 1, "y": None}}) == {"a": {"x": 1}}
-    assert canonicalize_output([{"x": 1}, {"x": 1, "y": None}]) == [
-        {"x": 1},
-        {"x": 1},
-    ]
-    assert canonicalize_output({"a": [1, None, 3]}) == {"a": [1, None, 3]}
-    assert canonicalize_output(None) is None
-    assert canonicalize_output(42) == 42
-    assert canonicalize_output("hello") == "hello"
 
 
 def test_heterogeneous_expand_root_no_phantom_churn():
