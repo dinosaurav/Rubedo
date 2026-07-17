@@ -144,7 +144,6 @@ def split_chunks(load_pdf: list[dict]):
     retries=3,
     retry_delay=2,
     rate_limit="20/min",
-    index=["kind"],  # Selection.parse("kind:image") to find captioned figures
 )
 def caption(split_chunks: dict, params: PdfParams) -> dict:
     """Image chunks -> cheap vision LLM caption; text chunks pass through.

@@ -62,7 +62,7 @@ def clean(fetch: dict) -> dict:
     return {"title": fetch["title"], "text": body}
 
 
-@p.step(executor="process", index=["longest_word"])
+@p.step(executor="process")
 def analyze(clean: dict) -> dict:
     """CPU-bound token crunching, run in a worker process."""
     words = re.findall(r"[a-zA-Z']+", clean["text"].lower())

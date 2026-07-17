@@ -8,9 +8,9 @@ from rubedo.models import (
     Base,
     Run,
     RunCoordinateStatus,
-    Materialization,
-    MaterializationIndexEntry,
+    InputHashUsage,
 )
+from rubedo import lane_store
 from rubedo.selection import Selection
 from rubedo.invalidation import invalidate
 import uuid
@@ -19,10 +19,10 @@ from sqlalchemy import create_engine
 
 
 # Folder recipe: a root expand step that walks "test_input" and yields each
-# file's content. Indexed on `path` so tests can still find "the lane for
-# a.txt" without the coordinate being that literal string (coordinates are
-# content-addressed: row-<hash>).
-@step(index=["path"])
+# file's content. The `path` field in the output lets tests find "the lane
+# for a.txt" without the coordinate being that literal string (coordinates
+# are content-addressed: row-<hash>).
+@step(check_cache=False)
 def scan():
     for name in sorted(os.listdir("test_input")):
         path = os.path.join("test_input", name)
@@ -43,26 +43,22 @@ test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
 
 def _coord_for_path(session, run_id, step_name, filename):
     """The coordinate a given run minted for `filename`, found via the
-    `scan` step's indexed `path` field — coordinates are row-<hash>, not
+    `scan` step's `path` output field — coordinates are row-<hash>, not
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
-    scan_rows = (
+    rows = (
         session.query(RunCoordinateStatus)
-        .filter_by(run_id=run_id, step_name="scan")
-        .filter(RunCoordinateStatus.materialization_id.isnot(None))
+        .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
+        .filter(RunCoordinateStatus.output_address.isnot(None))
         .all()
     )
-    for rc in scan_rows:
-        hit = (
-            session.query(MaterializationIndexEntry)
-            .filter_by(
-                materialization_id=rc.materialization_id,
-                field="path",
-                value=filename,
-            )
-            .first()
-        )
-        if hit:
+    addr_index = lane_store.address_row_index()
+    for rc in rows:
+        row = addr_index.get(str(rc.output_address))
+        if row is None:
+            continue
+        output = row.get("output")
+        if isinstance(output, dict) and output.get("path") == filename:
             return rc.coordinate
     return None
 
@@ -121,8 +117,7 @@ def test_first_run_creates_all():
         for c in coords:
             assert c.status == "created"
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
+        assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
 
 def test_second_run_reuses_all():
@@ -204,30 +199,27 @@ def test_failure_creates_no_materialization():
 
         # Ensure no materialization was created for a.txt (only b.txt's
         # count-lines output — the 2 scan lanes always materialize)
-        mats = (
-            session.query(Materialization)
-            .filter_by(step_name="count-lines")
-            .all()
-        )
-        assert len(mats) == 1
+        count_lines_rows = [
+            r for r in lane_store.all_filled_rows() if r.get("step_name") == "count-lines"
+        ]
+        assert len(count_lines_rows) == 1
 
 
 def test_select_by_coordinate_glob():
     test_pipeline.run(workers=1)
 
     sel = Selection(source_id="scan", coordinate_glob="row-*")
-    from rubedo.selection import get_selection_materialization_ids
+    from rubedo.selection import get_selection_addresses
 
     with get_session() as session:
-        mat_ids = get_selection_materialization_ids(session, sel)
-        mats = (
-            session.query(Materialization).filter(Materialization.id.in_(mat_ids)).all()
-        )
+        addrs = get_selection_addresses(session, sel)
+        idx = lane_store.address_row_index()
+        rows = [idx[a] for a in addrs if a in idx]
         # every live materialization's latest coordinate matches row-* —
         # both scan's own lanes and count-lines' (which shares its
         # parent's coordinate, a 1:1 dependent map)
-        assert len(mats) == 4
-        assert all(m.input_hash is not None for m in mats)
+        assert len(rows) == 4
+        assert all(r.get("input_hash") is not None for r in rows)
 
 
 def test_invalidate_selected():
@@ -241,13 +233,13 @@ def test_invalidate_selected():
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
-        # Check materialization is invalidated
-        mat = (
-            session.query(Materialization)
-            .filter(Materialization.id == res["materialization_ids"][0])
-            .first()
-        )
-        assert mat.is_live is False
+        # Check materialization is invalidated (by address via IHU)
+        from rubedo.models import InputHashUsage
+
+        addr = res["addresses"][0]
+        usage = session.query(InputHashUsage).filter_by(address=addr).first()
+        assert usage is not None
+        assert usage.fulfilled is False
 
 
 def test_invalidated_result_not_reused():
@@ -279,9 +271,7 @@ def test_logical_deletion():
     assert res1.created_count == 4  # 2 files x (scan lane + count-lines lane)
     assert res1.reused_count == 0
 
-    with db.get_session() as session:
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
+    assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
     # 2. Delete one file
     os.remove("test_input/a.txt")
@@ -303,10 +293,14 @@ def test_logical_deletion():
         assert run_coords[0].status == "reused"
 
         # a.txt's materialization is untouched and still live — a re-add reuses it.
-        mats = session.query(Materialization).all()
-        assert len(mats) == 4
-        for m in mats:
-            assert m.is_live
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 6  # 4 original lanes + old anchor + new anchor (b.txt only)
+        assert (
+            session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .count()
+            == 5  # 4 live lanes + 1 live anchor (old anchor demoted by IHU flip)
+        )
 
 
 def test_restore_deleted_reuses_cache():

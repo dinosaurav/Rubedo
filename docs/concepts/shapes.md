@@ -24,7 +24,7 @@ The default. One input lane in, one output lane out, same coordinate. This
 is almost every step you'll write:
 
 ```python
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
@@ -37,8 +37,8 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
+def count_lines(scan: dict):
+    return {"line_count": len(scan["text"].splitlines())}
 
 p.run()
 ```
@@ -88,8 +88,8 @@ in the code implies it. The parent comes from the parameter name, like
 any other step.)
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
-output per distinct value of an indexed field, read from
-`@step(index=[...])` entries at plan time (so planning stays value-free).
+output per distinct value of a field, read from the parent output struct
+at plan time (so planning stays value-free).
 `group_key=` implies `shape="reduce"` on its own:
 
 ```python
@@ -99,9 +99,9 @@ def digest(articles: dict) -> dict:
     return {"count": len(titles), "headlines": titles}
 ```
 
-A lane that carries no value for `group_key` raises — index it on the parent
-step. A lane with several values for the field (a list-valued index) joins
-every one of those groups.
+A lane that carries no value for `group_key` raises — the field must be
+present in the parent step's output. A lane with several values for the
+field (a list-valued field) joins every one of those groups.
 
 By default, `on_failed="use_passed"`: if a parent lane failed or was
 blocked, `reduce` drops it and proceeds with whatever survived (firing a
@@ -175,6 +175,36 @@ Reach for `expand` whenever the *number* of downstream items isn't known
 until you've fetched something — RSS feeds, paginated APIs, multi-page
 documents, search results.
 
+### Table-return expand (bulk fan-out)
+
+Instead of `yield`-ing N payloads in a Python loop, an expand step can
+**return an Arrow table** (`pa.Table`, polars DataFrame, or pandas
+DataFrame). Each row becomes a content-addressed lane — the table IS the
+fan-out. This lets you go straight from `pl.read_csv("data.csv")`, a
+DuckDB query, or any Arrow producer to lanes, with no Python iteration:
+
+```python
+import pyarrow as pa
+from rubedo import step
+
+@step(shape="expand")
+def load_csv():
+    return pa.table({
+        "name": ["alice", "bob", "carol"],
+        "score": [100, 200, 300],
+    })
+```
+
+Each row becomes a `row-<hash>` lane whose output is a dict (the row's
+values). Downstream steps receive it as a `dict` parameter, just like a
+yielded payload. Identical rows collapse to one lane (same content → same
+hash). The anchor caching works identically to yield-based expand — on
+re-run, if the parent is unchanged, the expand fn is not called and
+children are reused.
+
+Declare `shape="expand"` explicitly for table-return expand (a
+non-generator function doesn't auto-infer the shape).
+
 ## `join` — N-way equijoin
 
 Combines lane sets from **different roots** on a shared, indexed value —
@@ -197,10 +227,10 @@ def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(index=["cust"])
+@p.step
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@p.step(index=["cid"])
+@p.step
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @p.step(
@@ -212,8 +242,8 @@ def enrich(order, customer):        # one lane per matched pair
 (`join_on=` implies `shape="join"`; the parents are the `join_on` keys,
 confirmed by the function's parameters at build time.)
 
-Every side named in `join_on` must be indexed on the field it's matched by
-(`@step(index=[...])`), and `join_on`'s keys must exactly match the
+Every side named in `join_on` must carry the field it's matched by in its
+output struct, and `join_on`'s keys must exactly match the
 function's parameter names (which become the parents). `join` accepts two
 or more parents — `join_on={a:"uid",
 b:"uid", c:"uid"}` is a valid N-way star, all matched on the same field

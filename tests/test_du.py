@@ -11,7 +11,8 @@ from sqlalchemy.pool import StaticPool
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import get_session
 from rubedo.du import storage_report
-from rubedo.models import Materialization
+from rubedo.models import InputHashUsage
+from rubedo import lane_store
 from rubedo.store import _get_object_path, read_materialization_output
 
 TEST_FOLDER = ".test_du_data"
@@ -77,19 +78,20 @@ def make_shout_pipeline():
     # Single-step expand root that reads and transforms in the same
     # generator — this keeps the step's own output content-address exactly
     # hand-countable (no extra scan-step materialization inflating the byte
-    # totals below).
-    @step
+    # totals below). Yields bytes so outputs spill to the content-addressed
+    # object store (small strings would be inline JSON, not on disk).
+    @step(check_cache=False)
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
             if os.path.isfile(path):
-                yield open(path).read().upper()
+                yield open(path).read().upper().encode("utf-8")
 
     return pipeline(name="du", steps=[shout])
 
 
 def test_sizes_and_counts_for_populated_store():
-    # Outputs are text-serialized: "ALPHA" = 5 bytes, "HI" = 2 bytes.
+    # Outputs are bytes-spilled: b"ALPHA" = 5 bytes, b"HI" = 2 bytes.
     create_file("a.txt", "alpha")
     create_file("b.txt", "hi")
     summary = make_shout_pipeline().run(workers=1)
@@ -98,19 +100,19 @@ def test_sizes_and_counts_for_populated_store():
     report = storage_report()
     assert report.total_objects == 2
     assert report.total_bytes == 7  # hand-count: 5 + 2
-    assert report.total_materializations == 2
-    assert report.live_materializations == 2
+    assert report.total_materializations == 3  # 2 lanes + 1 root-anchor
+    assert report.live_materializations == 3
     assert report.missing_objects == 0
     assert report.reclaimable_objects == 0
     assert report.reclaimable_bytes == 0
 
     (pipe,) = report.pipelines
     assert pipe.pipeline_id == "du"
-    assert (pipe.objects, pipe.bytes, pipe.materializations) == (2, 7, 2)
+    assert (pipe.objects, pipe.bytes, pipe.materializations) == (2, 7, 3)
     (usage,) = pipe.steps
     assert usage.step_name == "shout"
     assert (usage.objects, usage.bytes) == (2, 7)
-    assert usage.live_materializations == 2
+    assert usage.live_materializations == 3
 
     # --json surface: plain dict, round-trippable
     d = report.to_dict()
@@ -123,7 +125,7 @@ def test_invalidated_only_object_is_reclaimable():
     make_shout_pipeline().run(workers=1)
 
     res = invalidate(Selection(step="shout"), reason="test")
-    assert res["invalidated_count"] == 1
+    assert res["invalidated_count"] == 2  # 1 child lane + 1 root-anchor
 
     report = storage_report()
     assert report.total_objects == 1
@@ -154,7 +156,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     create_file("a.txt", "same")
     create_file("b.txt", "same\n")
 
-    @step(index=["path"])
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -163,44 +165,50 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
 
     @step
     def norm(scan):
-        return scan["text"].strip()
+        return scan["text"].strip().encode("utf-8")
 
     summary = pipeline(name="du", steps=[scan, norm]).run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4  # 2 files x (scan + norm)
 
     report = storage_report()
-    assert report.total_materializations == 4  # 2 scan + 2 norm
-    # norm's two materializations dedupe to one physical object; scan's two
-    # (different "path", so different content, JSON-serialized) add two
-    # more distinct objects.
-    assert report.total_objects == 3
+    assert report.total_materializations == 5  # 2 scan + 2 norm + 1 root-anchor
+    # scan yields small dicts -> inline JSON (no object-store bytes); norm's
+    # two materializations dedupe to one physical bytes object.
+    assert report.total_objects == 1
     (scan_usage,) = [
         s for s in report.pipelines[0].steps if s.step_name == "scan"
     ]
     (norm_usage,) = [
         s for s in report.pipelines[0].steps if s.step_name == "norm"
     ]
-    assert norm_usage.objects == 1  # deduped: one shared "same" object
+    assert scan_usage.objects == 0  # inline dicts: no object-store entries
+    assert norm_usage.objects == 1  # deduped: one shared b"same" object
     assert norm_usage.bytes == len("same")
     assert report.total_bytes == scan_usage.bytes + norm_usage.bytes
 
-    with get_session() as session:
-        norm_mats = session.query(Materialization).filter_by(step_name="norm").all()
-        addresses = {m.output_address for m in norm_mats}
-        hashes = {m.output_content_hash for m in norm_mats}
+    with get_session():
+        norm_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "norm"]
+        addresses = {r.get("address") for r in norm_rows}
+        hashes = {
+            r.get("output", "")[len("objects:"):]
+            for r in norm_rows
+            if r.get("output", "").startswith("objects:")
+        }
     assert len(addresses) == 2  # distinct addresses...
     assert len(hashes) == 1  # ...sharing one object
 
     def coordinate_for_path(path_value):
+        from rubedo.planning import _ArrowRowRef
+
         with get_session() as session:
-            for m in session.query(Materialization).filter_by(step_name="scan").all():
-                if read_materialization_output(m).get("path") == path_value:
+            for r in [row for row in lane_store.all_filled_rows() if row.get("step_name") == "scan" and row.get("lane_key") != "@root"]:
+                if read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
                     from rubedo.models import RunCoordinateStatus
 
                     rc = (
                         session.query(RunCoordinateStatus)
-                        .filter_by(step_name="scan", materialization_id=m.id)
+                        .filter_by(step_name="scan", output_address=r.get("address"))
                         .first()
                     )
                     return rc.coordinate
@@ -235,9 +243,14 @@ def test_missing_object_file_is_reported_not_crashed():
     create_file("a.txt", "alpha")
     make_shout_pipeline().run(workers=1)
 
-    with get_session() as session:
-        mat = session.query(Materialization).one()
-        content_hash = str(mat.output_content_hash)
+    with get_session():
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 2  # 1 child lane + 1 root-anchor
+        # The child is bytes-spilled; the anchor is inline JSON.
+        child_row = next(r for r in rows if r.get("lane_key") != "@root")
+        out = child_row.get("output", "")
+        assert out.startswith("objects:")
+        content_hash = out[len("objects:"):]
     os.remove(_get_object_path(content_hash))
 
     report = storage_report()  # must not raise
@@ -282,10 +295,15 @@ def test_reclaimed_object_reported_separately_from_missing():
 
     # A genuinely missing object still reads as missing, alongside the reclaimed.
     with get_session() as session:
-        live = (
-            session.query(Materialization).filter_by(is_live=True).first()
-        )
-        os.remove(_get_object_path(str(live.output_content_hash)))
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True)).all()
+        }
+    idx = lane_store.address_row_index()
+    live_row = next(idx[a] for a in fulfilled_addrs if a in idx)
+    live_out = live_row.get("output", "")
+    assert live_out.startswith("objects:")
+    os.remove(_get_object_path(live_out[len("objects:"):]))
     mixed = storage_report()
     assert mixed.missing_objects == 1
     assert mixed.reclaimed_objects == len(done.reclaimed)

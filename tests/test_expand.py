@@ -8,7 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
+from rubedo import lane_store
+from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_expand_data"
@@ -83,7 +85,7 @@ def assert_run(pipe):
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -142,9 +144,11 @@ def test_expand_mints_child_lanes_and_chains_downstream():
             .all()
         )
         assert len(shout) == 3  # alpha, beta, gamma → 3 content-addressed lanes
+        addr_index = lane_store.address_row_index()
         values = {
-            read_materialization_output(session.get(Materialization, r.materialization_id))
+            read_materialization_output(_ArrowRowRef(row))
             for r in shout
+            if (row := addr_index.get(str(r.output_address)))
         }
         assert values == {"ALPHA", "BETA", "GAMMA"}
 
@@ -249,7 +253,7 @@ def test_source_decorator():
 
     @step
     def things():
-        calls.append(1)  # a source-shaped root re-scans each run
+        calls.append(1)  # a source-shaped root; reuses on re-run
         for x in ["a", "b", "c"]:
             yield {"x": x}
 
@@ -264,15 +268,17 @@ def test_source_decorator():
 
     s2 = assert_run(pipe)
     assert (s2.created_count, s2.reused_count) == (0, 6)
-    assert calls == [1, 1]  # re-scanned, but every lane reused
+    assert calls == [1]  # reused via anchor — generator not re-run
 
     with get_session() as session:
+        addr_index = lane_store.address_row_index()
         vals = {
-            read_materialization_output(session.get(Materialization, r.materialization_id))
+            read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="up")
             .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
             .all()
+            if (row := addr_index.get(str(r.output_address)))
         }
     assert vals == {"A", "B", "C"}
 
@@ -308,12 +314,14 @@ def test_root_expand_is_a_source():
     assert (s2.created_count, s2.reused_count) == (0, 6)
 
     with get_session() as session:
+        addr_index = lane_store.address_row_index()
         vals = {
-            read_materialization_output(session.get(Materialization, r.materialization_id))
+            read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="double")
             .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
             .all()
+            if (row := addr_index.get(str(r.output_address)))
         }
     assert vals == {0, 2, 4}
 

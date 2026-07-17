@@ -8,7 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, RunCoordinateStatus, RunEvent
+from rubedo.models import RunCoordinateStatus, RunEvent, InputHashUsage
+from rubedo import lane_store
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_groupkey_data"
@@ -95,13 +97,16 @@ def _outputs(step_name):
         statuses = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name=step_name)
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
         for st in statuses:
-            mat = session.get(Materialization, st.materialization_id)
-            if mat and mat.is_live:
-                result[st.coordinate] = read_materialization_output(mat)
+            if st.output_address:
+                row = lane_store.address_row_index().get(str(st.output_address))
+                if row:
+                    usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
+                    if usage and usage.fulfilled:
+                        result[st.coordinate] = read_materialization_output(_ArrowRowRef(row))
     return result
 
 
@@ -110,7 +115,7 @@ def test_group_key_partitions_by_indexed_field():
     create_file("b.txt", "tech")
     create_file("c.txt", "biz")
 
-    @step(index=["category"])
+    @step
     def classify(scan):
         return {"category": scan["text"].strip()}
 
@@ -131,7 +136,7 @@ def test_group_key_none_is_one_all_group():
     create_file("a.txt", "tech")
     create_file("b.txt", "biz")
 
-    @step(index=["category"])
+    @step
     def classify(scan):
         return {"category": scan["text"].strip()}
 
@@ -149,7 +154,7 @@ def test_group_key_none_is_one_all_group():
 def test_group_key_multivalue_joins_multiple_groups():
     create_file("a.txt", "solo")
 
-    @step(index=["tag"])
+    @step
     def classify(scan):
         return {"tag": ["tech", "ai"]}
 
@@ -160,7 +165,6 @@ def test_group_key_multivalue_joins_multiple_groups():
     pipe = pipeline(name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
-    # the single lane is a member of both groups
     assert set(outs) == {"tech", "ai"}
     assert outs["tech"]["n"] == 1
     assert outs["ai"]["n"] == 1
@@ -173,7 +177,7 @@ def test_group_key_reduce_after_expand():
     def read(scan):
         return scan["text"].splitlines()
 
-    @step(index=["category"])
+    @step
     def articles(read):
         for i, cat in enumerate(read):
             yield {"category": cat, "i": i}  # distinct payloads (i) so both "tech" survive
@@ -191,19 +195,19 @@ def test_group_key_reduce_after_expand():
     assert outs["biz"]["n"] == 1
 
 
-def test_group_key_unindexed_field_raises():
+def test_group_key_missing_field_raises():
     create_file("a.txt", "hello")
 
-    @step  # category is NOT indexed
+    @step  # no "category" field in the output
     def classify(scan):
-        return {"category": "tech"}
+        return {"type": "tech"}
 
     @step(depends_on=["classify"], group_key="category")
     def rollup(classify):
         return {"n": len(classify)}
 
     pipe = pipeline(name="g", steps=[scan, classify, rollup])
-    with pytest.raises(ValueError, match="no indexed value"):
+    with pytest.raises(ValueError, match="no value"):
         pipe.run(workers=1)
 
 

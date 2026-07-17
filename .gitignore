@@ -1,5 +1,8 @@
 # Rubedo project gitignore
 
+# Scratch / work-in-progress (not tracked)
+tmp/
+
 # Specific Folder for Rubedo metadata/cache
 .rubedo/
 
@@ -37,6 +40,9 @@ MANIFEST
 /test_*.py
 /test_*.txt
 /print_errors.py
+
+# Benchmark results (per-machine, compared across commits)
+benchmarks/results/
 
 # Testing and Coverage
 .test_*/

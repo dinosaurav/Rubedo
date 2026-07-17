@@ -5,12 +5,12 @@ import json
 import uuid
 from .models import (
     Run,
-    Materialization,
-    MaterializationLifecycle,
+    InputHashUsage,
     RunEvent,
 )
+from . import lane_store
 from .db import get_session
-from .selection import Selection, get_selection_materialization_ids
+from .selection import Selection, get_selection_addresses
 from .trace import _bfs
 from .util import utcnow_iso
 
@@ -59,50 +59,55 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
         session.commit()
 
         try:
-            mat_ids = get_selection_materialization_ids(session, selection)
+            addresses = get_selection_addresses(session, selection)
 
             # Downstream closure: seed on the selection's *live* matches
             # (mirrors trace's default seeding), then walk derivation edges
             # with trace's own BFS. Traversal passes through non-live nodes
             # (edges are the truth of derivation) but only live ones flip.
-            descendant_ids: list[int] = []
+            descendant_addrs: list[str] = []
             if downstream:
-                live_rows = (
-                    session.query(Materialization.id)
-                    .filter(Materialization.id.in_(mat_ids), Materialization.is_live)
+                # Live = fulfilled=True.  Filter the seed addresses.
+                fulfilled = {
+                    str(u.address) for u in session.query(InputHashUsage)
+                    .filter(InputHashUsage.fulfilled.is_(True))
                     .all()
-                )
-                seed_ids = {int(r.id) for r in live_rows}
-                reached, _ = _bfs(session, seed_ids, downstream=True)
-                descendant_ids = sorted(reached)
+                }
+                live_seed_addrs = {a for a in addresses if a in fulfilled}
+                reached, _ = _bfs(session, live_seed_addrs, downstream=True)
+                descendant_addrs = sorted(reached)
 
-            def _flip(mat_id: int) -> bool:
-                mat = session.get(Materialization, mat_id)
-                if mat is None or not mat.is_live:
-                    return False
-                mat.is_live = False  # type: ignore
-                session.add(
-                    MaterializationLifecycle(
-                        materialization_id=mat.id,
-                        action="invalidated",
-                        run_id=run_id,
-                        reason=reason,
-                        created_at=utcnow_iso(),
-                    )
+            def _flip(addr: str) -> bool:
+                # Check liveness via IHU.fulfilled — only flip if currently live.
+                usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=addr)
+                    .first()
                 )
+                if usage is None or not usage.fulfilled:
+                    return False
+                # The tombstone: flip fulfilled=False.
+                # The Arrow row stays as history, but the next run sees
+                # fulfilled=False and recomputes.  See notes/arrow-storage.md.
+                # Also evict from the in-memory fulfilled cache so a
+                # subsequent .plan() (without a run in between) sees the
+                # invalidation.
+                usage.fulfilled = False  # type: ignore
+                usage.last_run_id = run_id  # type: ignore
+                lane_store.mark_unfulfilled(addr)
                 return True
 
-            flipped_ids: list[int] = []
+            flipped_addrs: list[str] = []
             seed_count = 0
-            for mat_id in mat_ids:
-                if _flip(mat_id):
+            for addr in addresses:
+                if _flip(addr):
                     seed_count += 1
-                    flipped_ids.append(mat_id)
+                    flipped_addrs.append(addr)
             downstream_count = 0
-            for mat_id in descendant_ids:
-                if _flip(mat_id):
+            for addr in descendant_addrs:
+                if _flip(addr):
                     downstream_count += 1
-                    flipped_ids.append(mat_id)
+                    flipped_addrs.append(addr)
             invalidated_count = seed_count + downstream_count
 
             run.status = "completed"  # type: ignore
@@ -117,13 +122,14 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
             )
             session.add(event)
             session.commit()
+            lane_store.flush_all()
 
             return {
                 "run_id": run_id,
                 "invalidated_count": invalidated_count,
                 "seed_count": seed_count,
                 "downstream_count": downstream_count,
-                "materialization_ids": flipped_ids if downstream else mat_ids,
+                "addresses": flipped_addrs,
             }
         except Exception as e:
             session.rollback()

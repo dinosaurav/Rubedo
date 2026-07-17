@@ -7,11 +7,9 @@ import rubedo.db as db
 from rubedo.models import (
     Run,
     RunCoordinateStatus,
-    Materialization,
-    MaterializationIndexEntry,
     RunEvent,
 )
-from rubedo import step, pipeline
+from rubedo import step, pipeline, lane_store
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -63,11 +61,9 @@ def setup_teardown():
     os.chdir(orig_dir)
 
 
-@step(index=["path"])
+@step(check_cache=False)
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
-    `path` so tests can find "the lane for x.txt" without the coordinate
-    being that literal string."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -85,21 +81,21 @@ def coord_for_path(filename, run_id=None):
     a specific run when that matters.
     """
     with get_session() as session:
-        q = session.query(RunCoordinateStatus).filter_by(step_name="scan")
+        q = (
+            session.query(RunCoordinateStatus)
+            .filter(RunCoordinateStatus.step_name == "scan")
+            .filter(RunCoordinateStatus.output_address.isnot(None))
+        )
         if run_id is not None:
-            q = q.filter_by(run_id=run_id)
-        rows = q.filter(RunCoordinateStatus.materialization_id.isnot(None)).all()
+            q = q.filter(RunCoordinateStatus.run_id == run_id)
+        rows = q.all()
+        addr_index = lane_store.address_row_index()
         for rc in rows:
-            hit = (
-                session.query(MaterializationIndexEntry)
-                .filter_by(
-                    materialization_id=rc.materialization_id,
-                    field="path",
-                    value=filename,
-                )
-                .first()
-            )
-            if hit:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            output = row.get("output")
+            if isinstance(output, dict) and output.get("path") == filename:
                 return rc.coordinate
     return None
 
@@ -131,7 +127,7 @@ def test_first_run_creates_statuses(setup_teardown):
         for c in coords:
             assert c.status == "created"
             assert c.pipeline_id == "p-dummy"
-            assert c.materialization_id is not None
+            assert c.output_address is not None
 
         run_row = session.query(Run).filter_by(id=res.run_id).first()
         summary = json.loads(run_row.summary_json)
@@ -155,8 +151,8 @@ def test_second_run_reuses_statuses(setup_teardown):
         assert summary["reused"] == 6
         assert summary["created"] == 0
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 6  # No new materializations
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 7  # 6 lanes + 1 root-anchor (no new materializations)
 
 
 def test_changed_file_creates_one(setup_teardown):
@@ -190,8 +186,8 @@ def test_changed_file_creates_one(setup_teardown):
         assert summary["created"] == 2  # scan(a) + dummy(a)
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        mats = session.query(Materialization).all()
-        assert len(mats) == 8  # 6 original + 2 new (scan-a, dummy-a)
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 10  # 6 original + 2 anchors + 2 new (scan-a, dummy-a)
 
 
 def test_deleted_file_absent_from_next_run(setup_teardown):
@@ -227,10 +223,8 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
         assert "removed" not in summary
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        # Output bytes still exist logically (materialization row still there)
-        mat = (
-            session.query(Materialization).filter_by(output_address=old_address).first()
-        )
+        # Output bytes still exist logically (Arrow row still there)
+        mat = lane_store.address_row_index().get(old_address)
         assert mat is not None
 
 
@@ -262,10 +256,8 @@ def test_failed_coordinate_records_failed(setup_teardown):
         assert summary["created"] == 5  # 3 scan + 2 failing (a, c)
 
         # Ensure no materialization created for b.txt's failing step
-        mats = (
-            session.query(Materialization).filter_by(created_by_run_id=res.run_id).all()
-        )
-        assert len(mats) == 5
+        mats = [r for r in lane_store.all_filled_rows() if r.get("run_id") == res.run_id]
+        assert len(mats) == 6  # 5 lanes + 1 root-anchor
 
 
 def test_event_log_populated(setup_teardown):

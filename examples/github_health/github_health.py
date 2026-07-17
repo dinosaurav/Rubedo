@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -73,22 +73,19 @@ def activity(fetch_repo: dict) -> dict:
     return {"commits_30d": len(commits)}
 
 
-@p.step(index=["language"])
-def score(fetch_repo: dict, activity: dict) -> ProcessResult:
+@p.step
+def score(fetch_repo: dict, activity: dict):
     """A naive health score: reward stars and recent commits, penalize open issues."""
     health = (
         fetch_repo["stars"] // 100 + activity["commits_30d"] - fetch_repo["open_issues"] // 50
     )
-    return ProcessResult(
-        value={
-            "repo": fetch_repo["repo"],
-            "language": fetch_repo["language"],
-            "stars": fetch_repo["stars"],
-            "commits_30d": activity["commits_30d"],
-            "health": health,
-        },
-        metadata={"health": health},
-    )
+    return {
+        "repo": fetch_repo["repo"],
+        "language": fetch_repo["language"],
+        "stars": fetch_repo["stars"],
+        "commits_30d": activity["commits_30d"],
+        "health": health,
+    }
 
 
 @p.step(shape="reduce")

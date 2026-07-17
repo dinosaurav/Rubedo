@@ -228,11 +228,11 @@ def test_depends_on_dict_alias_on_join():
     def customers_src():
         yield {"cid": "a", "name": "Acme"}
 
-    @step(index=["cust"])
+    @step
     def order(orders_src):
         return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-    @step(index=["cid"])
+    @step
     def customer(customers_src):
         return {"cid": customers_src["cid"], "name": customers_src["name"]}
 

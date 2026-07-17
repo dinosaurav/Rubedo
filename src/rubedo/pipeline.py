@@ -293,6 +293,56 @@ class Pipeline:
             )
         return decorator
 
+    def join(self, *, name: str, join_on: Dict[str, str], version: str = "0",
+             on_failed: str = "use_passed"):
+        """Declarative join — no function body. The engine builds the
+        output by nesting each matched parent's output dict under its
+        step name: ``{"orders": {...}, "customers": {...}}``.
+
+        Zero Python function calls per matched pair — the output struct
+        is assembled directly from the parents' struct values. Caching
+        is automatic (address derived from parents' content hashes).
+
+        Requires ``name=`` (no function ``__name__`` to infer from).
+        """
+        s = StepSpec(
+            name=name,
+            fn=None,  # type: ignore[arg-type]
+            version=version,
+            depends_on=list(join_on.keys()),
+            depends_on_explicit=True,
+            shape="join",
+            join_on=join_on,
+            declarative=True,
+            on_failed=on_failed,  # type: ignore[arg-type]
+        )
+        self._steps.append(s)
+        self._spec = None
+        return s
+
+    def union(self, *, name: str, depends_on: List[str], version: str = "0",
+              on_failed: str = "use_passed"):
+        """Declarative union — merges lane sets from multiple parents into
+        one set, deduped by content hash. No function body — each lane
+        passes through unchanged. Useful for combining sources or
+        branches before a downstream step.
+
+        Requires ``name=`` (no function ``__name__`` to infer from).
+        """
+        s = StepSpec(
+            name=name,
+            fn=None,  # type: ignore[arg-type]
+            version=version,
+            depends_on=list(depends_on),
+            depends_on_explicit=True,
+            shape="map",
+            declarative=True,
+            on_failed=on_failed,  # type: ignore[arg-type]
+        )
+        self._steps.append(s)
+        self._spec = None
+        return s
+
     @property
     def spec(self) -> PipelineSpec:
         """The validated `PipelineSpec`, built lazily on first access from

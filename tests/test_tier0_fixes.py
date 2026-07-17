@@ -15,8 +15,9 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, Selection, invalidate, pipeline, step
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, Run, RunCoordinateStatus
-from rubedo.selection import get_selection_materialization_ids
+from rubedo import lane_store
+from rubedo.models import InputHashUsage, Run, RunCoordinateStatus
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_tier0_data"
@@ -141,24 +142,31 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     pipe = pipeline(name="inv", steps=[scan, read])
     pipe.run(workers=1)
 
-    import rubedo.invalidation as inv_mod
-
-    real = inv_mod.MaterializationLifecycle
+    # Make the second InputHashUsage query inside _flip raise — simulates
+    # a crash mid-invalidation.  The rollback must undo the first flip
+    # (fulfilled=False).
+    from rubedo.models import InputHashUsage
+    from sqlalchemy.orm import Session as ORMSession
+    real_query = ORMSession.query
     calls = {"n": 0}
 
-    def flaky(**kwargs):
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            raise RuntimeError("boom mid-invalidation")
-        return real(**kwargs)
+    def flaky_query(self, entity, *args, **kwargs):
+        if entity is InputHashUsage:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise RuntimeError("boom mid-invalidation")
+        return real_query(self, entity, *args, **kwargs)
 
-    monkeypatch.setattr(inv_mod, "MaterializationLifecycle", flaky)
+    monkeypatch.setattr(ORMSession, "query", flaky_query)
     with pytest.raises(RuntimeError, match="boom"):
         invalidate(Selection(step="read"), reason="partial-failure test")
 
+    # Undo the flaky patch before assertions query InputHashUsage
+    monkeypatch.undo()
+
     with get_session() as session:
         # The first flip happened before the failure; rollback must undo it
-        assert session.query(Materialization).filter_by(is_live=False).count() == 0
+        assert session.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
         failed_run = session.query(Run).filter_by(kind="invalidate").one()
         assert failed_run.status == "failed"
 
@@ -181,10 +189,11 @@ def test_selection_ids_unique_across_runs():
     with get_session() as session:
         # Scoped to "read" (not scan too): the point under test is
         # uniqueness across the two runs' status rows, not the raw count.
-        ids = get_selection_materialization_ids(
+        from rubedo.selection import get_selection_addresses
+        addrs = get_selection_addresses(
             session, Selection(coordinate_glob="*", step="read")
         )
-    assert len(ids) == len(set(ids)) == 2
+    assert len(addrs) == len(set(addrs)) == 2
 
 
 def test_selection_parse_pipeline_term():
@@ -215,8 +224,14 @@ def test_invalidate_scoped_to_pipeline():
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
-        dead = session.query(Materialization).filter_by(is_live=False).one()
-        assert dead.pipeline_id == "p2"
+        dead_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(False)).all()
+        }
+        assert len(dead_addrs) == 1
+        dead_row = lane_store.address_row_index().get(next(iter(dead_addrs)))
+        assert dead_row is not None
+        assert dead_row.get("pipeline_id") == "p2"
 
 
 # --- B5: skip_cache parents of join/group_key are rejected (validated
@@ -224,7 +239,7 @@ def test_invalidate_scoped_to_pipeline():
 
 
 def test_join_rejects_skip_cache_parent():
-    @step(index=["k"])
+    @step
     def left():
         return {"k": "x"}
 
@@ -293,13 +308,13 @@ def test_expand_yields_bytes_and_reuses():
     assert s1.created_count == 5
 
     with get_session() as session:
+        addr_index = lane_store.address_row_index()
         sizes = {
-            read_materialization_output(
-                session.get(Materialization, r.materialization_id)
-            )
+            read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="size", status="created")
             .all()
+            if (row := addr_index.get(str(r.output_address)))
         }
     assert sizes == {5, 4}  # alpha, beta
 

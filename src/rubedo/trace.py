@@ -13,8 +13,7 @@ was recomputed but this output hasn't been re-derived yet), and skipping it
 would lie about the derivation. Non-live nodes are marked, never hidden.
 
 Root resolution: a lineage *root* (no parent materializations — a root
-step's output) is resolved for display by reading its stored payload, not
-via any auto-indexing; `@step(index=[...])` stays the opt-in seeding handle.
+step's output) is resolved for display by reading its stored payload.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -22,15 +21,19 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 
 from .db import get_session
-from .models import Materialization, MaterializationEdge, RunCoordinateStatus
-from .selection import Selection, get_selection_materialization_ids
+from .models import (
+    MaterializationEdge,
+    RunCoordinateStatus,
+    InputHashUsage,
+)
+from . import lane_store
+from .selection import Selection, get_selection_addresses
 
 
 @dataclass
 class TraceNode:
     """One materialization reached by a trace."""
 
-    materialization_id: int
     step_name: str
     pipeline_id: str
     coordinate: Optional[str]
@@ -47,7 +50,7 @@ class TraceResult:
     """Everything a trace reached: nodes plus the edges between them."""
 
     nodes: List[TraceNode]
-    edges: List[Tuple[int, int]]  # (parent_materialization_id, child_materialization_id)
+    edges: List[Tuple[str, str]]  # (parent_address, child_address)
 
     @property
     def seeds(self) -> List[TraceNode]:
@@ -89,17 +92,21 @@ class TraceResult:
 
 
 def _bfs(
-    session: Session, seed_ids: Set[int], *, downstream: bool
-) -> Tuple[Dict[int, int], List[Tuple[int, int]]]:
-    """Walk edges transitively from seeds; {mat_id: depth} plus edges seen."""
+    session: Session, seed_addrs: Set[str], *, downstream: bool
+) -> Tuple[Dict[str, int], List[Tuple[str, str]]]:
+    """Walk edges transitively from seeds; {address: depth} plus edges seen.
+
+    Address-based: uses ``parent_address`` / ``child_address`` columns on
+    ``MaterializationEdge`` — no integer FK lookups.
+    """
     here, there = (
-        (MaterializationEdge.parent_id, MaterializationEdge.child_id)
+        (MaterializationEdge.parent_address, MaterializationEdge.child_address)
         if downstream
-        else (MaterializationEdge.child_id, MaterializationEdge.parent_id)
+        else (MaterializationEdge.child_address, MaterializationEdge.parent_address)
     )
-    reached: Dict[int, int] = {}
-    edges: List[Tuple[int, int]] = []
-    frontier = set(seed_ids)
+    reached: Dict[str, int] = {}
+    edges: List[Tuple[str, str]] = []
+    frontier = set(seed_addrs)
     depth = 0
     while frontier:
         depth += 1
@@ -108,10 +115,10 @@ def _bfs(
             .filter(here.in_(frontier))
             .all()
         )
-        edges.extend((int(r.parent_id), int(r.child_id)) for r in rows)
-        nxt = {int(getattr(r, there.key)) for r in rows}
+        edges.extend((str(r.parent_address), str(r.child_address)) for r in rows)
+        nxt = {str(getattr(r, there.key)) for r in rows}
         frontier = {
-            m for m in nxt if m not in reached and m not in seed_ids
+            m for m in nxt if m not in reached and m not in seed_addrs
         }
         for m in frontier:
             reached[m] = depth
@@ -138,78 +145,106 @@ def trace(
         _init_home(home)
 
     with get_session() as session:
-        seed_ids = set(get_selection_materialization_ids(session, selection))
-        if seed_ids and not include_superseded:
-            live_rows = (
-                session.query(Materialization.id)
-                .filter(Materialization.id.in_(seed_ids), Materialization.is_live)
-                .all()
-            )
-            seed_ids = {int(r.id) for r in live_rows}
-
-        up, up_edges = _bfs(session, seed_ids, downstream=False)
-        down, down_edges = _bfs(session, seed_ids, downstream=True)
-
-        # A node reachable both ways (diamonds) keeps its upstream reading.
-        placement: Dict[int, Tuple[str, int]] = {}
-        for m in seed_ids:
-            placement[m] = ("seed", 0)
-        for m, d in down.items():
-            placement.setdefault(m, ("downstream", d))
-        for m, d in up.items():
-            placement[m] = ("upstream", d) if placement.get(m, ("", 0))[0] != "seed" else placement[m]
-
-        all_ids = set(placement)
-        if not all_ids:
+        seed_addrs = set(get_selection_addresses(session, selection))
+        if not seed_addrs:
             return TraceResult(nodes=[], edges=[])
 
-        mats = {
-            int(m.id): m
-            for m in session.query(Materialization)
-            .filter(Materialization.id.in_(all_ids))
-            .all()
+        if not include_superseded:
+            # Live = fulfilled=True in input_hash_usages.
+            fulfilled_addrs = {
+                str(u.address) for u in session.query(InputHashUsage)
+                .filter(InputHashUsage.fulfilled.is_(True))
+                .all()
+            }
+            seed_addrs = seed_addrs & fulfilled_addrs
+
+        up, up_edges = _bfs(session, seed_addrs, downstream=False)
+        down, down_edges = _bfs(session, seed_addrs, downstream=True)
+
+        # A node reachable both ways (diamonds) keeps its upstream reading.
+        placement: Dict[str, Tuple[str, int]] = {}
+        for a in seed_addrs:
+            placement[a] = ("seed", 0)
+        for a, d in down.items():
+            placement.setdefault(a, ("downstream", d))
+        for a, d in up.items():
+            placement[a] = ("upstream", d) if placement.get(a, ("", 0))[0] != "seed" else placement[a]
+
+        all_addrs = set(placement)
+        if not all_addrs:
+            return TraceResult(nodes=[], edges=[])
+
+        # Build nodes from Arrow rows + RCS coordinates
+        arrow_idx = lane_store.address_row_index()
+        # Filter out expand-anchor rows — they're cache entries (the child
+        # hashes), not real lanes. They have no RCS, no edges, and their
+        # output is {"_children": [...]} — not a user payload.
+        all_addrs = {
+            a for a in all_addrs
+            if arrow_idx.get(a, {}).get("lane_key") != "@root"
         }
-        coords: Dict[int, str] = {}
-        for mat_id, coordinate in (
+        if not all_addrs:
+            return TraceResult(nodes=[], edges=[])
+        # Coordinates from RCS (latest per address)
+        addr_coords: Dict[str, str] = {}
+        for addr, coord in (
             session.query(
-                RunCoordinateStatus.materialization_id, RunCoordinateStatus.coordinate
+                RunCoordinateStatus.output_address,
+                RunCoordinateStatus.coordinate,
             )
-            .filter(RunCoordinateStatus.materialization_id.in_(all_ids))
+            .filter(
+                RunCoordinateStatus.output_address.isnot(None),
+                RunCoordinateStatus.output_address.in_(all_addrs),
+            )
+            .order_by(RunCoordinateStatus.id.asc())
             .all()
         ):
-            coords[int(mat_id)] = str(coordinate)
+            addr_coords[str(addr)] = str(coord)
 
-        # Lineage roots: reached nodes with no parent edge in the ledger at all.
+        # Lineage roots: reached addresses with no parent edge.
         parented = {
-            int(r.child_id)
-            for r in session.query(MaterializationEdge.child_id)
-            .filter(MaterializationEdge.child_id.in_(all_ids))
+            str(r.child_address)
+            for r in session.query(MaterializationEdge.child_address)
+            .filter(MaterializationEdge.child_address.in_(all_addrs))
             .all()
         }
-        root_values: Dict[int, Any] = {}
+        root_values: Dict[str, Any] = {}
         if resolve_roots:
-            from .store import read_materialization_output
+            from .store import read_output
 
-            for m in all_ids - parented:
-                try:
-                    root_values[m] = read_materialization_output(mats[m])  # type: ignore[arg-type]
-                except Exception:
-                    pass  # a missing object never breaks a read-only trace
+            for addr in all_addrs - parented:
+                row = arrow_idx.get(addr)
+                if row:
+                    # Skip expand-anchor rows — they're cache entries (the
+                    # child hashes), not real lanes with a user payload.
+                    if row.get("lane_key") == "@root":
+                        continue
+                    try:
+                        root_values[addr] = read_output(
+                            row.get("output"), row.get("content_type")
+                        )
+                    except Exception:
+                        pass  # a missing object never breaks a read-only trace
+
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
 
         nodes = [
             TraceNode(
-                materialization_id=m,
-                step_name=str(mat.step_name),
-                pipeline_id=str(mat.pipeline_id),
-                coordinate=coords.get(m),
-                output_address=str(mat.output_address),
-                is_live=bool(mat.is_live),
-                filtered=bool(mat.filtered),
-                relation=placement[m][0],
-                depth=placement[m][1],
-                root_value=root_values.get(m),
+                step_name=str(arrow_idx.get(a, {}).get("step_name", "")),
+                pipeline_id=str(arrow_idx.get(a, {}).get("pipeline_id", "")),
+                coordinate=addr_coords.get(a),
+                output_address=a,
+                is_live=a in fulfilled_addrs,
+                filtered=bool(arrow_idx.get(a, {}).get("filtered", False)),
+                relation=placement[a][0],
+                depth=placement[a][1],
+                root_value=root_values.get(a),
             )
-            for m, mat in mats.items()
+            for a in all_addrs
         ]
         edge_set = {e for e in up_edges + down_edges}
         return TraceResult(nodes=nodes, edges=sorted(edge_set))

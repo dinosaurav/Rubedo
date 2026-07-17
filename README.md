@@ -36,7 +36,7 @@ Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for
 Pipelines are plain Python objects — define them wherever your code lives:
 
 ```python
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
@@ -49,8 +49,8 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict) -> ProcessResult:
-    return ProcessResult(value={"line_count": len(scan["text"].splitlines())})
+def count_lines(scan: dict):
+    return {"line_count": len(scan["text"].splitlines())}
 
 print(p.describe())           # the DAG, before ever running (also: format="mermaid", format="ascii")
 print(p.plan())                # dry-run: what would p.run() do to my data, and why
@@ -104,7 +104,7 @@ def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
 
-Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), index it with `@step(index=[...])` and query — the lane key is never a human key.
+Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), query it — the lane key is never a human key.
 
 A step consumes up to two things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed) and **params** (run-level knobs, validated against the pipeline's `params_model` and hashed only for steps that declare a `params` parameter — so turning a knob recomputes exactly the steps that read it).
 
@@ -136,9 +136,9 @@ A step can **decline an item** by returning `Filtered(reason=...)`: downstream s
 
 By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan-out, and joins:
 
-- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of an indexed field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
+- **`reduce`** (N:1) — fan in over all a parent's surviving lanes: `@step(shape="reduce")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
-- **`join`** — an N-way equijoin across multiple `expand` roots, matched on an indexed field, minting one lane per matched tuple:
+- **`join`** — an N-way equijoin across multiple `expand` roots, matched on a field of their parent outputs, minting one lane per matched tuple:
 
 ```python
 p = pipeline(name="enrich")
@@ -153,10 +153,10 @@ def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(index=["cust"])
+@p.step
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@p.step(index=["cid"])
+@p.step
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @p.step(
@@ -178,7 +178,7 @@ See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding
 
 ## Search and surgical invalidation
 
-Outputs are **searchable by their content**: `@step(index=["company", "meta.region"])` extracts those value fields into an index at commit time, so you can select by what a step *computed*, regardless of file names or row keys:
+Outputs are **searchable by their content**: a step's output struct fields are the query language's open vocabulary, so you can select by what a step *computed*, regardless of file names or row keys:
 
 ```python
 from rubedo import Selection, invalidate
@@ -187,7 +187,7 @@ invalidate(Selection(index={"company": "acme"}))          # recompute acme's row
 Selection.parse("step:extract company:acme live:true")     # query-string form (Python, CLI, and UI)
 ```
 
-Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches an indexed field. A label is just data you chose to index — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
+Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches a field of the step's output struct. A label is just a field a step returns — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
 
 `downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that a reduce or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
 

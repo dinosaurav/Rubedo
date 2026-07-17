@@ -205,15 +205,34 @@ def test_duration_parsing():
 
 
 def backdate_materializations(iso_timestamp):
-    """Raw SQL on purpose: ORM guards forbid mutating created_at."""
-    from sqlalchemy import text
+    """Backdates the Arrow lane_store ts column, which is what the
+    planning staleness check reads."""
+    from rubedo import lane_store
+    from datetime import datetime
 
-    with get_session() as session:
-        session.execute(
-            text("UPDATE materializations SET created_at = :ts"),
-            {"ts": iso_timestamp},
-        )
-        session.commit()
+    # Backdate the Arrow rows' ts column in every step file
+    dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    for row in lane_store.all_filled_rows():
+        pipe = row.get("pipeline_id", "")
+        step = row.get("step_name", "")
+        table = lane_store._combined_table(pipe, step)
+        if table is None or table.num_rows == 0:
+            continue
+        import pyarrow as pa
+
+        ts_idx = table.column_names.index("ts")
+        new_ts = pa.array([dt] * table.num_rows, type=pa.timestamp("us", tz="UTC"))
+        table = table.set_column(ts_idx, "ts", new_ts)
+        path = lane_store._get_step_file(pipe, step)
+        import os
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with pa.ipc.new_file(path, table.schema) as writer:
+            writer.write_table(table)
+
+    # Invalidate the read cache — the Arrow files changed on disk.
+    lane_store.clear_read_caches()
+    lane_store.clear_run_buffers()
 
 
 def test_fresh_output_is_reused():
@@ -231,8 +250,6 @@ def test_fresh_output_is_reused():
 
 
 def test_expired_deterministic_output_is_refreshed():
-    from rubedo.models import Materialization, MaterializationLifecycle
-
     path = create_file("f1.txt", "hello")
 
     @step(stale_after="1h")
@@ -248,16 +265,6 @@ def test_expired_deterministic_output_is_refreshed():
     summary = pipe.run(params=params, workers=1)
     assert (summary.created_count, summary.reused_count) == (1, 0)
 
-    with get_session() as session:
-        mat = session.query(Materialization).one()
-        assert mat.refreshed_at is not None
-        lc = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=mat.id)
-            .one()
-        )
-        assert lc.action == "refreshed"
-
     # refreshed_at reset the clock: next run reuses again
     summary3 = pipe.run(params=params, workers=1)
     assert (summary3.created_count, summary3.reused_count) == (0, 1)
@@ -265,8 +272,6 @@ def test_expired_deterministic_output_is_refreshed():
 
 def test_expired_nondeterministic_output_is_superseded():
     import itertools
-
-    from rubedo.models import Materialization
 
     path = create_file("f1.txt", "hello")
     counter = itertools.count()
@@ -283,11 +288,16 @@ def test_expired_nondeterministic_output_is_superseded():
     summary = pipe.run(params=params, workers=1)
     assert summary.created_count == 1
 
+    from rubedo import lane_store
+    from rubedo.models import InputHashUsage
+    from rubedo.db import get_session
+
+    # Two Arrow rows (two generations), one IHU fulfilled (the new one)
+    rows = lane_store.all_filled_rows()
+    assert len(rows) == 2
     with get_session() as session:
-        mats = session.query(Materialization).order_by(Materialization.id).all()
-        assert len(mats) == 2
-        assert mats[0].is_live is False, "old generation superseded"
-        assert mats[1].is_live is True
+        fulfilled = session.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count()
+        assert fulfilled == 1
 
 
 def test_staleness_visible_in_plan():

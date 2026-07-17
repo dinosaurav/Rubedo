@@ -112,7 +112,6 @@ def screen(top_story: dict, params: Screen) -> dict | Filtered:
     retries=3,
     retry_delay=2,
     rate_limit="30/min",
-    index=["topic"],  # search your outputs by topic: Selection.parse("topic:AI")
 )
 def classify(screen: dict) -> dict:
     """Ask the LLM for a topic + one-line blurb. Expensive + non-idempotent → cached."""

@@ -25,9 +25,9 @@ place*.
     A coordinate is **not the identity of work** — that's the
     content-addressed **output address** (below), computed from the step
     too, not just the item. And it's **not the primary search handle** —
-    that's `@step(index=[...])`. A coordinate is always `row-<hash>`, never
+    that's the output struct's fields. A coordinate is always `row-<hash>`, never
     a file name or a row id, so nothing downstream can treat it as one.
-    Query by what a step *computed* (`index=`), not by coordinate.
+    Query by what a step *computed* (its output fields), not by coordinate.
 
 A coordinate can also be **minted mid-DAG**: `expand` mints a fresh
 content-addressed `row-<hash>` lane per yielded payload, and `join` mints an
@@ -124,7 +124,7 @@ A run has three phases with a hard boundary between them:
   access is checking whether a computed address is already a live
   materialization. It never reads a payload's actual value (with the
   narrow, documented exception of `group_key`/`join_on`, which read
-  *indexed fields* at plan time — still no value bytes). The output is a
+  *fields of the parent output* at plan time — still no value bytes). The output is a
   `StepDecision` per lane: `reuse`, `execute`, `blocked`, `pending`, or
   `filtered`.
 - **Execution is DB-free.** `execution.py` runs step functions in a thread

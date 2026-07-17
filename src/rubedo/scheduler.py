@@ -11,9 +11,11 @@ order is partitioned into segments (_partition_segments) and every segment
 goes through the one segment executor (_run_segment). Under
 schedule="broad" (the default) each step is its own segment, so the
 executor degenerates to plan-all -> execute-all -> commit-each — the classic
-staged loop. Under schedule="deep", consecutive 1:1 steps share a segment
-and each lane advances through them the moment its own inputs commit;
-reduce/join/expand and multi-parent maps stay singleton barrier segments.
+staged loop. Under schedule="deep", consecutive deep-eligible steps share a
+segment and each lane advances through them the moment its own inputs
+commit; reduce/join/dependent-expand and multi-parent maps stay singleton
+barrier segments. Root expands are deep-eligible — independent sources run
+concurrently within the same segment.
 """
 
 import concurrent.futures
@@ -31,14 +33,14 @@ SCHEDULES = ("broad", "deep")
 
 
 def _scanned_for(step: StepSpec) -> List[RootItem]:
-    """The synthetic items feeding a source-less map root's plan.
+    """The synthetic items feeding a source-less root's plan.
 
-    A non-expand root mints a single synthetic '@root' item (its input is a
-    constant, so it runs once and then reuses); everything else (dependent
-    steps, root expands — which yield their own lanes via the generator)
-    gets nothing. Shared by runner.plan() and _run_segment below.
+    A root step (no depends_on) mints a single synthetic '@root' item —
+    its input is a constant (map) or the generator's own yields (expand),
+    so it runs once and then reuses via the ROOT_LANE-keyed anchor. Shared
+    by runner.plan() and _run_segment below.
     """
-    if not step.depends_on and step.shape != "expand":
+    if not step.depends_on:
         return [RootItem(coordinate=ROOT_LANE, content_hash=ROOT_LANE)]
     return []
 
@@ -46,13 +48,16 @@ def _scanned_for(step: StepSpec) -> List[RootItem]:
 def _deep_eligible(step: StepSpec) -> bool:
     """Can a lane flow through this step without waiting for its siblings?
 
-    v1: only 1:1 steps — shape="map" with at most one parent (root maps and
-    skip_cache utils included; a skip_cache step never executes eagerly
-    anyway, its fusion semantics are untouched). reduce/join consume whole
-    lane sets (true barriers); expand and multi-parent maps are treated as
-    barriers for now (unlockable later).
+    1:1 map steps (including root maps and skip_cache utils) and root
+    expands (independent sources that yield their own lanes). reduce/join
+    consume whole lane sets (true barriers); dependent expands and
+    multi-parent maps are treated as barriers for now (unlockable later).
     """
-    return step.shape == "map" and len(step.depends_on) <= 1
+    if step.shape == "map" and len(step.depends_on) <= 1:
+        return True
+    if step.shape == "expand" and not step.depends_on:
+        return True
+    return False
 
 
 def _partition_segments(
@@ -153,6 +158,7 @@ def _run_segment(
             memo,
             limiters[step.name],
             pp,
+            ctx.pipeline_id,
         )
         in_flight[fut] = step
 
@@ -167,6 +173,7 @@ def _run_segment(
             force,
             accepts[step.name],
             lanes=lanes,
+            pipeline_id=ctx.pipeline_id,
         )
         _record_planned(session, ctx, step, decisions)
         session.commit()
@@ -223,6 +230,14 @@ def _run_segment(
                 for outcome in outcomes:
                     if not outcome.is_anchor:
                         advance(step, outcome.decision.coordinate)
+
+        # Flush this segment's steps to disk — durability per segment.
+        # The flushed table stays in the disk-table cache so downstream
+        # lookups get a cache hit (no re-read).  The write buffers are
+        # cleared (data is on disk + in cache).
+        from . import lane_store
+        for s in seg_steps:
+            lane_store.flush_step(ctx.pipeline_id, s.name)
     finally:
         for tp in thread_pools.values():
             tp.shutdown(wait=True)

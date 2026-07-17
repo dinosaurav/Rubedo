@@ -1,6 +1,7 @@
 """Generations semantics: non-deterministic steps, supersede/resurrect, type fidelity."""
 
 import itertools
+import json as _json
 import os
 import shutil
 import uuid
@@ -11,12 +12,10 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import (
-    Materialization,
-    MaterializationLifecycle,
-    RunCoordinateStatus,
-)
-from rubedo.store import init_store
+from rubedo.models import RunCoordinateStatus, InputHashUsage
+from rubedo import lane_store
+from rubedo.hashing import hash_bytes
+from rubedo.store import init_store, _get_object_path
 
 TEST_FOLDER = ".test_generations_data"
 ENV_FOLDER = ".test_generations_env"
@@ -101,13 +100,28 @@ def make_nondeterministic_pipeline(pipe_id="gen"):
 
 
 def get_mats(step_name):
-    with get_session() as session:
-        return (
-            session.query(Materialization)
-            .filter_by(step_name=step_name)
-            .order_by(Materialization.id)
-            .all()
+    """All Arrow rows for a step, sorted by ts (creation order)."""
+    return [
+        r for r in sorted(
+            (r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name),
+            key=lambda r: r.get("ts", ""),
         )
+    ]
+
+
+def _is_live(addr):
+    with get_session() as session:
+        u = session.query(InputHashUsage).filter_by(address=addr).first()
+        return bool(u and u.fulfilled)
+
+
+def _object_path_for(row):
+    """Object-store path for a spilled row, else None (inline values live
+    in the Arrow row, not the object store)."""
+    out = row.get("output")
+    if isinstance(out, str) and out.startswith("objects:"):
+        return _get_object_path(out[len("objects:"):])
+    return None
 
 
 def test_invalidate_nondeterministic_creates_new_generation():
@@ -126,31 +140,32 @@ def test_invalidate_nondeterministic_creates_new_generation():
 
     gens = get_mats("generate")
     assert len(gens) == 2, "recompute with different bytes must be a new generation"
-    assert gens[0].id == gen1.id
-    assert gens[0].is_live is False, "old generation stays as history, not deleted"
-    assert gens[1].is_live is True
-    assert gens[0].output_address == gens[1].output_address
-    assert gens[0].output_content_hash != gens[1].output_content_hash
+    assert gens[0].get("address") == gen1.get("address")
+    # Both generations share the same address — the address is live
+    # (the new generation is fulfilled).  The old generation is history
+    # (an old Arrow row with a different output string).
+    assert gens[0].get("output") != gens[1].get("output")
+    assert _is_live(gens[1].get("address"))
+    assert gens[0].get("address") == gens[1].get("address")
+    assert gens[0].get("output") != gens[1].get("output")
 
-    # The lifecycle log preserves the full story: invalidated by the user
-    with get_session() as session:
-        lifecycle = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=gen1.id)
-            .order_by(MaterializationLifecycle.id)
-            .all()
-        )
-        assert [lc.action for lc in lifecycle] == ["invalidated"]
-        assert lifecycle[0].reason == "bad output"
+    # Old output survives (immutability of committed outputs): spilled
+    # objects are on disk; inline values persist in the append-only Arrow row.
+    for g in (gens[0], gens[1]):
+        p = _object_path_for(g)
+        if p is not None:
+            assert os.path.exists(p)
+        else:
+            assert g.get("output") is not None
 
-    # Old bytes survive on disk (immutability of committed outputs)
-    assert os.path.exists(gens[0].output_path)
-    assert os.path.exists(gens[1].output_path)
-
-    # Downstream saw the new content hash and recomputed
+    # Downstream saw the new output string and recomputed
     sums = get_mats("summarize")
     assert len(sums) == 2
-    assert sums[1].input_hash == gens[1].output_content_hash
+    from rubedo.hashing import hash_bytes
+    import json as _json
+    _gen1_output = gens[1].get("output")
+    _gen1_key = _gen1_output.encode("utf-8") if isinstance(_gen1_output, str) else _json.dumps(_gen1_output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert sums[1].get("input_hash") == hash_bytes(_gen1_key)
     with get_session() as session:
         rc = (
             session.query(RunCoordinateStatus)
@@ -158,7 +173,7 @@ def test_invalidate_nondeterministic_creates_new_generation():
             .one()
         )
         assert rc.status == "created"
-        assert rc.materialization_id == sums[1].id
+        assert str(rc.output_address) == sums[1].get("address")
 
 
 def test_force_nondeterministic_supersedes_live_generation():
@@ -172,21 +187,16 @@ def test_force_nondeterministic_supersedes_live_generation():
 
     gens = get_mats("generate")
     assert len(gens) == 2
-    assert gens[0].is_live is False
-    assert gens[1].is_live is True
+    assert gens[0].get("output") != gens[1].get("output")
+    assert _is_live(gens[1].get("address"))
 
-    with get_session() as session:
-        lc = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=gens[0].id)
-            .one()
-        )
-        assert lc.action == "superseded"
-        assert lc.superseded_by_id == gens[1].id
+    # Lifecycle rows gone in the new model
 
     # Downstream recomputed off the new bytes rather than reusing stale output
     sums = get_mats("summarize")
-    assert sums[-1].input_hash == gens[1].output_content_hash
+    _gen1_output = gens[1].get("output")
+    _gen1_key = _gen1_output.encode("utf-8") if isinstance(_gen1_output, str) else _json.dumps(_gen1_output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert sums[-1].get("input_hash") == hash_bytes(_gen1_key)
 
 
 def test_force_deterministic_reuses_live_row():
@@ -203,7 +213,7 @@ def test_force_deterministic_reuses_live_row():
 
     mats = get_mats("stable")
     assert len(mats) == 1, "identical bytes are the same fact, not a new generation"
-    assert mats[0].is_live is True
+    assert _is_live(mats[0].get("address"))
 
 
 def test_params_are_part_of_cache_identity():
@@ -277,7 +287,7 @@ def test_string_payload_round_trips_as_string():
     summary = pipe.run(params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit")
-    assert mat.content_type == "text"
+    assert mat.get("content_type") == "text"
 
 
 def test_bytes_payload_round_trips_as_bytes():
@@ -296,4 +306,4 @@ def test_bytes_payload_round_trips_as_bytes():
     summary = pipe.run(params={"path": path}, workers=1)
     assert summary.failed_count == 0
     (mat,) = get_mats("emit_b")
-    assert mat.content_type == "bytes"
+    assert mat.get("content_type") == "bytes"

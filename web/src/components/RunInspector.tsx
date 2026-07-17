@@ -8,7 +8,6 @@ interface TraceItem {
   coordinate: string;
   status: string;
   output_address: string;
-  materialization_id: number;
   is_match: boolean;
 }
 

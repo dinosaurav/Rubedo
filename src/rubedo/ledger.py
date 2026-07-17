@@ -17,11 +17,7 @@ from .db import get_session
 from .execution import ExecutionOutcome, _materialized_ancestors
 from .models import (
     Filtered,
-    Materialization,
     MaterializationEdge,
-    MaterializationIndexEntry,
-    MaterializationLifecycle,
-    ProcessResult,
     Run,
     RunCoordinateStatus,
     RunEvent,
@@ -29,7 +25,8 @@ from .models import (
 )
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
-from .store import stage_and_commit
+from .store import serialize_output
+from . import lane_store
 from .util import utcnow_iso
 
 
@@ -176,7 +173,6 @@ def _record_planned(
                     status,
                     input_hash=d.input_hash,
                     output_address=d.output_address,
-                    materialization_id=d.existing.id,  # type: ignore
                     metadata_json=json.dumps(meta) if meta else None,
                 )
             )
@@ -223,190 +219,46 @@ def _record_planned(
                 coordinate=d.coordinate,
                 data={"reason": "stale"} if d.stale else None,
             )
-
-
-def _commit_materialization(
-    session: Session,
-    *,
-    pipeline_id: str,
-    step: StepSpec,
-    input_hash: str,
-    output_address: str,
-    output_content_hash: str,
-    content_type: str,
-    output_path: str,
-    metadata_json: Optional[str],
-    run_id: str,
-    refresh: bool = False,
-    filtered: bool = False,
-) -> tuple[Materialization, str]:
-    """Record an executed result at its address, honoring generations.
-
-    An address may accumulate generations over time; at most one is live.
-    Identical bytes are the same fact (reuse the live row, or restore a
-    non-live one); different bytes supersede the live generation so that
-    downstream input hashes change and dependents recompute. Every liveness
-    transition appends a materialization_lifecycle row — the append-only
-    truth that the is_live/refreshed_at projections cache.
-
-    refresh marks a staleness-driven recompute: identical bytes then reset
-    the generation's freshness clock instead of being a silent no-op.
-
-    Returns (materialization, action) with action one of
-    created | reused | restored | superseded | refreshed.
-    """
-    live = (
-        session.query(Materialization)
-        .filter_by(output_address=output_address, is_live=True)
-        .first()
-    )
-    superseded = None
-    if live:
-        if live.output_content_hash == output_content_hash:
-            if refresh:
-                live.refreshed_at = utcnow_iso()  # type: ignore
-                session.add(
-                    MaterializationLifecycle(
-                        materialization_id=live.id,
-                        action="refreshed",
-                        run_id=run_id,
-                        reason="stale output re-verified byte-identical",
-                        created_at=utcnow_iso(),
+            # Claim: record that this run is executing this address.
+            # We do NOT flip fulfilled=False here — the old output may
+            # produce identical bytes (expand root re-run, force=True),
+            # and the commit path needs to know if the address was
+            # previously fulfilled to distinguish "reused" (same bytes,
+            # was already live) from "created" (was invalidated/missing).
+            # The claim just records last_run_id for traceability.
+            if d.output_address is not None:
+                from .models import InputHashUsage
+                existing_claim = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=str(d.output_address))
+                    .first()
+                )
+                if existing_claim:
+                    existing_claim.last_run_id = ctx.run_id  # type: ignore[assignment]
+                else:
+                    session.add(
+                        InputHashUsage(
+                            address=str(d.output_address),
+                            last_run_id=ctx.run_id,
+                            fulfilled=False,
+                        )
                     )
-                )
-                return live, "refreshed"
-            return live, "reused"
-        live.is_live = False  # type: ignore
-        # Demote before inserting the replacement so the one-live-per-address
-        # index never sees two live generations
-        session.flush()
-        superseded = live
-    else:
-        prior = (
-            session.query(Materialization)
-            .filter_by(
-                output_address=output_address,
-                output_content_hash=output_content_hash,
-                is_live=False,
-            )
-            .order_by(Materialization.id.desc())
-            .first()
-        )
-        if prior:
-            prior.is_live = True  # type: ignore
-            session.add(
-                MaterializationLifecycle(
-                    materialization_id=prior.id,
-                    action="restored",
-                    run_id=run_id,
-                    reason="recompute produced identical output",
-                    created_at=utcnow_iso(),
-                )
-            )
-            return prior, "restored"
 
-    mat = Materialization(
-        pipeline_id=pipeline_id,
-        step_name=step.name,
-        code_version=step.version,
-        code_hash=step.code_hash,
-        input_hash=input_hash,
-        output_address=output_address,
-        output_content_hash=output_content_hash,
-        content_type=content_type,
-        output_path=output_path,
-        metadata_json=metadata_json,
-        created_at=utcnow_iso(),
-        created_by_run_id=run_id,
-        filtered=filtered,
-        is_live=True,
+
+def _identity_of(output_value: Any) -> str:
+    """Compute a content identity hash from an output value (for
+    downstream ``input_hash`` computation).  Same value → same identity →
+    downstream reuses, regardless of inline (native Arrow) vs spilled
+    (ref string).  Computed once at commit time from the original output
+    value and stored in the ``output_identity`` Arrow column."""
+    from .hashing import hash_bytes
+    import json
+
+    if isinstance(output_value, str):
+        return hash_bytes(output_value.encode("utf-8"))
+    return hash_bytes(
+        json.dumps(output_value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
-
-    from sqlalchemy.exc import IntegrityError
-    try:
-        with session.begin_nested():
-            session.add(mat)
-            session.flush()
-    except IntegrityError:
-        live = (
-            session.query(Materialization)
-            .filter_by(output_address=output_address, is_live=True)
-            .first()
-        )
-        if live:
-            if live.output_content_hash == output_content_hash:
-                return live, "reused"
-            
-            live.is_live = False  # type: ignore
-            session.flush()
-            superseded = live
-            
-            mat2 = Materialization(
-                pipeline_id=pipeline_id,
-                step_name=step.name,
-                code_version=step.version,
-                code_hash=step.code_hash,
-                input_hash=input_hash,
-                output_address=output_address,
-                output_content_hash=output_content_hash,
-                content_type=content_type,
-                output_path=output_path,
-                metadata_json=metadata_json,
-                created_at=utcnow_iso(),
-                created_by_run_id=run_id,
-                filtered=filtered,
-                is_live=True,
-            )
-            session.add(mat2)
-            session.flush()
-            mat = mat2
-        else:
-            raise
-
-    if superseded is not None:
-        session.add(
-            MaterializationLifecycle(
-                materialization_id=superseded.id,
-                action="superseded",
-                run_id=run_id,
-                reason="recompute produced different output",
-                superseded_by_id=mat.id,
-                created_at=utcnow_iso(),
-            )
-        )
-        return mat, "superseded"
-    return mat, "created"
-
-
-def _extract_index_entries(session: Session, mat_id: int, step: StepSpec, result):
-    """Project declared value fields into the search index.
-
-    Labels are data someone chose to index: fields come straight from the
-    output value (dotted paths for nesting), list fields yield one entry
-    per element, missing fields are simply not indexed.
-    """
-    if not step.index:
-        return
-    value = result.value if isinstance(result, ProcessResult) else result
-    if not isinstance(value, dict):
-        return
-
-    for path in step.index:
-        node = value
-        for part in path.split("."):
-            node = node.get(part) if isinstance(node, dict) else None  # type: ignore
-            if node is None:
-                break
-        if node is None:
-            continue
-        elements = node if isinstance(node, list) else [node]
-        for el in elements:
-            if isinstance(el, (str, int, float, bool)):
-                session.add(
-                    MaterializationIndexEntry(
-                        materialization_id=mat_id, field=path, value=str(el)
-                    )
-                )
 
 
 def _record_failure(
@@ -485,35 +337,121 @@ def _commit_execution_result(
 
         try:
             # A step declining the coordinate is a cacheable decision: it is
-            # committed like any output (a marker object with filtered=True)
+            # committed like any output (a marker dict with filtered=True)
             # so re-runs reuse the verdict instead of re-executing the step.
             is_filtered = isinstance(result, Filtered)
             if is_filtered:
-                metadata_json = json.dumps({"reason": result.reason})
                 result = {"__filtered__": True, "reason": result.reason}
+
+            if outcome.arrow_batched:
+                # Arrow data already written to the lane store's arrow batch
+                # buffer by _expand_table_outcomes — skip serialize_output +
+                # append_filled.  Read the output value and identity from the
+                # arrow batch buffer for the MatRef.  Always "created" —
+                # re-running an expand root and producing the same content
+                # is a new generation, not a reuse.
+                mat_action = "created"
+                content_type = "json"
+                batch_row = lane_store.arrow_batch_row_by_address(
+                    ctx.pipeline_id, step.name, str(decision.output_address)
+                )
+                output_string = batch_row.get("output") if batch_row else None
+                identity = batch_row.get("output_identity") if batch_row else None
+            elif outcome.is_anchor:
+                # Expand anchor: store in a separate file (<step>.anchor.arrow)
+                # via append_anchor, so the anchor's output (a list of child
+                # hashes) doesn't pollute the step's output column type.
+                # Always serialize as a JSON string — the anchor file's output
+                # column is always string type.
+                import json as _json
+                output_string = _json.dumps(result, sort_keys=True, separators=(",", ":"))
+                content_type = "json"
+                identity = _identity_of(output_string)
+                mat_action = "created"
+                from .models import InputHashUsage
+                existing_usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=str(decision.output_address))
+                    .first()
+                )
+                if existing_usage and existing_usage.fulfilled:
+                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    if existing_row and existing_row.get("output_identity") == identity:
+                        mat_action = "reused"
+                if mat_action != "reused":
+                    lane_store.append_anchor(
+                        pipeline_id=ctx.pipeline_id,
+                        step_name=step.name,
+                        lane_key=decision.coordinate,
+                        address=str(decision.output_address),
+                        input_hash=str(decision.input_hash),
+                        output=output_string,
+                        content_type=content_type,
+                        run_id=ctx.run_id,
+                        code_hash=step.code_hash,
+                        code_version=step.version,
+                        output_identity=identity,
+                    )
             else:
-                metadata_json = None
-                if isinstance(result, ProcessResult) and result.metadata:
-                    metadata_json = json.dumps(result.metadata)
+                output_string, content_type = serialize_output(
+                    ctx.run_id, decision.coordinate, result
+                )
+                identity = _identity_of(output_string)
 
-            final_path, output_content_hash, content_type = stage_and_commit(
-                ctx.run_id, decision.coordinate, result
-            )
+                # Determine mat_action: if the address was already fulfilled
+                # (live) and the existing Arrow row has the same identity,
+                # the step re-ran but produced identical output → "reused".
+                mat_action = "created"
+                from .models import InputHashUsage
+                existing_usage = (
+                    session.query(InputHashUsage)
+                    .filter_by(address=str(decision.output_address))
+                    .first()
+                )
+                if existing_usage and existing_usage.fulfilled:
+                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    if existing_row and existing_row.get("output_identity") == identity:
+                        mat_action = "reused" if not decision.stale else "refreshed"
 
-            mat, mat_action = _commit_materialization(
-                session,
-                pipeline_id=ctx.pipeline_id,
-                step=step,
-                input_hash=decision.input_hash,  # type: ignore
-                output_address=decision.output_address,  # type: ignore
-                output_content_hash=output_content_hash,
-                content_type=content_type,
-                output_path=final_path,
-                metadata_json=metadata_json,
-                run_id=ctx.run_id,
-                refresh=decision.stale,
-                filtered=is_filtered,
+                if mat_action != "reused":
+                    lane_store.append_filled(
+                        pipeline_id=ctx.pipeline_id,
+                        step_name=step.name,
+                        lane_key=decision.coordinate,
+                        address=str(decision.output_address),
+                        input_hash=str(decision.input_hash),
+                        output=output_string,
+                        content_type=content_type,
+                        run_id=ctx.run_id,
+                        filtered=is_filtered,
+                        code_hash=step.code_hash,
+                        code_version=step.version,
+                        output_identity=identity,
+                    )
+
+            # Mark this address as fulfilled in input_hash_usages — the
+            # liveness gate.  The planning phase checks fulfilled=True to
+            # decide reuse.
+            from .models import InputHashUsage as _IHU
+            existing = (
+                session.query(_IHU)
+                .filter_by(address=str(decision.output_address))
+                .first()
             )
+            if existing:
+                existing.fulfilled = True  # type: ignore[assignment]
+                existing.last_run_id = ctx.run_id  # type: ignore[assignment]
+            else:
+                session.add(
+                    _IHU(
+                        address=str(decision.output_address),
+                        last_run_id=ctx.run_id,
+                        fulfilled=True,
+                    )
+                )
+            # Update the fulfilled cache so the next planning phase
+            # sees this address as live without a SQLite re-query.
+            lane_store.mark_fulfilled(str(decision.output_address))
 
             if outcome.is_anchor:
                 # Cache anchor only: stored so a re-run's plan can skip the
@@ -521,11 +459,6 @@ def _commit_execution_result(
                 # coord_step_mats entry.
                 session.commit()
                 return
-
-            # Fresh generations get their declared value fields indexed;
-            # reused/restored/refreshed rows already carry their entries
-            if mat_action in ("created", "superseded") and not is_filtered:
-                _extract_index_entries(session, mat.id, step, result)  # type: ignore
 
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
@@ -540,14 +473,19 @@ def _commit_execution_result(
                 flat_parents = decision.parent_mats
                 
             for p_mat in _materialized_ancestors(flat_parents).values():
+                p_addr = getattr(p_mat, "output_address", None) or ""
+                c_addr = str(decision.output_address)
                 edge_exists = (
                     session.query(MaterializationEdge)
-                    .filter_by(parent_id=p_mat.id, child_id=mat.id)
+                    .filter_by(parent_address=p_addr, child_address=c_addr)
                     .first()
                 )
                 if not edge_exists:
                     session.add(
-                        MaterializationEdge(parent_id=p_mat.id, child_id=mat.id)
+                        MaterializationEdge(
+                            parent_address=p_addr,
+                            child_address=c_addr,
+                        )
                     )
 
             if is_filtered:
@@ -586,7 +524,6 @@ def _commit_execution_result(
                     status,
                     input_hash=decision.input_hash,
                     output_address=decision.output_address,
-                    materialization_id=mat.id,
                     metadata_json=json.dumps(status_meta) if status_meta else None,
                 )
             )
@@ -597,15 +534,16 @@ def _commit_execution_result(
                 "step_filtered" if is_filtered else f"materialization_{mat_action}",
                 step_name=step.name,
                 coordinate=decision.coordinate,
-                data={"materialization_id": mat.id},
+                data={"output_address": str(decision.output_address)},
             )
             ctx.count(step.name, status)
             ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
-                mat.id,
-                mat.output_address,
-                mat.output_content_hash,
-                mat.content_type,
+                0,
+                str(decision.output_address),
+                identity,
+                content_type,
                 filtered=is_filtered,
+                output=output_string,
             )
         except Exception as e:
             session.rollback()
@@ -628,6 +566,13 @@ def _commit_execution_result(
 
 def _finish_run(ctx: _RunContext) -> RunSummary:
     """Finalize the run status and return a summary of all outcomes."""
+    # Safety-net flush: per-segment flush in _run_segment should have
+    # already written everything, but this catches any edge case (e.g.
+    # anchor rows from expand steps that weren't in the segment's step
+    # list).  On exception paths, clear_run_buffers drops only the
+    # current segment's in-flight work; completed segments are on disk.
+    lane_store.flush_all()
+
     full_summary = {
         "created": ctx.totals["created"],
         "reused": ctx.totals["reused"],

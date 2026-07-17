@@ -37,7 +37,6 @@ class RunCoordinateStatusOut(BaseModel):
     pipeline_id: Optional[str] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
-    materialization_id: Optional[int] = None
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     metadata_json: Optional[str] = None
@@ -57,7 +56,6 @@ class RunEventOut(BaseModel):
 
 class MaterializationOut(BaseModel):
     """A materialized output from a step."""
-    id: int
     pipeline_id: str
     step_name: str
     code_version: str
@@ -80,14 +78,12 @@ class CurrentOutputOut(BaseModel):
     code_version: Optional[str] = None
     input_hash: Optional[str] = None
     output_address: Optional[str] = None
-    materialization_id: Optional[int] = None
     run_id: str
     updated_at: Optional[str] = None
 
 
 class SelectionPreviewItem(BaseModel):
     """A materialization matched by a selection query."""
-    materialization_id: int
     pipeline_id: str
     step_name: str
     code_version: str
@@ -107,7 +103,7 @@ class SelectionInvalidateResponse(BaseModel):
     """Result of an invalidation request."""
     run_id: str
     invalidated_count: int
-    materialization_ids: List[int]
+    addresses: List[str] = []
 
 
 class PipelineOut(BaseModel):
@@ -121,12 +117,6 @@ class PipelineOut(BaseModel):
     last_run_finished_at: Optional[str] = None
     # DAG snapshot recorded by the most recent run (steps, edges, policies)
     definition: Optional[Dict[str, Any]] = None
-
-
-class MaterializationIndexEntryOut(BaseModel):
-    """One indexed field/value pair for a materialization."""
-    field: str
-    value: str
 
 
 class ObjectMetadataOut(BaseModel):
@@ -147,4 +137,3 @@ class ObjectMetadataOut(BaseModel):
     invalidation_reason: Optional[str] = None
     output_content_hash: str
     content_type: Optional[str] = None
-    index: List[MaterializationIndexEntryOut]

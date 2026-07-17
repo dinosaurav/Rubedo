@@ -10,7 +10,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, RunEvent
+from rubedo.models import RunEvent
+from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_code_data"
@@ -193,7 +194,9 @@ def test_code_hash_recorded_on_materialization():
     pipe, spec = register(body_v1, "v1")
     pipe.run(params={"path": path}, workers=1)
 
-    with get_session() as session:
-        mat = session.query(Materialization).one()
-        assert mat.code_hash == spec.code_hash
-        assert mat.code_hash is not None
+    with get_session():
+        rows = lane_store.all_filled_rows()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.get("code_hash") == spec.code_hash
+        assert row.get("code_hash") is not None

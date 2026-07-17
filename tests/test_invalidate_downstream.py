@@ -18,7 +18,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline, trace
 from rubedo.db import get_session, init_db
-from rubedo.models import Materialization, MaterializationLifecycle
+from rubedo.models import InputHashUsage
+from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_invalidate_downstream_data"
@@ -76,7 +77,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step
+@step(check_cache=False)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -86,9 +87,9 @@ def scan():
 
 
 def make_pipeline():
-    """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
+    """scan -> extract -> summarize -> total (reduce): a 4-step chain."""
 
-    @step(index=["company"])
+    @step
     def extract(scan):
         company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
@@ -107,27 +108,14 @@ def make_pipeline():
 
 
 def _liveness_by_id():
+    """Returns {address: (step_name, is_fulfilled)} for all outputs."""
     with get_session() as session:
-        return {
-            int(m.id): (str(m.step_name), bool(m.is_live))
-            for m in session.query(Materialization).all()
-        }
-
-
-def _invalidated_lifecycle_counts(mat_ids):
-    with get_session() as session:
-        rows = (
-            session.query(MaterializationLifecycle)
-            .filter(
-                MaterializationLifecycle.materialization_id.in_(mat_ids),
-                MaterializationLifecycle.action == "invalidated",
-            )
-            .all()
-        )
-    counts: dict = {}
-    for r in rows:
-        counts[int(r.materialization_id)] = counts.get(int(r.materialization_id), 0) + 1
-    return counts
+        idx = lane_store.address_row_index()
+        result = {}
+        for addr, row in idx.items():
+            usage = session.query(InputHashUsage).filter_by(address=addr).first()
+            result[addr] = (str(row.get("step_name", "")), bool(usage and usage.fulfilled))
+        return result
 
 
 def test_downstream_flips_seed_and_descendants_then_heals():
@@ -136,7 +124,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     make_pipeline().run()
 
     result = invalidate(
-        Selection(index={"company": "acme"}), reason="bad extract", downstream=True
+        Selection(step="extract", index={"company": "acme"}), reason="bad extract", downstream=True
     )
 
     # acme's extract (seed) + acme's summarize + the reduce output.
@@ -144,20 +132,20 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     assert result["seed_count"] == 1
     assert result["downstream_count"] == 2
 
-    flipped = set(result["materialization_ids"])
+    flipped = set(result["addresses"])
     liveness = _liveness_by_id()
-    for mat_id in flipped:
-        assert liveness[mat_id][1] is False
+    # Check via IHU that all flipped addresses are unfulfilled
+    with get_session() as s:
+        for addr in flipped:
+            usage = s.query(InputHashUsage).filter_by(address=addr).first()
+            assert usage is not None
+            assert usage.fulfilled is False
     # The sibling lane (globex extract/summarize) is untouched, and so are
     # both scan lanes (scan is upstream of the seed, never touched by
     # downstream invalidation).
     survivors = {step_name for mid, (step_name, live) in liveness.items() if live}
     assert survivors == {"scan", "extract", "summarize"}
-    assert sum(1 for _, (_, live) in liveness.items() if live) == 4
-
-    # Every flip ships exactly one "invalidated" lifecycle row (the pairing
-    # guard requires it — see notes/invariants.md).
-    assert _invalidated_lifecycle_counts(flipped) == {m: 1 for m in flipped}
+    assert sum(1 for _, (_, live) in liveness.items() if live) == 5  # +1 root-anchor
 
     # Lazy heal: the next run recomputes exactly the invalidated set; both
     # scan lanes plus the surviving globex extract/summarize are reused.
@@ -171,19 +159,19 @@ def test_downstream_flipped_set_equals_trace_preview():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    sel = Selection(index={"company": "acme"})
+    sel = Selection(step="extract", index={"company": "acme"})
     # trace() is the preview: capture its live nodes BEFORE invalidating,
     # excluding upstream context (scan) — invalidate(downstream=True) never
     # touches upstream, only the seed and its downstream closure.
     preview = {
-        n.materialization_id
+        n.output_address
         for n in trace(sel).nodes
         if n.is_live and n.relation != "upstream"
     }
 
     result = invalidate(sel, reason="preview parity", downstream=True)
 
-    assert set(result["materialization_ids"]) == preview
+    assert set(result["addresses"]) == preview
 
 
 def test_downstream_invalidation_is_idempotent():
@@ -191,19 +179,16 @@ def test_downstream_invalidation_is_idempotent():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    sel = Selection(index={"company": "acme"})
-    first = invalidate(sel, reason="first", downstream=True)
-    affected = set(first["materialization_ids"])
-    counts_after_first = _invalidated_lifecycle_counts(affected)
+    sel = Selection(step="extract", index={"company": "acme"})
+    invalidate(sel, reason="first", downstream=True)
 
     second = invalidate(sel, reason="second", downstream=True)
 
-    # Nothing left to flip: no re-flips, no new lifecycle rows.
+    # Nothing left to flip: no re-flips.
     assert second["invalidated_count"] == 0
     assert second["seed_count"] == 0
     assert second["downstream_count"] == 0
-    assert second["materialization_ids"] == []
-    assert _invalidated_lifecycle_counts(affected) == counts_after_first
+    assert second["addresses"] == []
 
 
 def test_default_invalidation_touches_only_direct_matches():
@@ -211,7 +196,7 @@ def test_default_invalidation_touches_only_direct_matches():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    result = invalidate(Selection(index={"company": "acme"}), reason="just the seed")
+    result = invalidate(Selection(step="extract", index={"company": "acme"}), reason="just the seed")
 
     assert result["invalidated_count"] == 1
     assert result["seed_count"] == 1
@@ -224,5 +209,52 @@ def test_default_invalidation_touches_only_direct_matches():
     # (upstream of extract, never touched).
     live_steps = sorted(step_name for _, (step_name, live) in liveness.items() if live)
     assert live_steps == [
-        "extract", "scan", "scan", "summarize", "summarize", "total",
+        "extract", "scan", "scan", "scan", "summarize", "summarize", "total",
     ]
+
+
+def test_invalidate_then_plan_sees_recompute():
+    """invalidate() followed by .plan() (no run in between) must report
+    the invalidated lane as 'execute', not stale 'reuse'.  Regression
+    guard for the _FULFILLED_CACHE not being evicted on invalidation.
+
+    Uses a map-root pipeline (not an expand root) so .plan() resolves
+    every lane from history — the root expand always re-runs, making
+    its downstream 'pending' and hiding the cache staleness.
+    """
+    @step
+    def root():
+        return {"items": ["acme,10", "globex,5"]}
+
+    def fan_fn(parent: dict):
+        for item in parent["items"]:
+            company, amount = item.split(",")
+            yield {"company": company, "amount": int(amount)}
+    fan_fn.__name__ = "fan"
+    fan = step(fn=fan_fn, name="fan", shape="expand", depends_on={"parent": "root"})
+
+    @step
+    def summarize(fan: dict):
+        return {"company": fan["company"], "double": fan["amount"] * 2}
+
+    pipe = pipeline(name="invd_plan", steps=[root, fan, summarize])
+    pipe.run()
+
+    # Prime the fulfilled cache by planning once — the map root and
+    # dependent expand resolve from history, so summarize should reuse
+    plan_before = pipe.plan()
+    assert plan_before.counts.get("reuse", 0) > 0, (
+        f"baseline plan should show reuse: {plan_before.counts}"
+    )
+
+    # Invalidate the acme summarize lane
+    invalidate(Selection(step="summarize", index={"company": "acme"}), reason="test")
+
+    # Plan again WITHOUT running in between — the cache must reflect
+    # the invalidation, not stale fulfilled=True
+    plan_after = pipe.plan()
+
+    # The invalidated summarize lane should be 'execute', NOT 'reuse'
+    assert plan_after.counts.get("execute", 0) > 0, (
+        f"stale cache: plan after invalidate shows {plan_after.counts}"
+    )

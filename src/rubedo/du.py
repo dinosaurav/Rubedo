@@ -1,10 +1,11 @@
 """Read-only storage observability: what the object store holds, per the ledger.
 
-storage_report() walks the materializations table — never the store
-directory (direction-of-truth rule: the ledger is the truth about what the
-store contains; enumerating `objects/` would invert that). File sizes are
-read via os.path.getsize on ledger-named paths, which is fine: the ledger
-names the path, the filesystem only supplies the byte count.
+storage_report() walks the Arrow lane_store rows + input_hash_usages —
+never the store directory (direction-of-truth rule: the ledger is the
+truth about what the store contains; enumerating `objects/` would invert
+that). File sizes are read via os.path.getsize on ledger-named paths,
+which is fine: the ledger names the path, the filesystem only supplies
+the byte count.
 
 The load-bearing subtlety is sharing. The store is content-addressed and
 dedupes identical bytes, so one physical object (keyed by
@@ -35,8 +36,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from .db import get_session
-from .models import Materialization, ObjectReclamation
+from .models import InputHashUsage, ObjectReclamation
 from .store import _get_object_path
+from . import lane_store
 
 
 @dataclass
@@ -141,12 +143,6 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         _init_home(home)
 
     with get_session() as session:
-        rows = session.query(
-            Materialization.pipeline_id,
-            Materialization.step_name,
-            Materialization.output_content_hash,
-            Materialization.is_live,
-        ).all()
         # Bytes logged at deletion for each reclaimed hash (latest row wins, so
         # a re-reclaimed object reflects its most recent deletion).
         reclaimed_bytes_of: Dict[str, int] = {}
@@ -157,12 +153,40 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         ):
             reclaimed_bytes_of[str(r.content_hash)] = int(r.bytes)
 
-    # Physical objects: group all materializations by content hash.
+        # Liveness from input_hash_usages.fulfilled
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
+
+    # Content hashes + pipeline/step from the Arrow lane_store rows.
+    arrow_rows = lane_store.all_filled_rows()
+
+    # Build (pipeline_id, step_name, content_hash, is_live) tuples.
+    # content_hash is parsed from the `output` ref string for spilled
+    # values; inline (JSON) outputs have content_hash=None — they count as
+    # materializations but occupy no object-store bytes.
+    rows: List[tuple] = []
+    for row in arrow_rows:
+        addr = row.get("address", "")
+        output = row.get("output")
+        content_hash = (
+            output[len("objects:"):]
+            if isinstance(output, str) and output.startswith("objects:")
+            else None
+        )
+        is_live = addr in fulfilled_addrs
+        rows.append((row.get("pipeline_id", ""), row.get("step_name", ""), content_hash, is_live))
+
+    # Physical objects: group spilled materializations by content hash.
     size_of: Dict[str, int] = {}
     missing: Set[str] = set()
     reclaimed: Set[str] = set()
     live_refs: Dict[str, int] = {}
     for _, _, content_hash, is_live in rows:
+        if content_hash is None:
+            continue  # inline value: no object-store bytes
         if (
             content_hash not in size_of
             and content_hash not in missing
@@ -202,7 +226,7 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         ):
             usage.materializations += 1
             usage.live_materializations += 1 if is_live else 0
-            if content_hash not in seen:
+            if content_hash is not None and content_hash not in seen:
                 seen.add(content_hash)
                 usage.objects += 1
                 usage.bytes += size_of.get(content_hash, 0)
@@ -215,7 +239,7 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         total_objects=len(size_of) + len(missing),
         total_bytes=sum(size_of.values()),
         total_materializations=len(rows),
-        live_materializations=sum(1 for r in rows if r.is_live),
+        live_materializations=sum(1 for r in rows if r[3]),
         missing_objects=len(missing),
         reclaimable_objects=len(reclaimable),
         reclaimable_bytes=sum(size_of[h] for h in reclaimable),

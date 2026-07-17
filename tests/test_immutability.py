@@ -10,16 +10,16 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
+from rubedo import lane_store
 from rubedo.models import (
     ImmutabilityError,
-    Materialization,
-    MaterializationLifecycle,
+    InputHashUsage,
+    MaterializationEdge,
     Run,
     RunCoordinateStatus,
     RunEvent,
 )
 from rubedo.store import init_store
-from rubedo.util import utcnow_iso
 
 TEST_FOLDER = ".test_immutability_data"
 ENV_FOLDER = ".test_immutability_env"
@@ -111,32 +111,24 @@ def test_append_only_rows_reject_deletes():
         session.rollback()
 
 
-def test_materialization_content_is_immutable():
+def test_materialization_edge_is_immutable():
     pipe, _ = run_simple_pipeline()
     with get_session() as session:
-        mat = session.query(Materialization).first()
-        mat.output_content_hash = "tampered"
-        with pytest.raises(ImmutabilityError, match="immutable"):
+        edge = session.query(MaterializationEdge).first()
+        edge.parent_address = "tampered"
+        with pytest.raises(ImmutabilityError, match="append-only"):
             session.commit()
         session.rollback()
 
 
-def test_materialization_liveness_is_the_only_legal_update():
+def test_input_hash_usage_liveness_is_mutable():
     pipe, _ = run_simple_pipeline()
     with get_session() as session:
-        mat = session.query(Materialization).first()
-        mat.is_live = False
-        # Projection column is allowed, but the pairing guard requires the
-        # flip to ship a lifecycle row in the same transaction (see
-        # notes/invariants.md).
-        session.add(
-            MaterializationLifecycle(
-                materialization_id=mat.id,
-                action="invalidated",
-                reason="test",
-                created_at=utcnow_iso(),
-            )
-        )
+        ihu = session.query(InputHashUsage).first()
+        ihu.fulfilled = False
+        ihu.last_run_id = "different"
+        # InputHashUsage is the one intentionally mutable ledger table:
+        # fulfilled/last_run_id legitimately update (claim/fulfill/invalidate).
         session.commit()
 
 
@@ -166,15 +158,10 @@ def test_restore_preserves_invalidation_history():
     with get_session() as session:
         # Only "read"'s materialization was invalidated; "scan"'s own lane
         # materialization is untouched, so filter to the step under test.
-        mat = session.query(Materialization).filter_by(step_name="read").one()
-        assert mat.is_live is True
-
-        lifecycle = (
-            session.query(MaterializationLifecycle)
-            .filter_by(materialization_id=mat.id)
-            .order_by(MaterializationLifecycle.id)
-            .all()
-        )
-        assert [lc.action for lc in lifecycle] == ["invalidated", "restored"]
-        assert lifecycle[0].reason == "looked wrong"
-        assert lifecycle[0].run_id is not None, "who invalidated it is preserved"
+        read_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "read"]
+        assert read_rows
+        ihu = session.query(InputHashUsage).filter_by(address=read_rows[0]["address"]).first()
+        assert ihu is not None and ihu.fulfilled is True
+        # No lifecycle rows in the new model — liveness is
+        # input_hash_usages.fulfilled.  The invalidation flipped fulfilled=False,
+        # the rerun flipped it back to True.

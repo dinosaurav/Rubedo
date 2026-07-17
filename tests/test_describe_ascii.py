@@ -47,11 +47,11 @@ def _newsroom_shaped():
     def publishers():
         yield {"publisher": "TechCorp", "region": "US"}
 
-    @p.step(index=["publisher"])
+    @p.step
     def feed(feeds):
         return feeds
 
-    @p.step(index=["publisher"])
+    @p.step
     def publisher(publishers):
         return publishers
 
@@ -62,7 +62,7 @@ def _newsroom_shaped():
     def feed_meta(feed, publisher):
         return {}
 
-    @p.step(index=["region"])
+    @p.step
     def articles(feed_meta):
         yield {}
 

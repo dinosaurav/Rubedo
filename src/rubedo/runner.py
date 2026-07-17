@@ -50,6 +50,8 @@ def _init_home(home: str):
     """
     init_db(db_path=os.path.join(home, "rubedo.sqlite"))
     init_store(home=home)
+    from . import lane_store
+    lane_store.init_tables(home=home)
 
 
 @contextlib.contextmanager
@@ -228,11 +230,10 @@ def plan(
     "execute" means the step function would run for that coordinate;
     "pending" means the answer depends on an upstream execution whose output
     (and therefore this coordinate's address) is unknowable without running.
-    A root *expand* step (a parentless generator) always plans as one
-    "execute" — it has no parent to cache its enumeration against, so its
-    lanes are unknowable
-    until it actually runs (a second `plan()` sees them via the expand
-    anchor without re-running the generator).
+    A root *expand* step (a parentless generator) plans as "reuse" for each
+    cached child lane if the ROOT_LANE-keyed anchor is present, or one
+    "execute" for @root if it isn't (first run) or the step has
+    check_cache=False.
 
     home, if given, points the ledger/object store at a custom root instead
     of the default `.rubedo`/RUBEDO_HOME.
@@ -261,6 +262,7 @@ def plan(
                 params_hash,
                 force,
                 accepts_params,
+                pipeline_id=pipeline.name,
             )
             drifted = sum(1 for d in decisions if d.code_drift)
             if drifted:
@@ -345,6 +347,8 @@ def declare_pipeline(
 
     init_db()
     init_store()
+    from . import lane_store
+    lane_store.init_tables()
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     now = utcnow_iso()
@@ -452,6 +456,13 @@ def run_pipeline(
             if prog is not None:
                 progress_cb = prog.update
 
+            # Clear read caches at run start — they may hold stale data
+            # from a previous run with a different DB/home.  The cache
+            # is rebuilt on first lookup (one address-column scan per
+            # step, amortized across all lookups in this run).
+            from . import lane_store
+            lane_store.clear_read_caches()
+
             try:
                 params_hash = hash_json(params or {})
                 memo = _RunMemo()
@@ -475,6 +486,15 @@ def run_pipeline(
                 return summary
 
             except Exception as e:
+                # Flush whatever completed to disk — per-segment flush
+                # already wrote completed segments; this catches the
+                # current segment's successfully committed lanes (a
+                # catastrophic failure mid-commit leaves the Arrow row
+                # but IHU not fulfilled, so next run recomputes — the
+                # stale row is harmless history).  No reason to discard
+                # successful work.
+                from . import lane_store
+                lane_store.flush_all()
                 with get_session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                     if err_run:

@@ -2,49 +2,48 @@
 
 Every output is stored at a content-addressed, opaque address — great for
 caching, useless for asking "which rows mention `acme`?" or "recompute
-everything for `region=EU`." Indexing bridges that gap: it makes outputs
-findable by what a step *computed*, not by file name or row position. This
-page covers `@step(index=[...])`, the `Selection` query language, and the
-two ways to act on a selection: `invalidate()` and `trace()`.
+everything for `region=EU`." Searchable output fields bridge that gap: they
+make outputs findable by what a step *computed*, not by file name or row
+position. This page covers the `Selection` query language and the two ways
+to act on a selection: `invalidate()` and `trace()`.
 
-## Indexing: `@step(index=[...])`
+## Searchable output fields
+
+A step's output struct fields are searchable directly — no declaration
+needed. Whatever a step returns is findable by the fields of that value,
+not by file name or row position:
 
 ```python
-@step(index=["company", "meta.region"])
+@step
 def extract(row: dict):
     return {"company": row["company"], "meta": {"region": row["region"]}, ...}
 ```
 
-`index` names fields of the step's **output value** to extract into a
-search index at commit time. Dotted paths reach into nested dicts
-(`"meta.region"` pulls `value["meta"]["region"]`); a list-valued field
-indexes one entry per element, so a step that returns `{"tags": ["a", "b"]}`
-with `index=["tags"]` is findable by `tags:a` *or* `tags:b`.
+Dotted paths reach into nested dicts (`"meta.region"` pulls
+`value["meta"]["region"]`); a list-valued field matches one entry per
+element, so a step that returns `{"tags": ["a", "b"]}` is findable by
+`tags:a` *or* `tags:b`.
 
-Indexing is purely operational:
+Search is purely operational:
 
-- It never touches cache identity — adding, removing, or changing `index=`
-  doesn't change a step's output address and doesn't force a recompute.
-- Only *newly created* materializations get indexed under a new
-  declaration; outputs that already existed before you added `index=` stay
-  unindexed until they're recomputed (bump `version`, or use `invalidate()`,
-  if you need old rows searchable retroactively).
+- It never touches cache identity — what you can find has no effect on a
+  step's output address and never forces a recompute.
 - It's incompatible with `skip_cache=True` — nothing is stored to search, so
-  the combination is rejected at pipeline-build time.
+  a `skip_cache` output isn't selectable by content.
 
 `group_key` (on a `reduce` step) and `join_on` (on a `join` step) both read
-indexed fields at *plan* time to decide which lanes belong together — see
-[`../concepts/shapes.md`](../concepts/shapes.md).
+fields of the parent output at *plan* time to decide which lanes belong
+together — see [`../concepts/shapes.md`](../concepts/shapes.md).
 
-### Labels are just indexed data
+### Labels are just output data
 
-A "label" isn't a separate concept — it's whatever you chose to put in
-`index=`. It's **non-unique** (many rows can share `company:acme`),
-**multi-valued** (a list field indexes every element), attachable at *any*
+A "label" isn't a separate concept — it's whatever field a step chose to
+return. It's **non-unique** (many rows can share `company:acme`),
+**multi-valued** (a list field matches every element), attachable at *any*
 step in the DAG (not just roots), and it is **never part of cache
-identity** — two rows with identical content but different index values
-would still collapse to the same lane if their content matches; indexing
-only affects what you can find, not what recomputes.
+identity** — two rows with identical content but different field values
+would still collapse to the same lane if their content matches; search only
+affects what you can find, not what recomputes.
 
 ## The `Selection` query language
 
@@ -58,8 +57,8 @@ Selection.parse("step:extract company:acme live:true")      # query string
 `Selection.parse()` splits the query on whitespace into `key:value` terms
 (quote values containing spaces: `company:"acme corp"`). Some prefixes are
 **reserved** — they map to engine facts, read straight off the
-`Materialization` row — and everything else is treated as an indexed-field
-match:
+`Materialization` row — and everything else is treated as a match against
+an output field:
 
 | Term | Matches | Notes |
 |---|---|---|
@@ -71,7 +70,7 @@ match:
 | `version:<range>` | `Materialization.code_version` | when the value starts with `<`, `>`, `=`, or `!`, parsed as a [PEP 440](https://peps.python.org/pep-0440/) specifier via `packaging.SpecifierSet` — `version:<2.0`, `version:>=1.5,<2.0` |
 | `address:<hash>` | `Materialization.output_address` | exact match |
 | `live:true` / `live:false` | `Materialization.is_live` | `live:false` selects invalidated/superseded/pruned generations |
-| anything else, `field:value` | an indexed field (`@step(index=[...])`) | `MaterializationIndexEntry(field, value)`; every other term in the query must also match (AND) |
+| anything else, `field:value` | a field of the step's output struct | scanned directly from the Arrow `output` struct column; every other term in the query must also match (AND) |
 
 A query can combine any number of terms; all of them must match. Reserved
 terms are pushed down into SQL; `coord:` globbing and `version:` range
@@ -80,12 +79,12 @@ PEP 440 specifiers don't map cleanly onto `LIKE`).
 
 !!! note "Two channels, one home each"
     Lane-key globs (`coord:`) answer *source-shaped* questions — "the file
-    at this path," "this CSV row's key." Indexed fields answer
+    at this path," "this CSV row's key." Output fields answer
     *content-shaped* questions — "outputs where the step computed
     `company=acme`." They're deliberately separate: a coordinate is an
     engine-facing dataflow key (content-addressed by default, not a human
-    label), and `index=` is the only supported way to search by what a step
-    actually produced.
+    label), and querying output fields is the only supported way to search
+    by what a step actually produced.
 
 ## `invalidate()`: a logical tombstone
 

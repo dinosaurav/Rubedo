@@ -10,10 +10,38 @@ from typing import Any, Dict, List, Optional, Tuple, Union, Literal
 from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
-from .models import Materialization, MaterializationIndexEntry
 from .spec import PipelineSpec, StepSpec
-from .store import read_materialization_output
+from .store import read_output
 from .util import iso_age_seconds
+
+
+def _identity_from_output(row: dict) -> str:
+    """Read the content identity (for downstream input_hash) from an
+    Arrow row's ``output_identity`` column.  This is computed once at
+    commit time from the original output value and stored directly —
+    no recompute from the Arrow-read-back value, so the union struct
+    null-fill (``{"a": 1}`` → ``{"a": 1, "b": None}``) doesn't shift
+    the identity."""
+    return row.get("output_identity") or ""
+
+
+def _field_values_from_ref(ref, field: str) -> List[str]:
+    """Extract the stringified values of a field from a MatRef's output.
+
+    When the output is a native Arrow value (a dict from a struct column),
+    the field is a dict key — read it directly.  When the output is a
+    string (the spill/mixed fallback) or None, the field is not available
+    without deserializing from the object store.
+    """
+    output = getattr(ref, "output", None)
+    if isinstance(output, dict):
+        val = output.get(field)
+        if val is None:
+            return []
+        if isinstance(val, (list, tuple)):
+            return [str(v) for v in val]
+        return [str(val)]
+    return []
 
 
 @dataclass
@@ -37,12 +65,32 @@ class MatRef:
         output_content_hash,
         content_type=None,
         filtered=False,
+        output=None,
     ):
         self.id = id
         self.output_address = output_address
         self.output_content_hash = output_content_hash
         self.content_type = content_type
         self.filtered = filtered
+        self.output = output  # the Arrow "output" column value (inline JSON or ref string)
+
+
+class _ArrowRowRef:
+    """Adapter that makes an Arrow lane_store row dict satisfy the
+    HasOutputContentHash protocol so ``read_output`` can read its value
+    from the inline JSON or the object store (for spilled refs).  Used by
+    the expand-anchor path which needs to deserialize the anchor's stored
+    children list.
+
+    The ``output_content_hash`` (identity for downstream ``input_hash``
+    computation) is read directly from the ``output_identity`` column —
+    computed once at commit time from the original output value."""
+
+    def __init__(self, row: dict):
+        self._row = row
+        self.output = row.get("output")
+        self.output_content_hash = row.get("output_identity") or ""
+        self.content_type = row.get("content_type")
 
 
 @dataclass
@@ -144,9 +192,11 @@ def _compute_step_input_hash(
         parent_name = step.depends_on[0]
         return parent_mats[parent_name].output_content_hash
 
-    # Multi-parent
+    # Multi-parent — for declarative union, only present parents contribute
     parent_hashes = {
-        dep: parent_mats[dep].output_content_hash for dep in sorted(step.depends_on)
+        dep: parent_mats[dep].output_content_hash
+        for dep in sorted(step.depends_on)
+        if dep in parent_mats
     }
     return hash_json(parent_hashes)
 
@@ -197,6 +247,8 @@ def _step_accepts_params(step: StepSpec) -> bool:
     """Check if the step function signature accepts a 'params' keyword argument."""
     import inspect
 
+    if step.fn is None:
+        return False  # declarative step — no function, no params
     return "params" in inspect.signature(step.fn).parameters
 
 
@@ -219,40 +271,27 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
 def _group_reduce_lanes(
     session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """Partition a reduce's parent lanes into groups by an indexed field.
+    """Partition a reduce's parent lanes into groups by a field.
 
-    Reads each lane's `MaterializationIndexEntry` rows for `step.group_key`: a
-    lane with several values (a list-valued index) joins each group; a lane
-    with none raises, since you cannot group by a field it never indexed.
+    Reads each lane's ``group_key`` field from the parent's output (a
+    dict from a native Arrow struct column) directly.  A lane with
+    several values (a list-valued field) joins each group; a lane with
+    none raises.
     """
-    mat_ids = []
     coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
         for coord, ref in coord_refs.items():
-            mat_ids.append(ref.id)  # type: ignore
             coord_ref_map.append((dep, coord, ref))
 
-    vals_by_mat: Dict[int, List[str]] = {}
-    if mat_ids:
-        rows = (
-            session.query(MaterializationIndexEntry)
-            .filter(
-                MaterializationIndexEntry.materialization_id.in_(mat_ids),
-                MaterializationIndexEntry.field == step.group_key,
-            )
-            .all()
-        )
-        for row in rows:
-            vals_by_mat.setdefault(row.materialization_id, []).append(row.value)  # type: ignore
-
     groups: Dict[str, Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]] = {}
+    gk = step.group_key or ""
     for dep, coord, ref in coord_ref_map:
-        values = vals_by_mat.get(ref.id)  # type: ignore
+        values = _field_values_from_ref(ref, gk)
         if not values:
             raise ValueError(
                 f"reduce step '{step.name}': group_key '{step.group_key}' "
-                f"has no indexed value for lane '{coord}' (parent '{dep}'). "
-                f"Add index=['{step.group_key}'] to that step."
+                f"has no value for lane '{coord}' (parent '{dep}'). "
+                f"The field must exist in the parent's output dict."
             )
         for v in values:
             groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
@@ -269,6 +308,7 @@ def _reduce_group_decision(
     accepts_params: bool,
     failed_parents: Optional[List[str]] = None,
     blocked_parents: Optional[List[str]] = None,
+    pipeline_id: str = "",
 ) -> StepDecision:
     """Reuse/execute decision for one reduce group (or the sole '@all')."""
     hash_data = {}
@@ -292,15 +332,18 @@ def _reduce_group_decision(
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
 
-    existing_mat = (
-        session.query(Materialization)
-        .filter_by(output_address=output_address, is_live=True)
-        .first()
-    )
+    existing_mat = None
+    if pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        result = batch_lookup_by_address(
+            pipeline_id, step.name, {output_address}, session
+        )
+        existing_mat = result.get(output_address)
     expired = False
     if existing_mat and step.stale_after is not None:
-        freshness = existing_mat.refreshed_at or existing_mat.created_at
-        expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
+        freshness = existing_mat.get("ts")
+        if freshness and iso_age_seconds(freshness) > step.stale_after:
+            expired = True
 
     if existing_mat and not force and not expired:
         return StepDecision(
@@ -309,17 +352,18 @@ def _reduce_group_decision(
             input_hash=input_hash,
             output_address=output_address,
             existing=MatRef(
-                existing_mat.id,
-                existing_mat.output_address,
-                existing_mat.output_content_hash,
-                existing_mat.content_type,
-                filtered=existing_mat.filtered,
+                existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                output_address,
+                existing_mat.get("output_identity", ""),
+                existing_mat.get("content_type"),
+                filtered=existing_mat.get("filtered", False),
+                output=existing_mat.get("output"),
             ),
             code_drift=(
                 step.code_mode == "warn"
                 and step.code_hash is not None
-                and existing_mat.code_hash is not None
-                and step.code_hash != existing_mat.code_hash
+                and step.code_hash is not None
+                and step.code_hash != existing_mat.get("code_hash")
             ),
             failed_parents=failed_parents or [],
             blocked_parents=blocked_parents or [],
@@ -346,6 +390,7 @@ def _plan_join(
     params_hash: str,
     force: bool,
     accepts_params: bool,
+    pipeline_id: str = "",
 ) -> List[StepDecision]:
     """Plan an N-way equijoin.
 
@@ -362,7 +407,6 @@ def _plan_join(
     blocked_parents: List[str] = []
     pending = False
 
-    mat_ids_by_dep: Dict[str, List[int]] = {dep: [] for dep in deps}
     coord_ref_map: Dict[str, List[Tuple[str, Any]]] = {dep: [] for dep in deps}
 
     for (coord, d), ref in coord_step_mats.items():
@@ -377,7 +421,6 @@ def _plan_join(
         elif ref == "filtered" or getattr(ref, "filtered", False):
             pass
         elif ref is not None:
-            mat_ids_by_dep[d].append(ref.id)  # type: ignore
             coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
@@ -394,30 +437,15 @@ def _plan_join(
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
-    vals_by_mat_by_dep: Dict[str, Dict[int, List[str]]] = {dep: {} for dep in deps}
-    for d in deps:
-        if not mat_ids_by_dep[d]:
-            continue
-        rows = (
-            session.query(MaterializationIndexEntry)
-            .filter(
-                MaterializationIndexEntry.materialization_id.in_(mat_ids_by_dep[d]),
-                MaterializationIndexEntry.field == step.join_on[d],  # type: ignore
-            )
-            .all()
-        )
-        for row in rows:
-            vals_by_mat_by_dep[d].setdefault(row.materialization_id, []).append(row.value)  # type: ignore
-
     for d in deps:
         field = step.join_on[d]  # type: ignore
         for coord, ref in coord_ref_map[d]:
-            values = vals_by_mat_by_dep[d].get(ref.id)
+            values = _field_values_from_ref(ref, field)
             if not values:
                 raise ValueError(
-                    f"join step '{step.name}': side '{d}' has no indexed value "
-                    f"for join field '{field}' at lane '{coord}'. Add "
-                    f"index=['{field}'] to that step."
+                    f"join step '{step.name}': side '{d}' has no value "
+                    f"for join field '{field}' at lane '{coord}'. "
+                    f"The field must exist in the parent's output dict."
                 )
             for v in values:
                 buckets[d].setdefault(v, []).append((coord, ref))
@@ -455,21 +483,20 @@ def _plan_join(
 
     addrs = [out_addr for _, _, _, out_addr in combo_list]
     mats_by_addr = {}
-    if addrs:
-        mats = (
-            session.query(Materialization)
-            .filter(Materialization.output_address.in_(addrs), Materialization.is_live.is_(True))
-            .all()
+    if addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, set(addrs), session
         )
-        mats_by_addr = {m.output_address: m for m in mats}
 
     decisions: List[StepDecision] = []
     for pair_coord, parent_mats, input_hash, output_address in combo_list:
-        existing_mat = mats_by_addr.get(output_address)  # type: ignore
+        existing_mat = mats_by_addr.get(output_address)
         expired = False
         if existing_mat and step.stale_after is not None:
-            freshness = existing_mat.refreshed_at or existing_mat.created_at
-            expired = iso_age_seconds(freshness) > step.stale_after
+            freshness = existing_mat.get("ts")
+            if freshness and iso_age_seconds(freshness) > step.stale_after:
+                expired = True
 
         if existing_mat and not force and not expired:
             decisions.append(
@@ -479,17 +506,18 @@ def _plan_join(
                     input_hash=input_hash,
                     output_address=output_address,
                     existing=MatRef(
-                        existing_mat.id,
-                        existing_mat.output_address,
-                        existing_mat.output_content_hash,
-                        existing_mat.content_type,
-                        filtered=existing_mat.filtered,
+                        existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                        output_address,
+                        existing_mat.get("output_identity", ""),
+                        existing_mat.get("content_type"),
+                        filtered=existing_mat.get("filtered", False),
+                output=existing_mat.get("output"),
                     ),
                     code_drift=(
                         step.code_mode == "warn"
                         and step.code_hash is not None
-                        and existing_mat.code_hash is not None
-                        and step.code_hash != existing_mat.code_hash
+                        and existing_mat.get("code_hash") is not None
+                        and step.code_hash != existing_mat.get("code_hash")
                     ),
                     failed_parents=failed_parents,
                     blocked_parents=blocked_parents,
@@ -521,6 +549,7 @@ def _plan_step(
     force: bool,
     accepts_params: bool,
     lanes: Optional[List[str]] = None,
+    pipeline_id: str = "",
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only.
 
@@ -530,7 +559,13 @@ def _plan_step(
     map-shaped steps support a subset (collective shapes consume whole lane
     sets); the decisions are byte-identical to what whole-step planning
     would produce for those coordinates at the same ledger state.
+
+    `force` is the run-level override (``--force``); `step.check_cache=False`
+    is the per-step equivalent. Both make plan skip reuse and emit "execute",
+    but the commit path is unaffected — results still land in cache.
     """
+    # check_cache=False on the step is a per-step force: skip reuse, still commit.
+    force = force or not step.check_cache
     if lanes is not None and step.shape != "map":
         raise ValueError(
             f"lane-subset planning requires shape='map' (step '{step.name}' "
@@ -583,8 +618,8 @@ def _plan_step(
                 )
             ]
 
-        # One group ("@all") unless group_key partitions the lanes by an
-        # indexed field of the parent output.
+        # One group ("@all") unless group_key partitions the lanes by a
+        # field of the parent output.
         if step.group_key is None:
             groups = {"@all": parent_mats}
         else:
@@ -593,20 +628,17 @@ def _plan_step(
         return [
             _reduce_group_decision(
                 session, step, gcoord, gmats, params_hash, force, accepts_params,
-                failed_parents=failed_parents, blocked_parents=blocked_parents
+                failed_parents=failed_parents, blocked_parents=blocked_parents,
+                pipeline_id=pipeline_id,
             )
             for gcoord, gmats in sorted(groups.items())
         ]
 
     if step.shape == "join":
         return _plan_join(
-            session, step, coord_step_mats, params_hash, force, accepts_params
+            session, step, coord_step_mats, params_hash, force, accepts_params,
+            pipeline_id=pipeline_id,
         )
-
-    if step.shape == "expand" and not step.depends_on:
-        # Root expand = source: no parent to cache against, so it always
-        # executes (re-scan the world every run). Execution mints the lanes.
-        return [StepDecision(coordinate="@root", action="execute", parent_mats={})]
 
     decisions = []
     
@@ -652,6 +684,10 @@ def _plan_step(
 
         for dep in step.depends_on:
             if (coord, dep) not in coord_step_mats:
+                if step.declarative:
+                    # Declarative union: a lane only needs to exist in one
+                    # parent, not all — skip missing parents
+                    continue
                 raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use shape='join'")
             parent_mat = coord_step_mats[(coord, dep)]
             if parent_mat == "blocked":
@@ -723,7 +759,10 @@ def _plan_step(
             continue
 
         if step.shape == "expand":
-            parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
+            if step.depends_on:
+                parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
+            else:
+                parent_hash = ROOT_LANE  # root expand: anchor keyed on the constant
             anchor_address = expand_anchor_address(
                 step, parent_hash, params_hash, accepts_params
             )
@@ -743,11 +782,11 @@ def _plan_step(
 
     all_addrs = set(map_addrs + anchor_addrs)
     mats_by_addr = {}
-    if all_addrs:
-        mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_addrs), Materialization.is_live.is_(True)
-        ).all()
-        mats_by_addr = {m.output_address: m for m in mats}
+    if all_addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, all_addrs, session
+        )
 
     child_identities_by_target = {}
     all_child_addrs = []
@@ -761,10 +800,10 @@ def _plan_step(
             if not anchor:
                 continue
             if step.stale_after is not None:
-                freshness = anchor.refreshed_at or anchor.created_at
-                if iso_age_seconds(freshness) > step.stale_after:  # type: ignore
+                freshness = anchor.get("ts")
+                if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
-            children_hashes = read_materialization_output(anchor)  # type: ignore
+            children_hashes = read_output(anchor.get("output"), anchor.get("content_type"))
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:
@@ -778,11 +817,11 @@ def _plan_step(
                 child_identities_by_target[coord] = []
 
     child_mats_by_addr = {}
-    if all_child_addrs:
-        child_mats = session.query(Materialization).filter(
-            Materialization.output_address.in_(all_child_addrs), Materialization.is_live.is_(True)
-        ).all()
-        child_mats_by_addr = {m.output_address: m for m in child_mats}
+    if all_child_addrs and pipeline_id:
+        from .lane_store import batch_lookup_by_address
+        child_mats_by_addr = batch_lookup_by_address(
+            pipeline_id, step.name, set(all_child_addrs), session
+        )
 
     for kind, *args in resolved_targets:
         if kind == "expand":
@@ -802,7 +841,7 @@ def _plan_step(
             incomplete = False
             out = []
             for child_hash, input_hash, child_addr in identities:
-                child = child_mats_by_addr.get(child_addr)  # type: ignore
+                child = child_mats_by_addr.get(child_addr)
                 if child is None:
                     incomplete = True
                     break
@@ -813,11 +852,12 @@ def _plan_step(
                         input_hash=input_hash,
                         output_address=child_addr,
                         existing=MatRef(
-                            child.id,
-                            child.output_address,
-                            child.output_content_hash,
-                            child.content_type,
-                            filtered=child.filtered,
+                            child.get("mat_id") or child.get("row_id", ""),
+                            child_addr,
+                            child.get("output_identity", ""),
+                            child.get("content_type"),
+                            filtered=child.get("filtered", False),
+                            output=child.get("output"),
                         ),
                     )
                 )
@@ -840,8 +880,9 @@ def _plan_step(
 
             expired = False
             if existing_mat and step.stale_after is not None:
-                freshness = existing_mat.refreshed_at or existing_mat.created_at
-                expired = iso_age_seconds(freshness) > step.stale_after  # type: ignore
+                freshness = existing_mat.get("ts")
+                if freshness and iso_age_seconds(freshness) > step.stale_after:
+                    expired = True
 
             if existing_mat and not force and not expired:
                 decisions.append(
@@ -852,17 +893,18 @@ def _plan_step(
                         input_hash=input_hash,
                         output_address=output_address,
                         existing=MatRef(
-                            existing_mat.id,
-                            existing_mat.output_address,
-                            existing_mat.output_content_hash,
-                            existing_mat.content_type,
-                            filtered=existing_mat.filtered,
+                            existing_mat.get("mat_id") or existing_mat.get("row_id", ""),
+                            output_address,
+                            existing_mat.get("output_identity", ""),
+                            existing_mat.get("content_type"),
+                            filtered=existing_mat.get("filtered", False),
+                            output=existing_mat.get("output"),
                         ),
                         code_drift=(
                             step.code_mode == "warn"
                             and step.code_hash is not None
-                            and existing_mat.code_hash is not None
-                            and step.code_hash != existing_mat.code_hash
+                            and existing_mat.get("code_hash") is not None
+                            and step.code_hash != existing_mat.get("code_hash")
                         ),
                     )
                 )

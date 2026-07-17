@@ -2,10 +2,10 @@
 
 broad (default) stages step by step — every lane of step N completes
 before any lane starts step N+1. deep pipelines each lane through
-consecutive 1:1 (map) steps as soon as its own inputs commit; reduce/join
-(and, for now, expand and multi-parent maps) remain barriers that
-synchronize on all lanes. Ledger rows — statuses, addresses, lifecycle —
-must be identical across modes.
+consecutive deep-eligible steps (1:1 maps and root expands) as soon as
+its own inputs commit; reduce/join/dependent-expand (and multi-parent
+maps) remain barriers that synchronize on all lanes. Ledger rows —
+statuses, addresses, lifecycle — must be identical across modes.
 
 schedule=/home= are Pipeline construction-time settings: a cross-mode
 comparison builds two Pipeline wrappers over the *same*
@@ -26,10 +26,11 @@ from sqlalchemy.pool import StaticPool
 from rubedo import Filtered, pipeline, step
 from rubedo.db import init_db, get_session
 from rubedo.models import (
-    Materialization,
-    MaterializationIndexEntry,
+    InputHashUsage,
     RunCoordinateStatus,
 )
+from rubedo import lane_store
+from rubedo.planning import _ArrowRowRef
 from rubedo.store import init_store, read_materialization_output
 
 TEST_FOLDER = ".test_schedule_data"
@@ -87,11 +88,9 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(index=["path"])
+@step
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
-    `path` so tests can find "the lane for x.txt" without the coordinate
-    being that literal string."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -105,21 +104,17 @@ def coord_for_path(filename):
     with get_session() as session:
         rows = (
             session.query(RunCoordinateStatus)
-            .filter_by(step_name="scan")
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.step_name == "scan")
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
+        addr_index = lane_store.address_row_index()
         for rc in rows:
-            hit = (
-                session.query(MaterializationIndexEntry)
-                .filter_by(
-                    materialization_id=rc.materialization_id,
-                    field="path",
-                    value=filename,
-                )
-                .first()
-            )
-            if hit:
+            row = addr_index.get(str(rc.output_address))
+            if row is None:
+                continue
+            output = row.get("output")
+            if isinstance(output, dict) and output.get("path") == filename:
                 return rc.coordinate
     return None
 
@@ -155,10 +150,12 @@ def _status_rows(run_id):
 
 
 def _mat_hashes():
-    with get_session() as session:
-        return {
-            m.output_content_hash for m in session.query(Materialization).all()
-        }
+    import json
+    return {
+        r.get("output") if isinstance(r.get("output"), str)
+        else json.dumps(r.get("output"), sort_keys=True, default=str)
+        for r in lane_store.all_filled_rows()
+    }
 
 
 # (a) Mode equivalence: fresh broad vs fresh deep produce identical facts.
@@ -248,7 +245,7 @@ def test_deep_pipelines_lanes_across_steps():
 
     assert gate.is_set()
     assert summary.status == "completed"
-    # scan is a barrier (expand root) under deep; s1/s2 pipeline through it.
+    # scan is a root expand (deep-eligible); s1/s2 pipeline through it.
     assert (summary.created_count, summary.failed_count, summary.blocked_count) == (
         6,  # 2 files x (scan + s1 + s2)
         0,
@@ -392,12 +389,12 @@ def test_deep_reduce_barrier_receives_all_lanes():
     assert summary.status == "completed"
     assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
     with get_session() as session:
-        mat = (
-            session.query(Materialization)
-            .filter_by(step_name="total", is_live=True)
-            .one()
-        )
-        assert read_materialization_output(mat) == {"n": 3, "total": 12}
+        total_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "total"]
+        assert total_rows
+        total_row = total_rows[0]
+        ihu = session.query(InputHashUsage).filter_by(address=total_row["address"]).first()
+        assert ihu is not None and ihu.fulfilled is True
+        assert read_materialization_output(_ArrowRowRef(total_row)) == {"n": 3, "total": 12}
 
 
 # (h) The rate limiter is one instance per step per run, shared across every
@@ -479,3 +476,49 @@ def test_invalid_schedule_raises():
 
     with pytest.raises(ValueError, match="schedule"):
         pipeline(name="bad", steps=[scan, s1], schedule="sideways")
+
+
+# (h) Independent root expands run concurrently under deep — two sources
+# that don't depend on each other should overlap, not run sequentially.
+def test_deep_concurrent_root_expands():
+    gate_a = threading.Event()
+    gate_b = threading.Event()
+
+    @step(shape="expand")
+    def source_a():
+        gate_b.set()  # signal B that A has started
+        if not gate_a.wait(timeout=30):
+            raise RuntimeError(
+                "gate_a never opened: source_b did not start while source_a was in flight"
+            )
+        yield {"src": "a"}
+
+    @step(shape="expand")
+    def source_b():
+        gate_a.set()  # signal A that B has started
+        if not gate_b.wait(timeout=30):
+            raise RuntimeError(
+                "gate_b never opened: source_a did not start while source_b was in flight"
+            )
+        yield {"src": "b"}
+
+    @step
+    def process_a(source_a: dict):
+        return source_a["src"].upper()
+
+    @step
+    def process_b(source_b: dict):
+        return source_b["src"].upper()
+
+    pipe = pipeline(
+        name="concurrent_roots",
+        steps=[source_a, source_b, process_a, process_b],
+        schedule="deep",
+    )
+    summary = pipe.run()
+
+    assert summary.status == "completed"
+    # Both gates were set — the two root expands ran concurrently
+    assert gate_a.is_set() and gate_b.is_set()
+    # 2 sources (1 lane each) + 2 process = 4
+    assert summary.created_count == 4

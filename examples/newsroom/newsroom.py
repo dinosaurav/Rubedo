@@ -66,12 +66,12 @@ def publishers():
             yield row
 
 
-@p.step(index=["publisher"])
+@p.step
 def feed(feeds: dict) -> dict:
     return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
 
 
-@p.step(index=["publisher"])
+@p.step
 def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
@@ -84,7 +84,7 @@ def feed_meta(feed: dict, publisher: dict) -> dict:
     return {"feed_id": feed["feed_id"], "region": publisher["region"]}
 
 
-@p.step(index=["region"])
+@p.step
 def articles(feed_meta: dict):
     fid = feed_meta["feed_id"]
     print(f"  scraping feed {fid} ...")  # runs once per feed, then cached

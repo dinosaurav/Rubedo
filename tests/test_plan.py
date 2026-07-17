@@ -69,11 +69,11 @@ def create_file(name, content):
 
 
 def make_pipeline(pipe_id="pl"):
-    # Folder recipe: walk TEST_FOLDER, yield each file's content. A root
-    # expand has no parent to cache its enumeration against, so it always
-    # plans as "execute": plan() can never preview what it will yield
-    # without actually running it (see the tests below).
-    @step
+    # Folder recipe: walk TEST_FOLDER, yield each file's content.
+    # check_cache=False: a filesystem scan must re-scan every run to
+    # detect changes — otherwise it reuses the cached child lanes and
+    # edits/deletions are invisible.
+    @step(check_cache=False)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

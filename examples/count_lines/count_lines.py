@@ -1,7 +1,7 @@
 import os
 
 from pydantic import BaseModel, Field
-from rubedo import ProcessResult, pipeline
+from rubedo import pipeline
 
 
 class CountLinesParams(BaseModel):
@@ -19,7 +19,7 @@ class CountLinesParams(BaseModel):
 p = pipeline(name="count-lines", params_model=CountLinesParams)
 
 
-@p.step
+@p.step(check_cache=False)
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
@@ -38,7 +38,7 @@ def read_lines(input_files: str, params: dict):
 
 
 @p.step
-def count_lines(read_lines: dict) -> ProcessResult:
+def count_lines(read_lines: dict):
     lines = read_lines["lines"]
     params = CountLinesParams(**read_lines["params"])
 
@@ -52,18 +52,15 @@ def count_lines(read_lines: dict) -> ProcessResult:
     if params.include_text_preview:
         metadata["preview"] = "".join(lines)[:80]
 
-    return ProcessResult(
-        value={
-            "line_count": len(lines),
-            "ok": len(lines) >= params.min_lines,
-        },
-        metadata=metadata,
-    )
+    return {
+        "line_count": len(lines),
+        "ok": len(lines) >= params.min_lines,
+    }
 
 
 @p.step(shape="reduce")
 def total_lines(count_lines: dict):
-    return sum(v.value["line_count"] if isinstance(v, ProcessResult) else v["line_count"] for v in count_lines.values())
+    return sum(v["line_count"] for v in count_lines.values())
 
 
 if __name__ == "__main__":

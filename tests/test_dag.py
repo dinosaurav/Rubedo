@@ -4,8 +4,9 @@ import shutil
 from rubedo.db import init_db, get_session
 from rubedo.store import init_store, read_materialization_output
 from rubedo import step, pipeline
-from rubedo.planning import topological_sort
-from rubedo.models import RunCoordinateStatus, Materialization, MaterializationEdge
+from rubedo.planning import topological_sort, _ArrowRowRef
+from rubedo.models import RunCoordinateStatus, MaterializationEdge, InputHashUsage
+from rubedo import lane_store
 import uuid
 from sqlalchemy import create_engine
 
@@ -90,10 +91,11 @@ def coordinate_for_path(step_name, path_value):
     """The migrated coordinate is a content hash (row-<hash>), not the
     literal filename. Recover it by scanning that step's live
     materializations for the one whose payload carries this path."""
+    idx = lane_store.address_row_index()
     with get_session() as session:
         for rc in session.query(RunCoordinateStatus).filter_by(step_name=step_name).all():
-            mat = session.get(Materialization, rc.materialization_id)
-            if mat is not None and read_materialization_output(mat).get("path") == path_value:
+            row = idx.get(str(rc.output_address)) if rc.output_address else None
+            if row is not None and read_materialization_output(_ArrowRowRef(row)).get("path") == path_value:
                 return rc.coordinate
     return None
 
@@ -150,21 +152,22 @@ def test_linear_dag():
             .filter_by(coordinate=coord_f1, step_name="read")
             .first()
         )
-        read_f1 = session.get(Materialization, rc_read.materialization_id)
-        assert read_f1 is not None
+        idx = lane_store.address_row_index()
+        read_row = idx.get(str(rc_read.output_address)) if rc_read and rc_read.output_address else None
+        assert read_row is not None
 
         rc_upper = (
             session.query(RunCoordinateStatus)
             .filter_by(coordinate=coord_f1, step_name="upper")
             .first()
         )
-        upper_f1 = session.get(Materialization, rc_upper.materialization_id)
-        assert upper_f1 is not None
+        upper_row = idx.get(str(rc_upper.output_address)) if rc_upper and rc_upper.output_address else None
+        assert upper_row is not None
 
         # Check edges
         edge = (
             session.query(MaterializationEdge)
-            .filter_by(parent_id=read_f1.id, child_id=upper_f1.id)
+            .filter_by(parent_address=str(rc_read.output_address), child_address=str(rc_upper.output_address))
             .first()
         )
         assert edge is not None
@@ -226,16 +229,18 @@ def test_invalidate_downstream_then_rerun():
     assert summary.failed_count == 0
 
     with get_session() as session:
-        mat = (
-            session.query(Materialization)
-            .filter_by(step_name="upper")
-            .one()
-        )
-        assert mat.is_live
+        upper_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "upper"]
+        # 2 rows: old (invalidated, history) + new (live).  The latest
+        # one (by ts) is the live one.
+        assert len(upper_rows) == 2
+        latest = max(upper_rows, key=lambda r: r.get("ts", ""))
+        addr = latest.get("address")
+        usage = session.query(InputHashUsage).filter_by(address=addr).first()
+        assert usage.fulfilled is True
         edges = (
-            session.query(MaterializationEdge).filter_by(child_id=mat.id).all()
+            session.query(MaterializationEdge).filter_by(child_address=addr).all()
         )
-        assert len(edges) == 1
+        assert len(edges) == 1  # not duplicated
 
 
 def test_duplicate_content_files_share_materialization():
@@ -268,10 +273,10 @@ def test_duplicate_content_files_share_materialization():
     assert summary.failed_count == 0
 
     with get_session() as session:
-        mats = session.query(Materialization).filter_by(step_name="upper").all()
-        assert len(mats) == 1
+        upper_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "upper"]
+        assert len(upper_rows) == 1
         edges = (
-            session.query(MaterializationEdge).filter_by(child_id=mats[0].id).all()
+            session.query(MaterializationEdge).filter_by(child_address=upper_rows[0].get("address")).all()
         )
         assert len(edges) == 1
 

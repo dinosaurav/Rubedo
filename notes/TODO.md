@@ -13,15 +13,21 @@ the invariants rewrite, **18** notes hygiene, **19** comment cleanup,
 ascii describe, **21** `secrets=`/`env=` + `rubedo check`, **22**
 shape & dependency inference, **23** removing `@source`, and **24**
 callable `StepSpec` + `describe()` TTY default — shipped 2026-07-13/14).
-**25** stays deferred (owner: queued, do not build until asked); **26**
-(auto-index + lazy index heal) is next, design-settled. The cloud
-chain (**6** → **7**+**7b** → **8** → **13**) builds when multi-machine
-demand is real — though **8** is independently
-buildable (workers never touch the ledger/store; item 7 is its throughput
-story, not a prerequisite), and **6 needs a respec post-14** (see its
-note). (**10b** retention GC shipped — see the Done changelog.) Unsettled
-ideas live in **Parked** at the bottom — do not build those without a
-design session.
+**25** stays deferred (owner: queued, do not build until asked). **26**
+(auto-index + lazy index heal) is **retired** — the Arrow storage rewrite
+(`notes/arrow-storage.md`) deletes the `materialization_index` table
+entirely; indexed fields become Arrow struct columns scanned by pyarrow,
+making the heal moot. **27** (inline values + automatic object-store
+spill) is the Phase 4 endpoint of the Arrow rewrite — the Arrow `output`
+column holds the value itself (small) or a ref to serialized data (large),
+deleting `content_hash`/`output_path`; gated on Phase 3 (delete the
+`materializations` SQLite table). The cloud chain (**6** → **7**+**7b**
+→ **8** → **13**) builds when multi-machine demand is real — though **8**
+is independently buildable (workers never touch the ledger/store; item 7
+is its throughput story, not a prerequisite), and **6 needs a respec
+post-14** (see its note). (**10b** retention GC shipped — see the Done
+changelog.) Unsettled ideas live in **Parked** at the bottom — do not
+build those without a design session.
 
 ## 25. Did-you-mean suggestions  **[DEFERRED — owner 2026-07-14: queued, do not build until asked]**
 
@@ -30,82 +36,89 @@ parameter names, unknown `depends_on`/`join_on` step names, unknown
 `Selection` fields, CLI step/pipeline arguments. Small, self-contained;
 waits for the owner's go.
 
-## 26. Auto-index + lazy index heal  **[design settled 2026-07-14; ⚠️ subtle]**
+## 26. Auto-index + lazy index heal  **[RETIRED 2026-07-15 — superseded by the Arrow storage rewrite]**
 
-Declaring a join or grouping should be enough: fields named in
-`join_on=`/`group_key=` are indexed on the parent automatically, and
-`run()` backfills index rows for lanes materialized *before* the field
-was declared — reading bytes the store already holds, never recomputing.
-This serves *never pay twice*: `index=` is deliberately not part of cache
-identity, so adding metadata to a long-lived store must neither force
-re-execution nor dead-end in the planner's "add index=" error. The heal
-also fixes the pre-existing manual version of the hole (adding `index=`
-to an already-run step today strands its reused lanes rowless) — it
-covers every declared index field, injected or hand-written.
+The Arrow storage rewrite (`notes/arrow-storage.md`) deletes the
+`materialization_index` table entirely.  Indexed fields become Arrow
+struct columns scanned by pyarrow predicates — no SQLite denormalization
+table to heal.  The auto-index injection (adding `join_on`/`group_key`
+fields to the parent's declared index) is still valuable and will be
+preserved, but the "lazy heal" half of this item is moot: there's no
+table to backfill.
 
-**Settled decisions (owner design session 2026-07-14 — do not re-litigate):**
+## 27. Inline values + automatic object-store spill  **[design settled 2026-07-16 — see `notes/arrow-storage.md` § "Inline values + object store spill"]**
 
-- **Injection at `_build_spec`**, where item 22 already builds resolved
-  step copies: each `join_on={parent: field}` injects `field` into that
-  parent's resolved `index`; a reduce's `group_key` injects into its
-  single parent. `definition()` snapshots the resolved index —
-  previously-correct pipelines already declared these fields manually, so
-  their snapshots must not move (pin one). Manual `index=` remains for
-  query-only fields.
-- **The heal runs inside `run()` only** — main thread (the
-  all-ledger-writes rule), after the `Run` row exists (its event needs a
-  run id), strictly before the plan phase. `plan()` stays read-only and
-  value-free: on a gapped store it keeps erroring; the asymmetry has
-  precedent (plan() never previews an expand root's enumeration — item 14
-  finding, pinned in `test_plan.py`). Reword the join planner's
-  missing-value error to name the real causes: the payload may lack the
-  field, and `plan()` cannot backfill — `run()` will.
-- **Heal = the same extraction, later.** For each of the run's steps with
-  declared index fields, one cheap query finds live materializations
-  missing rows for a declared field; each gap gets its stored bytes read,
-  the SAME extraction helper commit-time indexing uses (import it — the
-  item-13 one-hasher discipline), and the missing
-  `MaterializationIndexEntry` rows inserted. Planning semantics are
-  untouched: the heal writes only rows commit-time extraction would have
-  written. Zero gaps ⇒ zero object reads — steady state is one cheap
-  query per indexed step.
-- **Absent fields skip, never fail.** A payload genuinely lacking the
-  field gets no row (identical to commit-time behavior); bytes missing
-  from the store are skipped and counted (du's missing discipline, never
-  a crash). The heal appends one run event summarizing counts (healed /
-  lacked-field / unreadable). No lifecycle rows: index entries are
-  projections of stored bytes, not liveness transitions — the pairing
-  guard is not in play, and inserts don't touch the immutability guards.
-- **No new ops surface.** No `rubedo reindex` command, no disable knob —
-  the heal is idempotent (a crash mid-heal just heals less; the next run
-  finishes the job) and free when there's nothing to do.
+Today every output lives in the content-addressed object store
+(`objects/`), and the `materializations` SQLite row stores the
+`output_content_hash` — a hash string the reader resolves to find the
+actual bytes. This item flips the model: **the Arrow file's `output`
+column holds the value itself** for small outputs (the common case —
+dicts, strings, ints), and **automatically spills large values to the
+object store**, storing a ref string (`"objects:<hash>"`) in the column
+that points to the serialized data — not to a content hash that a
+reader has to resolve in a second lookup.
 
-**Trap (part of the spec):** (1) **Exclude expand anchors** from the gap
-query — an anchor is a live materialization with zero
-`RunCoordinateStatus` refs (`gc.py` detects exactly this shape) whose
-payload is a child-hash list, not a step output; a naive heal would
-"extract" from garbage. Reuse gc's structural detection and pin with a
-test that an expand step's anchor is never read by the heal. (2) The
-extraction helper must be imported, never copied — multi-valued index
-fields (one lane, several values) must behave identically healed or
-fresh. (3) Materializations are shared across pipelines by address: the
-gap query scopes by the run's step names, but a healed row benefits every
-pipeline sharing the address — fine; never widen the scope to the whole
-store. (4) The join planner's missing-value `ValueError` survives —
-post-auto-index its one honest cause is "this lane's payload lacks the
-field," and the reworded message must say exactly that.
+The object store stops being "where every output lives" and becomes
+"where big values that don't fit in an Arrow column live." The
+`content_hash` / `output_path` columns are deleted from the Arrow
+schema — the column *is* the value, or it's a direct pointer to the
+value's bytes.
 
-Acceptance: a pipeline whose store predates any join gains one new step
-with `join_on=` and NO manual `index=` on the parent — the next `run()`
-backfills (index rows exist afterward), the join plans and executes, and
-every cached parent lane is reused (nothing recomputes); a second run
-heals nothing (event counts zero — and zero object reads, assert by
-instrumentation); `plan()` before that first `run()` errors with the new
-message (pinned); a payload lacking the field is skipped, the event
-records it, and planning behaves exactly as a fresh store would; an
-expand anchor is never read (pinned); `group_key` over a reduce gets the
-identical treatment; a previously-explicit pipeline's `definition()`
-snapshot is byte-identical; full verification checklist green.
+**Settled decisions (owner design session 2026-07-15/16 — do not
+re-litigate):**
+
+- **The `output` column is the value or a ref, never a bare hash.**
+  Inline: the actual serialized value in an Arrow struct/scalar. Spilled:
+  a ref string (`"objects:<hash>"`) pointing to the serialized value
+  bytes in the object store. The content hash is embedded in the ref's
+  filename (the store is content-addressed), recoverable but not the
+  payload — the payload is the data or a pointer to the data, never a
+  hash string requiring a second lookup.
+- **`content_hash` and `output_path` columns deleted from the Arrow
+  schema.** The child's `input_hash` is computed from the actual input
+  content received — hash the parent's output value directly (inline) or
+  hash the ref string (spilled). No stored hash column needed.
+- **Spill triggers compose (any one triggers spill):**
+  - **Type-based**: `bytes`/images/binary blobs → always spill
+  - **Size-based**: serialized value > threshold (e.g. 4KB) → spill
+  - **Declaration**: `@step(spills=["field_name", ...])` → force spill,
+    override size rule
+- **Object store stays content-addressed;** spilled values are ordinary
+  objects, GC'd via `object_reclamations` as today.
+- **Same bytes → same `input_hash` → downstream reuses**, regardless of
+  inline vs spilled — the `input_hash` derivation is uniform.
+
+**Prerequisite:** the `materializations` SQLite table must be deleted
+first (Phase 3 of the Arrow storage rewrite) — the inline-values model
+only makes sense when the Arrow file is the sole source of truth for
+output content. This item is Phase 4.
+
+**Trap (part of the spec):** (1) the spill threshold must be
+configurable per-step, not just global — a 4KB dict is small, a 4KB
+image thumbnail is not, and the `@step(spills=...)` declaration is the
+override valve; (2) the inline value's Arrow type must encode the
+format (dict → struct, list → list, DataFrame → embedded Arrow IPC) so
+the reader can deserialize without a separate `content_type` column —
+or `content_type` stays as a column if the type encoding is ambiguous;
+(3) GC must handle the new ref-string format — a spilled value is
+reclaimed when no Arrow row references it, same as today's
+`output_content_hash` reclamation but keyed on the ref string; (4) the
+`input_hash` derivation for spilled values hashes the *ref string*
+(`"objects:<hash>"`), not the spilled bytes — this avoids reading
+large objects from the store just to hash them, and the invariant
+"same bytes → same `input_hash`" holds because same bytes → same
+content hash → same ref string → same `input_hash`. The derivation
+path differs between inline (hash the value) and spilled (hash the
+ref), but the identity result is equivalent.
+
+Acceptance: a step returning a small dict stores the dict inline in the
+Arrow `output` column (no object-store write); a step returning a 100KB
+DataFrame spills to `objects/` and stores a ref string in the column; a
+child step receiving either form computes the same `input_hash` for
+identical content; GC reclaims spilled objects when no Arrow row
+references them; the `content_hash` and `output_path` columns are gone
+from the Arrow schema; `uv run pytest -q` green; e2e Created:22 →
+Reused:22.
 
 ## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
 
@@ -378,11 +391,11 @@ worker↔store directly; the runner handles only hashes and metadata.
 **Trap (part of the spec):** **(1) The main-side value consumers.** Today
 the runner holds every result value between `call()` and commit, and
 several things quietly depend on that: output validation
-(`_validate_output`), data-quality `assertions`, `Filtered` verdict
-detection, and `@step(index=[...])` extraction at commit. Under refs the
+(`_validate_output`), data-quality `assertions`, and `Filtered` verdict
+detection. Under refs the
 runner never sees the bytes, so **each of these moves into the shim**
-(index specs and assertion callables travel with the submission; the shim
-returns index entries and verdicts in its metadata) — grep everything
+(assertion callables travel with the submission; the shim returns
+verdicts in its metadata) — grep everything
 that touches `result` between call and commit and account for every
 consumer before shipping. **(2) One hasher.** The worker computes the
 content hash the ledger will trust: the shim must call the *same*
@@ -832,8 +845,8 @@ introspection). Foundation, in one breath: the **producer model**
 guards + the liveness-flip pairing guard · single `run()`/`plan()` entry
 points, no registry, definition snapshots · step policies (retries,
 rate_limit, stale_after, skip_cache fusion, assertions, filters,
-`on_failed`) · `index=` + selection language with semver ranges ·
-Folder/Csv/Table sources (streaming `batch_size`) · loky/cloudpickle
+  `on_failed`) · selection language with semver ranges ·
+  Folder/Csv/Table sources (streaming `batch_size`) · loky/cloudpickle
 process executor · `RUBEDO_HOME` · mypy/py.typed pass · React dashboard
 (DAG view, run inspector, SSE live view) · examples suite (`count_lines`
 flagship, `hn_digest`, `pdf_digest`, …) · rename to Rubedo.

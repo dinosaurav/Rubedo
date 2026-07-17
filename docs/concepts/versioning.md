@@ -161,10 +161,10 @@ A `skip_cache` step must have a consumer — the constructor rejects one with
 no downstream step, since its output would never be computed or stored at
 all. It also can't be a `reduce` (a reduction's whole point is to be
 materialized), an `expand` (nothing to anchor an ungrounded fan-out
-against), or a `join` parent (a join needs its sides' indexed fields
-committed to match on), and none of `stale_after`, `index=`, or the retry/
-rate-limit policies apply to it — there's no stored output for a TTL or
-index entry to attach to, and no materialization step for a retry to wrap.
+against), or a `join` parent (a join needs its sides' output fields
+committed to match on), and none of `stale_after` or the retry/
+rate-limit policies apply to it — there's no stored output for a TTL to
+attach to, and no materialization step for a retry to wrap.
 
 ### When *not* to use it
 
@@ -179,7 +179,7 @@ a step is:
   actually return" is a fact worth keeping),
 
 it deserves materialization, not `skip_cache` — you want that output
-addressed, cached, retried, rate-limited, indexed, and inspectable via
+addressed, cached, retried, rate-limited, searchable, and inspectable via
 `trace()`, all of which `skip_cache` deliberately gives up. Reach for
 `skip_cache` only for the boring glue code you'd otherwise inline directly
 into a bigger step just to avoid the ledger noise of one more row per lane.

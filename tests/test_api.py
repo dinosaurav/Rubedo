@@ -6,7 +6,7 @@ from rubedo import step, pipeline
 from rubedo.server import app
 from rubedo.db import init_db
 import rubedo.db as db
-from rubedo.models import Base, ProcessResult
+from rubedo.models import Base
 import uuid
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import create_engine
@@ -25,14 +25,10 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="count-lines", index=["path"])
-def count_lines(scan: dict) -> ProcessResult:
+@step(name="count-lines")
+def count_lines(scan: dict):
     text = scan["text"]
-    lines = text.split("\n")
-    return ProcessResult(
-        value={"text": text, "path": scan["path"]},
-        metadata={"line_count": len(lines), "empty": len(text) == 0},
-    )
+    return {"text": text, "path": scan["path"]}
 
 
 test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
@@ -118,27 +114,29 @@ def test_get_materializations():
     response = client.get("/api/materializations?limit=10&offset=0")
     assert response.status_code == 200
     mats = response.json()
-    assert len(mats) == 4
+    assert len(mats) == 5  # 4 lanes + 1 root-anchor
     assert mats[0]["output_address"] is not None
 
 
 def test_selection_preview():
     response = client.post(
         "/api/selection/preview",
-        json={"index": {"path": "a.txt"}},
+        json={"step": "count-lines", "index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["materialization_count"] == 1
-    assert data["items"][0]["metadata"]["line_count"] == 2
+    # metadata is {} from Arrow (metadata_json was a Materialization column,
+    # now deleted; RCS.metadata_json carries the rich per-attempt data)
+    assert data["items"][0]["metadata"] == {}
 
 
 def test_selection_invalidate():
     response = client.post(
         "/api/selection/invalidate?reason=api test",
-        json={"index": {"path": "a.txt"}},
+        json={"step": "count-lines", "index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["invalidated_count"] == 1
-    assert len(data["materialization_ids"]) == 1
+    assert len(data["addresses"]) == 1

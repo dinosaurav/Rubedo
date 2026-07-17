@@ -221,7 +221,8 @@ demand.
 
 **`group_key`'s distinct constraint (later):** grouping parent lanes by a field
 of their *value* needs values at plan time, but planning only reads content
-hashes. So `group_key` must either group by coordinate / an indexed field, or
+hashes. So `group_key` must either group by coordinate / a field of the
+parent output, or
 reduce-planning must read parent values (tolerable, since reduce is already a
 barrier). Decision deferred to that increment — and it is why `expand`, not
 `group_key`, is the cleaner next step.
@@ -289,13 +290,13 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
 3. **`group_key` reduce** — ✅ **DONE**. `@step(shape="reduce",
    group_key="field")` partitions the reduction's parent lanes by a named
-   `@step(index=[...])` field of the parent output, emitting one output per
+   field of the parent output, emitting one output per
    group (coordinate = the group value); `group_key=None` is the old single
    `@all`. Grouping reads `MaterializationIndexEntry` rows at plan time — no
    value reads, plan stays value-free (`_group_reduce_lanes`,
    `_reduce_group_decision`). A lane with several values for the field joins
-   each group (list-valued index); a lane with none raises (index it on the
-   parent). Also fixed reduce to gather lanes from `coord_step_mats` rather
+   each group (list-valued field); a lane with none raises (the field must
+   be present in the parent output). Also fixed reduce to gather lanes from `coord_step_mats` rather
    than only source coordinates, so a reduce now folds in **minted/expanded
    lanes** — `expand → group_key reduce` works. A vanished group just orphans
    (step 2). Execution/ledger unchanged (a group is a decision whose
@@ -316,8 +317,8 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      publisher) and covered by `tests/test_join.py`.
    - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
      depends_on=[a, b, ...], join_on={a: field, b: field, ...})`: an **N-way**
-     equijoin matching each side's `@step(index=[...])` field by value
-     (plan-time, value-free, like `group_key`). It buckets each side by its
+      equijoin matching each side's field by value
+      (plan-time, value-free, like `group_key`). It buckets each side by its
      key, intersects on shared values, and mints one lane per matched tuple
      (cartesian within a shared value) with coordinate `a|b|...`. 2-way is the
      common case; `join_on={a:"uid", b:"uid", c:"uid", d:"uid"}` is a 4-way

@@ -78,7 +78,7 @@ def forecast(geocode: dict) -> dict:
     }
 
 
-@p.step(index=["outlook"])
+@p.step
 def advice(forecast: dict) -> dict:
     """Turn the numbers into a one-word outlook and a suggestion."""
     if forecast["precip"] >= 1:

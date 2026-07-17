@@ -6,7 +6,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from importlib.resources import files as _resource_files
-from typing import List
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,12 +17,11 @@ from .models import (
     Run,
     RunEvent,
     effective_run_status,
-    Materialization,
-    MaterializationIndexEntry,
-    MaterializationLifecycle,
     MaterializationEdge,
     RunCoordinateStatus,
+    InputHashUsage,
 )
+from . import lane_store
 from .selection import Selection
 from .invalidation import invalidate
 from .schemas import (
@@ -37,6 +36,36 @@ from .schemas import (
     PipelineOut,
     ObjectMetadataOut,
 )
+
+
+def _search_output_fields(pipeline_id: str, step_name: str, query: str) -> List[str]:
+    """Addresses where any output dict field value contains ``query`` as a
+    substring. Searches the struct output column directly."""
+    q_lower = query.lower()
+    matches: List[str] = []
+    for row in lane_store.all_filled_rows():
+        if row.get("pipeline_id") != pipeline_id or row.get("step_name") != step_name:
+            continue
+        output = row.get("output")
+        if not isinstance(output, dict):
+            continue
+        hit = False
+        for val in output.values():
+            if isinstance(val, (list, tuple)):
+                for v in val:
+                    if isinstance(v, (str, int, float, bool)) and q_lower in str(v).lower():
+                        hit = True
+                        break
+            elif isinstance(val, (str, int, float, bool)):
+                if q_lower in str(val).lower():
+                    hit = True
+            if hit:
+                break
+        if hit:
+            addr = row.get("address", "")
+            if addr:
+                matches.append(addr)
+    return matches
 
 
 @asynccontextmanager
@@ -158,16 +187,44 @@ def get_materializations(
 ):
     """List materializations with pagination."""
     with get_session() as session:
-        total = session.query(Materialization).count()
-        mats = (
-            session.query(Materialization)
-            .order_by(Materialization.id.desc())
-            .limit(limit)
-            .offset(offset)
-            .all()
+        # Build the list from Arrow rows + IHU liveness, not Materialization.
+        all_rows = lane_store.all_filled_rows()
+        # Deduplicate by address (latest ts wins), sorted newest first
+        by_addr: Dict[str, dict] = {}
+        for row in all_rows:
+            addr = row.get("address", "")
+            existing = by_addr.get(addr)
+            if existing is None or (row.get("ts") and existing.get("ts") and row["ts"] > existing["ts"]):
+                by_addr[addr] = row
+        sorted_rows = sorted(
+            by_addr.values(),
+            key=lambda r: (r.get("ts") or ""),
+            reverse=True,
         )
+        total = len(sorted_rows)
+        page = sorted_rows[offset : offset + limit]
+        # Liveness for the is_live field
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
         response.headers["X-Total-Count"] = str(total)
-        return [_to_dict(m) for m in mats]
+        return [
+            {
+                "pipeline_id": r.get("pipeline_id", ""),
+                "step_name": r.get("step_name", ""),
+                "code_version": r.get("code_version") or "",
+                "input_hash": r.get("input_hash", ""),
+                "output_address": r.get("address", ""),
+                "output_content_hash": r.get("output_identity", ""),
+                "content_type": r.get("content_type"),
+                "metadata_json": None,
+                "created_at": str(r.get("ts", "")),
+                "is_live": r.get("address", "") in fulfilled_addrs,
+            }
+            for r in page
+        ]
 
 
 @app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
@@ -213,31 +270,35 @@ def get_current_outputs():
         )
 
         results = []
+        # Build an address→row index from Arrow for metadata lookups
+        arrow_idx = lane_store.address_row_index()
+        fulfilled_addrs = {
+            str(u.address) for u in session.query(InputHashUsage)
+            .filter(InputHashUsage.fulfilled.is_(True))
+            .all()
+        }
         for rc in rows:
-            mat = None
-            if rc.materialization_id is not None:
-                mat = (
-                    session.query(Materialization)
-                    .filter_by(id=rc.materialization_id)
-                    .first()
-                )
-            if mat and not mat.is_live:
+            addr = str(rc.output_address) if rc.output_address else None
+            if not addr:
+                continue
+            arrow_row = arrow_idx.get(addr)
+            if not arrow_row:
+                continue
+            # Skip non-fulfilled (dead) outputs
+            if addr not in fulfilled_addrs:
                 continue
             results.append(
                 {
                     "source_id": rc.source_id,
                     "coordinate": rc.coordinate,
                     "status": rc.status,
-                    "pipeline_id": mat.pipeline_id if mat else None,
-                    "step_name": mat.step_name if mat else None,
-                    "code_version": mat.code_version if mat else None,
+                    "pipeline_id": arrow_row.get("pipeline_id"),
+                    "step_name": arrow_row.get("step_name"),
+                    "code_version": arrow_row.get("code_version"),
                     "input_hash": rc.input_hash,
                     "output_address": rc.output_address,
-                    "materialization_id": rc.materialization_id,
                     "run_id": rc.run_id,
-                    # when the output bytes were produced, not when a run
-                    # last confirmed them (reuse bumps rc rows every run)
-                    "updated_at": mat.created_at if mat else rc.created_at,
+                    "updated_at": str(arrow_row.get("ts", "")) if arrow_row.get("ts") else rc.created_at,
                 }
             )
         return results
@@ -247,51 +308,62 @@ def get_current_outputs():
 def search_run(run_id: str, query: str = Query(..., min_length=1)):
     """Search for a value in a run and return the full lineage trace."""
     with get_session() as session:
-        # 1. Find matching materialization IDs for this run
-        matching_mat_ids = set()
+        # 1. Find matching addresses for this run
+        matching_addrs = set()
 
-        coords_match = session.query(RunCoordinateStatus.materialization_id).filter(
+        coords_match = session.query(RunCoordinateStatus.output_address).filter(
             RunCoordinateStatus.run_id == run_id,
-            RunCoordinateStatus.materialization_id.isnot(None),
+            RunCoordinateStatus.output_address.isnot(None),
             RunCoordinateStatus.coordinate.contains(query)
         ).all()
-        for (m_id,) in coords_match:
-            matching_mat_ids.add(m_id)
+        for (addr,) in coords_match:
+            matching_addrs.add(str(addr))
 
-        index_match = session.query(RunCoordinateStatus.materialization_id).join(
-            MaterializationIndexEntry,
-            RunCoordinateStatus.materialization_id == MaterializationIndexEntry.materialization_id
+        # Indexed-field substring search: scan Arrow files for this run's
+        # steps, then map matching addresses back.
+        run_rcs = session.query(
+            RunCoordinateStatus.output_address,
+            RunCoordinateStatus.pipeline_id,
+            RunCoordinateStatus.step_name,
         ).filter(
             RunCoordinateStatus.run_id == run_id,
-            MaterializationIndexEntry.value.contains(query)
+            RunCoordinateStatus.output_address.isnot(None),
         ).all()
-        for (m_id,) in index_match:
-            matching_mat_ids.add(m_id)
 
-        if not matching_mat_ids:
+        run_addrs = {str(r.output_address) for r in run_rcs}
+        seen_steps = set()
+        for r in run_rcs:
+            key = (r.pipeline_id, r.step_name)
+            if key in seen_steps:
+                continue
+            seen_steps.add(key)
+            for addr in _search_output_fields(r.pipeline_id, r.step_name, query):
+                if addr in run_addrs:
+                    matching_addrs.add(addr)
+
+        if not matching_addrs:
             return {"trace": []}
 
-        # 2. Get all materializations used in this run
-        run_mat_ids = {m_id for (m_id,) in session.query(RunCoordinateStatus.materialization_id).filter(
-            RunCoordinateStatus.run_id == run_id,
-            RunCoordinateStatus.materialization_id.isnot(None)
-        ).all()}
-
-        # 3. Get all edges within this run's materializations
-        all_edges = session.query(MaterializationEdge).filter(
-            (MaterializationEdge.parent_id.in_(run_mat_ids)) | (MaterializationEdge.child_id.in_(run_mat_ids))
+        # 2. Build edge graph via MaterializationEdge (address-based)
+        all_edges = session.query(
+            MaterializationEdge.parent_address,
+            MaterializationEdge.child_address,
+        ).filter(
+            (MaterializationEdge.parent_address.in_(run_addrs))
+            | (MaterializationEdge.child_address.in_(run_addrs))
         ).all()
 
-        parents = {m: [] for m in run_mat_ids}  # type: ignore
-        children = {m: [] for m in run_mat_ids}  # type: ignore
+        parents: Dict[str, List[str]] = {a: [] for a in run_addrs}
+        children: Dict[str, List[str]] = {a: [] for a in run_addrs}
         for e in all_edges:
-            if e.child_id in run_mat_ids and e.parent_id in run_mat_ids:
-                parents[e.child_id].append(e.parent_id)
-                children[e.parent_id].append(e.child_id)
+            p, c = str(e.parent_address), str(e.child_address)
+            if p in run_addrs and c in run_addrs:
+                parents[c].append(p)
+                children[p].append(c)
 
-        # 4. BFS to find all related materializations
-        queue = list(matching_mat_ids)
-        visited = set(matching_mat_ids)
+        # 3. BFS to find all related addresses
+        queue = list(matching_addrs)
+        visited = set(matching_addrs)
 
         while queue:
             curr = queue.pop(0)
@@ -304,26 +376,31 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
                     visited.add(c)
                     queue.append(c)
 
-        # 5. Fetch details for the trace
-        results = session.query(RunCoordinateStatus, Materialization).join(
-            Materialization, RunCoordinateStatus.materialization_id == Materialization.id
-        ).filter(
-            RunCoordinateStatus.run_id == run_id,
-            RunCoordinateStatus.materialization_id.in_(visited)
-        ).all()
+        # 4. Fetch details for the trace (RCS + Arrow)
+        arrow_idx = lane_store.address_row_index()
+        rcs_rows = (
+            session.query(RunCoordinateStatus)
+            .filter(
+                RunCoordinateStatus.run_id == run_id,
+                RunCoordinateStatus.output_address.isnot(None),
+            )
+            .filter(RunCoordinateStatus.output_address.in_(visited))
+            .all()
+        )
 
         trace = []
-        for rc, mat in results:
+        for rc in rcs_rows:
+            addr = str(rc.output_address)
+            arrow_row = arrow_idx.get(addr, {})
             trace.append({
                 "step_name": rc.step_name,
                 "coordinate": rc.coordinate,
                 "status": rc.status,
                 "output_address": rc.output_address,
-                "materialization_id": mat.id,
-                "is_match": mat.id in matching_mat_ids,
-                "created_at": mat.created_at
+                "is_match": addr in matching_addrs,
+                "created_at": str(arrow_row.get("ts", "")) if arrow_row.get("ts") else rc.created_at,
             })
-            
+
         return {"trace": trace}
 
 
@@ -341,96 +418,117 @@ def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset
                 "coordinate": rc.coordinate,
                 "status": rc.status,
                 "output_address": rc.output_address,
-                "materialization_id": rc.materialization_id,
                 "error_message": rc.error_message
             })
         return {"total": total, "items": items}
 
 
-def _resolve_materialization(session, output_address: str):
-    """Latest generation at an address, preferring the live one."""
-    live = (
-        session.query(Materialization)
-        .filter_by(output_address=output_address, is_live=True)
-        .first()
-    )
-    if live:
-        return live
-    return (
-        session.query(Materialization)
-        .filter_by(output_address=output_address)
-        .order_by(Materialization.id.desc())
-        .first()
-    )
+def _is_fulfilled(session, output_address: str, step_name: Optional[str] = None, pipeline_id: Optional[str] = None) -> bool:
+    """Check input_hash_usages.fulfilled for this address."""
+    row = session.query(InputHashUsage.fulfilled).filter(
+        InputHashUsage.address == output_address,
+    ).first()
+    return bool(row and row[0])
+
+
+def _resolve_arrow_row(output_address: str) -> Optional[Dict[str, Any]]:
+    """Resolve an output_address to its Arrow lane_store row (latest by ts).
+    Returns None if no Arrow row exists for this address."""
+    return lane_store.address_row_index().get(output_address)
+
+
+def _resolve_object_path(arrow_row: Dict[str, Any]) -> Optional[str]:
+    """If the output is a spilled ref string, return the object store path.
+    Returns None for inline values (no on-disk file)."""
+    output = arrow_row.get("output", "")
+    if isinstance(output, str) and output.startswith("objects:"):
+        from .store import _get_object_path
+        return _get_object_path(output[len("objects:"):])
+    return None
 
 
 @app.get("/api/objects/{output_address}", response_model=ObjectMetadataOut)
 def get_object_metadata(output_address: str):
     """Get metadata and a preview for a materialized object."""
+    arrow_row = _resolve_arrow_row(output_address)
+    if not arrow_row:
+        raise HTTPException(404, "Object not found")
+
+    output = arrow_row.get("output")
+    obj_path = _resolve_object_path(arrow_row)
+
+    # For inline values (native Arrow types or JSON strings), preview directly
+    if obj_path is None:
+        if isinstance(output, str):
+            size = len(output.encode("utf-8"))
+            preview_text = output[:4096]
+            preview_kind = "text"
+            try:
+                preview_json = json.loads(output)
+                preview_kind = "json"
+            except Exception:
+                preview_json = None
+        elif output is None:
+            size = 0
+            preview_kind = "binary"
+            preview_text = None
+            preview_json = None
+        else:
+            # Native Arrow value (dict, int, etc.)
+            import json as _json
+            json_str = _json.dumps(output, sort_keys=True, default=str)
+            size = len(json_str.encode("utf-8"))
+            preview_text = json_str[:4096]
+            preview_kind = "json"
+            try:
+                preview_json = _json.loads(json_str)
+            except Exception:
+                preview_json = None
+    else:
+        if not os.path.exists(obj_path):
+            raise HTTPException(404, "Object bytes not found in store")
+        size = os.path.getsize(obj_path)
+        preview_kind = "binary"
+        preview_text = None
+        preview_json = None
+        if size < 1024 * 1024 * 10:
+            try:
+                with open(obj_path, "r", encoding="utf-8") as f:
+                    content = f.read(4096)
+                    preview_text = content
+                    preview_kind = "text"
+                    try:
+                        preview_json = json.loads(content)
+                        preview_kind = "json"
+                    except Exception:
+                        pass
+            except UnicodeDecodeError:
+                pass
+
     with get_session() as session:
-        mat = _resolve_materialization(session, output_address)
-        if not mat:
-            raise HTTPException(404, "Object not found")
-        obj_path = os.path.abspath(mat.output_path)
-
-    if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object bytes not found in store")
-
-    size = os.path.getsize(obj_path)
-
-    # Try to preview first 4KB
-    preview_kind = "binary"
-    preview_text = None
-    preview_json = None
-
-    if size < 1024 * 1024 * 10:  # Only try to preview if < 10MB
-        try:
-            with open(obj_path, "r", encoding="utf-8") as f:
-                content = f.read(4096)
-                preview_text = content
-                preview_kind = "text"
-                try:
-                    preview_json = json.loads(content)
-                    preview_kind = "json"
-                except Exception:
-                    pass
-        except UnicodeDecodeError:
-            pass  # It's binary
-
-    # Fetch the materialization data; when/why it stopped being live is
-    # derived from the append-only lifecycle log
-    with get_session() as session:
-        mat = _resolve_materialization(session, output_address)
+        is_live = _is_fulfilled(session, output_address)
         invalidated_at = None
         invalidation_reason = None
-        if not mat.is_live:
-            lc = (
-                session.query(MaterializationLifecycle)
-                .filter_by(materialization_id=mat.id)
-                .order_by(MaterializationLifecycle.id.desc())
+        if not is_live:
+            usage = (
+                session.query(InputHashUsage)
+                .filter_by(address=output_address)
                 .first()
             )
-            if lc:
-                invalidated_at = lc.created_at
-                invalidation_reason = lc.reason
+            if usage:
+                invalidated_at = usage.last_run_id
+                invalidation_reason = "invalidated"
         mat_data = {
-            "pipeline_id": mat.pipeline_id,
-            "step_name": mat.step_name,
-            "code_version": mat.code_version,
-            "created_by_run_id": mat.created_by_run_id,
-            "created_at": mat.created_at,
-            "is_live": mat.is_live,
+            "pipeline_id": arrow_row.get("pipeline_id", ""),
+            "step_name": arrow_row.get("step_name", ""),
+            "code_version": arrow_row.get("code_version") or "",
+            "created_by_run_id": str(arrow_row.get("run_id", "")),
+            "created_at": str(arrow_row.get("ts", "")),
+            "is_live": is_live,
             "invalidated_at": invalidated_at,
             "invalidation_reason": invalidation_reason,
-            "output_content_hash": mat.output_content_hash,
-            "content_type": mat.content_type,
-            "index": [
-                {"field": e.field, "value": e.value}
-                for e in session.query(MaterializationIndexEntry)
-                .filter_by(materialization_id=mat.id)
-                .order_by(MaterializationIndexEntry.id)
-                .all()
-            ],
+            "output_content_hash": arrow_row.get("output_identity", ""),
+            "content_type": arrow_row.get("content_type"),
         }
 
     return {
@@ -445,18 +543,35 @@ def get_object_metadata(output_address: str):
 
 
 @app.get("/api/objects/{output_address}/download")
-def download_object(output_address: str) -> FileResponse:
+def download_object(output_address: str):
     """Download the raw bytes of a materialized object."""
-    with get_session() as session:
-        mat = _resolve_materialization(session, output_address)
-        if not mat:
-            raise HTTPException(404, "Object not found")
-        obj_path = os.path.abspath(mat.output_path)
+    from fastapi.responses import Response
 
-    if not os.path.exists(obj_path):
-        raise HTTPException(404, "Object bytes not found in store")
+    arrow_row = _resolve_arrow_row(output_address)
+    if not arrow_row:
+        raise HTTPException(404, "Object not found")
 
-    return FileResponse(obj_path, filename=output_address)
+    output = arrow_row.get("output")
+    obj_path = _resolve_object_path(arrow_row)
+
+    if obj_path is not None:
+        if not os.path.exists(obj_path):
+            raise HTTPException(404, "Object bytes not found in store")
+        return FileResponse(obj_path, filename=output_address)
+    else:
+        # Inline value — serialize native Arrow value to JSON for download
+        import json as _json
+        if isinstance(output, str):
+            body = output
+        elif output is None:
+            body = ""
+        else:
+            body = _json.dumps(output, sort_keys=True, default=str)
+        return Response(
+            content=body.encode("utf-8"),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{output_address}"'},
+        )
 
 
 def _selection_from_payload(data: dict) -> Selection:
@@ -475,30 +590,30 @@ async def preview_selection(request: Request):
     """Preview which materializations match a selection query."""
     data = await request.json()
     sel = _selection_from_payload(data)
-    from .selection import get_selection_materialization_ids
+    from .selection import get_selection_addresses
 
     with get_session() as session:
-        mat_ids = get_selection_materialization_ids(session, sel)
-        mats = (
-            session.query(Materialization).filter(Materialization.id.in_(mat_ids)).all()
-        )
+        addrs = get_selection_addresses(session, sel)
+        arrow_idx = lane_store.address_row_index()
         items = []
-        for m in mats:
+        for addr in addrs:
+            row = arrow_idx.get(addr)
+            if not row:
+                continue
             items.append(
                 {
-                    "materialization_id": m.id,
-                    "pipeline_id": m.pipeline_id,
-                    "step_name": m.step_name,
-                    "code_version": m.code_version,
-                    "output_address": m.output_address,
-                    "output_content_hash": m.output_content_hash,
-                    "metadata": json.loads(m.metadata_json) if m.metadata_json else {},  # type: ignore
-                    "invalidated": not m.is_live,
+                    "pipeline_id": row.get("pipeline_id", ""),
+                    "step_name": row.get("step_name", ""),
+                    "code_version": row.get("code_version") or "",
+                    "output_address": addr,
+                    "output_content_hash": row.get("output_identity", ""),
+                    "metadata": {},
+                    "invalidated": not _is_fulfilled(session, addr),
                 }
             )
 
         return {
-            "materialization_count": len(mats),
+            "materialization_count": len(items),
             "items": items,
         }
 
@@ -515,7 +630,7 @@ async def invalidate_selection(request: Request):
     return {
         "run_id": result["run_id"],
         "invalidated_count": result["invalidated_count"],
-        "materialization_ids": result["materialization_ids"],
+        "addresses": result["addresses"],
     }
 
 

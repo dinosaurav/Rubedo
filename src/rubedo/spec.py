@@ -69,11 +69,13 @@ class StepSpec:
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
-    index: Tuple[str, ...] = ()  # value fields extracted into the search index
-    shape: str = "map"  # map | reduce | expand
+    check_cache: bool = True  # when False, always re-execute (still commits, like --force for one step)
+    shape: str = "map"  # map | reduce | expand | join
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
-    join_on: Optional[Dict[str, str]] = None  # join: {parent: indexed field}
+    join_on: Optional[Dict[str, str]] = None  # join: {parent: field}
+    arrow_reduce: bool = False  # reduce: pass parent's output as pa.Table, not dict-of-lanes
+    declarative: bool = False  # no fn — engine builds the output (join: nested struct, union: passthrough)
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
@@ -160,11 +162,12 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
-    index: Optional[List[str]] = None,
+    check_cache: bool = True,
     shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
+    arrow_reduce: bool = False,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
     on_failed: Literal["use_passed", "block"] = "use_passed",
@@ -242,12 +245,15 @@ def step(
     serialization round-trip, and execution policies (retries, rate_limit)
     are not applied — if a step needs those, it deserves materialization.
 
-    index names fields of the output value (dotted paths for nesting) to
-    extract into the search index at commit time, making outputs findable
-    by their content: Selection(index={"company": "acme"}). List-valued
-    fields index one entry per element. Purely operational — changing
-    index= never affects cache identity, and only newly created
-    materializations are indexed under the new declaration.
+    check_cache (default True) controls whether a step's plan phase checks
+    the cache for a reusable output. When False, the step always re-executes
+    — but still commits its result to cache, so downstream steps can reuse
+    and a subsequent run with check_cache=True sees the fresh output. This
+    is the per-step equivalent of `force=True`: right for source roots that
+    must re-scan the world every run (a filesystem crawl, an API poll) but
+    whose outputs are stable when the upstream hasn't changed (content-
+    addressed lanes collapse onto the same addresses, so downstream reuse
+    is unaffected).
 
     on_failed controls the partial fan-in behavior for collective steps
     (reduce/join). "use_passed" (default) allows the step to proceed with
@@ -360,10 +366,15 @@ def step(
                 f"Step '{step_name}': stale_after is meaningless with skip_cache — "
                 "nothing is stored to expire"
             )
-        if skip_cache and index:
+        if not check_cache and skip_cache:
             raise ValueError(
-                f"Step '{step_name}': index is meaningless with skip_cache — "
-                "nothing is stored to search"
+                f"Step '{step_name}': check_cache=False is contradictory with skip_cache "
+                "— a skip_cache step is never materialized, so there is no cache to skip"
+            )
+        if not check_cache and stale_after is not None:
+            raise ValueError(
+                f"Step '{step_name}': stale_after is meaningless with check_cache=False "
+                "— the step always re-executes anyway"
             )
         if on_failed not in ("use_passed", "block"):
             raise ValueError(
@@ -404,11 +415,12 @@ def step(
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
             skip_cache=skip_cache,
-            index=tuple(index or ()),
+            check_cache=check_cache,
             shape=resolved_shape,
             executor=executor,
             group_key=group_key,
             join_on=join_on,
+            arrow_reduce=arrow_reduce,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,
             on_failed=on_failed,
@@ -442,6 +454,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["depends_on_aliases"] = dict(s.depends_on_aliases)
         if s.skip_cache:
             entry["skip_cache"] = True
+        if not s.check_cache:
+            entry["check_cache"] = False
         if s.retries:
             entry["retries"] = s.retries
             entry["retry_on"] = [e.__name__ for e in s.retry_on]

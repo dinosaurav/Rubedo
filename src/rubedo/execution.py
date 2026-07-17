@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 from .hashing import hash_json, hash_bytes
-from .models import Filtered, ProcessResult
+from .models import Filtered
 from .planning import (
     EphemeralRef,
     MatRef,
@@ -26,9 +26,35 @@ from .planning import (
     expand_anchor_address,
     expand_child_coord,
     expand_child_identity,
+    ROOT_LANE,
 )
 from .spec import StepSpec
-from .store import read_materialization_output
+from .store import _try_arrow, _to_arrow_table, read_output
+
+
+def _resolve_parent_table(
+    pipeline_id: str, parent_step: str, lane_refs: Dict[str, Any]
+):
+    """Resolve a reduce parent's output as a pa.Table — the struct column
+    flattened into columns. Falls back to dict-of-lanes if the output
+    column is not a struct (string fallback for spilled/mixed values)."""
+    from . import lane_store
+
+    lane_keys = list(lane_refs.keys())
+    table = lane_store.output_column_as_table(pipeline_id, parent_step, lane_keys)
+    if table is not None:
+        return table
+    # Fallback: resolve each lane to a Python dict and build a table
+    import pyarrow as pa
+
+    rows = []
+    for lane, ref in lane_refs.items():
+        val = read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
+        if val is not None:
+            rows.append(val)
+    if not rows:
+        return pa.table({})
+    return pa.Table.from_pylist(rows)
 
 
 class _RateLimiter:
@@ -129,6 +155,11 @@ class ExecutionOutcome:
     # the parent): stored so a re-run can skip the fn, but it is not a lane —
     # no status, count, edge, or coord_step_mats entry.
     is_anchor: bool = False
+    # Arrow data already written to the lane store's arrow batch buffer —
+    # the ledger should skip serialize_output + append_filled (the Arrow
+    # table is already in the buffer).  SQLite writes (IHU, edges, RCS)
+    # still happen per-outcome.
+    arrow_batched: bool = False
 
 
 def _dep_kwarg(step: StepSpec, dep: str) -> str:
@@ -154,7 +185,7 @@ def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     """
     if isinstance(ref, EphemeralRef):
         return _compute_ephemeral(ref, params, memo)
-    return read_materialization_output(ref)
+    return read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
 
 
 def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo):
@@ -182,23 +213,20 @@ def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo
                 f"skip_cache step '{step.name}' returned Filtered: filtering "
                 "is a cacheable decision, so filter steps must be materialized"
             )
-        # Consumers of materialized steps receive the unwrapped value;
-        # keep the contract identical (minus the serialization round-trip)
-        if isinstance(result, ProcessResult):
-            result = result.value
         return result
 
     return memo.compute((ref.step.name, ref.item.coordinate), produce)
 
 
-def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[int, MatRef]:
-    """Nearest materialized ancestors, skipping through ephemeral hops."""
-    out: Dict[int, MatRef] = {}
+def _materialized_ancestors(parent_refs: Dict[str, Any]) -> Dict[str, MatRef]:
+    """Nearest materialized ancestors, skipping through ephemeral hops.
+    Keyed by output_address (the identity for edge writes)."""
+    out: Dict[str, MatRef] = {}
     for ref in parent_refs.values():
         if isinstance(ref, EphemeralRef):
             out.update(_materialized_ancestors(ref.parent_refs))
         else:
-            out[ref.id] = ref
+            out[ref.output_address] = ref
     return out
 
 
@@ -220,6 +248,7 @@ def _process_decision(
     memo: _RunMemo,
     limiter: Optional[_RateLimiter],
     process_pool: Optional[Any] = None,
+    pipeline_id: str = "",
 ) -> List[ExecutionOutcome]:
     """Run the step function for one execute decision — the (step, lane) unit.
 
@@ -234,7 +263,31 @@ def _process_decision(
     plus N children; every other shape returns exactly one outcome.
     """
 
+    def _declarative_result(decision: StepDecision) -> Any:
+        """Build the output for a declarative step (no fn) from the
+        parents' output values directly.
+
+        - Declarative join: nest each parent's output under its step name
+          -> {"orders": {...}, "customers": {...}}
+        - Declarative union (map shape): pass through the single present
+          parent's output unchanged
+        """
+        if step.shape == "join":
+            return {
+                dep: _resolve_parent_value(
+                    decision.parent_mats[dep], params, memo
+                )
+                for dep in step.depends_on
+            }
+        # Declarative map (union) — passthrough the one parent that has
+        # this lane (parent_mats only contains present parents)
+        dep = list(decision.parent_mats.keys())[0]
+        return _resolve_parent_value(decision.parent_mats[dep], params, memo)
+
     def call(decision: StepDecision, pool: Optional[Any] = None):
+        if step.declarative:
+            return _declarative_result(decision)
+
         # Dependent steps get parent outputs by parameter name; either kind
         # may declare `params`. A root step (map or expand) reads no
         # payload — it mints its own lane(s) from its params/generator.
@@ -242,13 +295,21 @@ def _process_decision(
         if not step.depends_on:
             kwargs = {}
         elif step.shape == "reduce":
-            kwargs = {
-                _dep_kwarg(step, dep): {
-                    lane: _resolve_parent_value(ref, params, memo)
-                    for lane, ref in decision.parent_mats[dep].items()
+            if step.arrow_reduce:
+                kwargs = {
+                    _dep_kwarg(step, dep): _resolve_parent_table(
+                        pipeline_id, dep, decision.parent_mats[dep]
+                    )
+                    for dep in step.depends_on
                 }
-                for dep in step.depends_on
-            }
+            else:
+                kwargs = {
+                    _dep_kwarg(step, dep): {
+                        lane: _resolve_parent_value(ref, params, memo)
+                        for lane, ref in decision.parent_mats[dep].items()
+                    }
+                    for dep in step.depends_on
+                }
         else:
             kwargs = {
                 _dep_kwarg(step, dep): _resolve_parent_value(
@@ -268,11 +329,10 @@ def _process_decision(
     ) -> List[ExecutionOutcome]:
         """Fan one parent lane's yielded payloads into content-addressed lanes.
 
-        A dependent expand emits the cache anchor first (the child content
-        hashes, addressed by the parent so a re-run can skip the fn). A *root*
-        expand (a source) has no parent to cache against, so it writes no
-        anchor and always re-runs. Then one child per distinct payload — each a
-        content-addressed lane `row-<hash>`; identical payloads collapse.
+        Emits the cache anchor first (the child content hashes, addressed by
+        the parent — or ROOT_LANE for a root expand — so a re-run can skip
+        the fn). Then one child per distinct payload — each a content-
+        addressed lane `row-<hash>`; identical payloads collapse.
         """
         seen: set = set()
         children: List[tuple] = []  # (child_hash, value)
@@ -288,24 +348,28 @@ def _process_decision(
             children.append((child_hash, value))
 
         outcomes: List[ExecutionOutcome] = []
+        # Anchor: the child hashes, addressed by the parent (or ROOT_LANE
+        # for a root expand). Not a lane — just the cache entry that lets
+        # a re-run skip the generator.
         if step.depends_on:
-            # Anchor: the child hashes, addressed by the parent. Not a lane.
             parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
-            anchor = StepDecision(
-                coordinate=decision.coordinate,
-                action="execute",
-                input_hash=parent_hash,
-                output_address=expand_anchor_address(
-                    step, parent_hash, params_hash, accepts_params
-                ),
-                parent_mats=decision.parent_mats,
+        else:
+            parent_hash = ROOT_LANE
+        anchor = StepDecision(
+            coordinate=decision.coordinate,
+            action="execute",
+            input_hash=parent_hash,
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            parent_mats=decision.parent_mats,
+        )
+        outcomes.append(
+            ExecutionOutcome(
+                anchor, True, result=[h for h, _ in children],
+                attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
             )
-            outcomes.append(
-                ExecutionOutcome(
-                    anchor, True, result=[h for h, _ in children],
-                    attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
-                )
-            )
+        )
 
         for child_hash, value in children:
             input_hash, child_address = expand_child_identity(
@@ -326,6 +390,126 @@ def _process_decision(
             )
         return outcomes
 
+    def _expand_table_outcomes(
+        decision: StepDecision, source_table: Any,
+        attempt: int, attempt_errors: List[str]
+    ) -> List[ExecutionOutcome]:
+        """Fan a table-return expand into content-addressed lanes, keeping
+        the data in Arrow throughout.  One ``to_pylist()`` for hashing only;
+        the struct column is written directly to the lane store's arrow batch
+        buffer — no Python dict → Arrow round trip at flush time.
+        """
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        from datetime import datetime, timezone
+        from . import lane_store
+
+        # One bulk conversion for hashing only
+        src_pa_table, _ = _to_arrow_table(source_table)
+        rows = src_pa_table.to_pylist()
+        seen: set = set()
+        children: List[tuple] = []  # (row_idx, child_hash, lane_key, input_hash, address)
+        for idx, row in enumerate(rows):
+            _validate_output(step, row)
+            child_hash = hash_json(row)
+            if child_hash in seen:
+                continue
+            seen.add(child_hash)
+            lane_key = expand_child_coord(child_hash)
+            input_hash, child_address = expand_child_identity(
+                step, child_hash, params_hash, accepts_params
+            )
+            children.append((idx, child_hash, lane_key, input_hash, child_address))
+
+        # Build the lane store Arrow table directly from the source table's
+        # struct column + computed metadata — no Python dict buffer.
+        if children:
+            ts = datetime.now(timezone.utc)
+            # Extract the struct array for the deduped rows
+            # src_pa_table is already a pa.Table (converted above)
+            # Build the struct column by selecting deduped rows
+            row_indices = [c[0] for c in children]
+            struct_type = pa.struct([
+                pa.field(name, src_pa_table.column(name).type)
+                for name in src_pa_table.column_names
+            ])
+            cols = []
+            for name in src_pa_table.column_names:
+                col = src_pa_table.column(name)
+                if isinstance(col, pa.ChunkedArray):
+                    combined = pa.concat_arrays(col.chunks)
+                else:
+                    combined = col
+                cols.append(combined)
+            struct_arr = pa.StructArray.from_arrays(
+                [pc.take(c, row_indices) for c in cols],
+                fields=[pa.field(n, c.type) for n, c in zip(src_pa_table.column_names, cols)],
+            )
+
+            lane_keys = [c[2] for c in children]
+            addresses = [c[4] for c in children]
+            input_hashes = [c[3] for c in children]
+            output_identities = [c[1] for c in children]  # child_hash == _identity_of(row)
+            row_ids = [
+                lane_store._make_row_id(pipeline_id, step.name, lk, ts)
+                for lk in lane_keys
+            ]
+
+            batch_table = pa.table({
+                "row_id": pa.array(row_ids, type=pa.string()),
+                "lane_key": pa.array(lane_keys, type=pa.string()),
+                "address": pa.array(addresses, type=pa.string()),
+                "input_hash": pa.array(input_hashes, type=pa.string()),
+                "code_version": pa.array([step.version] * len(children), type=pa.string()),
+                "output": struct_arr,
+                "output_identity": pa.array(output_identities, type=pa.string()),
+                "content_type": pa.array(["json"] * len(children), type=pa.string()),
+                "code_hash": pa.array([step.code_hash] * len(children), type=pa.string()),
+                "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
+                "run_id": pa.array([""] * len(children), type=pa.string()),  # filled by ledger
+                "filtered": pa.array([False] * len(children), type=pa.bool_()),
+            }, schema=lane_store._schema(pa, struct_type))
+
+            lane_store.append_arrow_batch(pipeline_id, step.name, batch_table)
+
+        # Build outcomes — no dict values, arrow_batched=True
+        outcomes: List[ExecutionOutcome] = []
+        if step.depends_on:
+            parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
+        else:
+            parent_hash = ROOT_LANE
+        anchor = StepDecision(
+            coordinate=decision.coordinate,
+            action="execute",
+            input_hash=parent_hash,
+            output_address=expand_anchor_address(
+                step, parent_hash, params_hash, accepts_params
+            ),
+            parent_mats=decision.parent_mats,
+        )
+        outcomes.append(
+            ExecutionOutcome(
+                anchor, True, result=[c[1] for c in children],
+                attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
+            )
+        )
+
+        for _, child_hash, lane_key, input_hash, child_address in children:
+            child = StepDecision(
+                coordinate=lane_key,
+                action="execute",
+                input_hash=input_hash,
+                output_address=child_address,
+                parent_mats=decision.parent_mats,
+            )
+            outcomes.append(
+                ExecutionOutcome(
+                    child, True, result=None, attempts=attempt,
+                    attempt_errors=attempt_errors, arrow_batched=True,
+                )
+            )
+        return outcomes
+
     def process(  # type: ignore
         decision: StepDecision, pool: Optional[Any] = None
     ) -> List[ExecutionOutcome]:
@@ -337,11 +521,18 @@ def _process_decision(
             try:
                 result = call(decision, pool)
                 if step.shape == "expand":
-                    # Consume the iterable inside the try so a failing
-                    # generator body is caught and retried like any other.
-                    return _expand_outcomes(
-                        decision, list(result), attempt, attempt_errors
-                    )
+                    if _try_arrow(result):
+                        # Table-return expand: keep data in Arrow, one
+                        # to_pylist for hashing only, struct column
+                        # written directly to the arrow batch buffer.
+                        return _expand_table_outcomes(
+                            decision, result, attempt, attempt_errors
+                        )
+                    else:
+                        values = list(result)
+                        return _expand_outcomes(
+                            decision, values, attempt, attempt_errors
+                        )
                 _validate_output(step, result)
                 return [
                     ExecutionOutcome(

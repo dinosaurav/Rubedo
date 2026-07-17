@@ -9,7 +9,8 @@ from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
 from rubedo.db import init_db, get_session
-from rubedo.models import Materialization, MaterializationEdge, RunCoordinateStatus, RunEvent
+from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent, InputHashUsage
+from rubedo import lane_store
 from rubedo.store import init_store, read_materialization_output
 
 DATA = ".test_join_data"
@@ -94,17 +95,23 @@ def assert_run(pipe, **kw):
 
 
 def _outputs(step_name):
+    from rubedo.planning import _ArrowRowRef
+
     result = {}
+    idx = lane_store.address_row_index()
     with get_session() as session:
         for st in (
             session.query(RunCoordinateStatus)
             .filter_by(step_name=step_name)
-            .filter(RunCoordinateStatus.materialization_id.isnot(None))
+            .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         ):
-            mat = session.get(Materialization, st.materialization_id)
-            if mat and mat.is_live:
-                result[st.coordinate] = read_materialization_output(mat)
+            row = idx.get(str(st.output_address))
+            if not row:
+                continue
+            usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
+            if usage and usage.fulfilled:
+                result[st.coordinate] = read_materialization_output(_ArrowRowRef(row))
     return result
 
 
@@ -115,11 +122,11 @@ def test_two_way_equijoin():
     orders_src = csv_source("orders")
     customers_src = csv_source("customers")
 
-    @step(index=["cust"])
+    @step
     def order(orders):
         return {"oid": orders["oid"], "cust": orders["cust"]}
 
-    @step(index=["cid"])
+    @step
     def customer(customers):
         return {"cid": customers["cid"], "name": customers["name"]}
 
@@ -143,12 +150,10 @@ def test_two_way_equijoin():
     }
     # each joined lane edges to both its sides
     with get_session() as session:
-        mat = (
-            session.query(Materialization)
-            .filter_by(step_name="enrich", is_live=True)
-            .first()
-        )
-        assert session.query(MaterializationEdge).filter_by(child_id=mat.id).count() == 2
+        enrich_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "enrich"]
+        assert len(enrich_rows) >= 1
+        addr = enrich_rows[0].get("address")
+        assert session.query(MaterializationEdge).filter_by(child_address=addr).count() == 2
 
     # re-run: joins reused (identity = the two sides' content)
     s2 = assert_run(pipe)
@@ -162,7 +167,7 @@ def test_four_way_star_join():
         write_csv(f"{src}.csv", f"uid,v\nu1,{src}1\nu2,{src}2\n")
 
     def loader(src_name, step_name):
-        @step(name=step_name, depends_on=[src_name], index=["uid"])
+        @step(name=step_name, depends_on=[src_name])
         def load(**kwargs):
             row = kwargs[src_name]
             return {"uid": row["uid"], "v": row["v"]}
@@ -198,13 +203,13 @@ def test_join_failed_parent_lane():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
@@ -236,13 +241,13 @@ def test_join_failed_parent_lane_use_passed():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
@@ -294,11 +299,11 @@ def test_join_empty():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 

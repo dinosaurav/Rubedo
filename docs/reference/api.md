@@ -32,7 +32,6 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
-    index: Optional[List[str]] = None,
     shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
@@ -62,18 +61,17 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `retry_backoff` | `float` | `1.0` | Multiplier applied to `retry_delay` after each attempt. |
 | `rate_limit` | `str` \| `None` | `None` | `"10/min"`, `"2/s"`, `"500/hour"` — paces this step's executions across all its workers, retries included. Parsed by `parse_rate_limit`; raises `ValueError` on a bad format. |
 | `stale_after` | `str` \| `None` | `None` | `"24h"`, `"30min"`, `"7d"` — a cached output older than this re-executes on the next run. Different bytes supersede the old generation (downstream recomputes); identical bytes just refresh the freshness clock. Parsed by `parse_duration`. |
-| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, `stale_after`, and `index`. A `skip_cache` step must have at least one consumer. |
-| `index` | `list[str]` \| `None` | `None` | Dotted-path fields of the output *value* to extract into the search index at commit time (e.g. `["company", "meta.region"]`). List-valued fields index one entry per element. Never affects cache identity — only newly created materializations are indexed under a new declaration. Incompatible with `skip_cache`. |
+| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, and `stale_after`. A `skip_cache` step must have at least one consumer. |
 | `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
-| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
-| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
+| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: a field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
+| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
 | `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
 | `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
 | `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
 
 ```python
-from rubedo import ProcessResult, step
+from rubedo import step
 
 def check_price_positive(val: dict):
     if val["price"] < 0:
@@ -90,7 +88,7 @@ def check_price_positive(val: dict):
     stale_after="24h",
     assertions=[check_price_positive],
 )
-def enrich(row: dict) -> ProcessResult:
+def enrich(row: dict):
     ...
 ```
 
@@ -110,8 +108,8 @@ that parent's step name (a `reduce` step's parent kwarg is a
 `{coordinate: value}` dict instead of a single value); any step may
 additionally declare a `params` argument to receive the run's validated
 params (see [Concepts: model](../concepts/model.md)). A step returns
-either a plain JSON-serializable value, a `ProcessResult` (value +
-metadata), or `Filtered(reason=...)` to decline the lane.
+either a plain JSON-serializable value or `Filtered(reason=...)` to
+decline the lane.
 
 A `StepSpec` is itself callable — `extract(scan={"text": "hi"})` is a pure
 passthrough to the decorated function, so a step is directly unit-testable
@@ -469,8 +467,9 @@ from the query-string language shared by Python, the CLI, and the web UI.
 | `live:true`\|`false` | `invalidated` (inverted) | `live:false` |
 | anything else | `index[key]` | `company:acme` |
 
-Any term that isn't a reserved prefix matches an indexed output field
-(`@step(index=[...])`) — indexed data is the language's open vocabulary.
+Any term that isn't a reserved prefix matches a field of the step's output
+struct — the output's fields are searchable directly, with no declaration,
+and are the language's open vocabulary.
 
 ```python
 from rubedo import Selection
@@ -482,30 +481,48 @@ Selection(index={"company": "acme"})
 See [Guide: search and invalidation](../guides/search-and-invalidation.md)
 for the full query language and CLI equivalents.
 
-## `ProcessResult`
+## Step return values
+
+A step returns a plain JSON-serializable value (a dict, list, string,
+number, etc.) directly — no wrapper required. Downstream steps receive
+that value as their parent argument. To decline a lane instead of
+producing one, return `Filtered(reason=...)` (see below).
 
 ```python
-class ProcessResult(BaseModel):
-    value: Any
-    metadata: Optional[Dict[str, Any]] = None
-```
-
-The successful output of a step, carrying the value that downstream steps
-receive plus optional metadata that rides along in the ledger but isn't
-passed to consumers. A step may also return a plain JSON-serializable value
-directly instead of wrapping it — `ProcessResult` is for when you want to
-attach metadata alongside the value.
-
-```python
-from rubedo import ProcessResult
+from rubedo import step
 
 @step
-def count_lines(read_lines: dict) -> ProcessResult:
-    return ProcessResult(
-        value={"line_count": len(read_lines["lines"])},
-        metadata={"source": "count_lines step"},
-    )
+def count_lines(read_lines: dict):
+    return {"line_count": len(read_lines["lines"])}
 ```
+
+Custom classes with a `.model_dump()` method (Pydantic v2) or `.to_dict()`
+method are automatically coerced to a dict at storage time. Deserialization
+is one-way: downstream steps receive the dict, not the original class —
+reconstruct in the step function if needed (`MyModel(**parent_dict)`).
+
+```python
+from pydantic import BaseModel
+from rubedo import step
+
+class Summary(BaseModel):
+    line_count: int
+
+@step
+def count_lines(read_lines: dict) -> Summary:
+    return Summary(line_count=len(read_lines["lines"]))
+
+@step
+def report(count_lines: dict):
+    # count_lines is a dict here: {"line_count": 42}
+    # reconstruct if you want the model:
+    # summary = Summary(**count_lines)
+    return {"report": f"{count_lines['line_count']} lines"}
+```
+
+Bytes and Arrow-compatible types (`pa.Table`, polars/pandas DataFrames)
+are always spilled to the content-addressed object store and read back
+as their original type.
 
 ## `Filtered`
 
@@ -565,8 +582,8 @@ above), and every lane it yields is
 content-addressed (`row-<hash>`): identical payloads collapse to one lane,
 and an edited item reads as removed + created, so incrementality survives
 reordering, dedup, and appends for free. To find or track an item by a
-human field (email, id, file name), `@step(index=[...])` it and query — the
-coordinate is never a human key.
+human field (email, id, file name), query the step's output struct — its
+fields are searchable directly, and the coordinate is never a human key.
 
 See [Concepts: sources](../concepts/sources.md) for the folder, CSV, SQL
 table, and cloud object storage recipes.
