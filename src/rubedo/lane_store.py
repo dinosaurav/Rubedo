@@ -2,15 +2,15 @@
 
 One Arrow IPC file per step.  Each row is one successful computation:
 ``(row_id, lane_key, address, input_hash, code_version, output,
-output_identity, content_type, code_hash, ts, run_id, filtered,
-index_values)``.  The ``output`` column holds the value itself in a
-native Arrow type (struct for dicts, int64 for ints, string) when all
-lanes in a step are inline; falls back to ``string`` (JSON-serialized
-inline + ``"objects:<hash>"`` ref strings) when any value spills to the
-object store.  ``output_identity`` is the content identity hash (for
-downstream ``input_hash`` computation), computed once at commit time
-from the original output value — plan time reads it from the column
-instead of recomputing from the Arrow-read-back value.
+output_identity, content_type, code_hash, ts, run_id, filtered)``.  The
+``output`` column holds the value itself in a native Arrow type (struct
+for dicts, int64 for ints, string) when all lanes in a step are inline;
+falls back to ``string`` (JSON-serialized inline + ``"objects:<hash>"``
+ref strings) when any value spills to the object store.  ``output_identity``
+is the content identity hash (for downstream ``input_hash`` computation),
+computed once at commit time from the original output value — plan time
+reads it from the column instead of recomputing from the Arrow-read-back
+value.
 
 **No tombstones here.**  Liveness (reuse vs. recompute) is the
 ``input_hash_usages`` SQLite table's job — ``fulfilled=True`` means a
@@ -51,7 +51,6 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     ("ts", "timestamp[us]", False),
     ("run_id", "string", False),
     ("filtered", "bool", False),
-    ("index_values", "map<string, list<string>>", True),  # @step(index=[...]) field→values
 ]
 
 
@@ -167,7 +166,7 @@ def append_arrow_batch(
     written directly to the lane store without going through Python dict
     intermediaries.  The table must have the full lane store schema
     (row_id, lane_key, address, input_hash, output, content_type,
-    code_hash, code_version, ts, run_id, filtered, index_values).
+    code_hash, code_version, ts, run_id, filtered).
 
     At flush time, the arrow batch buffer is concatenated with the dict
     buffer and the on-disk history."""
@@ -205,7 +204,6 @@ def append_filled(
     filtered: bool = False,
     code_hash: Optional[str] = None,
     code_version: Optional[str] = None,
-    index_values: Optional[Dict[str, List[str]]] = None,
     output_identity: Optional[str] = None,
     ts: Optional[Any] = None,
 ):
@@ -224,11 +222,7 @@ def append_filled(
     ``output_identity`` is the content identity hash (for downstream
     ``input_hash`` computation), computed once at commit time from the
     original output value — stored directly so plan time reads it from
-    the column instead of recomputing from the Arrow-read-back value.
-
-    ``index_values`` is the @step(index=[...]) field→values dict, stored
-    as a map<string, list<string>> column — the sole source of truth for
-    indexed field values."""
+    the column instead of recomputing from the Arrow-read-back value."""
     from datetime import datetime, timezone
 
     if ts is None:
@@ -247,7 +241,6 @@ def append_filled(
             "ts": ts,
             "run_id": run_id,
             "filtered": filtered,
-            "index_values": index_values,
         }
     )
 
@@ -588,18 +581,6 @@ def find_by_row_id(
     return filtered.to_pylist()[0]
 
 
-def _normalize_index_values(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert the index_values map column from pyarrow's list-of-tuples
-    format to a plain dict.  Returns {} for null/missing."""
-    iv = row.get("index_values")
-    if iv is None:
-        return {}
-    if isinstance(iv, dict):
-        return iv
-    # pyarrow map columns come back as [(key, value), ...]
-    return dict(iv)
-
-
 def batch_lookup_by_address(
     pipeline_id: str,
     step_name: str,
@@ -613,9 +594,8 @@ def batch_lookup_by_address(
     has a ``fulfilled=True`` entry in ``input_hash_usages`` AND a filled
     Arrow row in the lane_store.  Addresses not in the dict are misses
     (recompute).  The row_dict carries all fields the planning phase needs
-    to build a MatRef: ``row_id``, ``content_hash``, ``content_type``,
-    ``output_path``, ``filtered``, ``code_hash``, ``ts``,
-    ``index_values``.
+    to build a MatRef: ``row_id``, ``output_identity``, ``content_type``,
+    ``output``, ``filtered``, ``code_hash``, ``ts``.
     """
     from .models import InputHashUsage
 
@@ -644,124 +624,7 @@ def batch_lookup_by_address(
     for row in rows:
         addr = row.get("address")
         if addr in fulfilled_addrs:
-            row["index_values"] = _normalize_index_values(row)
             result[addr] = row
-    return result
-
-
-def scan_indexed_field(
-    pipeline_id: str,
-    step_name: str,
-    field: str,
-    value: Any,
-) -> List[str]:
-    """Addresses where the indexed field has the given value.
-
-    Scans the step's Arrow ``index_values`` map column.  Returns a list
-    of ``address`` strings (the cache identity) for rows whose
-    ``index_values[field]`` list contains ``str(value)``.
-    """
-    table = _combined_table(pipeline_id, step_name)
-    if table is None or table.num_rows == 0:
-        return []
-    target = str(value)
-    matches: List[str] = []
-    for row in table.to_pylist():
-        iv = _normalize_index_values(row)
-        if target in iv.get(field, []):
-            matches.append(row.get("address", ""))
-    return [a for a in matches if a]
-
-
-def scan_indexed_field_all(
-    field: str,
-    value: Any,
-) -> List[str]:
-    """Addresses where the indexed field has the given value, across ALL
-    step Arrow files.  Used when the selection has no step filter.
-    """
-    matches: List[str] = []
-    if not os.path.isdir(TABLES_DIR):
-        return matches
-    for entry in os.listdir(TABLES_DIR):
-        pipe_dir = os.path.join(TABLES_DIR, entry)
-        if not os.path.isdir(pipe_dir):
-            continue
-        for fname in os.listdir(pipe_dir):
-            if not fname.endswith(".arrow"):
-                continue
-            step_name = fname[:-len(".arrow")]
-            matches.extend(scan_indexed_field(entry, step_name, field, value))
-    return matches
-
-
-def search_indexed_values(
-    pipeline_id: str,
-    step_name: str,
-    query: str,
-) -> List[str]:
-    """Addresses where any indexed field value contains ``query`` as a
-    substring.  Used by the server's run-search endpoint."""
-    table = _combined_table(pipeline_id, step_name)
-    if table is None or table.num_rows == 0:
-        return []
-    q_lower = query.lower()
-    matches: List[str] = []
-    for row in table.to_pylist():
-        iv = _normalize_index_values(row)
-        hit = False
-        for vals in iv.values():
-            for v in vals:
-                if q_lower in v.lower():
-                    hit = True
-                    break
-            if hit:
-                break
-        if hit:
-            matches.append(row.get("address", ""))
-    return [a for a in matches if a]
-
-
-def get_index_values(
-    pipeline_id: str,
-    step_name: str,
-    address: str,
-) -> List[Tuple[str, str]]:
-    """The ``(field, value)`` pairs for one address's indexed fields.
-    Used by the server's materialization-detail endpoint to display
-    indexed labels."""
-    table = _combined_table(pipeline_id, step_name)
-    if table is None or table.num_rows == 0:
-        return []
-    for row in table.to_pylist():
-        if row.get("address") == address:
-            iv = _normalize_index_values(row)
-            return [(field, val) for field, vals in iv.items() for val in vals]
-    return []
-
-
-def all_index_entries() -> List[Tuple[str, str]]:
-    """All ``(field, value)`` pairs across all step Arrow files.
-    Test/debugging utility — scans every file under ``TABLES_DIR``."""
-    result: List[Tuple[str, str]] = []
-    if not os.path.isdir(TABLES_DIR):
-        return result
-    for entry in os.listdir(TABLES_DIR):
-        pipe_dir = os.path.join(TABLES_DIR, entry)
-        if not os.path.isdir(pipe_dir):
-            continue
-        for fname in os.listdir(pipe_dir):
-            if not fname.endswith(".arrow"):
-                continue
-            step_name = fname[:-len(".arrow")]
-            table = _combined_table(entry, step_name)
-            if table is None or table.num_rows == 0:
-                continue
-            for row in table.to_pylist():
-                iv = _normalize_index_values(row)
-                for field, vals in iv.items():
-                    for val in vals:
-                        result.append((field, val))
     return result
 
 

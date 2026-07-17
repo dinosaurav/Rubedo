@@ -165,11 +165,11 @@ directly:
   [model.md](model.md) on generations); a new coordinate creates fresh.
 
 To find or track an item by a human field — email, order id, file name,
-whatever a person would call it — **index it downstream**, don't rely on
-the coordinate:
+whatever a person would call it — **query the step's output struct**,
+don't rely on the coordinate:
 
 ```python
-@p.step(index=["path"])
+@p.step
 def scan(): ...
 ```
 
@@ -177,7 +177,7 @@ then `Selection(index={"path": "a.txt"})`. The coordinate is engine
 plumbing, not a search key — see [model.md](model.md) for the full "what a
 coordinate is/isn't" distinction, and
 [`../guides/search-and-invalidation.md`](../guides/search-and-invalidation.md)
-for querying by indexed fields.
+for querying by output fields.
 
 ### Why this makes incrementality survive reordering and appends
 
@@ -210,10 +210,10 @@ def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(index=["cust"])
+@p.step
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@p.step(index=["cid"])
+@p.step
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @p.step(

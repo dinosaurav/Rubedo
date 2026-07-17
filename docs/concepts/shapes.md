@@ -88,8 +88,8 @@ in the code implies it. The parent comes from the parameter name, like
 any other step.)
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
-output per distinct value of an indexed field, read from
-`@step(index=[...])` entries at plan time (so planning stays value-free).
+output per distinct value of a field, read from the parent output struct
+at plan time (so planning stays value-free).
 `group_key=` implies `shape="reduce"` on its own:
 
 ```python
@@ -99,9 +99,9 @@ def digest(articles: dict) -> dict:
     return {"count": len(titles), "headlines": titles}
 ```
 
-A lane that carries no value for `group_key` raises — index it on the parent
-step. A lane with several values for the field (a list-valued index) joins
-every one of those groups.
+A lane that carries no value for `group_key` raises — the field must be
+present in the parent step's output. A lane with several values for the
+field (a list-valued field) joins every one of those groups.
 
 By default, `on_failed="use_passed"`: if a parent lane failed or was
 blocked, `reduce` drops it and proceeds with whatever survived (firing a
@@ -227,10 +227,10 @@ def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(index=["cust"])
+@p.step
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@p.step(index=["cid"])
+@p.step
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @p.step(
@@ -242,8 +242,8 @@ def enrich(order, customer):        # one lane per matched pair
 (`join_on=` implies `shape="join"`; the parents are the `join_on` keys,
 confirmed by the function's parameters at build time.)
 
-Every side named in `join_on` must be indexed on the field it's matched by
-(`@step(index=[...])`), and `join_on`'s keys must exactly match the
+Every side named in `join_on` must carry the field it's matched by in its
+output struct, and `join_on`'s keys must exactly match the
 function's parameter names (which become the parents). `join` accepts two
 or more parents — `join_on={a:"uid",
 b:"uid", c:"uid"}` is a valid N-way star, all matched on the same field

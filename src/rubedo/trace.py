@@ -13,8 +13,7 @@ was recomputed but this output hasn't been re-derived yet), and skipping it
 would lie about the derivation. Non-live nodes are marked, never hidden.
 
 Root resolution: a lineage *root* (no parent materializations — a root
-step's output) is resolved for display by reading its stored payload, not
-via any auto-indexing; `@step(index=[...])` stays the opt-in seeding handle.
+step's output) is resolved for display by reading its stored payload.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple

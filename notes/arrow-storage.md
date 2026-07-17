@@ -98,7 +98,7 @@ mean "no filled Arrow row to reuse"). The planning phase checks
 |---|---|---|
 | `materializations` table | → Arrow rows | the lane history IS the table |
 | `materialization_lifecycle` table | **gone** | the row sequence in Arrow IS the lifecycle log |
-| `materialization_index` table | **gone** | the indexed field is a column in the Arrow file — selection scans it (pyarrow predicate, no SQL denormalization) |
+| `materialization_index` table | **gone** | the output struct's fields are columns in the Arrow file — selection scans them (pyarrow predicate, no SQL denormalization) |
 | `uq_live_output_address` partial unique index | **gone** | no longer one-live-per-address; multiple rows per `input_hash` across time are expected and correct |
 | the pairing guard (`_assert_liveness_pairing`) | **gone** | nothing to pair — there's no `is_live` flip and no lifecycle row to ship with it |
 | the supersede/restore/savepoint dance in `_commit_materialization` | **gone** | recompute just appends; identical bytes are detected by `content_hash` equality, not by a unique-index collision |
@@ -340,8 +340,9 @@ Each bullet was a separate commit. The final state:
   was already fulfilled with matching content_hash.
 - **2d.** ✅ Deleted `materialization_lifecycle` table and the pairing guard.
   `invalidate()` flips `fulfilled=False`; no lifecycle row needed.
-- **2e.** ✅ Deleted `materialization_index` table. Indexed field values are
-  a `map<string, list<string>>` column (`index_values`) in the Arrow file.
+- **2e.** ✅ Deleted `materialization_index` table. Selection scans the
+  Arrow `output` struct column directly (pyarrow predicate, no SQL
+  denormalization).
 - **2f.** ✅ `RunCoordinateStatus` dropped `materialization_id` —
   `output_address` is the join key. (Kept `output_address` itself — it's
   needed by server/trace/selection as a direct lookup key; deriving it
@@ -491,5 +492,5 @@ the original doc:
 4. Lane dedup survives but stops being emergent. The unique index no
    longer catches duplicate `input_hash`es; a plan-time copy rule does.
 5. `materialization_index` deletes unconditionally with pyarrow alone —
-   DuckDB is not a prerequisite. The indexed field is an Arrow column;
-   a predicate scan replaces the SQLite denormalization lookup.
+   DuckDB is not a prerequisite. The output struct's fields are Arrow
+   columns; a predicate scan replaces the SQLite denormalization lookup.

@@ -52,11 +52,11 @@ def publishers():
     with open("publishers.csv") as f:
         yield from csv.DictReader(f)
 
-@p.step(index=["publisher"])
+@p.step
 def feed(feeds: dict) -> dict:
     return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
 
-@p.step(index=["publisher"])
+@p.step
 def publisher(publishers: dict) -> dict:
     return {"publisher": publishers["publisher"], "region": publishers["region"]}
 
@@ -67,7 +67,7 @@ def feed_meta(feed: dict, publisher: dict) -> dict:
 
 # fan out: a lane per article. cached against its parent,
 # so a re-run re-scrapes nothing. this is the flaky one.
-@p.step(index=["region"], retries=3,
+@p.step(retries=3,
         retry_on=(TimeoutError, ConnectionError),
         retry_backoff=2, rate_limit="30/min", stale_after="24h")
 def articles(feed_meta: dict):

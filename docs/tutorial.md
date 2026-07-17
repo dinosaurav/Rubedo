@@ -2,7 +2,7 @@
 
 This walks through a small, real pipeline end to end: a folder of review
 files gets read and classified as positive/negative/neutral. Along the way
-you'll index an output field and query it, edit an input and watch surgical
+you'll query an output field by content, edit an input and watch surgical
 recompute, bump a step's `version` and see what that invalidates, decline an
 input with `Filtered`, and finish by hand-invalidating a selection and
 re-running.
@@ -54,7 +54,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(index=["rating"])
+@step
 def classify(scan: dict):
     words = scan["text"].lower().split()
     if len(words) < 3:
@@ -83,10 +83,9 @@ There's no `folder=` kwarg — ingestion is just a step. `scan` is a
 parentless step that walks `./input` and `yield`s each file's own content
 (not just its path — the yielded payload is what gets hashed into the
 lane's identity), and each yield mints its own content-addressed lane.
-`classify` is an ordinary dependent `map` step. `index=["rating"]` extracts
-the `rating` field of its output into the search index at commit time —
-that's what makes it queryable by content later, not just by which file
-produced it.
+`classify` is an ordinary dependent `map` step. Its `rating` output field
+is queryable by content later, not just by which file produced it — the
+output struct's fields are searchable directly.
 
 Neither step spells out much at all, and every dropped kwarg is inferred
 from the code rather than defaulted blindly: `scan` is a generator
@@ -100,7 +99,7 @@ oddly the first time the step actually runs. Neither step passes `name=` or
 `"0"` — see [Concepts: versioning](concepts/versioning.md) for when you'd
 bump it explicitly, which we do a few sections down. Spelling everything
 out explicitly still works and is identical once built —
-`@step(shape="expand")` / `@step(depends_on=["scan"], index=["rating"])` —
+`@step(shape="expand")` / `@step(depends_on=["scan"])` —
 reach for it once a pipeline has enough steps that inference stops reading
 as obvious, or when a parameter's name legitimately differs from the step
 it depends on (`depends_on={"raw": "scan"}` binds a differently-named
@@ -157,13 +156,12 @@ unexecuted generator would yield. `p.run()`'s summary is where the real
 story shows: `created=0 reused=7` — every lane, including the filtered
 one, was a cache hit.
 
-## Querying by an indexed field
+## Querying by an output field
 
-`classify`'s `index=["rating"]` makes `rating` a queryable field of its
-output, independent of which file produced it — useful precisely because
-coordinates are content hashes (`row-<hash>`), not file names. `trace()`
-takes a `Selection` and follows lineage from whatever matches — it doubles
-as a read-only query tool:
+`classify`'s `rating` output field is queryable, independent of which file
+produced it — useful precisely because coordinates are content hashes
+(`row-<hash>`), not file names. `trace()` takes a `Selection` and follows
+lineage from whatever matches — it doubles as a read-only query tool:
 
 ```python title="query.py"
 from rubedo import Selection, trace
@@ -180,7 +178,7 @@ Trace: 1 seed, 1 upstream, 0 downstream
 
 `step:` and other `key:value` terms before the colon are reserved engine
 facts (`step`, `coord`, `version`, `live`, ...); anything else — here
-`rating` — matches an indexed field. `trace()` walks the matched
+`rating` — matches a field of the step's output struct. `trace()` walks the matched
 `classify` output back to the `scan` output it came from, resolving the
 root's stored payload so you can see *which file* — `review1.txt` — and
 what text actually produced the verdict, since the coordinate itself
@@ -231,7 +229,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent", "value
 ```
 
 ```python
-@step(version="v2", index=["rating"])
+@step(version="v2")
 ```
 
 ```bash

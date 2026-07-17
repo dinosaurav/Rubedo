@@ -2,8 +2,8 @@
 
 Semantics under test: live-only seeding by default (include_superseded=True
 widens it), traversal follows real edges regardless of liveness, lineage
-roots resolve their stored payload for display, and no auto-indexing exists —
-seeding rides on @step(index=[...]) declarations.
+roots resolve their stored payload for display, and seeding rides on
+output struct fields searchable via Selection.
 """
 
 import os
@@ -84,9 +84,9 @@ def scan():
 
 
 def make_pipeline():
-    """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
+    """scan -> extract -> summarize -> total (reduce): a 4-step chain."""
 
-    @step(index=["company"])
+    @step
     def extract(scan):
         company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
@@ -106,12 +106,14 @@ def _by_step(result):
     return {s: nodes for s, nodes in result.by_step().items()}
 
 
-def test_trace_downstream_from_indexed_seed():
+def test_trace_downstream_from_field_seed():
     create_file("a.txt", "acme,10")
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    result = trace(Selection(index={"company": "acme"}))
+    # Seed at extract (company field) — downstream reaches acme's
+    # summarize and the reduce, upstream reaches acme's scan lane.
+    result = trace(Selection(step="extract", index={"company": "acme"}))
 
     steps = _by_step(result)
     # Seeded at extract; downstream reaches acme's summarize and the reduce,

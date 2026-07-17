@@ -38,6 +38,36 @@ from .schemas import (
 )
 
 
+def _search_output_fields(pipeline_id: str, step_name: str, query: str) -> List[str]:
+    """Addresses where any output dict field value contains ``query`` as a
+    substring. Searches the struct output column directly."""
+    q_lower = query.lower()
+    matches: List[str] = []
+    for row in lane_store.all_filled_rows():
+        if row.get("pipeline_id") != pipeline_id or row.get("step_name") != step_name:
+            continue
+        output = row.get("output")
+        if not isinstance(output, dict):
+            continue
+        hit = False
+        for val in output.values():
+            if isinstance(val, (list, tuple)):
+                for v in val:
+                    if isinstance(v, (str, int, float, bool)) and q_lower in str(v).lower():
+                        hit = True
+                        break
+            elif isinstance(val, (str, int, float, bool)):
+                if q_lower in str(val).lower():
+                    hit = True
+            if hit:
+                break
+        if hit:
+            addr = row.get("address", "")
+            if addr:
+                matches.append(addr)
+    return matches
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -307,7 +337,7 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
             if key in seen_steps:
                 continue
             seen_steps.add(key)
-            for addr in lane_store.search_indexed_values(r.pipeline_id, r.step_name, query):
+            for addr in _search_output_fields(r.pipeline_id, r.step_name, query):
                 if addr in run_addrs:
                     matching_addrs.add(addr)
 
@@ -499,12 +529,6 @@ def get_object_metadata(output_address: str):
             "invalidation_reason": invalidation_reason,
             "output_content_hash": arrow_row.get("output_identity", ""),
             "content_type": arrow_row.get("content_type"),
-            "index": [
-                {"field": field, "value": val}
-                for field, val in lane_store.get_index_values(
-                    arrow_row.get("pipeline_id", ""), arrow_row.get("step_name", ""), output_address
-                )
-            ],
         }
 
     return {

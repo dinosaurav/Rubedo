@@ -239,7 +239,7 @@ def test_invalidate_scoped_to_pipeline():
 
 
 def test_join_rejects_skip_cache_parent():
-    @step(index=["k"])
+    @step
     def left():
         return {"k": "x"}
 

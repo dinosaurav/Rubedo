@@ -391,11 +391,11 @@ worker↔store directly; the runner handles only hashes and metadata.
 **Trap (part of the spec):** **(1) The main-side value consumers.** Today
 the runner holds every result value between `call()` and commit, and
 several things quietly depend on that: output validation
-(`_validate_output`), data-quality `assertions`, `Filtered` verdict
-detection, and `@step(index=[...])` extraction at commit. Under refs the
+(`_validate_output`), data-quality `assertions`, and `Filtered` verdict
+detection. Under refs the
 runner never sees the bytes, so **each of these moves into the shim**
-(index specs and assertion callables travel with the submission; the shim
-returns index entries and verdicts in its metadata) — grep everything
+(assertion callables travel with the submission; the shim returns
+verdicts in its metadata) — grep everything
 that touches `result` between call and commit and account for every
 consumer before shipping. **(2) One hasher.** The worker computes the
 content hash the ledger will trust: the shim must call the *same*
@@ -845,8 +845,8 @@ introspection). Foundation, in one breath: the **producer model**
 guards + the liveness-flip pairing guard · single `run()`/`plan()` entry
 points, no registry, definition snapshots · step policies (retries,
 rate_limit, stale_after, skip_cache fusion, assertions, filters,
-`on_failed`) · `index=` + selection language with semver ranges ·
-Folder/Csv/Table sources (streaming `batch_size`) · loky/cloudpickle
+  `on_failed`) · selection language with semver ranges ·
+  Folder/Csv/Table sources (streaming `batch_size`) · loky/cloudpickle
 process executor · `RUBEDO_HOME` · mypy/py.typed pass · React dashboard
 (DAG view, run inspector, SSE live view) · examples suite (`count_lines`
 flagship, `hn_digest`, `pdf_digest`, …) · rename to Rubedo.

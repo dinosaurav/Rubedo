@@ -92,8 +92,8 @@ and two aren't. For a step that calls a paid LLM instead of counting lines,
 this is the difference between a few cents and re-paying for a thousand
 rows every time you touch the code.
 
-See the [tutorial](tutorial.md) for a longer walkthrough — indexing,
-querying, version bumps, and invalidation.
+See the [tutorial](tutorial.md) for a longer walkthrough — querying
+outputs, version bumps, and invalidation.
 
 ## The `.rubedo/` state directory
 
@@ -160,8 +160,8 @@ uses itself.
 
 ## Where to go next
 
-- [Tutorial](tutorial.md) — build a small pipeline up incrementally: indexing
-  and querying outputs, editing an input, bumping a step's version, and
+- [Tutorial](tutorial.md) — build a small pipeline up incrementally:
+  querying outputs, editing an input, bumping a step's version, and
   invalidating a selection.
 - [Concepts: the model](concepts/model.md) — lanes, coordinates, addresses,
   and the vocabulary the rest of the docs assume.

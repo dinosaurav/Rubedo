@@ -115,7 +115,7 @@ def test_group_key_partitions_by_indexed_field():
     create_file("b.txt", "tech")
     create_file("c.txt", "biz")
 
-    @step(index=["category"])
+    @step
     def classify(scan):
         return {"category": scan["text"].strip()}
 
@@ -136,7 +136,7 @@ def test_group_key_none_is_one_all_group():
     create_file("a.txt", "tech")
     create_file("b.txt", "biz")
 
-    @step(index=["category"])
+    @step
     def classify(scan):
         return {"category": scan["text"].strip()}
 
@@ -154,7 +154,7 @@ def test_group_key_none_is_one_all_group():
 def test_group_key_multivalue_joins_multiple_groups():
     create_file("a.txt", "solo")
 
-    @step(index=["tag"])
+    @step
     def classify(scan):
         return {"tag": ["tech", "ai"]}
 
@@ -165,7 +165,6 @@ def test_group_key_multivalue_joins_multiple_groups():
     pipe = pipeline(name="g", steps=[scan, classify, rollup])
     assert_run(pipe)
     outs = _outputs("rollup")
-    # the single lane is a member of both groups
     assert set(outs) == {"tech", "ai"}
     assert outs["tech"]["n"] == 1
     assert outs["ai"]["n"] == 1
@@ -178,7 +177,7 @@ def test_group_key_reduce_after_expand():
     def read(scan):
         return scan["text"].splitlines()
 
-    @step(index=["category"])
+    @step
     def articles(read):
         for i, cat in enumerate(read):
             yield {"category": cat, "i": i}  # distinct payloads (i) so both "tech" survive

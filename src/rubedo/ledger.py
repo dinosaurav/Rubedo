@@ -261,31 +261,6 @@ def _identity_of(output_value: Any) -> str:
     )
 
 
-def _extract_index_values(step: StepSpec, result) -> Dict[str, List[str]]:
-    """Extract declared index fields from the output value into a
-    ``{field_path: [stringified_values]}`` dict for the Arrow
-    ``index_values`` map column."""
-    if not step.index:
-        return {}
-    value = result
-    if not isinstance(value, dict):
-        return {}
-    out: Dict[str, List[str]] = {}
-    for path in step.index:
-        node = value
-        for part in path.split("."):
-            node = node.get(part) if isinstance(node, dict) else None  # type: ignore
-            if node is None:
-                break
-        if node is None:
-            continue
-        elements = node if isinstance(node, list) else [node]
-        vals = [str(el) for el in elements if isinstance(el, (str, int, float, bool))]
-        if vals:
-            out[path] = vals
-    return out
-
-
 def _record_failure(
     session: Session,
     ctx: _RunContext,
@@ -382,7 +357,6 @@ def _commit_execution_result(
                 )
                 output_string = batch_row.get("output") if batch_row else None
                 identity = batch_row.get("output_identity") if batch_row else None
-                idx_values = {}
             else:
                 output_string, content_type = serialize_output(
                     ctx.run_id, decision.coordinate, result
@@ -404,7 +378,6 @@ def _commit_execution_result(
                     if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused" if not decision.stale else "refreshed"
 
-                idx_values = _extract_index_values(step, result)
                 if mat_action != "reused":
                     lane_store.append_filled(
                         pipeline_id=ctx.pipeline_id,
@@ -418,7 +391,6 @@ def _commit_execution_result(
                         filtered=is_filtered,
                         code_hash=step.code_hash,
                         code_version=step.version,
-                        index_values=idx_values,
                         output_identity=identity,
                     )
 
@@ -533,7 +505,6 @@ def _commit_execution_result(
                 identity,
                 content_type,
                 filtered=is_filtered,
-                index_values=idx_values,
                 output=output_string,
             )
         except Exception as e:

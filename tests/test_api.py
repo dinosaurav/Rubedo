@@ -25,7 +25,7 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 
-@step(name="count-lines", index=["path"])
+@step(name="count-lines")
 def count_lines(scan: dict):
     text = scan["text"]
     return {"text": text, "path": scan["path"]}
@@ -121,7 +121,7 @@ def test_get_materializations():
 def test_selection_preview():
     response = client.post(
         "/api/selection/preview",
-        json={"index": {"path": "a.txt"}},
+        json={"step": "count-lines", "index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()
@@ -134,7 +134,7 @@ def test_selection_preview():
 def test_selection_invalidate():
     response = client.post(
         "/api/selection/invalidate?reason=api test",
-        json={"index": {"path": "a.txt"}},
+        json={"step": "count-lines", "index": {"path": "a.txt"}},
     )
     assert response.status_code == 200
     data = response.json()

@@ -87,9 +87,9 @@ def scan():
 
 
 def make_pipeline():
-    """scan -> extract (indexed) -> summarize -> total (reduce): a 4-step chain."""
+    """scan -> extract -> summarize -> total (reduce): a 4-step chain."""
 
-    @step(index=["company"])
+    @step
     def extract(scan):
         company, amount = scan["text"].strip().split(",")
         return {"company": company, "amount": int(amount)}
@@ -124,7 +124,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     make_pipeline().run()
 
     result = invalidate(
-        Selection(index={"company": "acme"}), reason="bad extract", downstream=True
+        Selection(step="extract", index={"company": "acme"}), reason="bad extract", downstream=True
     )
 
     # acme's extract (seed) + acme's summarize + the reduce output.
@@ -159,7 +159,7 @@ def test_downstream_flipped_set_equals_trace_preview():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    sel = Selection(index={"company": "acme"})
+    sel = Selection(step="extract", index={"company": "acme"})
     # trace() is the preview: capture its live nodes BEFORE invalidating,
     # excluding upstream context (scan) — invalidate(downstream=True) never
     # touches upstream, only the seed and its downstream closure.
@@ -179,7 +179,7 @@ def test_downstream_invalidation_is_idempotent():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    sel = Selection(index={"company": "acme"})
+    sel = Selection(step="extract", index={"company": "acme"})
     invalidate(sel, reason="first", downstream=True)
 
     second = invalidate(sel, reason="second", downstream=True)
@@ -196,7 +196,7 @@ def test_default_invalidation_touches_only_direct_matches():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    result = invalidate(Selection(index={"company": "acme"}), reason="just the seed")
+    result = invalidate(Selection(step="extract", index={"company": "acme"}), reason="just the seed")
 
     assert result["invalidated_count"] == 1
     assert result["seed_count"] == 1

@@ -19,10 +19,10 @@ from sqlalchemy import create_engine
 
 
 # Folder recipe: a root expand step that walks "test_input" and yields each
-# file's content. Indexed on `path` so tests can still find "the lane for
-# a.txt" without the coordinate being that literal string (coordinates are
-# content-addressed: row-<hash>).
-@step(index=["path"])
+# file's content. The `path` field in the output lets tests find "the lane
+# for a.txt" without the coordinate being that literal string (coordinates
+# are content-addressed: row-<hash>).
+@step
 def scan():
     for name in sorted(os.listdir("test_input")):
         path = os.path.join("test_input", name)
@@ -43,7 +43,7 @@ test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
 
 def _coord_for_path(session, run_id, step_name, filename):
     """The coordinate a given run minted for `filename`, found via the
-    `scan` step's indexed `path` field — coordinates are row-<hash>, not
+    `scan` step's `path` output field — coordinates are row-<hash>, not
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
     rows = (
@@ -52,9 +52,13 @@ def _coord_for_path(session, run_id, step_name, filename):
         .filter(RunCoordinateStatus.output_address.isnot(None))
         .all()
     )
+    addr_index = lane_store.address_row_index()
     for rc in rows:
-        iv = lane_store.get_index_values(rc.pipeline_id, "scan", rc.output_address)
-        if ("path", filename) in iv:
+        row = addr_index.get(str(rc.output_address))
+        if row is None:
+            continue
+        output = row.get("output")
+        if isinstance(output, dict) and output.get("path") == filename:
             return rc.coordinate
     return None
 

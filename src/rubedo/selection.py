@@ -13,6 +13,18 @@ from .models import (
 from . import lane_store
 
 
+def _resolve_dotted(d: Dict[str, Any], path: str) -> Any:
+    """Follow a dotted path (e.g. ``meta.region``) into nested dicts."""
+    node: Any = d
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+        if node is None:
+            return None
+    return node
+
+
 class Selection(BaseModel):
     """Criteria for selecting materializations, either programmatically or via a query string."""
     source_id: Optional[str] = None
@@ -23,7 +35,7 @@ class Selection(BaseModel):
     output_address: Optional[str] = None
     invalidated: Optional[bool] = None
     pipeline_id: Optional[str] = None
-    # Indexed value fields (@step(index=[...])): all pairs must match
+    # Output struct field filters: all pairs must match (field:value search)
     index: Optional[Dict[str, str]] = None
 
     @classmethod
@@ -33,9 +45,9 @@ class Selection(BaseModel):
         Reserved prefixes map to engine facts —
           source:<id>  coord:<glob>  step:<name>  version:<v>
           address:<output_address>  live:true|false
-        Any other field:value term matches an indexed output field
-        (@step(index=[...])) — indexed data is the language's open
-        vocabulary. Quote values containing spaces: company:"acme corp".
+        Any other field:value term matches an output struct field —
+        the output dict's fields are searchable directly. Quote values
+        containing spaces: company:"acme corp".
         """
         import shlex
 
@@ -108,7 +120,7 @@ def get_selection_addresses(
 
     Builds the candidate set from Arrow lane_store rows (filtered by
     pipeline/step/version/address), then applies liveness (IHU
-    fulfilled), indexed-field (Arrow index_values), and
+    fulfilled), struct-field (Arrow output column), and
     coordinate/source_id (RunCoordinateStatus.output_address) filters.
     Version-range and coordinate-glob filtering happen in Python (glob
     matching and PEP 440 specifiers don't map cleanly to SQL).
@@ -134,42 +146,25 @@ def get_selection_addresses(
             r for r in arrow_rows if r.get("address") in fulfilled_addrs
         ]
 
-    # 3. Indexed-field filter — scan the struct output column for steps
-    #    that declared index= on the field, fall back to index_values
-    #    for string output or spilled values.  Without an index=
-    #    declaration, a field is not searchable via selection (it's
-    #    still available for join/group_key matching directly from the
-    #    parent's output dict).
+    # 3. Struct-field filter — scan the output struct column for the
+    #    requested field/value pairs.  A field is searchable when the
+    #    output is an inline dict (native Arrow struct); spilled string
+    #    outputs are skipped (the field isn't available without
+    #    deserializing from the object store).
     if selection.index:
         for field, value in selection.index.items():
-            # Try struct sub-field scan: only for rows whose step declared
-            # index= on this field (index_values has the field key, even if
-            # the struct scan is what actually reads the value)
             struct_matches: set = set()
             for r in arrow_rows:
-                # Check if this step declared index= on this field
-                iv = r.get("index_values")
-                if not iv or field not in iv:
-                    continue
                 output = r.get("output")
-                if isinstance(output, dict):
-                    val = output.get(field)
-                    if val is None:
-                        continue
-                    check_vals = [str(v) for v in val] if isinstance(val, (list, tuple)) else [str(val)]
-                    if value in check_vals:
-                        struct_matches.add(r.get("address"))
-            if struct_matches:
-                arrow_rows = [r for r in arrow_rows if r.get("address") in struct_matches]
-            else:
-                # Fall back to index_values map column
-                if selection.pipeline_id and selection.step:
-                    addrs = set(lane_store.scan_indexed_field(
-                        selection.pipeline_id, selection.step, field, value
-                    ))
-                else:
-                    addrs = set(lane_store.scan_indexed_field_all(field, value))
-                arrow_rows = [r for r in arrow_rows if r.get("address") in addrs]
+                if not isinstance(output, dict):
+                    continue
+                val = _resolve_dotted(output, field)
+                if val is None:
+                    continue
+                check_vals = [str(v) for v in val] if isinstance(val, (list, tuple)) else [str(val)]
+                if value in check_vals:
+                    struct_matches.add(r.get("address"))
+            arrow_rows = [r for r in arrow_rows if r.get("address") in struct_matches]
 
     # 4. Coordinate / source_id filter (RunCoordinateStatus.output_address)
     if selection.source_id or selection.coordinate_glob:

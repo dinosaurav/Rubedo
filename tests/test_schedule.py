@@ -88,11 +88,9 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(index=["path"])
+@step
 def scan():
-    """Folder recipe: walk TEST_FOLDER, yield each file's content. Indexed on
-    `path` so tests can find "the lane for x.txt" without the coordinate
-    being that literal string."""
+    """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
@@ -115,8 +113,8 @@ def coord_for_path(filename):
             row = addr_index.get(str(rc.output_address))
             if row is None:
                 continue
-            iv = lane_store.get_index_values(row["pipeline_id"], "scan", row["address"])
-            if ("path", filename) in iv:
+            output = row.get("output")
+            if isinstance(output, dict) and output.get("path") == filename:
                 return rc.coordinate
     return None
 

@@ -72,13 +72,13 @@ added, never "changed in place"). It may also be **minted mid-DAG**:
 `expand` mints content-addressed `row-<hash>` child lanes; `join` mints
 `a|b|…` pair lanes. It is *not* the identity of work (that is the
 content-addressed output address) and not the primary search handle
-(`index=`).
+(the output struct's fields).
 
 **Searching:**
 Two channels, one home each: lane keys for source-shaped questions
-(`coordinate_glob`); indexed fields of the output *value* for content-shaped
-questions (declared with `@step(index=[...])`, extracted at commit — a label
-is just data someone chose to index).
+(`coordinate_glob`); fields of the output *value* for content-shaped
+questions (the output struct's fields, searchable directly — a label is
+just data a step chose to return).
 
 **Source:**
 Not a separate type — ingestion is a root step. A parentless generator

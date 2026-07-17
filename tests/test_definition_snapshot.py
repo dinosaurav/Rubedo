@@ -48,7 +48,7 @@ PINNED_DEFINITION_JSON = """\
       "retry_on": [
         "Exception"
       ],
-      "source": "@step(\\n        name=\\"enrich\\", version=\\"2\\", depends_on=[\\"scan\\"], retries=2,\\n        rate_limit=\\"10/min\\", stale_after=\\"24h\\", index=[\\"path\\"],\\n    )\\n    def enrich(scan: dict):\\n        return scan",
+      "source": "@step(\\n        name=\\"enrich\\", version=\\"2\\", depends_on=[\\"scan\\"], retries=2,\\n        rate_limit=\\"10/min\\", stale_after=\\"24h\\",\\n    )\\n    def enrich(scan: dict):\\n        return scan",
       "stale_after_seconds": 86400.0,
       "version": "2",
       "workers": 4
@@ -82,7 +82,7 @@ def _build_snapshot_spec():
 
     @step(
         name="enrich", version="2", depends_on=["scan"], retries=2,
-        rate_limit="10/min", stale_after="24h", index=["path"],
+        rate_limit="10/min", stale_after="24h",
     )
     def enrich(scan: dict):
         return scan

@@ -75,8 +75,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   concept — a parentless generator `@step` infers this shape automatically)
   / `join` (N-way equijoin on
   `join_on={parent: field}`, minting `a|b|…` pair lanes; the field is
-  read from the parent's output dict — no `index=` needed on join
-  parents). A
+  read from the parent's output dict). A
   **source-less `map` root** (no `depends_on`) mints a single `@root` lane
   whose input is its params (or a constant) — so a pipeline can begin with
   a plain step fed a value instead of scanning for one; same params reuse,
@@ -113,14 +112,14 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   output dict); expand → one execute decision per parent lane,
   reused without re-running the fn via a parent-addressed cache anchor;
   join → one decision per matched tuple (`_plan_join`, reads `join_on`
-  fields from parent output dicts — no `index=` declaration needed).
+  fields from parent output dicts).
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
 - `src/rubedo/lane_store.py` — per-step Arrow IPC files under
   `.rubedo/tables/`: append-only rows of lane metadata (row_id, lane_key,
   address, input_hash, code_version, output, output_identity, content_type,
-  code_hash, ts, run_id, filtered, index_values). `output` holds the value
+  code_hash, ts, run_id, filtered). `output` holds the value
   itself in native Arrow type (struct for dicts, int64 for ints, string) when
   all lanes in a step are inline; falls back to `string` (JSON-serialized
   inline + `"objects:<hash>"` ref strings) when any value spills.
@@ -131,14 +130,9 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   null-fill (heterogeneous dict key sets) doesn't shift the identity.
   `content_type` distinguishes `"text"` (native string return), `"json"`
   (inline or JSON-serialized), and `"bytes"`/`"arrow-ipc:<kind>"` (spilled).
-  `index_values` is a `map<string, list<string>>` column holding the
-  `@step(index=[...])` field→values dict — the sole source of truth for
-  indexed fields. Pure data — no tombstones, no liveness. The
+  Pure data — no tombstones, no liveness. The
   `batch_lookup_by_address` function is the planning phase's reuse lookup
   (SQLite `input_hash_usages` for liveness, Arrow for content).
-  `scan_indexed_field` / `scan_indexed_field_all` /
-  `search_indexed_values` / `get_index_values` serve selection, server
-  search, and detail endpoints.
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
   events, the commit path (Arrow row via `lane_store.append_filled` +
   `input_hash_usages.fulfilled=True` + address-based `MaterializationEdge`;
@@ -185,11 +179,10 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   Identity is `Set[str]` addresses; content hashes from
   `lane_store.all_filled_rows()` — no `Materialization` import.
 - `src/rubedo/selection.py` — `Selection` + `Selection.parse()` (the query
-  language: lane-key globs, indexed fields, `version:<2.0`-style semantic
+  language: lane-key globs, output fields, `version:<2.0`-style semantic
   version ranges via `packaging.SpecifierSet`) + the materialization query.
-  Indexed-field selection scans the Arrow `index_values` map column via
-  `lane_store.scan_indexed_field` / `scan_indexed_field_all` (no SQLite
-  `materialization_index` table).
+  Output-field selection scans the Arrow `output` struct column directly
+  (no SQLite `materialization_index` table).
 - `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
   Ledger-derived only; never imports user pipelines. Serves the built web
   UI from `web_static/` (SPA fallback to `index.html`); `rubedo serve`
@@ -244,8 +237,8 @@ pipe.run(workers=1)
 
 Two consequences worth knowing before writing an assertion: lanes are
 content-addressed (`row-<hash>`, not the relative path), so a test that
-needs to identify *which* file a lane came from indexes the `path` field
-(`@step(index=["path"])`) and looks it up rather than asserting a
+needs to identify *which* file a lane came from reads the `path` field
+from the output dict and looks it up rather than asserting a
 `"a.txt"`-shaped coordinate; and every run outcome count (`created_count`/
 `reused_count`/…) is one step deeper than before — a single-file fixture
 through a one-step chain now reports 2 (the `scan` lane *and* the

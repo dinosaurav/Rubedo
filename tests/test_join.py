@@ -122,11 +122,11 @@ def test_two_way_equijoin():
     orders_src = csv_source("orders")
     customers_src = csv_source("customers")
 
-    @step(index=["cust"])
+    @step
     def order(orders):
         return {"oid": orders["oid"], "cust": orders["cust"]}
 
-    @step(index=["cid"])
+    @step
     def customer(customers):
         return {"cid": customers["cid"], "name": customers["name"]}
 
@@ -167,7 +167,7 @@ def test_four_way_star_join():
         write_csv(f"{src}.csv", f"uid,v\nu1,{src}1\nu2,{src}2\n")
 
     def loader(src_name, step_name):
-        @step(name=step_name, depends_on=[src_name], index=["uid"])
+        @step(name=step_name, depends_on=[src_name])
         def load(**kwargs):
             row = kwargs[src_name]
             return {"uid": row["uid"], "v": row["v"]}
@@ -203,13 +203,13 @@ def test_join_failed_parent_lane():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
@@ -241,13 +241,13 @@ def test_join_failed_parent_lane_use_passed():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         if a_csv["val"] == "fail":
             raise ValueError("bad data")
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 
@@ -299,11 +299,11 @@ def test_join_empty():
     a_src = csv_source("a_csv")
     b_src = csv_source("b_csv")
 
-    @step(name="a", index=["id"])
+    @step(name="a")
     def load_a(a_csv):
         return {"id": a_csv["id"], "v": a_csv["val"]}
 
-    @step(name="b", index=["id"])
+    @step(name="b")
     def load_b(b_csv):
         return {"id": b_csv["id"], "v": b_csv["val"]}
 

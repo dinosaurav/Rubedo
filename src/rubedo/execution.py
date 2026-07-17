@@ -464,7 +464,6 @@ def _process_decision(
                 "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
                 "run_id": pa.array([""] * len(children), type=pa.string()),  # filled by ledger
                 "filtered": pa.array([False] * len(children), type=pa.bool_()),
-                "index_values": pa.array([None] * len(children), type=pa.map_(pa.string(), pa.list_(pa.string()))),
             }, schema=lane_store._schema(pa, struct_type))
 
             lane_store.append_arrow_batch(pipeline_id, step.name, batch_table)

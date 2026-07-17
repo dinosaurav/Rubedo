@@ -32,7 +32,6 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
-    index: Optional[List[str]] = None,
     shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
@@ -62,12 +61,11 @@ imports your code — `@step` just builds a data object; nothing runs until
 | `retry_backoff` | `float` | `1.0` | Multiplier applied to `retry_delay` after each attempt. |
 | `rate_limit` | `str` \| `None` | `None` | `"10/min"`, `"2/s"`, `"500/hour"` — paces this step's executions across all its workers, retries included. Parsed by `parse_rate_limit`; raises `ValueError` on a bad format. |
 | `stale_after` | `str` \| `None` | `None` | `"24h"`, `"30min"`, `"7d"` — a cached output older than this re-executes on the next run. Different bytes supersede the old generation (downstream recomputes); identical bytes just refresh the freshness clock. Parsed by `parse_duration`. |
-| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, `stale_after`, and `index`. A `skip_cache` step must have at least one consumer. |
-| `index` | `list[str]` \| `None` | `None` | Dotted-path fields of the output *value* to extract into the search index at commit time (e.g. `["company", "meta.region"]`). List-valued fields index one entry per element. Never affects cache identity — only newly created materializations are indexed under a new declaration. Incompatible with `skip_cache`. |
+| `skip_cache` | `bool` | `False` | Marks an inline util: never materialized or recorded; its identity fuses into consumers' cache keys and it runs lazily (memoized per run) only when a consumer actually executes. Incompatible with `shape="expand"`, `shape="reduce"`, and `stale_after`. A `skip_cache` step must have at least one consumer. |
 | `shape` | `"map"` \| `"reduce"` \| `"expand"` \| `"join"` \| `None` | `None` (inferred) | When omitted, inferred from the code: a generator function → `"expand"`; `join_on=` → `"join"`; `group_key=` → `"reduce"`; otherwise `"map"`. An explicit value always wins; an explicit value that contradicts what the code implies (a non-`"expand"` shape on a generator, or a shape that doesn't match `join_on=`/`group_key=`) raises. See [Concepts: shapes](../concepts/shapes.md). |
 | `executor` | `"thread"` \| `"process"` | `"thread"` | `"process"` runs this step in a `loky` process pool (serialized via `cloudpickle`, so closures are fine) — for CPU-bound work. |
-| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: an indexed field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
-| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: indexed_field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
+| `group_key` | `str` \| `None` | `None` | `shape="reduce"` only: a field of the parent output to partition lanes by — one reduction per distinct value instead of one `"@all"` reduction. |
+| `join_on` | `dict[str, str]` \| `None` | `None` | `shape="join"` only: `{parent_step: field}` for each of (at least two) parents — the N-way equijoin key. Keys name the parents (they ARE `depends_on`); the function's parameters must match them. |
 | `output_model` | `Type[BaseModel]` \| `None` | `None` | Optional Pydantic model validated (`model_validate`) against the step's output value before it commits — raising fails the step, same as a failing `assertions` entry — and recorded into `definition()`'s JSON schema snapshot. |
 | `assertions` | `list[Callable[[Any], None]]` \| `None` | `None` | Callables run against the committed output *value* before it commits; raising fails the step so bad data never propagates downstream. |
 | `on_failed` | `"use_passed"` \| `"block"` | `"use_passed"` | `reduce`/`join` only: `"use_passed"` drops failed/blocked parent lanes and proceeds with the survivors (firing a `partial_fan_in` warning); `"block"` halts the step entirely if any parent lane is unavailable. |
@@ -469,8 +467,9 @@ from the query-string language shared by Python, the CLI, and the web UI.
 | `live:true`\|`false` | `invalidated` (inverted) | `live:false` |
 | anything else | `index[key]` | `company:acme` |
 
-Any term that isn't a reserved prefix matches an indexed output field
-(`@step(index=[...])`) — indexed data is the language's open vocabulary.
+Any term that isn't a reserved prefix matches a field of the step's output
+struct — the output's fields are searchable directly, with no declaration,
+and are the language's open vocabulary.
 
 ```python
 from rubedo import Selection
@@ -583,8 +582,8 @@ above), and every lane it yields is
 content-addressed (`row-<hash>`): identical payloads collapse to one lane,
 and an edited item reads as removed + created, so incrementality survives
 reordering, dedup, and appends for free. To find or track an item by a
-human field (email, id, file name), `@step(index=[...])` it and query — the
-coordinate is never a human key.
+human field (email, id, file name), query the step's output struct — its
+fields are searchable directly, and the coordinate is never a human key.
 
 See [Concepts: sources](../concepts/sources.md) for the folder, CSV, SQL
 table, and cloud object storage recipes.

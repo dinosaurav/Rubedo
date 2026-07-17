@@ -69,7 +69,6 @@ class StepSpec:
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
-    index: Tuple[str, ...] = ()  # value fields extracted into the search index
     shape: str = "map"  # map | reduce | expand | join
     executor: str = "thread"
     group_key: Optional[str] = None  # reduce: indexed field to group lanes by
@@ -162,7 +161,6 @@ def step(
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
     skip_cache: bool = False,
-    index: Optional[List[str]] = None,
     shape: Optional[str] = None,
     executor: str = "thread",
     group_key: Optional[str] = None,
@@ -244,13 +242,6 @@ def step(
     exist to keep other steps readable. Values pass in memory without a
     serialization round-trip, and execution policies (retries, rate_limit)
     are not applied — if a step needs those, it deserves materialization.
-
-    index names fields of the output value (dotted paths for nesting) to
-    extract into the search index at commit time, making outputs findable
-    by their content: Selection(index={"company": "acme"}). List-valued
-    fields index one entry per element. Purely operational — changing
-    index= never affects cache identity, and only newly created
-    materializations are indexed under the new declaration.
 
     on_failed controls the partial fan-in behavior for collective steps
     (reduce/join). "use_passed" (default) allows the step to proceed with
@@ -363,11 +354,6 @@ def step(
                 f"Step '{step_name}': stale_after is meaningless with skip_cache — "
                 "nothing is stored to expire"
             )
-        if skip_cache and index:
-            raise ValueError(
-                f"Step '{step_name}': index is meaningless with skip_cache — "
-                "nothing is stored to search"
-            )
         if on_failed not in ("use_passed", "block"):
             raise ValueError(
                 f"Step '{step_name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
@@ -407,7 +393,6 @@ def step(
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
             skip_cache=skip_cache,
-            index=tuple(index or ()),
             shape=resolved_shape,
             executor=executor,
             group_key=group_key,

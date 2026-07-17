@@ -73,7 +73,7 @@ def activity(fetch_repo: dict) -> dict:
     return {"commits_30d": len(commits)}
 
 
-@p.step(index=["language"])
+@p.step
 def score(fetch_repo: dict, activity: dict):
     """A naive health score: reward stars and recent commits, penalize open issues."""
     health = (

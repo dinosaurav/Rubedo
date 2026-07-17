@@ -74,7 +74,6 @@ def _inject_competing(pipeline_id, output_address, output_string, content_type):
         run_id="run_concurrent",
         code_hash="dummy",
         code_version="1",
-        index_values=None,
         output_identity=_identity_of(output_string),
     )
     lane_store.flush_step(pipeline_id, "my_step")

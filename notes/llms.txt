@@ -3,7 +3,7 @@
 Rubedo is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
 
 ## Concepts in 10 lines
-1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, index it (`index=[...]`) and query — the lane key is never a human key.
+1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, query its output struct fields — the lane key is never a human key.
 2. **Ingestion is a step, not a class:** there are no `Source` classes. A parentless generator step `yield`s one payload per item and mints a lane per yield — its `shape="expand"` is inferred from its being a generator — a folder scan is a three-line `os.listdir` generator, a CSV is a `csv.DictReader` loop, a SQL table is a plain `SELECT` loop. A pipeline can declare several such roots (multi-source; `join` combines them). Or a source-less plain `map` root (a non-generator with no parents) mints a single `@root` lane from its `params`.
 3. **Steps:** plain functions decorated with `@p.step(...)` (or module-level `@step`). `name` defaults to the function's `__name__`; `version` defaults to `"0"`. The decorator returns a `StepSpec` that is still directly callable exactly like the bare function — `extract(scan={"text": "hi"})` — handy in unit tests; the engine itself never calls it that way.
 4. **Pipelines:** `p = pipeline(name="...")` returns a `Pipeline`. Attach steps by decorating with `@p.step` (bare and `@p.step(...)` both work, exactly like module-level `@step`) or by passing module-level `@step` functions as `steps=[...]`. Both register on the same object, mix freely.
@@ -12,7 +12,7 @@ Rubedo is a local-first batch engine: DAG pipelines over keyed collections (file
 7. **Identity:** a step's cache identity is defined by its inputs + `version` + `params` (+ source code, only under `code="auto"`).
 8. **Generations:** a rerun supersedes old outputs with new ones; nothing is deleted, `is_live` flips.
 9. **Filtering:** return `Filtered("reason")` from a step to drop a lane from downstream processing without failing.
-10. **Shapes — mostly inferred:** a generator function is `expand`; `join_on=` implies `join`; `group_key=` implies `reduce`; everything else is `map` (1:1, the default). Only the plain `@all` reduce (no `group_key`) still needs `shape="reduce"` spelled out. Semantics: `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per indexed-field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across independent roots, matched on indexed fields).
+10. **Shapes — mostly inferred:** a generator function is `expand`; `join_on=` implies `join`; `group_key=` implies `reduce`; everything else is `map` (1:1, the default). Only the plain `@all` reduce (no `group_key`) still needs `shape="reduce"` spelled out. Semantics: `reduce` (N:1 fan-in — `{lane: value}` → one output; `group_key="field"` fans in per field value); `expand` (1:N — `yield` a payload per item, each a content-addressed lane, cached against its parent so a scrape runs once); `join` (N-way equijoin across independent roots, matched on fields of the parent outputs).
 
 ## Step Contract
 - A step's parameters name its parents: with no `depends_on=`, every parameter other than `params` must match a registered step's name and becomes a dependency in signature order (parents bind as kwargs keyed by step name; an unmatched parameter raises at pipeline-build time). Passing `depends_on=[...]` explicitly disables inference; the dict form `depends_on={"param": "step"}` binds a parent's output to a differently-named parameter. A root step (`map` or `expand` with no parents) takes no payload argument at all — it mints its own lane(s).
@@ -32,8 +32,8 @@ A step's output is cached based on:
 - `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step. Not allowed on `expand` or `reduce` steps.
 - `assertions=[callable, ...]`: A list of callables that take the output value. If any raise an exception, the step fails.
 - `executor="process"`: run this step's lanes in a `loky` process pool (via `cloudpickle`) instead of the default thread pool — for CPU-bound work.
-- `shape="reduce"` (the only shape you still write out, for the plain `@all` reduce): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (an indexed field of the parent; implies the reduce, so drop `shape=`) emits one output per group instead of one over `@all`.
-- `join_on={parent: field, ...}` (implies `shape="join"`): N-way equijoin matching each side on an indexed field; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
+- `shape="reduce"` (the only shape you still write out, for the plain `@all` reduce): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (a field of the parent; implies the reduce, so drop `shape=`) emits one output per group instead of one over `@all`.
+- `join_on={parent: field, ...}` (implies `shape="join"`): N-way equijoin matching each side on a field of its parent output; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
 - A generator function is `shape="expand"` automatically: `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records, or ingestion (a parentless expand = a source).
 
 ## Complete Worked Example
@@ -54,7 +54,7 @@ def screen():
     for row in rows:
         yield row
 
-@p.step(retries=3, rate_limit="10/min", index=["company"])
+@p.step(retries=3, rate_limit="10/min")
 def enrich(screen: dict, params: dict):
     if not screen.get("url"):
         return Filtered("No URL")
@@ -76,7 +76,7 @@ from rubedo import step, pipeline
 @step
 def screen(): ...
 
-@step(retries=3, rate_limit="10/min", index=["company"])
+@step(retries=3, rate_limit="10/min")
 def enrich(screen, params): ...
 
 p = pipeline(name="enrichment", params_model=EnrichParams, steps=[screen, enrich])
@@ -96,10 +96,10 @@ def orders_src():
 def customers_src():
     yield {"cid": "a", "name": "Acme"}
 
-@p.step(index=["cust"])
+@p.step
 def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
 
-@p.step(index=["cid"])
+@p.step
 def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
 
 @p.step(

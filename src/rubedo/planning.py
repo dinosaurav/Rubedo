@@ -29,9 +29,9 @@ def _field_values_from_ref(ref, field: str) -> List[str]:
     """Extract the stringified values of a field from a MatRef's output.
 
     When the output is a native Arrow value (a dict from a struct column),
-    the field is a dict key — read it directly, no ``index=`` declaration
-    needed.  When the output is a string (the spill/mixed fallback) or
-    None, fall back to ``index_values`` (the pre-extracted map column).
+    the field is a dict key — read it directly.  When the output is a
+    string (the spill/mixed fallback) or None, the field is not available
+    without deserializing from the object store.
     """
     output = getattr(ref, "output", None)
     if isinstance(output, dict):
@@ -41,9 +41,7 @@ def _field_values_from_ref(ref, field: str) -> List[str]:
         if isinstance(val, (list, tuple)):
             return [str(v) for v in val]
         return [str(val)]
-    # Fallback: index_values (for string output column or missing output)
-    iv = getattr(ref, "index_values", {}) or {}
-    return iv.get(field, [])
+    return []
 
 
 @dataclass
@@ -67,7 +65,6 @@ class MatRef:
         output_content_hash,
         content_type=None,
         filtered=False,
-        index_values=None,
         output=None,
     ):
         self.id = id
@@ -75,7 +72,6 @@ class MatRef:
         self.output_content_hash = output_content_hash
         self.content_type = content_type
         self.filtered = filtered
-        self.index_values = index_values or {}
         self.output = output  # the Arrow "output" column value (inline JSON or ref string)
 
 
@@ -116,12 +112,6 @@ class EphemeralRef:
         # Chains into consumers' input hashes exactly like a real
         # materialization's content hash would
         return self.identity_hash
-
-    @property
-    def index_values(self) -> Dict[str, List[str]]:
-        # EphemeralRefs are never parents of reduce/join (validation
-        # prevents it), so index_values is never consulted.
-        return {}
 
 
 @dataclass
@@ -284,11 +274,9 @@ def _group_reduce_lanes(
     """Partition a reduce's parent lanes into groups by a field.
 
     Reads each lane's ``group_key`` field from the parent's output (a
-    dict from a native Arrow struct column) directly — no ``index=``
-    declaration needed on the parent.  Falls back to ``index_values``
-    (the pre-extracted map column) when the output is a string (spilled/
-    mixed case).  A lane with several values (a list-valued field) joins
-    each group; a lane with none raises.
+    dict from a native Arrow struct column) directly.  A lane with
+    several values (a list-valued field) joins each group; a lane with
+    none raises.
     """
     coord_ref_map = []
     for dep, coord_refs in parent_mats.items():
@@ -303,8 +291,7 @@ def _group_reduce_lanes(
             raise ValueError(
                 f"reduce step '{step.name}': group_key '{step.group_key}' "
                 f"has no value for lane '{coord}' (parent '{dep}'). "
-                f"The field must exist in the parent's output dict "
-                f"or be declared with index=['{step.group_key}']."
+                f"The field must exist in the parent's output dict."
             )
         for v in values:
             groups.setdefault(v, {d: {} for d in step.depends_on})[dep][coord] = ref
@@ -370,13 +357,12 @@ def _reduce_group_decision(
                 existing_mat.get("output_identity", ""),
                 existing_mat.get("content_type"),
                 filtered=existing_mat.get("filtered", False),
-                index_values=existing_mat.get("index_values", {}),
                 output=existing_mat.get("output"),
             ),
             code_drift=(
                 step.code_mode == "warn"
                 and step.code_hash is not None
-                and existing_mat.get("code_hash") is not None
+                and step.code_hash is not None
                 and step.code_hash != existing_mat.get("code_hash")
             ),
             failed_parents=failed_parents or [],
@@ -459,8 +445,7 @@ def _plan_join(
                 raise ValueError(
                     f"join step '{step.name}': side '{d}' has no value "
                     f"for join field '{field}' at lane '{coord}'. "
-                    f"The field must exist in the parent's output dict "
-                    f"or be declared with index=['{field}']."
+                    f"The field must exist in the parent's output dict."
                 )
             for v in values:
                 buckets[d].setdefault(v, []).append((coord, ref))
@@ -526,8 +511,7 @@ def _plan_join(
                         existing_mat.get("output_identity", ""),
                         existing_mat.get("content_type"),
                         filtered=existing_mat.get("filtered", False),
-                        index_values=existing_mat.get("index_values", {}),
-                        output=existing_mat.get("output"),
+                output=existing_mat.get("output"),
                     ),
                     code_drift=(
                         step.code_mode == "warn"
@@ -628,8 +612,8 @@ def _plan_step(
                 )
             ]
 
-        # One group ("@all") unless group_key partitions the lanes by an
-        # indexed field of the parent output.
+        # One group ("@all") unless group_key partitions the lanes by a
+        # field of the parent output.
         if step.group_key is None:
             groups = {"@all": parent_mats}
         else:
@@ -869,7 +853,6 @@ def _plan_step(
                             child.get("output_identity", ""),
                             child.get("content_type"),
                             filtered=child.get("filtered", False),
-                            index_values=child.get("index_values", {}),
                             output=child.get("output"),
                         ),
                     )
@@ -911,7 +894,6 @@ def _plan_step(
                             existing_mat.get("output_identity", ""),
                             existing_mat.get("content_type"),
                             filtered=existing_mat.get("filtered", False),
-                            index_values=existing_mat.get("index_values", {}),
                             output=existing_mat.get("output"),
                         ),
                         code_drift=(

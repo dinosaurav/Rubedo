@@ -175,7 +175,7 @@ def test_params_change_recomputes():
 def test_invalidation_recomputes():
     call_count = 0
 
-    @step(index=["value"])
+    @step
     def producer():
         nonlocal call_count
         call_count += 1
@@ -279,7 +279,7 @@ def test_partial_recompute_on_input_change():
             if os.path.isfile(path):
                 yield {"path": name, "text": open(path).read()}
 
-    @step(index=["path"])
+    @step
     def count(scan: dict):
         return {"path": scan["path"], "lines": len(scan["text"].splitlines())}
 

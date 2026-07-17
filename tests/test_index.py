@@ -1,4 +1,4 @@
-"""@step(index=[...]): labels are data someone chose to index."""
+"""Selection by output struct fields: field:value in the query language."""
 
 import os
 import shutil
@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.db import init_db, get_session
 from rubedo.models import InputHashUsage
-from rubedo import lane_store
 from rubedo.store import init_store
 
 TEST_FOLDER = ".test_index_data"
@@ -79,7 +78,7 @@ def scan():
 
 
 def make_pipeline():
-    @step(index=["company", "contacts", "meta.region"])
+    @step
     def extract(scan: dict):
         text = scan["text"].strip()
         company, region, *contacts = text.split(",")
@@ -93,21 +92,13 @@ def make_pipeline():
     return pipeline(name="ix", steps=[scan, extract])
 
 
-def entries():
-    return sorted(lane_store.all_index_entries())
-
-
-def test_declared_fields_are_extracted():
+def test_struct_fields_are_searchable_without_declaration():
     create_file("a.txt", "acme,east,bob@x.com,ann@x.com")
     pipe = make_pipeline()
     pipe.run(workers=1)
 
-    assert sorted(entries()) == [
-        ("company", "acme"),
-        ("contacts", "ann@x.com"),  # list field: one entry per element
-        ("contacts", "bob@x.com"),
-        ("meta.region", "east"),  # dotted path into nested dicts
-    ]
+    res = invalidate(Selection(index={"company": "acme"}), reason="find acme")
+    assert res["invalidated_count"] == 1
 
 
 def test_selection_by_indexed_field():
@@ -120,20 +111,12 @@ def test_selection_by_indexed_field():
     assert res["invalidated_count"] == 1
 
     with get_session() as session:
-        # The invalidated address: fulfilled=False in IHU
         unfulfilled = (
             session.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(False))
             .all()
         )
         assert len(unfulfilled) == 1
-        addr = unfulfilled[0].address
-        # Look up the Arrow row by address to get pipeline_id/step_name
-        row = lane_store.address_row_index().get(addr, {})
-        iv = lane_store.get_index_values(
-            row.get("pipeline_id", ""), row.get("step_name", ""), addr
-        )
-        assert ("company", "acme") in iv
 
 
 def test_selection_index_pairs_are_anded():
@@ -146,59 +129,6 @@ def test_selection_index_pairs_are_anded():
         Selection(index={"company": "acme", "meta.region": "west"}), reason="one"
     )
     assert res["invalidated_count"] == 1
-
-
-def test_reuse_does_not_duplicate_entries():
-    create_file("a.txt", "acme,east")
-    pipe = make_pipeline()
-    pipe.run(workers=1)
-    pipe.run(workers=1)  # full cache hit
-
-    assert len(entries()) == 2  # company + meta.region, once
-
-
-def test_missing_fields_are_skipped():
-    create_file("a.txt", "acme,east")
-
-    @step(index=["company", "nonexistent", "meta.nope"])
-    def extract(scan: dict):
-        return {"company": "acme", "meta": {}}
-
-    pipe = pipeline(name="ix2", steps=[scan, extract])
-    summary = pipe.run(workers=1)
-    assert summary.failed_count == 0
-    assert entries() == [("company", "acme")]
-
-
-@pytest.mark.filterwarnings("ignore:Step 'extract' source code changed")
-def test_index_declaration_is_not_cache_identity():
-    create_file("a.txt", "acme,east")
-
-    @step(name="extract", version="1", depends_on=["scan"])
-    def extract_v1(scan: dict):
-        return {"company": "acme"}
-
-    pipe = pipeline(name="ix3", steps=[scan, extract_v1])
-    pipe.run(workers=1)
-
-    # Same step, index added: purely operational, so still a cache hit —
-    # and (documented) the existing materialization gains no entries
-    @step(name="extract", version="1", depends_on=["scan"], index=["company"])
-    def extract_v2(scan: dict):
-        return {"company": "acme"}
-
-    pipe = pipeline(name="ix3", steps=[scan, extract_v2])
-    summary = pipe.run(workers=1)
-    assert summary.reused_count == 2  # scan's lane + extract's lane
-    assert entries() == []
-
-
-def test_skip_cache_rejects_index():
-    with pytest.raises(ValueError, match="index is meaningless"):
-
-        @step(skip_cache=True, index=["x"])
-        def u(path):
-            pass
 
 
 def test_selection_language_end_to_end():

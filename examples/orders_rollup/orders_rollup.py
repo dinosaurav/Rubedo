@@ -61,7 +61,7 @@ def orders():
             yield dict(row)
 
 
-@p.step(index=["tier"])
+@p.step
 def classify(orders: dict):
     """Bucket each order by size."""
     row = orders

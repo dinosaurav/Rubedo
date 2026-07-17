@@ -16,7 +16,7 @@ Pipelines are not just 1:1 chains: steps can fan in (`reduce`, with per-group `g
 2. **Immutable Ledger & Surgical Invalidation**: Outputs are immutable bytes in an object store. A SQLite ledger tracks the lifecycle (created, reused, superseded, invalidated). You can invalidate outputs based on the *content* they generated (e.g., `invalidate(company:acme)`), not just by timestamp.
 3. **Resilience for the Real World**: Built-in policies for `retry_on`, `rate_limit`, and `stale_after` (TTL). This makes it perfect for wrangling rate-limited or flaky LLM APIs.
 4. **Zero-Magic, Zero-Daemon Architecture**: There is no central server to deploy or daemon to run. The pipeline is just a Python object, executed locally, with state stored in a local `.rubedo` directory.
-5. **Relational Shapes over Arbitrary Python**: Beyond 1:1 `map` steps, the engine offers `reduce`/`group_key` (fan-in), `expand` (1:N fan-out — e.g. a feed into a lane per article, cached so a scrape runs once), and N-way `join` (equijoin across sources on an indexed field). This is a relational vocabulary usually reserved for SQL engines, here applied to arbitrary Python objects and unstructured data — with per-lane content-addressed caching underneath every shape.
+5. **Relational Shapes over Arbitrary Python**: Beyond 1:1 `map` steps, the engine offers `reduce`/`group_key` (fan-in), `expand` (1:N fan-out — e.g. a feed into a lane per article, cached so a scrape runs once), and N-way `join` (equijoin across sources on a shared output field). This is a relational vocabulary usually reserved for SQL engines, here applied to arbitrary Python objects and unstructured data — with per-lane content-addressed caching underneath every shape.
 
 ## Competitor Landscape
 
