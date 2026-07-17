@@ -211,3 +211,50 @@ def test_default_invalidation_touches_only_direct_matches():
     assert live_steps == [
         "extract", "scan", "scan", "summarize", "summarize", "total",
     ]
+
+
+def test_invalidate_then_plan_sees_recompute():
+    """invalidate() followed by .plan() (no run in between) must report
+    the invalidated lane as 'execute', not stale 'reuse'.  Regression
+    guard for the _FULFILLED_CACHE not being evicted on invalidation.
+
+    Uses a map-root pipeline (not an expand root) so .plan() resolves
+    every lane from history — the root expand always re-runs, making
+    its downstream 'pending' and hiding the cache staleness.
+    """
+    @step
+    def root():
+        return {"items": ["acme,10", "globex,5"]}
+
+    def fan_fn(parent: dict):
+        for item in parent["items"]:
+            company, amount = item.split(",")
+            yield {"company": company, "amount": int(amount)}
+    fan_fn.__name__ = "fan"
+    fan = step(fn=fan_fn, name="fan", shape="expand", depends_on={"parent": "root"})
+
+    @step
+    def summarize(fan: dict):
+        return {"company": fan["company"], "double": fan["amount"] * 2}
+
+    pipe = pipeline(name="invd_plan", steps=[root, fan, summarize])
+    pipe.run()
+
+    # Prime the fulfilled cache by planning once — the map root and
+    # dependent expand resolve from history, so summarize should reuse
+    plan_before = pipe.plan()
+    assert plan_before.counts.get("reuse", 0) > 0, (
+        f"baseline plan should show reuse: {plan_before.counts}"
+    )
+
+    # Invalidate the acme summarize lane
+    invalidate(Selection(step="summarize", index={"company": "acme"}), reason="test")
+
+    # Plan again WITHOUT running in between — the cache must reflect
+    # the invalidation, not stale fulfilled=True
+    plan_after = pipe.plan()
+
+    # The invalidated summarize lane should be 'execute', NOT 'reuse'
+    assert plan_after.counts.get("execute", 0) > 0, (
+        f"stale cache: plan after invalidate shows {plan_after.counts}"
+    )

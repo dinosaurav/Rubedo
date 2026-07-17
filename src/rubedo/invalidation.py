@@ -89,8 +89,12 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 # The tombstone: flip fulfilled=False.
                 # The Arrow row stays as history, but the next run sees
                 # fulfilled=False and recomputes.  See notes/arrow-storage.md.
+                # Also evict from the in-memory fulfilled cache so a
+                # subsequent .plan() (without a run in between) sees the
+                # invalidation.
                 usage.fulfilled = False  # type: ignore
                 usage.last_run_id = run_id  # type: ignore
+                lane_store.mark_unfulfilled(addr)
                 return True
 
             flipped_addrs: list[str] = []

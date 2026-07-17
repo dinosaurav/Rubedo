@@ -681,6 +681,14 @@ def mark_fulfilled(address: str) -> None:
         _FULFILLED_CACHE.add(address)
 
 
+def mark_unfulfilled(address: str) -> None:
+    """Update the fulfilled cache when an address is invalidated.
+    No-op if the cache hasn't been loaded yet."""
+    global _FULFILLED_CACHE
+    if _FULFILLED_CACHE is not None:
+        _FULFILLED_CACHE.discard(address)
+
+
 def batch_lookup_by_address(
     pipeline_id: str,
     step_name: str,
