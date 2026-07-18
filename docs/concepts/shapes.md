@@ -9,8 +9,8 @@ output lanes — but each has a distinct planning and caching story worth
 knowing on its own. See [`../notes/producer-model.md`](../notes/producer-model.md)
 for the design behind the taxonomy.
 
-The four shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
-`aggregate` (`aggregate`/`one` — was "reduce"), `expand` (`one`/`many`),
+The five conceptual shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
+`aggregate` (`aggregate`/`one` — was "reduce"), `fold` (`fold`/`one`), `expand` (`one`/`many`),
 `join` (`join`/`many`). The legacy `shape=` kwarg is kept as an alias:
 `shape="map"`/`shape="reduce"`/`shape="expand"`/`shape="join"` each translate
 to the corresponding pair and are never stored on the spec.
@@ -125,6 +125,20 @@ document" reassembly (the `expand` → `aggregate` round trip in
 `examples/pdf_digest`, see [`../examples.md`](../examples.md), is exactly
 that: split a PDF into chunks, process each independently, fold back into a
 whole document).
+
+## `fold` — N:1 (sequential fan-in with accumulator)
+
+Like `aggregate`, `fold` is an N:1 fan-in (`out_shape="one"`, exactly one parent), but instead of receiving all lanes at once as a dict, the step function receives an **accumulator** and one parent value at a time. The accumulator is initialized to `fold_init` and passed from lane to lane. 
+
+```python
+@p.step(in_shape="fold", fold_init=0)
+def total_lines(accum: int, count_lines: dict):
+    return accum + count_lines["line_count"]
+```
+
+`fold` supports `group_key` exactly like `aggregate`: if specified, the fold is performed independently per group, and the accumulator resets to `fold_init` for each group. 
+
+`fold` is evaluated incrementally. Use it when an aggregate would run out of memory loading all lanes into a single dictionary, or when the logic naturally fits a rolling update.
 
 ## `expand` — 1:N (fan-out)
 

@@ -19,7 +19,7 @@ If you've ever processed a thousand rows through an LLM and then needed to fix t
 - **Orchestrators are the wrong tool.** Airflow/Prefect/Dagster schedule and monitor services; they don't give you row-level, content-addressed incrementality inside a local script. dbt does — but only for SQL.
 - **Make/Snakemake track files.** Rubedo tracks *content*, at row granularity, with a queryable history of every run.
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + content-addressed object store), created on first run and gitignored automatically.
+Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite control plane + Arrow IPC lane store + content-addressed object store), created on first run and gitignored automatically.
 
 > **Note:** `.rubedo/` resolves **relative to the current working directory** — pipelines, the CLI, and the server must all run from the same directory (typically your project root) to see the same state. Running from somewhere else silently creates a fresh, empty store there. To run from anywhere, pin the location with the `RUBEDO_HOME` (or `RUBEDO_DB_PATH`) environment variable.
 
@@ -134,9 +134,10 @@ A step can **decline an item** by returning `Filtered(reason=...)`: downstream s
 
 ## Shapes
 
-By default a step is `map` — 1:1 per lane. Three more shapes cover fan-in, fan-out, and joins:
+By default a step is `map` — 1:1 per lane. Four more shapes cover fan-in, fan-out, and joins:
 
 - **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` (or the `shape="reduce"` alias) receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
+- **`fold`** (N:1) — like `aggregate`, but receives an accumulator (initialized to `fold_init`) and one parent value at a time for incremental processing. Supports `group_key`.
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
 - **`join`** — an N-way equijoin across multiple `expand` roots, matched on a field of their parent outputs, minting one lane per matched tuple:
 
@@ -265,11 +266,11 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 ## Design
 
-The ledger is **append-only** and enforced at the ORM layer: committed outputs are immutable, every liveness transition is recorded, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
+The control plane is **append-only SQLite** (enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
 
 ## Project status
 
-Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the four shapes, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
+Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the five shapes, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
 
 ## Contributing
 

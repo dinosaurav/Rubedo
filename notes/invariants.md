@@ -102,7 +102,7 @@ blocked, filtered. "Filtered" means a step declined the coordinate — a
 cached, first-class verdict, not an error.
 
 **Collective Steps & Fan-in:**
-Collective steps (`aggregate` / `join`) default to partial fan-in
+Collective steps (`aggregate` / `fold` / `join`) default to partial fan-in
 (`on_failed="use_passed"`): if a parent lane fails or is blocked, the step
 drops it and proceeds with the surviving lanes (firing a `partial_fan_in`
 warning). They block entirely only if `on_failed="block"` is requested,

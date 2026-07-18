@@ -608,7 +608,7 @@ A new `in_shape="fold"` that processes lanes one at a time through an
 accumulator:
 
 ```python
-@p.step(in_shape="fold", init=0, group_key="region")
+@p.step(in_shape="fold", fold_init=0, group_key="region")
 def total(acc: int, articles: dict) -> int:
     return acc + articles["count"]
 ```
@@ -784,12 +784,12 @@ unrelated to the migration. Do not touch.
 
 ### Phase 2: `fold` (separate, after Phase 1 lands)
 
-- New `in_shape="fold"` with `init=` kwarg on `step()`.
+- New `in_shape="fold"` with `fold_init=` kwarg on `step()`.
 - Execution: sort lanes by coordinate, call fn per lane with
   accumulator, return final accumulator.
 - Plan/ledger/addressing: identical to aggregate (same input_hash
   computation, same output address, same group_key partitioning).
-- `init` is stored on `StepSpec` (a new field, any JSON-serializable
+- `fold_init` is stored on `StepSpec` (a new field, any JSON-serializable
   value).
 - `arrow_aggregate` does not apply to fold (fold is inherently
   one-at-a-time — a table doesn't make sense).

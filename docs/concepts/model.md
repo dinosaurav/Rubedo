@@ -70,8 +70,7 @@ Turning a knob recomputes exactly the steps that read it, and nothing else.
 
 ## The ledger
 
-The ledger is **append-only**, enforced at the ORM layer (`models.py`
-raises `ImmutabilityError` on update/delete for ledger tables). It records:
+The control plane is **append-only SQLite** (enforced at the ORM layer), while the data plane is **append-only Arrow IPC files** (`.rubedo/tables/`). It records:
 
 - **Runs** — a user-triggered execution attempt over some scope. Status is
   terminal-only (`completed` / `completed_with_failures` / `failed`); a run
@@ -81,38 +80,21 @@ raises `ImmutabilityError` on update/delete for ledger tables). It records:
 - **Run events** — every attempt, successful or not, including retries.
 - **Run-coordinate statuses** — the relationship between a run and a
   coordinate at a step: `created`, `reused`, `failed`, `blocked`, `filtered`.
-- **Materializations** — successful, committed outputs. Immutable once
-  written.
-- **Materialization lifecycle rows** — the append-only truth behind every
-  liveness/freshness transition (`created` / `reused` / `restored` /
-  `superseded` / `refreshed` / `invalidated` / `pruned`). `is_live` and
-  `refreshed_at` on `Materialization` are just mutable *projections* of this
-  log — a commit-time session guard rejects any flip that doesn't ship a
-  paired lifecycle row in the same transaction (see
-  [`../notes/invariants.md`](../notes/invariants.md)).
+- **Lane store (Arrow)** — pure data. One IPC file per step. Each row is one successful computation, storing the actual output (inline or an object-store ref). No tombstones, no liveness.
+- **Input hash usages** — the `input_hash_usages` SQLite table is the single gate for liveness. It maps `address → (last_run_id, fulfilled)`. `fulfilled=True` means a filled Arrow row exists (reuse); `fulfilled=False` means recompute (covers crash, invalidation, pruning).
 - **Materialization edges** — lineage: which output(s) a given output was
-  derived from. This is what `trace()` walks.
+  derived from, stored by `address`. This is what `trace()` walks.
 
-## Materializations and generations
+## Generations and Liveness
 
-An output address can accumulate **generations** over time, but at most one
-is ever live. When a step re-executes and produces bytes, `_commit_materialization`
-applies one rule set:
+An output address can accumulate **generations** over time (as multiple rows in the Arrow file), but only the most recent run's status governs liveness via `input_hash_usages.fulfilled`. When a step re-executes:
 
-- **Identical bytes, address currently live** → `reused`: the existing row
-  stands, nothing new is written.
-- **Identical bytes, address currently non-live** (a past generation matches
-  again) → `restored`: that old row's liveness flips back on, with a
-  `restored` lifecycle row — no new bytes.
-- **Different bytes** → `superseded`: the live generation is demoted
-  (`is_live=False`, paired `superseded` lifecycle row, flushed *before* the
-  replacement inserts, so the one-live-per-address constraint never sees two
-  live rows at once) and the new bytes become the live generation.
-- **A `stale_after` re-verification that lands on identical bytes** →
-  `refreshed`: the clock resets without changing which bytes are live.
+- **Identical bytes (same content hash)** → `reused`: the existing output bytes are identical, so the child's `input_hash` stays the same. The downstream cascade is skipped for free.
+- **Different bytes** → `created`: a new Arrow row is appended, and downstream steps recompute.
+- **A `stale_after` re-verification** → `refreshed`: the clock resets. If bytes are identical, downstream is saved.
 
 This is the mechanism behind "different bytes supersede, identical bytes
-reuse or restore" — it's what lets a pipeline safely re-run non-idempotent
+reuse" — it's what lets a pipeline safely re-run non-idempotent
 steps: same output, no new row; genuinely different output, a new
 generation that downstream recomputes against.
 
@@ -121,18 +103,16 @@ generation that downstream recomputes against.
 A run has three phases with a hard boundary between them:
 
 - **Planning is read-only and value-free.** `planning.py`'s only database
-  access is checking whether a computed address is already a live
-  materialization. It never reads a payload's actual value (with the
+  access is querying `input_hash_usages` (accelerated by `_FULFILLED_CACHE` and memory-cached Arrow address indexes) to check liveness. It never reads a payload's actual value (with the
   narrow, documented exception of `group_key`/`join_on`, which read
-  *fields of the parent output* at plan time — still no value bytes). The output is a
+  *fields of the parent output* at plan time). The output is a
   `StepDecision` per lane: `reuse`, `execute`, `blocked`, `pending`, or
   `filtered`.
 - **Execution is DB-free.** `execution.py` runs step functions in a thread
   or process pool, applies retries/rate limiting/assertions, and returns
   outcomes — it never touches the ledger.
 - **Commit is the only writer.** `ledger.py` takes execution outcomes and
-  applies the generations protocol above, writing every ledger row for a
-  run from the main thread.
+  applies the generations protocol above, appending Arrow rows to the lane store and updating `input_hash_usages.fulfilled = True` for successful outputs, all from the main thread.
 
 ```mermaid
 flowchart LR
@@ -143,7 +123,7 @@ flowchart LR
         E1["thread/process pool"] --> E2["retries, rate limit,\nassertions"] --> E3["ExecutionOutcome"]
     end
     subgraph Commit["commit (ledger writes)"]
-        C1["_commit_materialization\n(generations protocol)"] --> C2["materializations,\nlifecycle rows,\nlineage edges,\nrun-coordinate statuses"]
+        C1["ledger.py\n(generations protocol)"] --> C2["Arrow lane store,\ninput_hash_usages,\nlineage edges,\nrun-coordinate statuses"]
     end
     Plan -->|execute decisions| Execute --> Commit
     Plan -->|reuse decisions| Commit
@@ -161,19 +141,16 @@ Everything above exists to keep four promises (the full guarantee-level
 detail lives in [`../notes/invariants.md`](../notes/invariants.md)):
 
 1. **Never pay twice for the same computation.** "Already done" is checked
-   against the ledger, not memory — skip-if-exists is a materialization
-   lookup keyed on the deterministic output address, not a runtime cache,
+   against the ledger, not memory — skip-if-exists is an `input_hash_usages` lookup keyed on the deterministic output address, not a runtime cache,
    and the generations protocol extends this across time so identical
-   bytes always reuse or restore rather than recompute.
-2. **Never lie about what happened.** No materialization row exists unless
-   its output actually landed; a committed materialization never changes in
+   bytes always reuse rather than recompute.
+2. **Never lie about what happened.** No Arrow row exists unless
+   its output actually landed; an Arrow row never changes in
    place (fix forward with a new generation); a dying worker corrupts
    nothing committed, because execution is DB-free; users see current state
    through views, never raw storage; run status lives on the
    run–coordinate edge, not on the bytes (the same output can be `created`
-   in one run and `reused` in the next); and every liveness flip ships its
-   lifecycle row in the same transaction — a commit-time guard enforces
-   this, so there is no code path that can flip `is_live` silently.
+   in one run and `reused` in the next).
 3. **Order and parallelism never change results.** Output addresses come
    from `step`/`version`/`input_hash`(/`params`/`code`), never from
    wall-clock order or worker assignment, so `schedule="broad"` vs

@@ -92,6 +92,12 @@ recompute (covers crash, in-flight claim, and invalidation — all three
 mean "no filled Arrow row to reuse"). The planning phase checks
 `fulfilled` first and only reads the Arrow file on a confirmed reuse hit.
 
+**Memory caches make this O(matches).**
+To avoid repeatedly reading from disk and scanning massive lists of rows during planning, the data plane heavily utilizes memory caching:
+- **`_DISK_TABLE_CACHE` and `_ADDRESS_INDEX_CACHE`**: Tables loaded into memory are cached alongside an `address -> row_index` mapping. Flush operations keep the table in this cache, avoiding a disk re-read after writing.
+- **Vectorized lookup**: Arrow's `pc.is_in` filters row access to only matched addresses before converting to Python lists.
+- **`_FULFILLED_CACHE`**: A set of all fulfilled addresses loaded at run start, completely bypassing per-step SQLite `IN (...)` queries in favor of a Python set intersection during plan lookups.
+
 ## What gets deleted from the current ledger
 
 | Current | Fate | Why |
@@ -202,6 +208,8 @@ engine needs an explicit rule to populate B without re-running:
   lane's row. No re-execution, one write. This is the analog of today's
   `IntegrityError` path, just eager in planning instead of lazy on
   collision.
+
+**Note on fold vs aggregate**: Both `aggregate` and `fold` map N:1, but `fold` does sequential accumulation over the parent rows, retaining a `fold_init` rather than a single bulk dictionary. However, their physical representations in the Arrow file are exactly the same (one output row, no different than an `aggregate` output).
 
 The `content_hash` column is what makes byte-identical reuse still work:
 - parent re-runs, produces a new row with identical bytes → `content_hash`
