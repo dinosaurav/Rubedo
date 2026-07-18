@@ -432,6 +432,9 @@ def gc(
     another run's heartbeat is live, in which case GC refuses (the restore race,
     trap 3).
     """
+    from .runner import _check_home_guard
+
+    _check_home_guard(home)
     if home is not None:
         from .runner import _init_home
 

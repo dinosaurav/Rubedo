@@ -54,6 +54,73 @@ def _init_home(home: str):
     lane_store.init_tables(home=home)
 
 
+# --- one-home-per-process guard (TODO 34, buildable slice) -----------------
+#
+# _init_home repoints module-global DB/object-store/lane-table state, so two
+# concurrent runs in one process targeting *different* homes would silently
+# switch each other's backing store mid-run. This guard makes that a loud
+# error instead of silent corruption: it tracks the process's single active
+# effective home (None = the ambient default — no home= passed) plus a count
+# of runs currently using it. A run/plan/declaration requesting a different
+# home while the count is nonzero is rejected. Same-home concurrency (including
+# several concurrent default-home runs) passes straight through untouched.
+#
+# This is deliberately *not* a per-run context object — see TODO 34's
+# end-state note for why that's a separate, larger decision.
+_home_guard_lock = threading.Lock()
+_active_home: Optional[str] = None
+_active_home_runs = 0
+
+
+def _home_label(home: Optional[str]) -> str:
+    """Human-readable name for an effective home, including the no-home
+    default, for the guard's error message."""
+    return repr(home) if home is not None else "the default (.rubedo/RUBEDO_HOME)"
+
+
+def _home_conflict_message(home: Optional[str]) -> str:
+    # Caller holds _home_guard_lock, so _active_home/_active_home_runs are
+    # stable for the duration of building this message.
+    return (
+        "rubedo supports only one home per process at a time: "
+        f"{_active_home_runs} run(s) targeting home={_home_label(_active_home)} "
+        f"are still in flight in this process, so a call targeting "
+        f"home={_home_label(home)} cannot start. Finish the in-flight run(s) "
+        f"first, or run each home in a separate process."
+    )
+
+
+def _check_home_guard(home: Optional[str]) -> None:
+    """Raise if `home` conflicts with an in-flight run's home in this
+    process, without registering as an active run. For plan()/
+    declare_pipeline(), which call _init_home for a single quick session and
+    don't hold the run-scoped guard below."""
+    with _home_guard_lock:
+        if _active_home_runs > 0 and home != _active_home:
+            raise RuntimeError(_home_conflict_message(home))
+
+
+def _enter_home_guard(home: Optional[str]) -> None:
+    """Register a run as active for `home` (None = the ambient default),
+    raising first if it conflicts with a different home already in flight in
+    this process. Always pair with _exit_home_guard in a finally."""
+    global _active_home, _active_home_runs
+    with _home_guard_lock:
+        if _active_home_runs > 0 and home != _active_home:
+            raise RuntimeError(_home_conflict_message(home))
+        if _active_home_runs == 0:
+            _active_home = home
+        _active_home_runs += 1
+
+
+def _exit_home_guard() -> None:
+    """Release a run registered by _enter_home_guard. Always called from a
+    finally, including on failed runs, so the guard never wedges."""
+    global _active_home_runs
+    with _home_guard_lock:
+        _active_home_runs = max(0, _active_home_runs - 1)
+
+
 @contextlib.contextmanager
 def _run_heartbeat(run_id: str):
     """Bump the run's last_heartbeat_at every RUN_HEARTBEAT_INTERVAL_SECONDS
@@ -240,6 +307,7 @@ def plan(
     """
     from .planning import _code_drift_message
 
+    _check_home_guard(home)
     if home is not None:
         _init_home(home)
 
@@ -342,6 +410,7 @@ def declare_pipeline(
     visible in the dashboard and CLI before any execution. Returns the
     declaration run ID.
     """
+    _check_home_guard(home)
     if home is not None:
         _init_home(home)
 
@@ -409,105 +478,115 @@ def run_pipeline(
         raise ValueError(
             f"schedule must be one of {SCHEDULES}, got {schedule!r}"
         )
-    if home is not None:
-        _init_home(home)
 
-    from .progress import TerminalProgress
+    # Guard entry/exit brackets the whole run body — home= repoints
+    # module-global DB/store/lane-table state below, so the guard must be
+    # held for as long as that state is in use, not just for _init_home
+    # itself. _exit_home_guard runs in the finally so a failed run still
+    # releases it.
+    _enter_home_guard(home)
+    try:
+        if home is not None:
+            _init_home(home)
 
-    topo_steps = topological_sort(pipeline)
-    ctx = _RunContext(
-        run_id=f"run_{uuid.uuid4().hex[:12]}",
-        pipeline_id=pipeline.name,
-        source_id=_run_source_id(pipeline),
-        totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
-        by_step={
-            s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
-            for s in topo_steps
-            if not s.skip_cache
-        },
-    )
+        from .progress import TerminalProgress
 
-    with get_session() as session:
-        now = utcnow_iso()
-        session.add(
-            Run(
-                id=ctx.run_id,
-                kind="process",
-                pipeline_id=ctx.pipeline_id,
-                source_id=ctx.source_id,
-                params_json=json.dumps(params or {}, sort_keys=True),
-                definition_json=json.dumps(definition(pipeline)),
-                started_at=now,
-                last_heartbeat_at=now,
+        topo_steps = topological_sort(pipeline)
+        ctx = _RunContext(
+            run_id=f"run_{uuid.uuid4().hex[:12]}",
+            pipeline_id=pipeline.name,
+            source_id=_run_source_id(pipeline),
+            totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
+            by_step={
+                s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
+                for s in topo_steps
+                if not s.skip_cache
+            },
+        )
+
+        with get_session() as session:
+            now = utcnow_iso()
+            session.add(
+                Run(
+                    id=ctx.run_id,
+                    kind="process",
+                    pipeline_id=ctx.pipeline_id,
+                    source_id=ctx.source_id,
+                    params_json=json.dumps(params or {}, sort_keys=True),
+                    definition_json=json.dumps(definition(pipeline)),
+                    started_at=now,
+                    last_heartbeat_at=now,
+                )
             )
-        )
-        _emit_event(
-            session,
-            ctx.run_id,
-            "info",
-            "run_started",
-            pipeline_id=ctx.pipeline_id,
-            message=f"Starting run {ctx.run_id}",
-        )
-        session.commit()
+            _emit_event(
+                session,
+                ctx.run_id,
+                "info",
+                "run_started",
+                pipeline_id=ctx.pipeline_id,
+                message=f"Starting run {ctx.run_id}",
+            )
+            session.commit()
 
-        progress_cm = TerminalProgress() if progress else contextlib.nullcontext()
-        with progress_cm as prog, _run_heartbeat(ctx.run_id):
-            if prog is not None:
-                progress_cb = prog.update
+            progress_cm = TerminalProgress() if progress else contextlib.nullcontext()
+            with progress_cm as prog, _run_heartbeat(ctx.run_id):
+                if prog is not None:
+                    progress_cb = prog.update
 
-            # Clear read caches at run start — they may hold stale data
-            # from a previous run with a different DB/home.  The cache
-            # is rebuilt on first lookup (one address-column scan per
-            # step, amortized across all lookups in this run).
-            from . import lane_store
-            lane_store.clear_read_caches()
-
-            try:
-                params_hash = hash_json(params or {})
-                memo = _RunMemo()
-
-                for seg_steps in _partition_segments(topo_steps, schedule):
-                    _run_segment(
-                        session,
-                        ctx,
-                        seg_steps,
-                        pipeline,
-                        params,
-                        params_hash,
-                        force,
-                        workers,
-                        memo,
-                        progress_cb,
-                    )
-
-                summary = _finish_run(ctx)
-                _post_run_retention(session, pipeline, ctx, summary)
-                return summary
-
-            except Exception as e:
-                # Flush whatever completed to disk — per-segment flush
-                # already wrote completed segments; this catches the
-                # current segment's successfully committed lanes (a
-                # catastrophic failure mid-commit leaves the Arrow row
-                # but IHU not fulfilled, so next run recomputes — the
-                # stale row is harmless history).  No reason to discard
-                # successful work.
+                # Clear read caches at run start — they may hold stale data
+                # from a previous run with a different DB/home.  The cache
+                # is rebuilt on first lookup (one address-column scan per
+                # step, amortized across all lookups in this run).
                 from . import lane_store
-                lane_store.flush_all()
-                with get_session() as err_session:
-                    err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
-                    if err_run:
-                        err_run.status = "failed"  # type: ignore
-                        err_run.error_message = traceback.format_exc()  # type: ignore
-                        err_run.finished_at = utcnow_iso()  # type: ignore
-                        _emit_event(
-                            err_session,
-                            ctx.run_id,
-                            "error",
-                            "run_failed",
-                            pipeline_id=ctx.pipeline_id,
-                            message=str(e),
+                lane_store.clear_read_caches()
+
+                try:
+                    params_hash = hash_json(params or {})
+                    memo = _RunMemo()
+
+                    for seg_steps in _partition_segments(topo_steps, schedule):
+                        _run_segment(
+                            session,
+                            ctx,
+                            seg_steps,
+                            pipeline,
+                            params,
+                            params_hash,
+                            force,
+                            workers,
+                            memo,
+                            progress_cb,
                         )
-                        err_session.commit()
-                raise
+
+                    summary = _finish_run(ctx)
+                    _post_run_retention(session, pipeline, ctx, summary)
+                    return summary
+
+                except Exception as e:
+                    # Flush whatever completed to disk — per-segment flush
+                    # already wrote completed segments; this catches the
+                    # current segment's successfully committed lanes (a
+                    # catastrophic failure mid-commit leaves the Arrow row
+                    # but IHU not fulfilled, so next run recomputes — the
+                    # stale row is harmless history).  No reason to discard
+                    # successful work.
+                    from . import lane_store
+                    lane_store.flush_all()
+                    with get_session() as err_session:
+                        err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
+                        if err_run:
+                            err_run.status = "failed"  # type: ignore
+                            err_run.error_message = traceback.format_exc()  # type: ignore
+                            err_run.finished_at = utcnow_iso()  # type: ignore
+                            _emit_event(
+                                err_session,
+                                ctx.run_id,
+                                "error",
+                                "run_failed",
+                                pipeline_id=ctx.pipeline_id,
+                                message=str(e),
+                            )
+                            err_session.commit()
+                    raise
+    finally:
+        _exit_home_guard()

@@ -137,6 +137,9 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
     home (optional): point the DB and object store at a custom root for this
     call, mirroring trace()/run().
     """
+    from .runner import _check_home_guard
+
+    _check_home_guard(home)
     if home is not None:
         from .runner import _init_home
 

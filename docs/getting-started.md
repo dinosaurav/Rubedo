@@ -125,6 +125,12 @@ store (`objects/`). It's created automatically and gitignored automatically
     also takes a `home=` keyword (`pipeline(name=..., home="/var/lib/myproject/.rubedo")`)
     that wins over both env vars for every run/plan of that pipeline.
 
+    A process supports only **one home at a time**: if two runs are in
+    flight concurrently (e.g. two threads) with different `home=` values,
+    the second raises rather than silently repointing the first run's
+    storage. Same-home concurrency, and the no-`home=` default, are
+    unaffected — run different homes from separate processes instead.
+
 ## Registering steps as a list
 
 The `@p.step` decorators above accumulate steps on the `Pipeline` object;

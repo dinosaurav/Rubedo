@@ -139,6 +139,9 @@ def trace(
     reads the stored payload of lineage roots so a trace can show the human
     what source item everything came from.
     """
+    from .runner import _check_home_guard
+
+    _check_home_guard(home)
     if home is not None:
         from .runner import _init_home
 

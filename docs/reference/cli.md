@@ -363,3 +363,10 @@ directory — Vite's dev server proxies `/api` to the backend.
     root, and `trace(sel, home=...)`, `gc(home=...)`, and
     `storage_report(home=...)` each accept `home=` to point that one call at
     a custom root — all taking precedence over both environment variables.
+
+    A process supports only **one home at a time**: concurrent calls (across
+    `.run()`, `.plan()`, `trace()`, `gc()`, `storage_report()`, ...)
+    targeting different homes raise a clear error rather than silently
+    repointing each other's storage mid-call. Same-home concurrency, and the
+    no-`home=` default, are unaffected — use a separate process per home if
+    you need true concurrent homes.
