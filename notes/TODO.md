@@ -20,10 +20,8 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 33 → 34 — both build-ready (ratified by the
-owner 2026-07-18; 29–32 all shipped 2026-07-18). 33 is the ratified
-address salt (clears every cache, so land it before new history
-accumulates); 34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
+**Priority order:** 34 is the last open review item (29–33 all
+shipped 2026-07-18); its guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
 stays demand-gated — 8 is independently buildable if a cluster user
 shows up first.
 
@@ -57,70 +55,6 @@ Acceptance (slice): two threads running pipelines with different
 `home=` values → the second raises a clear error naming both homes;
 same-home concurrency and the no-home default are untouched; docs state
 the constraint.
-
-## 33. Cross-pipeline liveness coupling  **[ratified 2026-07-18 — build as written]**
-
-Output addresses (`compute_output_address`, `src/rubedo/hashing.py:34`)
-hash `(step, version, input_hash[, params][, code])` — no pipeline
-identity, and none enters through the `input_hash` chain either (it
-derives from parent *content* identities, recursively down to root
-payload hashes — data, not pipeline). `input_hash_usages` is keyed by
-address alone (`src/rubedo/models.py`). But Arrow content *is*
-pipeline-scoped (`tables/<pipeline>/<step>.arrow`). Consequence: two
-pipelines with an identically named+versioned step and identical inputs
-(the copy-a-pipeline-to-experiment case) share one liveness row.
-Invalidating or retention-pruning in pipeline A flips
-`fulfilled=False` for pipeline B (needless recompute); conversely B can
-see `fulfilled=True` from A's commit, miss in its own Arrow file, and
-recompute anyway. Everything degrades to "recompute", never corruption
-— the two-mechanism reuse check (IHU **and** Arrow row) self-heals —
-but liveness semantics silently cross pipeline boundaries.
-
-**Ratified fix (owner, 2026-07-18): fold the pipeline name into the
-address at the mint point.** `compute_output_address` gains a required
-`pipeline` parameter, appended as a final labeled segment
-(`…:pipeline:<name>`, same labeling discipline as `params`/`code`).
-Every address in the system becomes pipeline-scoped in one move, and
-all four address consumers — IHU liveness, Arrow content lookups,
-`RunCoordinateStatus.output_address`, `MaterializationEdge` — inherit
-it with zero changes, because they just store and compare the string.
-Call sites: exactly five, all in `planning.py` (212, 235, 327, 463,
-773 as of 2026-07-18), and `pipeline_id` already flows through those
-functions. No schema change — but every stored address becomes
-unreachable, so the dev-stage reset ritual applies; say so in the
-commit. Renaming a pipeline invalidates its cache — accepted: parity
-with the `tables/<name>/` content paths, which already orphan on
-rename.
-
-**What must NOT change (part of the spec):** exactly one mint point is
-salted. The `input_hash` derivation and expand lane-key minting
-(`row-<hash>` from payload content) stay pipeline-free — same data must
-keep producing the same lane keys in any pipeline, or the containment
-property (`docs/concepts/sources.md`) and cross-pipeline byte dedup
-break. GC needs no scope surgery: sweep already refcounts *content
-hashes* from Arrow rows (shared `objects/` bytes survive while any
-pipeline references them), and demote becomes pipeline-scoped
-automatically because the addresses it demotes are. Bonus fix that
-falls out: the server's `address_row_index()` global address→row dict
-can no longer collide across pipelines.
-
-**Rejected alternatives (recorded 2026-07-18, do not re-litigate):**
-composite `(pipeline_id, address)` IHU key — same semantics, ~nine-file
-diff, schema change, tuple keys in every lookup; root-salting
-(inject pipeline at root input hashes, let the chain propagate) —
-leaks into content-addressed lane keys or requires selective salting;
-deliberately-global shared cache — O(pipelines) content lookup,
-entangled retention, and the legitimate version of it is the cloud
-control plane's "shared team cache", a different layer.
-
-Acceptance: a cross-pipeline test (two pipelines, same step
-name/version/input) shows invalidating A leaves B's reuse intact, and
-retention-pruning A doesn't recompute B; identical payloads mint
-identical lane keys across the two pipelines (pin it); a GC test with
-shared content hashes across pipelines proves the bytes survive while
-either references them; README's and invariants.md's address formula
-updated in the same commit; dev-stage reset ritual in the commit
-message; full suite green; e2e Created:22 → Reused:22.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -499,6 +433,19 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — item 33 shipped (the address salt):**
+  compute_output_address gained a required `pipeline` parameter,
+  appended as the always-last labeled segment; five planning.py call
+  sites (two via the expand_anchor_address/expand_child_identity
+  helpers, threaded from planning + execution). Lane keys and
+  input_hash stay pipeline-free (pinned by test); gc.py untouched —
+  sweep still refcounts content hashes globally. Four tests in
+  tests/test_cross_pipeline_liveness.py cover invalidation, retention,
+  lane-key equality, and shared-bytes survival. Two crash-recovery
+  tests were "recovering" under a different pipeline name — exploiting
+  exactly this bug — and now recover under the same name. Address
+  formula updated in README/invariants/AGENTS/model.md; dev-stage
+  reset ritual performed (Created: 22 → Reused: 22).
 - **2026-07-18 — item 31 shipped:** declarative p.join()/p.union() now
   validate at declaration — join_on needs >=2 parents, union >=1 —
   raising step()-style ValueErrors instead of failing later inside
