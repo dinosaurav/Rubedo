@@ -8,10 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Mypy under a Python 3.12+ interpreter no longer aborts on numpy≥2.5's
-  PEP 695 stub syntax when the analysis target stays at 3.11. A scoped
-  override skips following into `numpy` (including stubs), so `uv sync`
-  without pinning 3.11 works again for the type gate.
+- Mypy's analysis target is now Python 3.12 so numpy≥2.5's PEP 695 stub
+  syntax parses under either a 3.11 or 3.12 interpreter. Runtime floor
+  stays `requires-python = ">=3.11"`.
 
 ## [0.3.0] - 2026-07-18
 
