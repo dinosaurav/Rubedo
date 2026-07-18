@@ -20,14 +20,17 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 29 → 32 → 30 → 31 → 34 → 33 (after ratification).
-Rationale: 29 stops bad rows being written *today* (every expand-table
-run adds more provenance-less rows); 32 is cheap and unblocks everything
-else (stale invariants actively mislead whoever builds the rest); 30 and
-31 are user-visible correctness with settled fixes; 34's guard slice is
-a small safety net; 33 is the deepest change and carries a schema reset.
-The cloud chain (7 → 7b → 8 → 13) stays demand-gated — 8 is
-independently buildable if a cluster user shows up first.
+**Priority order:** 29 → 32 → 30 → 31 → 33 → 34 — all six build-ready
+(both open decisions ratified by the owner 2026-07-18). Rationale: 29
+stops bad rows being written *today* (every expand-table run adds more
+provenance-less rows); 32 is cheap and unblocks everything else (stale
+invariants actively mislead whoever builds the rest); 30 and 31 are
+user-visible correctness with settled fixes; 33 shrank to a
+one-function change once the address-salt variant was ratified (it
+still clears every cache, so land it before new history accumulates);
+34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
+stays demand-gated — 8 is independently buildable if a cluster user
+shows up first.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -160,60 +163,69 @@ Acceptance (slice): two threads running pipelines with different
 same-home concurrency and the no-home default are untouched; docs state
 the constraint.
 
-## 33. Cross-pipeline liveness coupling  **[needs owner decision — recommended spec below, ratify then build]**
+## 33. Cross-pipeline liveness coupling  **[ratified 2026-07-18 — build as written]**
 
 Output addresses (`compute_output_address`, `src/rubedo/hashing.py:34`)
 hash `(step, version, input_hash[, params][, code])` — no pipeline
-identity. `input_hash_usages` is keyed by address alone
-(`src/rubedo/models.py`). But Arrow content *is* pipeline-scoped
-(`tables/<pipeline>/<step>.arrow`). Consequence: two pipelines with an
-identically named+versioned step and identical inputs share one
-liveness row. Invalidating or retention-pruning in pipeline A flips
+identity, and none enters through the `input_hash` chain either (it
+derives from parent *content* identities, recursively down to root
+payload hashes — data, not pipeline). `input_hash_usages` is keyed by
+address alone (`src/rubedo/models.py`). But Arrow content *is*
+pipeline-scoped (`tables/<pipeline>/<step>.arrow`). Consequence: two
+pipelines with an identically named+versioned step and identical inputs
+(the copy-a-pipeline-to-experiment case) share one liveness row.
+Invalidating or retention-pruning in pipeline A flips
 `fulfilled=False` for pipeline B (needless recompute); conversely B can
 see `fulfilled=True` from A's commit, miss in its own Arrow file, and
 recompute anyway. Everything degrades to "recompute", never corruption
 — the two-mechanism reuse check (IHU **and** Arrow row) self-heals —
 but liveness semantics silently cross pipeline boundaries.
 
-**Recommended fix (option a — scope liveness to the pipeline):** make
-the IHU primary key composite `(pipeline_id, address)`. Liveness then
-matches content scoping, the two mechanisms become congruent, and the
-`models.py` docstring's "the caller already knows pipeline_id" argument
-already holds at every call site. Schema change → dev-stage reset
-ritual, say so in the commit.
+**Ratified fix (owner, 2026-07-18): fold the pipeline name into the
+address at the mint point.** `compute_output_address` gains a required
+`pipeline` parameter, appended as a final labeled segment
+(`…:pipeline:<name>`, same labeling discipline as `params`/`code`).
+Every address in the system becomes pipeline-scoped in one move, and
+all four address consumers — IHU liveness, Arrow content lookups,
+`RunCoordinateStatus.output_address`, `MaterializationEdge` — inherit
+it with zero changes, because they just store and compare the string.
+Call sites: exactly five, all in `planning.py` (212, 235, 327, 463,
+773 as of 2026-07-18), and `pipeline_id` already flows through those
+functions. No schema change — but every stored address becomes
+unreachable, so the dev-stage reset ritual applies; say so in the
+commit. Renaming a pipeline invalidates its cache — accepted: parity
+with the `tables/<name>/` content paths, which already orphan on
+rename.
 
-Blast radius (enumerated 2026-07-18 — every `InputHashUsage` site):
-`ledger.py` (claim/fulfill — has `ctx.pipeline_id`), `lane_store.py`
-(the fulfilled-set half of `batch_lookup_by_address` — callers pass
-`pipeline_id` already), `gc.py` (demote becomes per-pipeline; **sweep
-stays global** — bytes in `objects/` are content-addressed and shared
-across pipelines, so "delete only when every referencing row anywhere
-is non-live" is already the documented rule and must survive),
-`invalidation.py` (tombstone gains pipeline scope), `du.py`,
-`selection.py`, `trace.py`, `server.py` (three fulfilled-set queries —
-scope each to the pipeline whose rows it's decorating). Grep
-`InputHashUsage` before calling it done; the list above was correct on
-2026-07-18.
+**What must NOT change (part of the spec):** exactly one mint point is
+salted. The `input_hash` derivation and expand lane-key minting
+(`row-<hash>` from payload content) stay pipeline-free — same data must
+keep producing the same lane keys in any pipeline, or the containment
+property (`docs/concepts/sources.md`) and cross-pipeline byte dedup
+break. GC needs no scope surgery: sweep already refcounts *content
+hashes* from Arrow rows (shared `objects/` bytes survive while any
+pipeline references them), and demote becomes pipeline-scoped
+automatically because the addresses it demotes are. Bonus fix that
+falls out: the server's `address_row_index()` global address→row dict
+can no longer collide across pipelines.
 
-**Rejected alternative (option b — deliberately global reuse):** keep
-the shared key and make the Arrow lookup consult other pipelines'
-files (a cross-pipeline shared cache). Rejected because it makes
-content lookup O(pipelines), entangles GC/retention across pipeline
-boundaries by design, and turns "pipeline `name` is the sole identity"
-into a lie — but flag if a real workload wants shared caches (that's
-the cloud control plane's "shared team cache", a different layer).
-
-**Trap:** the demote/sweep split in `gc.py` is the part that will look
-"simplifiable" mid-refactor — demote is per-(pipeline, address) but
-sweep refcounts *content hashes* across all pipelines. Keep them
-different scopes; a per-pipeline sweep deletes bytes another pipeline
-still references.
+**Rejected alternatives (recorded 2026-07-18, do not re-litigate):**
+composite `(pipeline_id, address)` IHU key — same semantics, ~nine-file
+diff, schema change, tuple keys in every lookup; root-salting
+(inject pipeline at root input hashes, let the chain propagate) —
+leaks into content-addressed lane keys or requires selective salting;
+deliberately-global shared cache — O(pipelines) content lookup,
+entangled retention, and the legitimate version of it is the cloud
+control plane's "shared team cache", a different layer.
 
 Acceptance: a cross-pipeline test (two pipelines, same step
 name/version/input) shows invalidating A leaves B's reuse intact, and
-retention-pruning A doesn't recompute B; a GC test with shared content
-hashes across pipelines proves sweep stays global; schema-change commit
-follows the dev-stage reset ritual; full suite green.
+retention-pruning A doesn't recompute B; identical payloads mint
+identical lane keys across the two pipelines (pin it); a GC test with
+shared content hashes across pipelines proves the bytes survive while
+either references them; README's and invariants.md's address formula
+updated in the same commit; dev-stage reset ritual in the commit
+message; full suite green; e2e Created:22 → Reused:22.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -239,7 +251,7 @@ string is payload data, consistent by construction. A moto-tested
 example pinning "re-run reuses with zero GetObject calls" is Parked.
 Full original spec in `notes/TODO-obsolete.md`.
 
-## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-18; lane-store plane needs owner ratification]**
+## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-18; all planes settled]**
 
 Distinct from the retired item 6 (input data) — this is the *internal*
 storage that backs every run. This — **not** the execution backend — is
@@ -285,18 +297,28 @@ against current code 2026-07-18 — do not re-litigate):**
   moto-tested in the always-run suite; real-Postgres correctness is
   deferred to **item 7b**.
 
-**Lane-store plane [needs owner decision — recommendation]:** cloud
-mode writes each buffered flush as its own immutable object
-(`tables/<pipeline>/<step>/<flush-uuid>.arrow`) instead of appending to
-one file — object stores don't append, but the lane store is already
-append-only batches flushed at segment boundaries, so a
-flush-per-object maps 1:1; the reader lists the prefix and
-concatenates. Local layout stays the single file. Compaction (merging
-many small flush objects) is explicitly deferred until a real
-deployment hurts. Ratify before building; if rejected, the fallback is
-scoping item 7 to planes 1–2 and declaring multi-machine reuse
-out-of-scope until a lane-store story exists — which would gut item 8's
-value, so say so explicitly.
+**Lane-store plane (ratified by owner 2026-07-18):** cloud mode writes
+each buffered flush as its own immutable object
+(`tables/<pipeline>/<step>/<flush-uuid>.arrow`) — object stores don't
+append, but the lane store is already append-only batches flushed at
+segment boundaries, so flush-per-object maps 1:1. The reader lists the
+prefix and concatenates, **deduping rows by `row_id`**, so a listing
+that races a compaction (sees the new base *and* not-yet-deleted
+segments) is harmless by construction. **Compaction is writer-side —
+no queue, no service:** at end of run, if a step's prefix exceeds a
+segment-count threshold, the runner reads base + segments, writes a
+new merged base via conditional put, then deletes the consumed
+segments — file count stays bounded at one base plus the flushes since
+last compaction. The bucket prefix *is* the durable queue (segments
+are the messages, deletion is the ack); a separate queue service would
+hold the same durable bytes twice and violate the zero-daemon
+positioning — if the hosted control plane later wants a background
+compactor, it consumes this same segment format. **Single-active-writer
+lease per pipeline** via a conditional-put marker object (the cloud
+analog of the local run heartbeat) — needed for concurrent
+same-pipeline runs regardless, and it makes compaction race-free
+(the sole writer compacts its own prefixes). Local layout stays the
+single append file — zero change for the normal case.
 
 **Trap (part of the spec, re-derived 2026-07-18):** **(1) The old
 dialect trap is gone — don't chase it.** The original spec's
@@ -582,6 +604,19 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — owner ratifications (design session):** item 33
+  settled as the **address-salt** variant — a `pipeline:<name>` labeled
+  segment in `compute_output_address`, chosen over the composite
+  `(pipeline_id, address)` key after tracing that no pipeline identity
+  enters the `input_hash` chain (content-derived all the way to the
+  roots) and that the salt scopes all four address consumers with a
+  five-call-site diff; composite key, root-salting, and global shared
+  cache recorded as rejected. Item 7's lane-store plane settled:
+  flush-per-object + **writer-side run-end compaction** (bounded file
+  count; the bucket prefix is the durable queue — owner's queue idea
+  absorbed without a service dependency) + single-active-writer lease
+  per pipeline + reader dedup by `row_id`. Both items dropped their
+  [needs owner decision] tags; 29–34 are now all build-ready.
 - **2026-07-18 — reprioritize + respec pass:** explicit priority order
   (29 → 32 → 30 → 31 → 34 → 33); item 30's grouping key settled from
   the UI's own columns; item 29's fix mechanism settled
