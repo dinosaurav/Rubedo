@@ -156,6 +156,7 @@ def _run_segment(
             limiters[step.name],
             pp,
             ctx.pipeline_id,
+            ctx.run_id,
         )
         in_flight[fut] = step
 

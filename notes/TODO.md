@@ -20,12 +20,11 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 29 → 32 → 30 → 31 → 33 → 34 — all six build-ready
-(both open decisions ratified by the owner 2026-07-18). Rationale: 29
-stops bad rows being written *today* (every expand-table run adds more
-provenance-less rows); 32 is cheap and unblocks everything else (stale
-invariants actively mislead whoever builds the rest); 30 and 31 are
-user-visible correctness with settled fixes; 33 shrank to a
+**Priority order:** 32 → 30 → 31 → 33 → 34 — all build-ready (both
+open decisions ratified by the owner 2026-07-18; 29 shipped
+2026-07-18). Rationale: 32 is cheap and unblocks everything else
+(stale invariants actively mislead whoever builds the rest); 30 and 31
+are user-visible correctness with settled fixes; 33 shrank to a
 one-function change once the address-salt variant was ratified (it
 still clears every cache, so land it before new history accumulates);
 34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
@@ -33,39 +32,6 @@ stays demand-gated — 8 is independently buildable if a cluster user
 shows up first.
 
 ──────────────────────────────────────────────────────────────────────
-
-## 29. Expand-table Arrow rows permanently record `run_id=""`
-
-The optimized table-expand path builds its Arrow batch with
-`"run_id": pa.array([""] * len(children))` and a comment claiming the
-ledger fills it in (`src/rubedo/execution.py:497`). It doesn't: the
-`arrow_batched` branch in `_commit_execution_result`
-(`src/rubedo/ledger.py:346`) only *reads* the buffered row back for the
-MatRef — nothing patches `run_id` before `append_arrow_batch` flushes.
-Every child row from this path lands on disk with an empty `run_id`,
-so lane-level provenance (which run created this output?) is broken for
-the optimized path, and the server's object endpoint reports an empty
-`created_by_run_id`.
-
-**Fix (settled, verified 2026-07-18):** `_process_decision`
-(`src/rubedo/execution.py:242`) already takes `pipeline_id`, passed as
-`ctx.pipeline_id` by the scheduler (`src/rubedo/scheduler.py:158`), and
-`ctx.run_id` sits right next to it on the run context
-(`src/rubedo/ledger.py:36`). Add a `run_id: str = ""` parameter the
-same way, pass `ctx.run_id` at the call site, and write it into the
-batch inside the `_expand_table_outcomes` closure. Delete the stale
-"filled by ledger" comment. No schema change — the column exists and is
-simply mis-filled.
-
-**Trap:** the non-table expand path and ordinary map commits already
-record `run_id` correctly — don't touch them; assert equality between
-the two expand paths in the test rather than pinning a literal.
-
-Acceptance: a pipeline whose root expand takes the table path produces
-Arrow rows whose `run_id` equals the creating run's id (test reads rows
-back via `lane_store` and compares against the run row); the object/API
-metadata for such a lane reports the real `created_by_run_id`;
-`uv run pytest -q` green; e2e Created:22 → Reused:22.
 
 ## 32. Docs reconciliation: invariants.md + README vs shipped code
 
@@ -604,6 +570,13 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — item 29 shipped:** expand-table Arrow rows now record
+  the creating run's id — `_process_decision` gained `run_id` beside
+  `pipeline_id` (scheduler passes `ctx.run_id`), the batch writes it,
+  the false "filled by ledger" comment is gone. Regression test in
+  `tests/test_expand_table.py` pins both expand paths to the real run
+  id (verified to fail on the unfixed engine); the server's
+  `created_by_run_id` fixed transitively.
 - **2026-07-18 — owner ratifications (design session):** item 33
   settled as the **address-salt** variant — a `pipeline:<name>` labeled
   segment in `compute_output_address`, chosen over the composite

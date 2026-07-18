@@ -151,6 +151,32 @@ def test_expand_table_dedup_identical_rows():
     assert len(outs) == 2
 
 
+def test_expand_table_rows_record_creating_run_id():
+    # The table path builds its own Arrow batch; its rows must carry the
+    # creating run's id just like the generator path's ledger-committed rows.
+    @step(shape="expand")
+    def table_load():
+        return pa.table({"name": ["alice", "bob"], "score": [1, 2]})
+
+    @step(shape="expand")
+    def gen_load():
+        yield {"name": "alice", "score": 1}
+        yield {"name": "bob", "score": 2}
+
+    table_run = pipeline(name="prov-table", steps=[table_load]).run(workers=1)
+    gen_run = pipeline(name="prov-gen", steps=[gen_load]).run(workers=1)
+
+    def run_ids(step_name):
+        return {
+            r.get("run_id")
+            for r in lane_store.all_filled_rows()
+            if r.get("step_name") == step_name
+        }
+
+    assert run_ids("table_load") == {table_run.run_id}
+    assert run_ids("gen_load") == {gen_run.run_id}
+
+
 def test_expand_polars_table():
     pl = pytest.importorskip("polars")
 

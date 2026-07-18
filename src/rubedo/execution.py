@@ -249,6 +249,7 @@ def _process_decision(
     limiter: Optional[_RateLimiter],
     process_pool: Optional[Any] = None,
     pipeline_id: str = "",
+    run_id: str = "",
 ) -> List[ExecutionOutcome]:
     """Run the step function for one execute decision — the (step, lane) unit.
 
@@ -494,7 +495,7 @@ def _process_decision(
                 "content_type": pa.array(["json"] * len(children), type=pa.string()),
                 "code_hash": pa.array([step.code_hash] * len(children), type=pa.string()),
                 "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
-                "run_id": pa.array([""] * len(children), type=pa.string()),  # filled by ledger
+                "run_id": pa.array([run_id] * len(children), type=pa.string()),
                 "filtered": pa.array([False] * len(children), type=pa.bool_()),
             }, schema=lane_store._schema(pa, struct_type))
 
