@@ -403,7 +403,7 @@ function App() {
             <a href={`${GITHUB_URL}/blob/main/README.md`} target="_blank" rel="noreferrer">README</a>
             <a href={DOCS_URL}>Docs</a>
             <a href={`${GITHUB_URL}/tree/main/examples`} target="_blank" rel="noreferrer">Examples</a>
-            <a href={`${DOCS_URL}notes/invariants/`} target="_blank" rel="noreferrer">Invariants</a>
+            <a href={`${DOCS_URL}development/invariants/`} target="_blank" rel="noreferrer">Invariants</a>
           </nav>
           <div className="footer-meta">
             Pre-1.0. The API is unstable; schema changes mean deleting <code>.rubedo/</code> and

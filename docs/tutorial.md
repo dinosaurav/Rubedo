@@ -281,7 +281,7 @@ print(result)
 !!! note "Why `version:v2` is in the query"
     Rubedo never deletes a superseded or orphaned generation's ledger row —
     invalidation and version bumps are both liveness changes, not deletes
-    (see [notes/invariants.md](notes/invariants.md)). After the version
+    (see [development/invariants.md](development/invariants.md)). After the version
     bump above, both the old default-version (`"0"`) classify outputs *and*
     the new `v2` ones are still live materializations, so a bare
     `rating:positive` selection would match generations from both versions.

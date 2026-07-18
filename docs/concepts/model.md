@@ -5,7 +5,7 @@ you dbt-style state for it: every output lands at a deterministic address,
 an append-only ledger records what happened to every item in every run, and
 lineage edges connect each output to the outputs it was derived from.
 Nothing here is magic — it's a hash function, a commit rule, and a log. This
-page is the vocabulary; [`../notes/invariants.md`](../notes/invariants.md) is
+page is the vocabulary; [`../development/invariants.md`](../development/invariants.md) is
 the canonical source if the two ever disagree.
 
 ## Lanes
@@ -138,7 +138,7 @@ the output of both.
 ## The promises, plainly
 
 Everything above exists to keep four promises (the full guarantee-level
-detail lives in [`../notes/invariants.md`](../notes/invariants.md)):
+detail lives in [`../development/invariants.md`](../development/invariants.md)):
 
 1. **Never pay twice for the same computation.** "Already done" is checked
    against the ledger, not memory — skip-if-exists is an `input_hash_usages` lookup keyed on the deterministic output address, not a runtime cache,

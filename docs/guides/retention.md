@@ -7,7 +7,7 @@ call, a scrape). Retention is the opt-in mechanism for when old bytes stop
 being worth their storage. This page is the user-facing summary; for the
 full model — the two policies that were considered and rejected, the exact
 demote/sweep algorithm, and every guarantee with its rationale — see
-[`../notes/retention.md`](../notes/retention.md).
+[`../development/retention.md`](../development/retention.md).
 
 ## Default: keep everything
 
@@ -83,7 +83,7 @@ the ledger:
    outside the keep-set gets `is_live=False`, each flip paired with a
    `pruned` lifecycle row in the same transaction (the same append-only
    bookkeeping `invalidate()` uses — a commit-time pairing guard enforces
-   it; see [`../notes/invariants.md`](../notes/invariants.md)).
+   it; see [`../development/invariants.md`](../development/invariants.md)).
 2. **Sweep.** A physical object's bytes are deleted only when **every**
    materialization referencing that content hash — across *all* pipelines,
    *all* steps, all history — is now non-live. Because the store dedupes
@@ -129,7 +129,7 @@ and out of a source and recomputation would be expensive if a pruned input
 ever reappeared — the keep-orphans default (nothing pruned, ever) is the
 safer choice there.
 
-See [`../notes/retention.md`](../notes/retention.md) for the full design —
+See [`../development/retention.md`](../development/retention.md) for the full design —
 including the two policies that were considered and rejected (age-based
 expiry, per-pipeline byte budgets) and why, plus every guarantee with the
 trap it closes.

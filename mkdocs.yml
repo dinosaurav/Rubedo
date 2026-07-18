@@ -48,7 +48,6 @@ theme:
     - navigation.tracking
     - navigation.tabs
     - navigation.sections
-    - toc.integrate
     - search.suggest
     - search.highlight
     - search.share
@@ -100,7 +99,9 @@ nav:
       - Selection & Invalidation: reference/api/selection.md
       - GC & Storage: reference/api/gc.md
     - CLI: reference/cli.md
-  - Design Notes:
-    - Invariants: notes/invariants.md
-    - Producer Model: notes/producer-model.md
-    - Retention: notes/retention.md
+  - Changelog: changelog.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Invariants: development/invariants.md
+    - Producer Model: development/producer-model.md
+    - Retention: development/retention.md

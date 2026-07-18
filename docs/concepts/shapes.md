@@ -6,7 +6,7 @@ from its input lanes. There are four conceptual shapes: `map` (1:1),
 `join` (N-way, minting pair lanes). Every shape is a special case of the same
 underlying idea — a producer that takes some input lanes and emits some
 output lanes — but each has a distinct planning and caching story worth
-knowing on its own. See [`../notes/producer-model.md`](../notes/producer-model.md)
+knowing on its own. See [`../development/producer-model.md`](../development/producer-model.md)
 for the design behind the taxonomy.
 
 The five conceptual shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
@@ -286,7 +286,7 @@ roots and need matching by *value* — enriching orders with customer
 records, feeds with publisher metadata. If two steps already share a
 lineage (both descend from the same source), you almost certainly want a
 plain multi-parent `map`, not a `join` — see
-[`../notes/producer-model.md`](../notes/producer-model.md#the-distinction-that-matters-most-diamond-join)
+[`../development/producer-model.md`](../development/producer-model.md#the-distinction-that-matters-most-diamond-join)
 for why a diamond isn't a join.
 
 ## Putting it together
