@@ -55,22 +55,14 @@
   --md-code-bg-color: #1a1a1a;
 }
 
-/* Header / nav tabs: white chrome with a red hairline, like the marketing
-   site's <header style="border-bottom: 1px solid red"> */
+/* Header: white chrome with a red hairline, like the marketing site's
+   <header style="border-bottom: 1px solid red"> */
 .md-header {
   border-bottom: 1px solid #ff0033;
   box-shadow: none;
 }
 
 [data-md-color-scheme="slate"] .md-header {
-  border-bottom-color: #ff3355;
-}
-
-.md-tabs {
-  border-bottom: 1px solid #ff0033;
-}
-
-[data-md-color-scheme="slate"] .md-tabs {
   border-bottom-color: #ff3355;
 }
 
