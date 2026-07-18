@@ -300,3 +300,32 @@ downstream lane), not 1.
 - The repo lives under `~/Documents` (macOS TCC-protected): if every file
   op suddenly returns EPERM, the app lost its Documents grant — tell the
   owner; nothing in-repo fixes it.
+
+## Cursor Cloud specific instructions
+
+The startup update script (`uv sync --python 3.11`, `npm --prefix web ci`)
+already refreshes deps on boot; `uv` and Node are preinstalled in the
+snapshot. Notes below cover only non-obvious caveats for running things.
+
+- **Pin Python to 3.11.** `uv sync` without `--python 3.11` picks the
+  system 3.12 interpreter, and `uv run mypy src/rubedo` then fails inside
+  numpy's stubs (`Type statement is only supported in Python 3.12 and
+  greater`) because `[tool.mypy] python_version = "3.11"`. The update
+  script already pins 3.11; if you rebuild the venv, keep the flag.
+- **Standard commands live in `CONTRIBUTING.md` / the "Verification
+  checklist" above** (`uv run pytest -q`, `uv run ruff check …`,
+  `uv run mypy src/rubedo`, `(cd web && npx tsc -b)`,
+  `(cd web && npm run build && npx playwright test)`).
+- **`web/src/rubedo/web_static/` is gitignored**, so `rubedo serve` only
+  shows the dashboard UI after `(cd web && npm run build)` has populated
+  it. The snapshot already has a build; rebuild after web changes.
+- **Playwright's chromium browser is preinstalled in the snapshot.** If a
+  fresh environment reports a missing browser, run
+  `(cd web && npx playwright install --with-deps chromium)` — not in the
+  update script (heavy download, persisted in snapshot instead).
+- **Run the app:** `uv run rubedo serve --host 127.0.0.1 --port 8000`
+  serves the API (`/api/*`) and bundled UI on port 8000. `.rubedo/` state
+  is CWD-relative (see README), so run pipelines, the CLI, and the server
+  all from the repo root, or pin `RUBEDO_HOME`.
+- `uv run pytest -q` emits one pre-existing `StarletteDeprecationWarning`
+  from FastAPI's TestClient — it is baseline, not from your changes.
