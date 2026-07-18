@@ -32,10 +32,13 @@ accurate and load-bearing; keep them updated when behavior changes.
   content-addressed lanes, `expand`, `group_key`, multi-source, and N-way
   `join` — is designed and built; see `notes/producer-model.md`.
 - **TODO conventions**: items keep their historical numbers (gaps are
-  shipped items — see the TODO's Done changelog); every open item's design
-  is settled and the spec is buildable as written. Most items carry a
-  **Trap:** paragraph that is part of the spec — and items tagged
-  **[⚠️ subtle]** or **DANGEROUS** doubly so: read it *and*
+  shipped/retired items — archived verbatim, with the full Done
+  changelog, in `notes/TODO-obsolete.md`); an open item's spec is
+  buildable as written unless tagged **[needs owner decision]** (settled
+  problem, unratified fix — propose, don't build) or carrying a **⚠️
+  respec** banner (re-verify pointers against current code first). Most
+  items carry a **Trap:** paragraph that is part of the spec — and items
+  tagged **[⚠️ subtle]** or **DANGEROUS** doubly so: read it *and*
   `notes/invariants.md` before coding, satisfy the
   acceptance line verbatim, and never "simplify" the guarded behavior away
   to make a fix easier.
