@@ -310,6 +310,45 @@ function App() {
         </div>
       </section>
 
+      {/* ---------------- Performance ---------------- */}
+      <section className="block" id="performance">
+        <Eyebrow>Performance</Eyebrow>
+        <h2 className="block-title">A columnar data plane, built to plan fast.</h2>
+        <p className="block-lede">
+          Outputs live in per-step, append-only{' '}
+          <Tooltip text="Arrow IPC files under .rubedo/tables/ — one row per lane per attempt. SQLite keeps the transactional control plane (runs, liveness, audit log); the data itself is columnar.">
+            <strong>Arrow IPC</strong>
+          </Tooltip>{' '}
+          files, so the reuse checks that dominate plan time are vectorized scans — not row-by-row
+          SQLite queries.
+        </p>
+        <div className="why-grid">
+          <div className="why-card">
+            <h3>O(matches) planning.</h3>
+            <p>
+              Each step&apos;s table carries an in-memory address index; planning touches only the rows
+              that match, however deep the run history. Liveness is a single SQLite query per run, not
+              per step.
+            </p>
+          </div>
+          <div className="why-card">
+            <h3>Memory until it&apos;s not needed.</h3>
+            <p>
+              A parent&apos;s table stays in memory while any upcoming step still reads it, and flushes
+              write through the cache — durability never costs a re-read.
+            </p>
+          </div>
+          <div className="why-card">
+            <h3>Arrow end-to-end.</h3>
+            <p>
+              A fan-in step can take its input as a <code>pyarrow.Table</code> and a fan-out can return
+              one — no Python-dict round trip. Every output field is searchable with no index to
+              declare.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* ---------------- Get started ---------------- */}
       <section className="block" id="start">
         <Eyebrow>Get started</Eyebrow>
@@ -325,11 +364,11 @@ function App() {
             <code>@p.step</code> generator
           </Tooltip>{' '}
           that yields a payload per item: a folder scan, a <code>csv.DictReader</code> loop, a SQL{' '}
-          <code>SELECT</code>. Each row mints its own content-addressed lane. To find it later by a human field,{' '}
-          <Tooltip text="Stores the field's value for O(1) lookup by value — used by join (to match lanes), group_key (to partition reduces), and selection queries (to find lanes by indexed field).">
-            <code>index</code>
+          <code>SELECT</code>. Each row mints its own content-addressed lane, and{' '}
+          <Tooltip text="Selection queries, join matching, and group_key partitioning all read fields straight off the Arrow output column — there is no index declaration.">
+            every output field is searchable
           </Tooltip>{' '}
-          that field.
+          — no index to declare.
         </p>
       </section>
 

@@ -268,6 +268,17 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 The control plane is **append-only SQLite** (enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
 
+## Performance
+
+The data plane is columnar: each step's outputs live in a per-step, append-only **Arrow IPC** file, and the reuse checks that dominate plan time are vectorized Arrow scans rather than per-row SQLite queries. On top of that store:
+
+- **Reuse lookups are O(matches), not O(history).** Each loaded table carries an in-memory `address → row` index; planning probes it and `table.take`s only the matching rows through Arrow's C++ kernels instead of deserializing a step's whole history. In the micro benchmarks this made warm lookups **1.6×** faster and sparse lookups (few matches in a deep table) **2.8×** faster.
+- **Liveness is one SQLite query per run.** The set of fulfilled addresses loads once at run start and is consulted as a Python set intersection, replacing a per-step `IN (...)` query — a `.plan()` over a 5K-lane store went from 0.35s to 0.22s when this landed (~31% at 20K lanes).
+- **Tables stay in memory while they're needed.** A parent step's table is flushed to disk only once no future segment reads it, and flushing writes *through* the cache — durability never costs a re-read.
+- **Data can stay in Arrow end-to-end.** An aggregate step can request its fan-in as a `pa.Table` (`arrow_aggregate=True`) and an expand step can return one, skipping the Python-dict round trip entirely; that's also why any output field is searchable and joinable with no index declaration.
+
+[`benchmarks/`](benchmarks/) is the before/after harness behind these numbers. Scenarios report **work counters** (Arrow rows written, reuse lookups, SQLite statements) alongside timings, so a change can demonstrate it does no extra work — see [`benchmarks/README.md`](benchmarks/README.md).
+
 ## Project status
 
 Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the five shapes, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
