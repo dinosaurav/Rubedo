@@ -308,3 +308,28 @@ downstream lane), not 1.
 - The repo lives under `~/Documents` (macOS TCC-protected): if every file
   op suddenly returns EPERM, the app lost its Documents grant — tell the
   owner; nothing in-repo fixes it.
+
+## Cursor Cloud specific instructions
+
+The boot update script lives in `.cursor/environment.json` (`install`):
+`uv sync` then `npm --prefix web ci`. `uv` and Node are expected in the
+snapshot; no Python-version pin — mypy targets 3.12, so a system 3.12
+venv is fine. Notes below cover only non-obvious caveats.
+
+- **Standard commands live in `CONTRIBUTING.md` / the "Verification
+  checklist" above** (`uv run pytest -q`, `uv run ruff check …`,
+  `uv run mypy src/rubedo`, `(cd web && npx tsc -b)`,
+  `(cd web && npm run build && npx playwright test)`).
+- **`src/rubedo/web_static/` is gitignored**, so `rubedo serve` only
+  shows the dashboard UI after `(cd web && npm run build)` has populated
+  it. Rebuild after web changes.
+- **Playwright's chromium browser should be preinstalled in the
+  snapshot.** If a fresh environment reports a missing browser, run
+  `(cd web && npx playwright install --with-deps chromium)` — not in the
+  update script (heavy download, persisted in snapshot instead).
+- **Run the app:** `uv run rubedo serve --host 127.0.0.1 --port 8000`
+  serves the API (`/api/*`) and bundled UI on port 8000. `.rubedo/` state
+  is CWD-relative (see README), so run pipelines, the CLI, and the server
+  all from the repo root, or pin `RUBEDO_HOME`.
+- `uv run pytest -q` emits one pre-existing `StarletteDeprecationWarning`
+  from FastAPI's TestClient — it is baseline, not from your changes.
