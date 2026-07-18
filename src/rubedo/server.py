@@ -259,7 +259,12 @@ def get_current_outputs():
             .filter(
                 RunCoordinateStatus.run_id.in_(session.query(latest_run_ids.c.id))
             )
-            .group_by(RunCoordinateStatus.source_id, RunCoordinateStatus.coordinate)
+            .group_by(
+                RunCoordinateStatus.pipeline_id,
+                RunCoordinateStatus.step_name,
+                RunCoordinateStatus.source_id,
+                RunCoordinateStatus.coordinate,
+            )
             .subquery()
         )
         rows = (
@@ -292,8 +297,14 @@ def get_current_outputs():
                     "source_id": rc.source_id,
                     "coordinate": rc.coordinate,
                     "status": rc.status,
-                    "pipeline_id": arrow_row.get("pipeline_id"),
-                    "step_name": arrow_row.get("step_name"),
+                    # Read pipeline_id/step_name off the RunCoordinateStatus row
+                    # itself, not the Arrow row's cached metadata: since the
+                    # output address is content-addressed (no pipeline_id in
+                    # the hash), two pipelines can share the same Arrow row,
+                    # and its metadata reflects whichever pipeline wrote it
+                    # first — not necessarily this rc's pipeline/step.
+                    "pipeline_id": rc.pipeline_id,
+                    "step_name": rc.step_name,
                     "code_version": arrow_row.get("code_version"),
                     "input_hash": rc.input_hash,
                     "output_address": rc.output_address,

@@ -140,3 +140,56 @@ def test_selection_invalidate():
     data = response.json()
     assert data["invalidated_count"] == 1
     assert len(data["addresses"]) == 1
+
+
+def test_current_outputs_one_row_per_step_and_lane():
+    """TODO 30: a two-step chain (scan -> count-lines) must surface a
+    current-output row for *each* step's coordinate, not collapse down
+    to the deepest step's row per lane."""
+    response = client.get("/api/current-outputs")
+    assert response.status_code == 200
+    outputs = response.json()
+
+    # 2 files x (scan + count-lines) = 4 rows, not 2 (one per lane).
+    assert len(outputs) == 4
+
+    step_names = {row["step_name"] for row in outputs}
+    assert step_names == {"scan", "count-lines"}
+
+    # No two rows share the same (pipeline_id, step_name, source_id, coordinate).
+    keys = [
+        (row["pipeline_id"], row["step_name"], row["source_id"], row["coordinate"])
+        for row in outputs
+    ]
+    assert len(keys) == len(set(keys))
+
+    # Each coordinate (lane) appears once for scan and once for count-lines.
+    coords_by_step: dict = {}
+    for row in outputs:
+        coords_by_step.setdefault(row["step_name"], set()).add(row["coordinate"])
+    assert coords_by_step["scan"] == coords_by_step["count-lines"]
+    assert len(coords_by_step["scan"]) == 2
+
+
+def test_current_outputs_no_collision_across_pipelines():
+    """Two pipelines sharing the same root step (so identical content-addressed
+    lane coordinates) must not collide in current-outputs — each pipeline's
+    rows must survive independently."""
+    other_pipeline = pipeline(name="p-test-2", steps=[scan, count_lines])
+    other_pipeline.run(workers=1)
+
+    response = client.get("/api/current-outputs")
+    assert response.status_code == 200
+    outputs = response.json()
+
+    pipeline_ids = {row["pipeline_id"] for row in outputs}
+    assert pipeline_ids == {"p-test", "p-test-2"}
+
+    # 2 pipelines x 2 files x (scan + count-lines) = 8 rows total.
+    assert len(outputs) == 8
+
+    rows_per_pipeline: dict = {}
+    for row in outputs:
+        rows_per_pipeline.setdefault(row["pipeline_id"], []).append(row)
+    assert len(rows_per_pipeline["p-test"]) == 4
+    assert len(rows_per_pipeline["p-test-2"]) == 4
