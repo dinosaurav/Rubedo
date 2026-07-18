@@ -20,10 +20,10 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 30 → 31 → 33 → 34 — all build-ready (both
-open decisions ratified by the owner 2026-07-18; 29 and 32 shipped
-2026-07-18). Rationale: 30 and 31
-are user-visible correctness with settled fixes; 33 shrank to a
+**Priority order:** 31 → 33 → 34 — all build-ready (both
+open decisions ratified by the owner 2026-07-18; 29, 32, and 30 shipped
+2026-07-18). Rationale: 31
+is user-visible correctness with a settled fix; 33 shrank to a
 one-function change once the address-salt variant was ratified (it
 still clears every cache, so land it before new history accumulates);
 34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
@@ -31,29 +31,6 @@ stays demand-gated — 8 is independently buildable if a cluster user
 shows up first.
 
 ──────────────────────────────────────────────────────────────────────
-
-## 30. `/api/current-outputs` silently drops steps
-
-`get_current_outputs` (`src/rubedo/server.py:257`) groups
-`RunCoordinateStatus` by only `(source_id, coordinate)` and keeps
-`max(id)` per group. In a normal chain every step writes a status for
-the same `(source_id, coordinate)`, so the endpoint keeps only the
-deepest step's row and drops the rest; across pipelines the same pair
-can also collide. The endpoint's claim ("the latest run's live lanes")
-is only true for single-step pipelines.
-
-**Fix (settled, verified 2026-07-18):** group by
-`(pipeline_id, step_name, source_id, coordinate)`. Both columns exist
-on `RunCoordinateStatus` (the run-search endpoint already queries
-them), and the dashboard's Current Outputs page
-(`web/src/pages/CurrentOutputs.tsx`) already renders Pipeline and Step
-columns *with select filters* — the UI was built for the per-(pipeline,
-step, lane) view the query fails to deliver.
-
-Acceptance: an API regression test drives a two-step chain and asserts
-one current-output row per (step, lane), not one per lane; two
-pipelines with overlapping coordinates don't collide; Playwright suite
-still green.
 
 ## 31. Declarative `join()`/`union()` bypass construction-time validation
 
@@ -544,6 +521,15 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — item 30 shipped:** /api/current-outputs now groups by
+  (pipeline_id, step_name, source_id, coordinate) — one row per (step,
+  lane), no cross-pipeline collapse. Plus a second bug found while
+  testing: the response's pipeline_id/step_name came from the shared
+  Arrow row's metadata (content-addressed, so colliding pipelines showed
+  whichever wrote first); now read off the authoritative
+  RunCoordinateStatus row. Two regression tests in tests/test_api.py;
+  live count_lines serves 22 rows (7x3+1). Item 33's address salt will
+  remove the underlying Arrow-row sharing too.
 - **2026-07-18 — item 32 shipped (docs reconciliation, wider than
   specced):** invariants.md fixed (Arrow schema now lists
   `output`/`output_identity`; IHU keyed by address alone; inline values
