@@ -202,40 +202,54 @@ def _compute_step_input_hash(
 
 
 def expand_anchor_address(
-    step: StepSpec, parent_hash: str, params_hash: str, accepts_params: bool
+    step: StepSpec, parent_hash: str, params_hash: str, accepts_params: bool, pipeline: str
 ) -> str:
     """Address of an expand step's cache anchor (the child content hashes).
 
     Keyed on the *parent* content, so it is predictable from the parent alone
-    — the entry point that lets a re-run skip the fn.
+    — the entry point that lets a re-run skip the fn. The address is
+    pipeline-scoped (TODO 33); the anchor's *content* (the child hashes) is
+    not — those stay pipeline-free so identical payloads mint identical
+    child lane keys everywhere (see `expand_child_identity`).
     """
     return compute_output_address(
         step.name,
         step.version,
         parent_hash,
+        pipeline,
         params_hash=params_hash if accepts_params else None,
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
 
 
 def expand_child_coord(child_hash: str) -> str:
-    """Content-addressed coordinate of an expand child lane."""
+    """Content-addressed coordinate of an expand child lane.
+
+    Deliberately pipeline-free: identical payload content must mint the
+    identical lane key in any pipeline (the containment property in
+    `docs/concepts/sources.md` and cross-pipeline byte dedup depend on it —
+    TODO 33 salts the *output address*, never this).
+    """
     return f"row-{child_hash[:12]}"
 
 
 def expand_child_identity(
-    step: StepSpec, child_hash: str, params_hash: str, accepts_params: bool
+    step: StepSpec, child_hash: str, params_hash: str, accepts_params: bool, pipeline: str
 ) -> tuple[str, str]:
     """(input_hash, output_address) of one content-addressed expand child.
 
     The child's identity *is* its content (`child_hash = hash(value)`), so
     identical children collapse and a re-run lands on the same generation —
-    exactly like a source lane. No parent/subkey in the identity.
+    exactly like a source lane. No parent/subkey in the identity. The
+    *output address* is pipeline-scoped (TODO 33); `child_hash` (returned
+    as `input_hash`) stays pipeline-free — it is also the lane key input
+    (see `expand_child_coord`), and lane keys must not vary by pipeline.
     """
     return child_hash, compute_output_address(
         step.name,
         step.version,
         child_hash,
+        pipeline,
         params_hash=params_hash if accepts_params else None,
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
@@ -328,6 +342,7 @@ def _reduce_group_decision(
         step.name,
         step.version,
         input_hash,
+        pipeline_id,
         params_hash=params_hash if accepts_params else None,
         code_hash=step.code_hash if step.code_mode == "auto" else None,
     )
@@ -464,6 +479,7 @@ def _plan_join(
                 step.name,
                 step.version,
                 input_hash,
+                pipeline_id,
                 params_hash=params_hash if accepts_params else None,
                 code_hash=step.code_hash if step.code_mode == "auto" else None,
             )
@@ -764,7 +780,7 @@ def _plan_step(
             else:
                 parent_hash = ROOT_LANE  # root expand: anchor keyed on the constant
             anchor_address = expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params
+                step, parent_hash, params_hash, accepts_params, pipeline_id
             )
             anchor_addrs.append(anchor_address)
             resolved_targets.append(("expand", coord, it, parent_mats, anchor_address, parent_hash))
@@ -774,6 +790,7 @@ def _plan_step(
                 step.name,
                 step.version,
                 input_hash,
+                pipeline_id,
                 params_hash=params_hash if accepts_params else None,
                 code_hash=step.code_hash if step.code_mode == "auto" else None,
             )
@@ -808,7 +825,7 @@ def _plan_step(
                 identities = []
                 for child_hash in children_hashes:
                     input_hash, child_addr = expand_child_identity(
-                        step, child_hash, params_hash, accepts_params
+                        step, child_hash, params_hash, accepts_params, pipeline_id
                     )
                     identities.append((child_hash, input_hash, child_addr))
                     all_child_addrs.append(child_addr)

@@ -389,7 +389,7 @@ def _process_decision(
             action="execute",
             input_hash=parent_hash,
             output_address=expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params
+                step, parent_hash, params_hash, accepts_params, pipeline_id
             ),
             parent_mats=decision.parent_mats,
         )
@@ -402,7 +402,7 @@ def _process_decision(
 
         for child_hash, value in children:
             input_hash, child_address = expand_child_identity(
-                step, child_hash, params_hash, accepts_params
+                step, child_hash, params_hash, accepts_params, pipeline_id
             )
             child = StepDecision(
                 coordinate=expand_child_coord(child_hash),
@@ -446,7 +446,7 @@ def _process_decision(
             seen.add(child_hash)
             lane_key = expand_child_coord(child_hash)
             input_hash, child_address = expand_child_identity(
-                step, child_hash, params_hash, accepts_params
+                step, child_hash, params_hash, accepts_params, pipeline_id
             )
             children.append((idx, child_hash, lane_key, input_hash, child_address))
 
@@ -512,7 +512,7 @@ def _process_decision(
             action="execute",
             input_hash=parent_hash,
             output_address=expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params
+                step, parent_hash, params_hash, accepts_params, pipeline_id
             ),
             parent_mats=decision.parent_mats,
         )

@@ -45,7 +45,7 @@ One file per step output. Append-only rows = one attempted output per lane:
 columns:
   row_id         string          deterministic hash of (pipeline|step|lane_key|ts)
   lane_key       string          the coordinate through the DAG
-  address        string          hash(step, version, input_hash[, params][, code]) — the cache identity
+  address        string          hash(step, version, input_hash[, params][, code], pipeline) — the cache identity
   input_hash     string          hash of the input content the child receives
   output         <inline value or object-store ref>   the actual result
   code_hash      string          source hash at creation time, for drift detection

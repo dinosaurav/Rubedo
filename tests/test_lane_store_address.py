@@ -2,10 +2,12 @@
 
 These tests exercise ``find_latest_filled_by_address``: the lookup that the
 engine's plan phase will use after the Phase 2 reader swap.  Address =
-``hash(step, version, input_hash[, params][, code])`` — the comprehensive
-cache identity.  A lane is reused only if its latest row was written by
-an identical-address computation; a version bump, changed params, or a
-code="auto" code change produces a different address and reads as "miss."
+``hash(step, version, input_hash[, params][, code], pipeline)`` — the
+comprehensive cache identity.  A lane is reused only if its latest row was
+written by an identical-address computation; a version bump, changed
+params, a code="auto" code change, or a different owning pipeline
+produces a different address and reads as "miss" (see
+``tests/test_cross_pipeline_liveness.py`` for the pipeline-scoping case).
 
 Also at the engine level: ``test_lane_store_reuse_via_pipeline_run`` is
 the end-to-end check — runs a small pipeline, inspects the

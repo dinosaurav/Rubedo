@@ -33,9 +33,14 @@ referenced from the column as an `"objects:<hash>"` ref string.
 
 **Output address:**
 Deterministically computed from identity inputs:
-`hash(step, code_version, input_hash[, params][, code])`.  The
+`hash(step, code_version, input_hash[, params][, code], pipeline)`.  The
 comprehensive cache identity — two lanes with the same address are the
-same computation and share one cached result.
+same computation and share one cached result. `pipeline` is a required,
+always-present, always-last segment (not optional like `params`/`code`):
+it scopes every address to its owning pipeline, so an identically
+named+versioned step with identical input in a *different* pipeline
+never shares an address, a liveness row, or a materialization (TODO 33)
+— the copy-a-pipeline-to-experiment case no longer cross-invalidates.
 
 **Lane store (Arrow):**
 One IPC file per step under `.rubedo/tables/<pipeline>/<step>.arrow`.
@@ -175,9 +180,16 @@ directly and, at most, point at this file in general terms.
   lookup keyed on the deterministic output address — so it survives
   process restarts, new workers, and separate runs equally.
 - **(1.2)** Content-addressing does the rest of the work implicitly: an
-  output address is `hash(step, code_version, input_hash[, params][, code])`
-  — identical inputs always land on the same address, so a cache hit is
-  found by construction, not by a lookup table someone has to maintain.
+  output address is
+  `hash(step, code_version, input_hash[, params][, code], pipeline)`
+  — identical inputs *within the same pipeline* always land on the same
+  address, so a cache hit is found by construction, not by a lookup
+  table someone has to maintain. `input_hash` and lane-key minting
+  (`row-<hash>`) stay pipeline-free by design — only the output address
+  is pipeline-scoped (TODO 33) — so identical payload content still
+  mints the identical lane key and the identical `input_hash` in any
+  pipeline; only the resulting output address, and hence liveness/reuse,
+  is scoped per pipeline.
 - **(1.3)** The generations protocol extends this across time: identical
   bytes reuse (no new Arrow row); only genuinely different bytes
   supersede (a new Arrow row is appended). A pruned lane whose input
@@ -219,8 +231,8 @@ directly and, at most, point at this file in general terms.
 ### 3 — Order and parallelism never change results
 
 - **(3.1)** Output addresses are computed from `step`, `version`,
-  `input_hash`, and optionally `params`/`code` — never from wall-clock
-  order, thread scheduling, or worker assignment. Two runs of the same
+  `input_hash`, `pipeline`, and optionally `params`/`code` — never from
+  wall-clock order, thread scheduling, or worker assignment. Two runs of the same
   pipeline over the same inputs always produce the same addresses
   regardless of how the work was scheduled.
 - **(3.2)** `schedule="broad"` (stage-at-a-time) and `schedule="deep"`

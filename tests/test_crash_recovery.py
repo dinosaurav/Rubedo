@@ -81,7 +81,12 @@ def test_crash_before_processing(setup_teardown):
     def crashing_processor(scan: dict) -> str:
         raise Exception("Crash before processing completes!")
 
-    p_crashing = pipeline(name="p-crash", steps=[scan, crashing_processor])
+    # Same pipeline name as p_dummy: this is a crash-recovery re-run of the
+    # *same* pipeline (TODO 33 scopes addresses per pipeline, so a
+    # differently-named pipeline would legitimately not share scan's
+    # cached output — that's the bug being fixed, not what this test is
+    # about).
+    p_crashing = pipeline(name="p-dummy", steps=[scan, crashing_processor])
 
     summary = p_crashing.run(workers=1)
     # scan(a)/(b) succeed; both crashing(a)/(b) fail -> partial success.
@@ -198,12 +203,16 @@ def test_per_segment_flush_preserves_earlier_steps(setup_teardown):
     assert "step_b" in step_names
     assert "crash_step" not in step_names
 
-    # Rerun with a non-crashing step — earlier steps should reuse
+    # Rerun with a non-crashing step — earlier steps should reuse. Same
+    # pipeline name as `p`: a crash-recovery re-run of the *same* pipeline
+    # (TODO 33 scopes addresses per pipeline, so a differently-named
+    # pipeline would legitimately miss scan/step_a/step_b's cache — that's
+    # the bug being fixed, not what this test is about).
     @step
     def ok_step(step_b: dict):
         return {"result": step_b["len"] * 2}
 
-    p2 = pipeline(name="seg-flush-ok", steps=[scan, step_a, step_b, ok_step])
+    p2 = pipeline(name="seg-flush", steps=[scan, step_a, step_b, ok_step])
     summary2 = p2.run(workers=1)
     assert summary2.status == "completed"
     # scan, step_a, step_b all reused (2 lanes each = 6), ok_step created (2)

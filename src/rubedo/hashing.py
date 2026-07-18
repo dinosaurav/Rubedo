@@ -35,15 +35,23 @@ def compute_output_address(
     step: str,
     code_version: str,
     input_hash: str,
+    pipeline: str,
     params_hash: Optional[str] = None,
     code_hash: Optional[str] = None,
 ) -> str:
     """Cache identity: version + data, plus run params for
-    steps that consume them and the source hash for steps with code='auto'.
-    Optional segments are labeled so their absence/presence can't collide."""
+    steps that consume them, the source hash for steps with code='auto',
+    and the owning pipeline name — so an identically named/versioned step
+    with identical input in a different pipeline never shares a liveness
+    row (TODO 33). `pipeline` is required (never optional-with-default):
+    every address in the system must be pipeline-scoped, with no call
+    site able to silently mint an unscoped one. Optional segments are
+    labeled so their absence/presence can't collide; `pipeline` is always
+    present and always appended last."""
     combined = f"{step}:{code_version}:{input_hash}"
     if params_hash is not None:
         combined += f":params:{params_hash}"
     if code_hash is not None:
         combined += f":code:{code_hash}"
+    combined += f":pipeline:{pipeline}"
     return hashlib.sha256(combined.encode("utf-8")).hexdigest()

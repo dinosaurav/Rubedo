@@ -156,11 +156,15 @@ class InputHashUsage(Base):
     invalidation — all three mean "no filled Arrow row to reuse").
 
     ``address`` is the comprehensive cache identity
-    (``hash(step, version, input_hash[, params][, code])``) and the
-    primary key.  The caller already knows ``step_name`` and
-    ``pipeline_id`` (it's planning a specific step in a specific
-    pipeline), so those don't need to be stored here — the Arrow file
-    path is ``tables/<pipeline>/<step>.arrow``, constructed by the caller.
+    (``hash(step, version, input_hash[, params][, code], pipeline)``) and
+    the primary key.  ``pipeline`` is folded into the address itself (a
+    required, always-present segment — TODO 33), so this table needs no
+    ``pipeline_id`` column to stay scoped: two pipelines with an
+    identically named+versioned step and identical input mint distinct
+    addresses and never share a row here.  The Arrow file path is
+    ``tables/<pipeline>/<step>.arrow``, constructed by the caller, who
+    already knows ``step_name`` and ``pipeline_id`` (it's planning a
+    specific step in a specific pipeline).
 
     Mutability: this table is the one *non-append-only* ledger table —
     ``last_run_id`` and ``fulfilled`` legitimately update (claim at plan

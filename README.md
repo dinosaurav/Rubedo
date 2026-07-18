@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Status: pre-1.0](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#project-status)
 
-Rubedo is a local-first batch engine: you define a DAG of Python steps over a collection of items — files in a folder, rows in a CSV, rows in a SQL table — and Rubedo runs it with **dbt-style state**. Every step output is stored immutably at a deterministic address (`hash(step, code_version, input_hash)`), so re-running a pipeline recomputes only what actually changed. An append-only run ledger records what happened to every item in every run, and lineage edges connect each output to the outputs it was derived from.
+Rubedo is a local-first batch engine: you define a DAG of Python steps over a collection of items — files in a folder, rows in a CSV, rows in a SQL table — and Rubedo runs it with **dbt-style state**. Every step output is stored immutably at a deterministic address (`hash(step, code_version, input_hash, pipeline)`), so re-running a pipeline recomputes only what actually changed. The pipeline name is folded into the address, so two pipelines with an identically named/versioned step and identical input never share a cache entry or a liveness row. An append-only run ledger records what happened to every item in every run, and lineage edges connect each output to the outputs it was derived from.
 
 It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid APIs — where "just re-run the script" means paying for everything again and hoping the results come back the same.
 

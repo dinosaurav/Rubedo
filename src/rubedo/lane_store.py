@@ -42,7 +42,7 @@ _SCHEMA_FIELDS: List[Tuple[str, str, bool]] = [
     # (name, pyarrow type string, nullable)
     ("row_id", "string", False),
     ("lane_key", "string", False),
-    ("address", "string", False),  # output_address: hash(step, version, input_hash[, params][, code])
+    ("address", "string", False),  # output_address: hash(step, version, input_hash[, params][, code], pipeline)
     ("input_hash", "string", False),
     ("code_version", "string", True),  # step version string, for selection queries
     ("output", "dynamic", True),  # native Arrow type per-step, or string for mixed/spilled
@@ -625,8 +625,10 @@ def find_latest_filled_by_address(
     only calls this to retrieve the content on a confirmed reuse hit.
 
     ``address`` is the comprehensive cache identity
-    (``hash(step, version, input_hash[, params][, code])`` — see
-    ``hashing.compute_output_address``).
+    (``hash(step, version, input_hash[, params][, code], pipeline)`` — see
+    ``hashing.compute_output_address``). ``pipeline`` is folded into the
+    address itself, so this lookup is naturally scoped per pipeline even
+    though the file it reads is already pipeline-specific.
     """
     rows = _rows_for_lane(pipeline_id, step_name, lane_key)
     candidates = [r for r in rows if r["address"] == address]

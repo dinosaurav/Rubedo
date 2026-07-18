@@ -112,7 +112,9 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   topological order); `Pipeline.describe()` delegates here.
 - `src/rubedo/planning.py` — read-only plan phase: `_plan_step` emits a
   `StepDecision` (reuse/execute/blocked/pending/filtered) per lane;
-  addresses = `hash(step, version, input_hash[, params][, code])`;
+  addresses = `hash(step, version, input_hash[, params][, code], pipeline)`
+  (`pipeline` is required, always-last — TODO 33 scopes every address to
+  its owning pipeline);
   staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
   Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
   `lane_store.find_latest_filled_by_address` (content retrieval) via

@@ -39,12 +39,18 @@ content-addressed `row-<hash>` lane per yielded payload, and `join` mints an
 Every step's output is stored at a **deterministic address**:
 
 ```
-hash(step, version, input_hash[, params_hash][, code_hash])
+hash(step, version, input_hash[, params_hash][, code_hash], pipeline)
 ```
 
 Concretely (`hashing.compute_output_address`): `step`, `version`, and
 `input_hash` are always in; `params_hash` is appended only for steps that
-declare a `params` argument, and `code_hash` only for `code="auto"` steps.
+declare a `params` argument, and `code_hash` only for `code="auto"` steps;
+`pipeline` (the owning pipeline's name) is always appended last, and unlike
+`params_hash`/`code_hash` it is required, never optional — so no address can
+be minted without it. This scopes every address to its pipeline: two
+pipelines with an identically named+versioned step and identical input never
+collide on an address, a cache hit, or a liveness row (renaming a pipeline
+invalidates its own cache, the same way renaming a step does).
 Each optional segment is labeled so its presence or absence can't collide
 with another combination. The whole thing is SHA-256'd. This is what makes
 caching **order-independent and rerun-safe**: the address doesn't care when
