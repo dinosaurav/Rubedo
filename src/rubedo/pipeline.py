@@ -304,6 +304,11 @@ class Pipeline:
 
         Requires ``name=`` (no function ``__name__`` to infer from).
         """
+        if len(join_on) < 2:
+            raise ValueError(
+                f"Step '{name}': in_shape='join' requires at least two parents in "
+                "join_on (N-way star join on a shared value)"
+            )
         s = StepSpec(
             name=name,
             fn=None,  # type: ignore[arg-type]
@@ -329,6 +334,10 @@ class Pipeline:
 
         Requires ``name=`` (no function ``__name__`` to infer from).
         """
+        if len(depends_on) < 1:
+            raise ValueError(
+                f"Step '{name}': union requires at least one parent in depends_on"
+            )
         s = StepSpec(
             name=name,
             fn=None,  # type: ignore[arg-type]

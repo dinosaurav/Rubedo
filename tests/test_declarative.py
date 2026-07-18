@@ -116,6 +116,18 @@ def test_declarative_join_requires_name():
         p.join(join_on={"a": "k", "b": "k"})
 
 
+def test_declarative_join_rejects_empty_join_on():
+    p = pipeline(name="dj4", steps=[])
+    with pytest.raises(ValueError, match="Step 'j': .*at least two parents"):
+        p.join(name="j", join_on={})
+
+
+def test_declarative_join_rejects_single_parent():
+    p = pipeline(name="dj5", steps=[])
+    with pytest.raises(ValueError, match="Step 'j': .*at least two parents"):
+        p.join(name="j", join_on={"a": "x"})
+
+
 # ---------------------------------------------------------------------------
 # p.union()
 # ---------------------------------------------------------------------------
@@ -187,3 +199,9 @@ def test_declarative_union_single_parent_passthrough():
     assert len(outs) == 2
     vals = {v["v"] for v in outs.values()}
     assert vals == {10, 20}
+
+
+def test_declarative_union_rejects_no_parents():
+    p = pipeline(name="du4", steps=[])
+    with pytest.raises(ValueError, match="Step 'u': .*at least one parent"):
+        p.union(name="u", depends_on=[])
