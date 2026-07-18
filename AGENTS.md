@@ -78,7 +78,9 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   `"@all"`) / `expand` (`in_shape="one", out_shape="many"` — 1:N; the fn
   yields payloads, minting content-addressed `row-<hash>` child lanes; **no
   `depends_on` = a root = a source** that yields the initial lanes and
-  re-runs every run, so `pipeline(steps=[...])` needs no separate ingestion
+  is anchor-cached by default — sources that watch external state declare
+  `check_cache=False` to re-enumerate each run — so `pipeline(steps=[...])`
+  needs no separate ingestion
   concept — a parentless generator `@step` infers this shape automatically)
   / `join` (`in_shape="join", out_shape="many"` — N-way equijoin on
   `join_on={parent: field}`, minting `a|b|…` pair lanes; the field is
@@ -190,8 +192,9 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   version ranges via `packaging.SpecifierSet`) + the materialization query.
   Output-field selection scans the Arrow `output` struct column directly
   (no SQLite `materialization_index` table).
-- `src/rubedo/server.py` — read-only FastAPI + invalidation endpoint.
-  Ledger-derived only; never imports user pipelines. Serves the built web
+- `src/rubedo/server.py` — FastAPI server: read-only API + UI plus one
+  write endpoint (`POST /api/selection/invalidate` — unauthenticated,
+  meant for local use). Ledger-derived only; never imports user pipelines. Serves the built web
   UI from `web_static/` (SPA fallback to `index.html`); `rubedo serve`
   wraps uvicorn so one command gives the full dashboard. The web app's
   `api.ts` uses a relative `/api` URL — same-origin in production, proxied

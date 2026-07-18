@@ -26,8 +26,10 @@ the point in themselves.
 ## Vocabulary
 
 **Object/output bytes:**
-Immutable stored result — a blob in the content-addressed object store
-(`objects/`), or (future) an inline value in the Arrow lane store.
+Immutable stored result — an inline value in the Arrow lane store's
+`output` column (the common case), or a blob in the content-addressed
+object store (`objects/`) for values that spill (large/binary),
+referenced from the column as an `"objects:<hash>"` ref string.
 
 **Output address:**
 Deterministically computed from identity inputs:
@@ -38,13 +40,23 @@ same computation and share one cached result.
 **Lane store (Arrow):**
 One IPC file per step under `.rubedo/tables/<pipeline>/<step>.arrow`.
 Each row is one successful computation: `row_id, lane_key, address,
-input_hash, content_hash, content_type, output_path, code_hash, ts,
-run_id, filtered`.  Pure data — no tombstones, no liveness, no `is_live`
-column.  The file is append-only; rows stack across runs.
+input_hash, code_version, output, output_identity, content_type,
+code_hash, ts, run_id, filtered`.  `output` holds the value itself in a
+native Arrow type (struct for dicts, int64, string) or an
+`"objects:<hash>"` ref string for spilled values; `output_identity` is
+the value's content-identity hash, computed once at commit time and read
+back at plan time (so Arrow's struct null-fill for heterogeneous dicts
+can never shift identity).  Pure data — no tombstones, no liveness, no
+`is_live` column.  The file is append-only; rows stack across runs, and
+a row is written only for created/refreshed outputs — pure reuse writes
+nothing.
 
 **Input hash usage (liveness gate):**
-The `input_hash_usages` SQLite table — one row per `(address, step,
-pipeline)`.  `fulfilled=True` means a filled Arrow row exists (reuse);
+The `input_hash_usages` SQLite table — one row per output address
+(`address` is the primary key; the planner already knows which pipeline
+and step it is asking about, and constructs the Arrow file path
+`tables/<pipeline>/<step>.arrow` itself).  `fulfilled=True` means a
+filled Arrow row exists (reuse);
 `fulfilled=False` means recompute (covers crash, in-flight claim, and
 invalidation — all three mean "no filled Arrow row to reuse").  This is
 the single source of truth for liveness.  The table is the one
@@ -92,8 +104,11 @@ that its parents are roots. Conceptually a source is the root
 
 **Root (head of a pipeline):**
 Any step with no `depends_on` originates lanes, and its `out_shape` sets how
-many: an `expand` root yields N (a source-shaped root; re-runs every run)
-or a `map` root mints a single `@root` lane whose input is its params.
+many: an `expand` root yields N (a source-shaped root — anchor-cached
+like any expand, so the generator is not re-run while its identity is
+unchanged; sources that watch external state declare `check_cache=False`
+to re-enumerate each run) or a `map` root mints a single `@root` lane
+whose input is its params.
 A pipeline needs at least one root to originate lanes.
 
 **Run-coordinate status:**

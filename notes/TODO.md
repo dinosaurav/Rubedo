@@ -20,10 +20,9 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 32 → 30 → 31 → 33 → 34 — all build-ready (both
-open decisions ratified by the owner 2026-07-18; 29 shipped
-2026-07-18). Rationale: 32 is cheap and unblocks everything else
-(stale invariants actively mislead whoever builds the rest); 30 and 31
+**Priority order:** 30 → 31 → 33 → 34 — all build-ready (both
+open decisions ratified by the owner 2026-07-18; 29 and 32 shipped
+2026-07-18). Rationale: 30 and 31
 are user-visible correctness with settled fixes; 33 shrank to a
 one-function change once the address-salt variant was ratified (it
 still clears every cache, so land it before new history accumulates);
@@ -32,31 +31,6 @@ stays demand-gated — 8 is independently buildable if a cluster user
 shows up first.
 
 ──────────────────────────────────────────────────────────────────────
-
-## 32. Docs reconciliation: invariants.md + README vs shipped code
-
-Three places where the written guarantees drifted from the code. Do
-this early — `notes/invariants.md` is the file every other item's
-implementer is told to read first, and two of its claims are now false:
-
-- `notes/invariants.md:41` still lists the pre-rewrite Arrow schema
-  (`content_hash`, `output_path`) — the shipped schema is `output` +
-  `output_identity` + `content_type` (see `lane_store.py`'s module
-  docstring, which is current).
-- `notes/invariants.md:46` says `input_hash_usages` is one row per
-  `(address, step, pipeline)` — the schema's primary key is `address`
-  alone (`src/rubedo/models.py`, `InputHashUsage`). Make the doc match
-  the code for now; item 33 is where the *key itself* may change, and
-  its commit updates the doc again.
-- `README.md:247` calls the web dashboard "read-only" without
-  qualification, but the server exposes
-  `POST /api/selection/invalidate` (`src/rubedo/server.py:621`). The
-  *UI* is read-only; the API is not. Say exactly that, in README and
-  in `AGENTS.md`'s server bullet, and note the endpoint is unauthenticated
-  and intended for local use.
-
-Acceptance: the three passages match the code; `mkdocs build --strict`
-green; no engine changes in the commit.
 
 ## 30. `/api/current-outputs` silently drops steps
 
@@ -570,6 +544,19 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — item 32 shipped (docs reconciliation, wider than
+  specced):** invariants.md fixed (Arrow schema now lists
+  `output`/`output_identity`; IHU keyed by address alone; inline values
+  no longer "(future)"); README + AGENTS.md now say the UI is read-only
+  but the API has the unauthenticated local-use invalidate endpoint.
+  Plus a fourth drift found during verification: "sources re-run every
+  run" was false everywhere — roots are anchor-cached
+  (tests/test_expand.py pins it) and `check_cache=False` is the rescan
+  opt-in, but docs/concepts/sources.md's recipes omitted it (a
+  folder/CSV/SQL/S3 source as documented would never notice new items).
+  All recipes and prose fixed across sources.md, README, AGENTS.md,
+  invariants.md; the fixed-list root case documented as the one that
+  correctly stays anchored.
 - **2026-07-18 — item 29 shipped:** expand-table Arrow rows now record
   the creating run's id — `_process_decision` gained `run_id` beside
   `pipeline_id` (scheduler passes `ctx.run_id`), the batch writes it,

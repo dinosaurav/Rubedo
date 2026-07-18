@@ -94,7 +94,7 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step
+@p.step(check_cache=False)   # re-read the CSV every run
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -244,7 +244,7 @@ rubedo gc --max-bytes 2GiB --delete   # apply it
 
 Retention deletes **bytes, never facts**: a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove). [notes/retention.md](notes/retention.md) is the full model — policies, the demote/sweep phases, guarantees, and the recompute trade-off.
 
-The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors:
+The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors. (The UI never writes; the API beneath it is read-only except for one endpoint, `POST /api/selection/invalidate`, which is unauthenticated and meant for local use — treat `rubedo serve` as a local tool, not something to expose publicly.)
 
 ```bash
 rubedo serve                    # API + UI on http://127.0.0.1:8000

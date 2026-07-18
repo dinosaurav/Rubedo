@@ -23,11 +23,18 @@ def double(rows):
     return rows["n"] * 2
 ```
 
-A source-shaped step re-runs its generator on every `p.run()` — there's no
-enumeration to cache, only the resulting lanes are (see
-[shapes.md](shapes.md#expand-1n-fan-out) for the anchor mechanism that skips
-re-running an *unchanged* expand's function on a re-run). `p.describe()` and
-the definition snapshot record the step's name, never its code.
+A source watching the outside world wants `check_cache=False`. By default
+a root generator's fan-out is **anchor-cached** like any expand (see
+[shapes.md](shapes.md#expand-1n-fan-out)): the generator runs once and is
+then skipped until its identity (code version, params) changes — right for
+a fixed in-code list like `rows` above, wrong for a folder or table you
+expect to change, where only a fresh enumeration can notice new, edited,
+or deleted items. `check_cache=False` re-runs the generator on every
+`p.run()`; the lanes it mints stay content-addressed, so a rescan that
+finds nothing new still reuses everything downstream. The recipes below
+all watch external state, so they all declare it. (The definition snapshot
+records the step's source text for display; the engine never imports or
+executes anything from a snapshot.)
 
 **Yield content, not references.** Whatever the generator yields is what
 gets hashed to mint the lane. A recipe that yielded a path or a row number
@@ -46,7 +53,7 @@ from rubedo import pipeline
 
 p = pipeline(name="docs")
 
-@p.step
+@p.step(check_cache=False)   # rescan the folder every run
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
@@ -73,7 +80,7 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step
+@p.step(check_cache=False)   # re-read the CSV every run
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -93,7 +100,7 @@ from rubedo import pipeline
 
 p = pipeline(name="orders-rollup")
 
-@p.step
+@p.step(check_cache=False)   # re-query the table every run
 def orders():
     engine = create_engine("postgresql://...")
     with engine.connect() as conn:
@@ -127,7 +134,7 @@ from rubedo import pipeline
 
 p = pipeline(name="ingest")
 
-@p.step
+@p.step(check_cache=False)   # re-LIST the bucket every run
 def objects():
     client = boto3.client("s3")
     paginator = client.get_paginator("list_objects_v2")
@@ -201,12 +208,12 @@ is just another parentless generator step; nothing extra to declare:
 ```python
 p = pipeline(name="enrich")
 
-@p.step
+@p.step(check_cache=False)
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step
+@p.step(check_cache=False)
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -228,8 +235,8 @@ See [shapes.md](shapes.md) for the `join` step this setup feeds, and
 join → expand → `group_key` pipeline over two CSV sources.
 
 A pipeline needs no source-shaped root at all, as long as some root
-originates lanes — either an `expand` root (a generator that mints N lanes
-and re-runs every run, as above) or a source-less `map` root (mints one
+originates lanes — either an `expand` root (a generator that mints N
+lanes, as above) or a source-less `map` root (mints one
 lane from its `params`). See
 [shapes.md](shapes.md#the-source-less-map-root).
 
