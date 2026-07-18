@@ -88,6 +88,7 @@ dev = [
     "tree-sitter>=0.26.0",
     "tree-sitter-python>=0.25.0",
     "uvicorn",
+    "mkdocstrings[python]>=1.0.6",
 ]
 
 [tool.mypy]

@@ -23,7 +23,7 @@ and anything else is `map` (`one`/`one`, the default). An explicit `shape=`
 (or `in_shape=`/`out_shape=`) always overrides the
 inference, and an explicit value that contradicts the code (a generator
 decorated `shape="map"`, say) raises rather than silently misbehaving. See
-[API reference: `@step`](../reference/api.md#shape-and-depends_on-inference)
+[API reference: `@step`](../reference/api/step.md)
 for the full inference rules, including how a step's `depends_on` is
 likewise inferred from its parameter names.
 

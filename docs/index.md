@@ -48,7 +48,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 
 ## Reference
 
-- **[Python API](reference/api.md)** — every public function and class.
+- **[Python API](reference/api/index.md)** — every public function and class.
 - **[CLI](reference/cli.md)** — every subcommand and flag.
 - **Design notes** — the canonical [invariants](notes/invariants.md), the [producer model](notes/producer-model.md), and the [retention model](notes/retention.md), published verbatim from the repo.
 

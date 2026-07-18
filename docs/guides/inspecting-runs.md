@@ -149,7 +149,7 @@ rubedo show run_39786b4eeef4 --failed
 
 See [`../reference/cli.md`](../reference/cli.md#rubedo-show) for the full
 `show` reference, and
-[`../reference/api.md`](../reference/api.md) for `RunSummary.failures()`,
+[`../reference/api/index.md`](../reference/api/index.md) for `RunSummary.failures()`,
 the library equivalent.
 
 ## The web dashboard (read-only)

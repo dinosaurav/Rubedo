@@ -10,6 +10,21 @@ edit_uri: edit/main/docs/
 extra_css:
   - stylesheets/extra.css
 
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: null
+            members_order: source
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            separate_signature: true
+            filters: ["!^_"]
+
 theme:
   name: material
   font: false
@@ -78,7 +93,12 @@ nav:
     - Inspecting Runs: guides/inspecting-runs.md
     - Retention & GC: guides/retention.md
   - Reference:
-    - Python API: reference/api.md
+    - Python API:
+      - Overview: reference/api/index.md
+      - Steps: reference/api/step.md
+      - Pipelines: reference/api/pipeline.md
+      - Selection & Invalidation: reference/api/selection.md
+      - GC & Storage: reference/api/gc.md
     - CLI: reference/cli.md
   - Design Notes:
     - Invariants: notes/invariants.md

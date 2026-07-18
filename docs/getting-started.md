@@ -178,6 +178,6 @@ uses itself.
   the CLI, the dashboard.
 - [Guide: retention](guides/retention.md) — `retention=N` and `rubedo gc`.
 - [Examples](examples.md) — a tour of the runnable example pipelines.
-- [API reference](reference/api.md) — every public function and class.
+- [API reference](reference/api/index.md) — every public function and class.
 - [CLI reference](reference/cli.md) — `rubedo ls`, `show`, `invalidate`,
   `trace`, `du`, `gc`.

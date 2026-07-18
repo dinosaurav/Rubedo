@@ -132,5 +132,5 @@ override with `OPENROUTER_VISION_MODEL` / `OPENROUTER_TEXT_MODEL`).
 `github_health` works unauthenticated but is happier with `GITHUB_TOKEN` set.
 
 See the [tutorial](tutorial.md) for a from-scratch walkthrough of the same
-ideas, and the [API reference](reference/api.md) for every function and
+ideas, and the [API reference](reference/api/index.md) for every function and
 parameter these examples use.
