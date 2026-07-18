@@ -20,36 +20,14 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 31 → 33 → 34 — all build-ready (both
-open decisions ratified by the owner 2026-07-18; 29, 32, and 30 shipped
-2026-07-18). Rationale: 31
-is user-visible correctness with a settled fix; 33 shrank to a
-one-function change once the address-salt variant was ratified (it
-still clears every cache, so land it before new history accumulates);
-34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
+**Priority order:** 33 → 34 — both build-ready (ratified by the
+owner 2026-07-18; 29–32 all shipped 2026-07-18). 33 is the ratified
+address salt (clears every cache, so land it before new history
+accumulates); 34's guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
 stays demand-gated — 8 is independently buildable if a cluster user
 shows up first.
 
 ──────────────────────────────────────────────────────────────────────
-
-## 31. Declarative `join()`/`union()` bypass construction-time validation
-
-`Pipeline.join` and `Pipeline.union` (`src/rubedo/pipeline.py:296,323`)
-construct `StepSpec` directly, skipping the validation `step()` gives
-decorated steps. An empty or one-parent `join_on`, or a `union` with no
-parents, is accepted at declaration and fails later inside planning
-with an internal error instead of a clear `ValueError` at build time.
-
-**Fix:** apply the same rules `step()` enforces — `join_on` needs ≥2
-parents, `union` needs ≥1 — as inline checks at the top of each
-declarative constructor (the checks are two lines each; no shared
-helper needed, and `spec.py` stays untouched per the flagship rule).
-
-Acceptance: `p.join(name="j", join_on={})` and
-`p.join(name="j", join_on={"a": "x"})` and
-`p.union(name="u", depends_on=[])` each raise `ValueError` at
-declaration naming the step and the rule; messages match the existing
-error style; full suite green.
 
 ## 34. `home=` is process-global — guard slice  **[slice settled; end-state needs owner decision]**
 
@@ -521,6 +499,10 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — item 31 shipped:** declarative p.join()/p.union() now
+  validate at declaration — join_on needs >=2 parents, union >=1 —
+  raising step()-style ValueErrors instead of failing later inside
+  planning. Three tests in tests/test_declarative.py; spec.py untouched.
 - **2026-07-18 — item 30 shipped:** /api/current-outputs now groups by
   (pipeline_id, step_name, source_id, coordinate) — one row per (step,
   lane), no cross-pipeline collapse. Plus a second bug found while
