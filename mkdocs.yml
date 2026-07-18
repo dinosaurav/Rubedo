@@ -17,12 +17,20 @@ plugins:
         python:
           paths: [src]
           options:
-            docstring_style: null
+            # google so Args/Returns sections render as structured
+            # parameter lists (the null style left "Args:" as raw prose,
+            # which is why the API pages looked unlike other Python docs).
+            docstring_style: google
+            docstring_section_style: table
             members_order: source
             show_root_heading: true
             show_root_full_path: false
             show_signature_annotations: true
             separate_signature: true
+            show_source: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            merge_init_into_class: true
             filters: ["!^_"]
 
 theme:
@@ -56,6 +64,7 @@ theme:
 
 markdown_extensions:
   - admonition
+  - tables
   - pymdownx.details
   - pymdownx.superfences:
       custom_fences:

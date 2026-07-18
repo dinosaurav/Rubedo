@@ -1,12 +1,15 @@
-/* Rubedo docs theme — mirrors the marketing site's "blueprint punk" palette:
-   white/black body, Important Red (#FF0033) accent, Satoshi display font,
-   square (no border-radius) chrome. See marketing/src/index.css. */
+/* Rubedo docs theme — light brand accent on stock Material chrome.
+   Keeps the marketing site's Important Red (#FF0033) for links and a
+   hairline under the header, plus Satoshi for body text — but does NOT
+   paint every heading red or put red borders around code blocks (that
+   read as layout-debug outlines next to typical Material/Python docs).
+   See marketing/src/index.css for the full landing-page palette. */
 
 @import url('https://api.fontshare.com/v2/css?f[]=satoshi@900,700,500,400&display=swap');
 
 :root {
-  --md-text-font: 'Satoshi';
-  --md-code-font: 'SFMono-Regular';
+  --md-text-font: 'Satoshi', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --md-code-font: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
 /* Light (default) scheme — white bg, near-black text, red accent */
@@ -26,7 +29,7 @@
 
   --md-typeset-a-color: #ff0033;
 
-  --md-code-bg-color: #f9f9f9;
+  --md-code-bg-color: #f5f5f5;
   --md-code-fg-color: #1a1a1a;
 }
 
@@ -69,43 +72,6 @@
 
 [data-md-color-scheme="slate"] .md-tabs {
   border-bottom-color: #ff3355;
-}
-
-/* Square, sharp-edged chrome instead of Material's rounded defaults */
-.md-typeset code,
-.md-typeset pre,
-.md-typeset .highlight,
-.md-typeset .admonition,
-.md-typeset details,
-.md-search__form,
-.md-typeset .tabbed-labels,
-.md-typeset table:not([class]) {
-  border-radius: 0;
-}
-
-.md-typeset pre > code {
-  border-radius: 0;
-}
-
-.md-typeset code {
-  border: 1px solid rgba(255, 0, 51, 0.25);
-}
-
-.md-typeset pre code {
-  border: none;
-}
-
-.md-typeset .highlight {
-  border: 1px solid #ff0033;
-}
-
-[data-md-color-scheme="slate"] .md-typeset .highlight {
-  border-color: #ff3355;
-}
-
-.md-typeset h1,
-.md-typeset h2 {
-  color: var(--md-accent-fg-color);
 }
 
 .md-nav__link--active,

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mypy's analysis target is now Python 3.12 so numpy≥2.5's PEP 695 stub
   syntax parses under either a 3.11 or 3.12 interpreter. Runtime floor
   stays `requires-python = ">=3.11"`.
+- Docs API pages now render like typical Material/mkdocstrings Python
+  references: Google-style `Args`/`Returns` become parameter tables
+  (`docstring_style: google`), the `step()` shape table is real Markdown
+  (and the `tables` extension is enabled), source dumps are off, and the
+  custom CSS no longer paints every heading/code block in red (kept the
+  brand hairline + link accent only).
 
 ## [0.3.0] - 2026-07-18
 

@@ -209,105 +209,113 @@ def step(
     """Declare a step. Works bare (`@step`) or called (`@step()`,
     `@step(version="2")`, ...) — both mint the same StepSpec.
 
-    name defaults to the decorated function's `__name__`; pass it
-    explicitly only when two steps would otherwise
-    collide (two functions named the same across modules) or when the
-    function name isn't the name you want in the ledger. Two steps that
-    resolve to the same name — whether given explicitly or defaulted from
-    the function — fail loudly at pipeline-construction time, naming both
-    functions so you can tell where the collision came from.
+    `name` defaults to the decorated function's `__name__`; pass it
+    explicitly only when two steps would otherwise collide (two functions
+    named the same across modules) or when the function name isn't the
+    name you want in the ledger. Two steps that resolve to the same name
+    — whether given explicitly or defaulted from the function — fail
+    loudly at pipeline-construction time, naming both functions so you
+    can tell where the collision came from.
 
-    shape, depends_on, join_on, and group_key restate what the code already
-    implies, so each has an inferred default (any explicit value always
-    wins, and an explicit value that contradicts what the code implies
-    raises).  shape= is a convenience alias that translates into the
-    pair (in_shape, out_shape) via the table below; in_shape=/out_shape=
-    are the primary fields on StepSpec and can be passed directly for
-    combinations shape= can't express:
+    `shape`, `depends_on`, `join_on`, and `group_key` restate what the
+    code already implies, so each has an inferred default (any explicit
+    value always wins, and an explicit value that contradicts what the
+    code implies raises). `shape=` is a convenience alias that translates
+    into the pair (`in_shape`, `out_shape`) via the table below;
+    `in_shape=`/`out_shape=` are the primary fields on `StepSpec` and can
+    be passed directly for combinations `shape=` can't express:
 
-      shape= in_shape      out_shape  meaning
-      map    one           one        1:1 (default)
-      reduce aggregate     one        N:1 batch fan-in (all lanes as a dict)
-      expand one           many       1:N fan-out (yields content-addressed lanes)
-      join   join          many       N-way equijoin (mints pair lanes)
+    | `shape=` | `in_shape` | `out_shape` | meaning |
+    | -------- | ---------- | ----------- | ------- |
+    | `map`    | `one`      | `one`       | 1:1 (default) |
+    | `reduce` | `aggregate`| `one`       | N:1 batch fan-in (all lanes as a dict) |
+    | `expand` | `one`      | `many`      | 1:N fan-out (yields content-addressed lanes) |
+    | `join`   | `join`     | `many`      | N-way equijoin (mints pair lanes) |
 
-      - A generator function defaults to out_shape="many" (in_shape stays
-        "one") — it's a fan-out by construction. An explicit out_shape="one"
-        on a generator raises (a generator under map/aggregate is already
-        broken; better to fail at decoration than mid-run).
-      - join_on= explicitly sets in_shape="join", out_shape="many" (not
-        just inference — a conflicting out_shape= raises).  group_key=
-        sets in_shape="aggregate".  A plain @all aggregate (no group_key)
-        still needs an explicit in_shape="aggregate" or shape="reduce" —
-        nothing else implies it.
-      - depends_on (when omitted entirely) is inferred at pipeline-build
-        time (_build_spec, once every sibling step's name is known, not
-        here): every parameter of the decorated function other than
-        `params` must name a registered step and becomes a dependency, in
-        signature order. An unmatched parameter raises ValueError naming
-        the step, the parameter, and the available step names. A signature
-        using *args/**kwargs skips inference entirely (pass depends_on=
-        explicitly if such a step has parents). A step with no non-params
-        parameters is a root. Passing depends_on= explicitly — as a list
-        (unchanged) or as {"param_name": "step_name"} to bind a parent's
-        output to a differently-named parameter — disables inference for
-        that step.
+    - A generator function defaults to `out_shape="many"` (`in_shape`
+      stays `"one"`) — it's a fan-out by construction. An explicit
+      `out_shape="one"` on a generator raises (a generator under
+      map/aggregate is already broken; better to fail at decoration than
+      mid-run).
+    - `join_on=` explicitly sets `in_shape="join"`, `out_shape="many"`
+      (not just inference — a conflicting `out_shape=` raises).
+      `group_key=` sets `in_shape="aggregate"`. A plain `@all` aggregate
+      (no `group_key`) still needs an explicit `in_shape="aggregate"` or
+      `shape="reduce"` — nothing else implies it.
+    - `depends_on` (when omitted entirely) is inferred at pipeline-build
+      time (`_build_spec`, once every sibling step's name is known, not
+      here): every parameter of the decorated function other than
+      `params` must name a registered step and becomes a dependency, in
+      signature order. An unmatched parameter raises `ValueError` naming
+      the step, the parameter, and the available step names. A signature
+      using `*args`/`**kwargs` skips inference entirely (pass
+      `depends_on=` explicitly if such a step has parents). A step with
+      no non-`params` parameters is a root. Passing `depends_on=`
+      explicitly — as a list (unchanged) or as
+      `{"param_name": "step_name"}` to bind a parent's output to a
+      differently-named parameter — disables inference for that step.
 
-    version defaults to "0". It's the step's semantic identity — bump it
-    for deliberate behavior changes (also the escape hatch for edits code
-    hashing can't see, like helpers the step calls). `code="warn"` (the
-    default either way) means an unbumped version never silently
-    recomputes on a code edit — it warns instead (see below) — so leaving
-    version at its default is exactly as safe as pinning it to "1" by hand.
+    `version` defaults to `"0"`. It's the step's semantic identity —
+    bump it for deliberate behavior changes (also the escape hatch for
+    edits code hashing can't see, like helpers the step calls).
+    `code="warn"` (the default either way) means an unbumped version
+    never silently recomputes on a code edit — it warns instead (see
+    below) — so leaving `version` at its default is exactly as safe as
+    pinning it to `"1"` by hand.
 
-    code decides what a *source edit* means, independently of version:
-      - "warn" (default): edits never recompute; reusing an output whose
-        code has since changed produces a loud warning. Right for
-        expensive/non-deterministic steps.
-      - "auto": the function's source hash joins the cache identity, so any
-        edit recomputes — no version bump needed. Right for cheap,
-        deterministic steps.
+    `code` decides what a *source edit* means, independently of version:
 
-    retries re-runs a failed execution up to `retries` extra times, but only
-    for exceptions matching retry_on — narrow it to transient error types
-    (timeouts, rate-limit responses); retrying a deterministic bug on an
-    expensive step just multiplies its cost. retry_delay seconds separate
-    attempts, multiplied by retry_backoff each time. Attempts are recorded
-    as run events.
+    - `"warn"` (default): edits never recompute; reusing an output whose
+      code has since changed produces a loud warning. Right for
+      expensive/non-deterministic steps.
+    - `"auto"`: the function's source hash joins the cache identity, so
+      any edit recomputes — no version bump needed. Right for cheap,
+      deterministic steps.
 
-    rate_limit ("10/min", "2/s", "500/hour") paces the step's executions
-    across all of its workers, retries included.
+    `retries` re-runs a failed execution up to `retries` extra times,
+    but only for exceptions matching `retry_on` — narrow it to transient
+    error types (timeouts, rate-limit responses); retrying a
+    deterministic bug on an expensive step just multiplies its cost.
+    `retry_delay` seconds separate attempts, multiplied by
+    `retry_backoff` each time. Attempts are recorded as run events.
 
-    stale_after ("24h", "30min", "7d") expires outputs: a cached output
-    older than this re-executes on the next run. A recompute that produces
-    different bytes supersedes the old generation; identical bytes refresh
-    its clock. Natural for scraped or otherwise time-sensitive data.
+    `rate_limit` (`"10/min"`, `"2/s"`, `"500/hour"`) paces the step's
+    executions across all of its workers, retries included.
 
-    skip_cache marks an inline util: the step is never materialized or
-    recorded — its identity (version/code/config) fuses into its consumers'
-    cache keys, and it executes lazily (memoized per run) only when a
-    consumer actually runs. Intended for quick, idempotent helpers that
-    exist to keep other steps readable. Values pass in memory without a
-    serialization round-trip, and execution policies (retries, rate_limit)
-    are not applied — if a step needs those, it deserves materialization.
+    `stale_after` (`"24h"`, `"30min"`, `"7d"`) expires outputs: a cached
+    output older than this re-executes on the next run. A recompute that
+    produces different bytes supersedes the old generation; identical
+    bytes refresh its clock. Natural for scraped or otherwise
+    time-sensitive data.
 
-    check_cache (default True) controls whether a step's plan phase checks
-    the cache for a reusable output. When False, the step always re-executes
-    — but still commits its result to cache, so downstream steps can reuse
-    and a subsequent run with check_cache=True sees the fresh output. This
-    is the per-step equivalent of `force=True`: right for source roots that
-    must re-scan the world every run (a filesystem crawl, an API poll) but
-    whose outputs are stable when the upstream hasn't changed (content-
-    addressed lanes collapse onto the same addresses, so downstream reuse
-    is unaffected).
+    `skip_cache` marks an inline util: the step is never materialized or
+    recorded — its identity (version/code/config) fuses into its
+    consumers' cache keys, and it executes lazily (memoized per run)
+    only when a consumer actually runs. Intended for quick, idempotent
+    helpers that exist to keep other steps readable. Values pass in
+    memory without a serialization round-trip, and execution policies
+    (`retries`, `rate_limit`) are not applied — if a step needs those,
+    it deserves materialization.
 
-    on_failed controls the partial fan-in behavior for collective steps
-    (aggregate/join). "use_passed" (default) allows the step to proceed with
-    the surviving lanes if some parent lanes fail or are blocked. "block"
-    halts the entire step if any parent lane is unavailable. Note that
-    "use_passed" is literal: a multi-parent aggregate whose parents all failed
-    for one dep still runs, receiving an empty dict for that kwarg — declare
-    on_failed="block" if every parent must contribute.
+    `check_cache` (default `True`) controls whether a step's plan phase
+    checks the cache for a reusable output. When `False`, the step
+    always re-executes — but still commits its result to cache, so
+    downstream steps can reuse and a subsequent run with
+    `check_cache=True` sees the fresh output. This is the per-step
+    equivalent of `force=True`: right for source roots that must
+    re-scan the world every run (a filesystem crawl, an API poll) but
+    whose outputs are stable when the upstream hasn't changed
+    (content-addressed lanes collapse onto the same addresses, so
+    downstream reuse is unaffected).
+
+    `on_failed` controls the partial fan-in behavior for collective
+    steps (aggregate/join). `"use_passed"` (default) allows the step to
+    proceed with the surviving lanes if some parent lanes fail or are
+    blocked. `"block"` halts the entire step if any parent lane is
+    unavailable. Note that `"use_passed"` is literal: a multi-parent
+    aggregate whose parents all failed for one dep still runs,
+    receiving an empty dict for that kwarg — declare
+    `on_failed="block"` if every parent must contribute.
     """
 
     def decorator(f: Callable) -> StepSpec:
