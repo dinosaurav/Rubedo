@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
+### Added
+- `in_shape="fold"` — a streaming accumulator shape for aggregate-style
+  steps: `fn(acc, value)` is called once per parent lane (sorted by
+  coordinate, so order never changes results) starting from a deep copy
+  of `fold_init` per group. Same plan/address/reuse/ledger semantics as
+  `in_shape="aggregate"`; only execution differs. Requires exactly one
+  parent and a JSON-serializable `fold_init`.
+- `p.join(name=, join_on=)` / `p.union(name=, depends_on=)` — declarative
+  steps with no function body: `join` assembles a nested struct from
+  matched parents, `union` merges lane sets deduped by content hash. Both
+  run with zero per-lane Python calls; caching is automatic.
+- Expand and reduce/aggregate steps can now produce/consume `pa.Table`
+  (Arrow tables) directly instead of a dict-of-lanes: `arrow_reduce=True`
+  (renamed `arrow_aggregate`) hands a reduce/aggregate step a `pa.Table`,
+  and an expand step returning a table mints one lane per row without a
+  Python dict round trip.
+- `check_cache` step field (default `True`) — per-step cache bypass that
+  still commits results, the per-step equivalent of `--force`. Root
+  (source) steps that must notice new/changed external state on every
+  run should set `check_cache=False`; `count_lines`'s scan step is the
+  reference example.
+- `join`/`group_key` read their fields directly from the parent's output
+  struct — `index=` is gone, every output field is searchable without it.
+
+### Changed
+- **Storage rewrite**: the `materializations` / `materialization_index` /
+  `MaterializationLifecycle` SQLite tables are deleted. Step outputs now
+  live in a per-step Arrow IPC lane store (`lane_store.py`) as native
+  Arrow types (structs for dicts, int64/string for scalars) with
+  automatic spill to the object store for large values; liveness is
+  tracked by the existing `input_hash_usages` table plus an
+  address-based `MaterializationEdge`. GC, selection, trace, and the
+  server all read Arrow instead of the old SQLite tables. See
+  `notes/arrow-storage.md`.
+- `StepSpec` carries `in_shape`/`out_shape` as its primary fields instead
+  of a single `shape`: `map` (one/one), `aggregate` (aggregate/one — the
+  step formerly called `reduce`), `expand` (one/many), `join` (join/many).
+  `reduce` → `aggregate` throughout, including `arrow_reduce` →
+  `arrow_aggregate` (old `shape=` kwarg still accepted, translated
+  internally).
+- Root expand (source) steps now reuse from cache across runs instead of
+  always re-executing — the expand anchor is keyed on a constant root
+  lane, so a second run with an unchanged generator emits `reuse` for
+  every child lane instead of re-scanning. Sources that need to detect
+  new or changed external state (folders, CSV/SQL/S3 scans) must opt in
+  with `check_cache=False`; docs (`sources.md`, README) updated to add it
+  to every external-state recipe.
+- Perf: cached fulfilled-address set (one SQLite query per run instead of
+  per step), O(matches) Arrow lookups via a cached address index, an LRU
+  cache for on-disk Arrow tables, parent tables kept in memory across
+  segments instead of re-read, and independent root expands now run
+  concurrently under `schedule="deep"`.
+
+### Fixed
+- Expand steps that return a `pa.Table` now record the creating run's id
+  on every child row — previously those rows landed with an empty
+  `run_id` and the server's "created by run" provenance came back blank
+  for table-returned expand lanes.
+- Output identity is canonicalized so Arrow's union null-fill
+  (heterogeneous dict key sets across lanes) can no longer shift a
+  downstream step's `input_hash`.
+- Dict outputs with differing key sets across lanes now evolve schema
+  correctly (union of fields, nullable for missing) instead of erroring.
+- Cache eviction on invalidation: a plan run immediately after an
+  invalidate now correctly sees the lane as needing recompute.
+
 ## [0.2.6] - 2026-07-15
 
 ### Fixed
