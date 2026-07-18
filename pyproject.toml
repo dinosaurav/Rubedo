@@ -98,4 +98,16 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_unused_configs = true
 
+# numpy>=2.5 ships PEP 695 `type` statements in its .pyi stubs. With
+# python_version = "3.11" (our requires-python floor), mypy refuses to
+# parse those stubs and aborts the whole run under a 3.12+ interpreter —
+# "Type statement is only supported in Python 3.12 and greater". Skip
+# following into numpy (including stubs) so the type gate stays green on
+# either 3.11 or 3.12 without bumping the analysis target. follow_imports_for_stubs
+# is load-bearing: without it the skip does not apply to .pyi files.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 
