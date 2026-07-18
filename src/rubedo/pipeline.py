@@ -170,14 +170,13 @@ def _build_spec(
     ]
     seen = {s.name: s for s in steps}
 
-    # Post-inference validation: a reduce step must have at least one parent.
-    # Checked here (not at decoration time) because a reduce that omits
-    # depends_on= gets its parent from signature inference above — the
-    # decoration-time check would fire before inference runs.
+    # Post-inference validation: a collective step must have at least one
+    # parent. Checked here (not at decoration time) because one declared
+    # without depends_on= gets its parent from signature inference above.
     for s in steps:
-        if s.in_shape == "aggregate" and not s.depends_on:
+        if s.in_shape in ("aggregate", "fold") and not s.depends_on:
             raise ValueError(
-                f"Step '{s.name}': in_shape='aggregate' requires at least one parent "
+                f"Step '{s.name}': in_shape={s.in_shape!r} requires at least one parent "
                 "in depends_on (or a parameter naming a parent step)"
             )
 
@@ -200,7 +199,7 @@ def _build_spec(
                     raise ValueError(
                         f"Step '{s.name}': in_shape='join' cannot have a skip_cache parent ('{dep}')"
                     )
-        if s.in_shape == "aggregate" and s.group_key is not None:
+        if s.in_shape in ("aggregate", "fold") and s.group_key is not None:
             for dep in s.depends_on:
                 parent = name_to_step.get(dep)
                 if parent and parent.skip_cache:

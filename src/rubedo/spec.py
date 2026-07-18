@@ -503,12 +503,32 @@ def step(
                 f"Step '{step_name}': arrow_aggregate=True requires in_shape='aggregate' "
                 f"(got in_shape={resolved_in!r})"
             )
-        # fold_init only on fold (enforced at build: fold without init raises)
+        # fold_init belongs only to fold steps and is part of the static
+        # definition: it is reset for every fold group.  Reject an omitted
+        # value and non-JSON values here so definition snapshots stay safe.
         if fold_init is not None and resolved_in != "fold":
             raise ValueError(
                 f"Step '{step_name}': fold_init is only valid with in_shape='fold' "
                 f"(got in_shape={resolved_in!r})"
             )
+        if resolved_in == "fold":
+            if fold_init is None:
+                raise ValueError(
+                    f"Step '{step_name}': in_shape='fold' requires fold_init"
+                )
+            if len(depends_on_list) > 1:
+                raise ValueError(
+                    f"Step '{step_name}': in_shape='fold' takes exactly one parent "
+                    "(accumulator + one lane value)"
+                )
+            try:
+                import json
+
+                json.dumps(fold_init)
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"Step '{step_name}': fold_init must be JSON-serializable"
+                ) from e
 
         resolved_retry_on = (retry_on,) if isinstance(retry_on, type) and issubclass(retry_on, BaseException) else retry_on
         parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
@@ -605,6 +625,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
                 entry["on_failed"] = s.on_failed
         if s.group_key is not None:
             entry["group_key"] = s.group_key
+        if s.in_shape == "fold":
+            entry["fold_init"] = s.fold_init
         if s.join_on is not None:
             entry["join_on"] = dict(s.join_on)
         if s.executor != "thread":

@@ -310,6 +310,34 @@ def _process_decision(
                     }
                     for dep in step.depends_on
                 }
+        elif step.in_shape == "fold":
+            # A fold is the aggregate cache/plan shape with a different
+            # execution strategy: deterministic, one-lane-at-a-time calls.
+            # The current fold API is unary (accumulator + one parent value).
+            # Copy the declared JSON value: mutable initial accumulators must
+            # reset independently for each group and each execution.
+            import copy
+
+            dep = step.depends_on[0]
+            accumulator = copy.deepcopy(step.fold_init)
+            for lane, ref in sorted(decision.parent_mats[dep].items()):
+                value = _resolve_parent_value(ref, params, memo)
+                if accepts_params:
+                    if pool is not None:
+                        accumulator = pool.submit(
+                            step.fn, accumulator, value,
+                            params=_build_step_params(step, params),
+                        ).result()
+                    else:
+                        accumulator = step.fn(
+                            accumulator, value,
+                            params=_build_step_params(step, params),
+                        )
+                elif pool is not None:
+                    accumulator = pool.submit(step.fn, accumulator, value).result()
+                else:
+                    accumulator = step.fn(accumulator, value)
+            return accumulator
         else:
             kwargs = {
                 _dep_kwarg(step, dep): _resolve_parent_value(

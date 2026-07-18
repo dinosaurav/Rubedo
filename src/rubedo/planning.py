@@ -571,7 +571,7 @@ def _plan_step(
             f"lane-subset planning requires in_shape='one' (step '{step.name}' "
             f"is in_shape='{step.in_shape}')"
         )
-    if step.in_shape == "aggregate":
+    if step.in_shape in ("aggregate", "fold"):
         parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []

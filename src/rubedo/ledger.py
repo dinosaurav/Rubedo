@@ -463,7 +463,7 @@ def _commit_execution_result(
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
             # already has its edges
-            if step.in_shape == "aggregate":
+            if step.in_shape in ("aggregate", "fold"):
                 flat_parents = {
                     f"{dep}:{lane}": ref 
                     for dep, lanes in decision.parent_mats.items() 
