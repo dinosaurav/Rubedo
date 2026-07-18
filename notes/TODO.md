@@ -10,12 +10,24 @@ pre-restructure TODO (with the full Done changelog and every shipped
 item's spec) is archived verbatim at `notes/TODO-obsolete.md` — gaps in
 the numbering below are shipped or retired items, documented there. New
 items continue from **29**. Items tagged **[needs owner decision]** have
-a settled problem statement but an unratified fix — propose, don't build.
+a settled problem statement and a recommended spec but an unratified
+fix — one line from the owner unlocks them; do not build first.
 Unsettled ideas live in **Parked** at the bottom — do not build those
 without a design session.
 
-Items 29–34 come from the 2026-07-18 full-codebase review (external
-agent, findings re-verified against source before being written down).
+Items 29–34 come from the 2026-07-18 full-codebase review; every
+finding and every sub-decision inside the specs (grouping keys, fix
+mechanisms, blast radii) was re-verified against source on 2026-07-18
+before being written down.
+
+**Priority order:** 29 → 32 → 30 → 31 → 34 → 33 (after ratification).
+Rationale: 29 stops bad rows being written *today* (every expand-table
+run adds more provenance-less rows); 32 is cheap and unblocks everything
+else (stale invariants actively mislead whoever builds the rest); 30 and
+31 are user-visible correctness with settled fixes; 34's guard slice is
+a small safety net; 33 is the deepest change and carries a schema reset.
+The cloud chain (7 → 7b → 8 → 13) stays demand-gated — 8 is
+independently buildable if a cluster user shows up first.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -32,10 +44,15 @@ so lane-level provenance (which run created this output?) is broken for
 the optimized path, and the server's object endpoint reports an empty
 `created_by_run_id`.
 
-**Fix:** thread the run id into `_expand_table_outcomes` (it's on the
-`ctx` the caller holds) and write it into the batch, then delete the
-stale "filled by ledger" comment. No schema change — the column exists
-and is simply mis-filled.
+**Fix (settled, verified 2026-07-18):** `_process_decision`
+(`src/rubedo/execution.py:242`) already takes `pipeline_id`, passed as
+`ctx.pipeline_id` by the scheduler (`src/rubedo/scheduler.py:158`), and
+`ctx.run_id` sits right next to it on the run context
+(`src/rubedo/ledger.py:36`). Add a `run_id: str = ""` parameter the
+same way, pass `ctx.run_id` at the call site, and write it into the
+batch inside the `_expand_table_outcomes` closure. Delete the stale
+"filled by ledger" comment. No schema change — the column exists and is
+simply mis-filled.
 
 **Trap:** the non-table expand path and ordinary map commits already
 record `run_id` correctly — don't touch them; assert equality between
@@ -47,6 +64,31 @@ back via `lane_store` and compares against the run row); the object/API
 metadata for such a lane reports the real `created_by_run_id`;
 `uv run pytest -q` green; e2e Created:22 → Reused:22.
 
+## 32. Docs reconciliation: invariants.md + README vs shipped code
+
+Three places where the written guarantees drifted from the code. Do
+this early — `notes/invariants.md` is the file every other item's
+implementer is told to read first, and two of its claims are now false:
+
+- `notes/invariants.md:41` still lists the pre-rewrite Arrow schema
+  (`content_hash`, `output_path`) — the shipped schema is `output` +
+  `output_identity` + `content_type` (see `lane_store.py`'s module
+  docstring, which is current).
+- `notes/invariants.md:46` says `input_hash_usages` is one row per
+  `(address, step, pipeline)` — the schema's primary key is `address`
+  alone (`src/rubedo/models.py`, `InputHashUsage`). Make the doc match
+  the code for now; item 33 is where the *key itself* may change, and
+  its commit updates the doc again.
+- `README.md:247` calls the web dashboard "read-only" without
+  qualification, but the server exposes
+  `POST /api/selection/invalidate` (`src/rubedo/server.py:621`). The
+  *UI* is read-only; the API is not. Say exactly that, in README and
+  in `AGENTS.md`'s server bullet, and note the endpoint is unauthenticated
+  and intended for local use.
+
+Acceptance: the three passages match the code; `mkdocs build --strict`
+green; no engine changes in the commit.
+
 ## 30. `/api/current-outputs` silently drops steps
 
 `get_current_outputs` (`src/rubedo/server.py:257`) groups
@@ -57,9 +99,13 @@ deepest step's row and drops the rest; across pipelines the same pair
 can also collide. The endpoint's claim ("the latest run's live lanes")
 is only true for single-step pipelines.
 
-**Fix:** group by `(pipeline_id, step_name, source_id, coordinate)` (or
-whatever narrower key the dashboard's "Current Outputs" view actually
-intends — check `web/src/` usage first and say which in the commit).
+**Fix (settled, verified 2026-07-18):** group by
+`(pipeline_id, step_name, source_id, coordinate)`. Both columns exist
+on `RunCoordinateStatus` (the run-search endpoint already queries
+them), and the dashboard's Current Outputs page
+(`web/src/pages/CurrentOutputs.tsx`) already renders Pipeline and Step
+columns *with select filters* — the UI was built for the per-(pipeline,
+step, lane) view the query fails to deliver.
 
 Acceptance: an API regression test drives a two-step chain and asserts
 one current-output row per (step, lane), not one per lane; two
@@ -75,41 +121,46 @@ parents, is accepted at declaration and fails later inside planning
 with an internal error instead of a clear `ValueError` at build time.
 
 **Fix:** apply the same rules `step()` enforces — `join_on` needs ≥2
-parents, `union` needs ≥1 — either by routing the declarative
-constructors through shared validation helpers or by adding the checks
-inline (keep `spec.py` readable per the flagship rule; the helpers can
-live in `pipeline.py`).
+parents, `union` needs ≥1 — as inline checks at the top of each
+declarative constructor (the checks are two lines each; no shared
+helper needed, and `spec.py` stays untouched per the flagship rule).
 
 Acceptance: `p.join(name="j", join_on={})` and
 `p.join(name="j", join_on={"a": "x"})` and
-`p.union(name="u", depends_on=[])` each raise `ValueError` naming the
-step and the rule at declaration (or at `_build_spec`, matching where
-equivalent `@step` errors fire); messages match the existing error
-style; full suite green.
+`p.union(name="u", depends_on=[])` each raise `ValueError` at
+declaration naming the step and the rule; messages match the existing
+error style; full suite green.
 
-## 32. Docs reconciliation: invariants.md + README vs shipped code
+## 34. `home=` is process-global — guard slice  **[slice settled; end-state needs owner decision]**
 
-Three places where the written guarantees drifted from the code:
+`_init_home` (`src/rubedo/runner.py:43`) repoints module-global DB,
+object-store, and lane-table state. Two concurrent runs in one process
+targeting different homes will silently switch each other's backing
+store mid-run. Single-home processes (the normal case, and every test)
+are unaffected.
 
-- `notes/invariants.md:41` still lists the pre-rewrite Arrow schema
-  (`content_hash`, `output_path`) — the shipped schema is `output` +
-  `output_identity` + `content_type` (see `lane_store.py`'s module
-  docstring, which is current).
-- `notes/invariants.md:46` says `input_hash_usages` is one row per
-  `(address, step, pipeline)` — the schema's primary key is `address`
-  alone (`src/rubedo/models.py`, `InputHashUsage`). Make the doc match
-  the code for now; item 33 is where the *key itself* may change.
-- `README.md:247` calls the web dashboard "read-only" without
-  qualification, but the server exposes
-  `POST /api/selection/invalidate` (`src/rubedo/server.py:621`). The
-  *UI* is read-only; the API is not. Say exactly that, in README and
-  in `AGENTS.md`'s server bullet, and note the endpoint is unauthenticated
-  and intended for local use.
+**Buildable slice (settled):** a module-level guard in `runner.py` —
+track the active effective home plus a live-run counter (increment when
+a run starts, decrement in the finally that ends it); a run starting
+with a *different* home while the counter is nonzero raises a clear
+error naming both homes. Same-home concurrency and the no-home default
+pass through untouched. Document one-home-per-process where `home=` is
+documented.
 
-Acceptance: the three passages match the code; `mkdocs build --strict`
-green; no engine changes in the commit.
+**End-state [needs owner decision]:** a per-run context object carrying
+db/store/lane-table handles, killing the module globals. Real plumbing
+cost across `db.py`/`store.py`/`lane_store.py`/`runner.py` — decide
+whether multi-home-per-process is a workload that will ever exist
+before paying it. Recommendation: don't build until a real embedding
+use-case (e.g. the cloud control plane's shared workers) demands it;
+the guard makes the current limitation safe instead of silent.
 
-## 33. Cross-pipeline liveness coupling  **[needs owner decision]**
+Acceptance (slice): two threads running pipelines with different
+`home=` values → the second raises a clear error naming both homes;
+same-home concurrency and the no-home default are untouched; docs state
+the constraint.
+
+## 33. Cross-pipeline liveness coupling  **[needs owner decision — recommended spec below, ratify then build]**
 
 Output addresses (`compute_output_address`, `src/rubedo/hashing.py:34`)
 hash `(step, version, input_hash[, params][, code])` — no pipeline
@@ -124,44 +175,45 @@ recompute anyway. Everything degrades to "recompute", never corruption
 — the two-mechanism reuse check (IHU **and** Arrow row) self-heals —
 but liveness semantics silently cross pipeline boundaries.
 
-**Options (pick one, then build):**
-(a) Scope liveness: add `pipeline_id` to the IHU primary key (schema
-change → dev-stage reset ritual). Liveness then matches content
-scoping. Recommended: it makes the two mechanisms congruent and the
+**Recommended fix (option a — scope liveness to the pipeline):** make
+the IHU primary key composite `(pipeline_id, address)`. Liveness then
+matches content scoping, the two mechanisms become congruent, and the
 `models.py` docstring's "the caller already knows pipeline_id" argument
-already assumes per-pipeline reads.
-(b) Make reuse deliberately global: keep the shared key and make the
-Arrow lookup consult other pipelines' files too (a shared cache across
-pipelines). Bigger semantic change; interacts with GC and retention.
+already holds at every call site. Schema change → dev-stage reset
+ritual, say so in the commit.
 
-**Trap:** GC (`src/rubedo/gc.py`) sweeps by address across *all*
-pipelines today — whichever option wins, re-derive the demote/sweep
-logic against it, and add cross-pipeline invalidation + retention tests
-(two pipelines, same step name/version/input) that pin the chosen
-semantics.
+Blast radius (enumerated 2026-07-18 — every `InputHashUsage` site):
+`ledger.py` (claim/fulfill — has `ctx.pipeline_id`), `lane_store.py`
+(the fulfilled-set half of `batch_lookup_by_address` — callers pass
+`pipeline_id` already), `gc.py` (demote becomes per-pipeline; **sweep
+stays global** — bytes in `objects/` are content-addressed and shared
+across pipelines, so "delete only when every referencing row anywhere
+is non-live" is already the documented rule and must survive),
+`invalidation.py` (tombstone gains pipeline scope), `du.py`,
+`selection.py`, `trace.py`, `server.py` (three fulfilled-set queries —
+scope each to the pipeline whose rows it's decorating). Grep
+`InputHashUsage` before calling it done; the list above was correct on
+2026-07-18.
 
-Acceptance (option a): the cross-pipeline test shows invalidating A
-leaves B's reuse intact; schema-change commit follows the dev-stage
-reset ritual; GC test covers two pipelines sharing content hashes.
+**Rejected alternative (option b — deliberately global reuse):** keep
+the shared key and make the Arrow lookup consult other pipelines'
+files (a cross-pipeline shared cache). Rejected because it makes
+content lookup O(pipelines), entangles GC/retention across pipeline
+boundaries by design, and turns "pipeline `name` is the sole identity"
+into a lie — but flag if a real workload wants shared caches (that's
+the cloud control plane's "shared team cache", a different layer).
 
-## 34. `home=` is process-global  **[needs owner decision on end-state; small guard buildable now]**
+**Trap:** the demote/sweep split in `gc.py` is the part that will look
+"simplifiable" mid-refactor — demote is per-(pipeline, address) but
+sweep refcounts *content hashes* across all pipelines. Keep them
+different scopes; a per-pipeline sweep deletes bytes another pipeline
+still references.
 
-`_init_home` (`src/rubedo/runner.py:43`) repoints module-global DB,
-object-store, and lane-table state. Two concurrent runs in one process
-targeting different homes will silently switch each other's backing
-store mid-run. Single-home processes (the normal case, and every test)
-are unaffected.
-
-**Minimal buildable slice:** document one-home-per-process, and make
-concurrent conflicting `_init_home` calls raise (a module-level "active
-home + live-run refcount" check) instead of corrupting. **Eventual
-fix** (needs design): a per-run context object carrying db/store/tables
-handles — decide whether that's worth the plumbing before building it.
-
-Acceptance (slice): two threads running pipelines with different
-`home=` values → the second raises a clear error naming both homes;
-same-home concurrency and the no-home default are untouched; docs state
-the constraint.
+Acceptance: a cross-pipeline test (two pipelines, same step
+name/version/input) shows invalidating A leaves B's reuse intact, and
+retention-pruning A doesn't recompute B; a GC test with shared content
+hashes across pipelines proves sweep stays global; schema-change commit
+follows the dev-stage reset ritual; full suite green.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -172,148 +224,105 @@ parameter names, unknown `depends_on`/`join_on` step names, unknown
 `Selection` fields, CLI step/pipeline arguments. Small, self-contained;
 waits for the owner's go.
 
-## 6. Cloud object storage sources (`S3Source` / `GCSSource`)  **[design settled 2026-07-10; ⚠️ respec after item 14]**
+## 6. Cloud object storage sources  **[RETIRED 2026-07-18 — shipped as a recipe]**
 
-> **2026-07-12:** item 14 deletes the `Source` protocol this spec subclasses.
-> The settled *decisions* survive — etag-based change token, LIST-only
-> enumeration, `client_factory=` — but the shape becomes an `@source` recipe:
-> the source generator LISTs and yields `{key, etag, size}` (cheap tokens,
-> zero GetObject), and a downstream cached `map` step GETs the bytes. The
-> containment property is preserved by lane structure instead of by
-> `scan()`/`load()`: a churned token recomputes one lane (one re-download),
-> nothing else. Do not build as written; respec against the post-14 world.
+Item 14 deleted the `Source` protocol this item's `S3Source`/`GCSSource`
+classes would have implemented, and the surviving design — LIST-only
+enumeration, cheap `(key, etag, size)` change tokens, a downstream
+cached step doing the GET — shipped as the documented recipe in
+`docs/concepts/sources.md` § "Cloud object storage (S3/GCS)". There is
+nothing left to build in the engine: the recipe's containment property
+(a churned token recomputes one lane = one re-download) falls out of
+content-addressed lanes. The old trap list (etag quote-stripping, LIST
+pagination) dissolved with the classes — in recipe form the raw etag
+string is payload data, consistent by construction. A moto-tested
+example pinning "re-run reuses with zero GetObject calls" is Parked.
+Full original spec in `notes/TODO-obsolete.md`.
 
-Local folders and SQL are great starts, but modern data lives in buckets. Add
-`Source`s that scan and pull from S3/GCS (`src/rubedo/sources.py`). **The
-load-bearing gotcha:** hashing an object means *downloading* it, so `scan()`
-must **not** content-hash eagerly — it makes LIST calls only, zero
-GetObject. This is exactly the producer-model insight that "scan produces a
-content hash eagerly" is the *folder* assumption; cloud sources use a change
-token that isn't the content hash. Note the containment property that makes
-a cheap token safe: `SourceItem.content_hash` feeds only the *root step's*
-`input_hash` (`planning.py:723`); consumers key on the root's output bytes,
-so a token that churns without a real content change costs one re-download +
-root re-run per object and nothing downstream.
+## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-18; lane-store plane needs owner ratification]**
 
-**Settled decisions (owner design session 2026-07-10 — do not re-litigate):**
+Distinct from the retired item 6 (input data) — this is the *internal*
+storage that backs every run. This — **not** the execution backend — is
+the real prerequisite for genuine multi-machine/cloud execution
+(item 8): a distributed deployment can't share a purely local SQLite
+file + objects dir. Post-Arrow-rewrite there are **three planes**, not
+two:
 
-- **Change token = `hash(etag, size)`, always** — one token shape, no
-  multipart sniffing, **never mtime**. ETag is a stable, content-derived
-  change token for single-part *and* multipart uploads (it changes when
-  content changes; identical re-uploads keep it — always for single-part,
-  for multipart when the part size matches); mtime is strictly worse (bumps
-  on identical re-upload). GCS: `hash(md5Hash or crc32c, size)` — GCS always
-  supplies a real hash. The "fall back to size+mtime for multipart" idea
-  from the original spec is dead.
-- **`load()` returns the object bytes.** No local download cache (which
-  would invent a directory whose lifecycle 10b would have to learn). This
-  knowingly diverges from `FolderSource`'s hand-a-path idiom; a
-  streaming/large-object story waits for demand. No `mode=` knob.
-- **Client hook = `client_factory=`**, an optional zero-arg callable
-  returning a client; default factory = the ambient session
-  (`boto3.client("s3")` / `storage.Client()`). A factory (closure)
-  cloudpickles cleanly under `executor="process"`; the live client is
-  created lazily per process and dropped from pickling (`__getstate__`).
-  **Never a live `client=` kwarg** — boto3 clients don't pickle. The
-  factory also covers MinIO/localstack endpoints and test fakes.
-- **Sequencing: two commits.** `S3Source` first (moto-tested, proves the
-  token/payload/factory shape), `GCSSource` second with the identical
-  shape (no moto equivalent — tests inject a fake via `client_factory`).
+1. **Ledger DB** (`src/rubedo/db.py`) → Postgres via URL.
+2. **Object store** (`src/rubedo/store.py`, spilled values + payloads)
+   → S3/GCS behind a protocol.
+3. **Lane store** (`src/rubedo/lane_store.py`, Arrow IPC files under
+   `tables/<pipeline>/<step>.arrow`) — **new since the original spec.**
+   This is now the content plane: reuse reads it, so a shared
+   deployment must share it. The original spec predates its existence.
 
-**Mechanics:** `S3Source(bucket, prefix="", client_factory=None)`.
-`id` = `s3://bucket/prefix` — credential-free **and endpoint-free** (an
-injected MinIO endpoint must not leak into `source_id`; same rule as
-`TableSource`). `scan()` = paginated ListObjectsV2 → coordinate = key
-relative to the prefix (forward slashes, mirroring `FolderSource`),
-`content_hash` = the token above, `ref` = the full key, `metadata` =
-size/mtime for display. `load()` = GetObject → bytes. Ship boto3/gcs as
-optional extras (`rubedo[s3]`, `rubedo[gcs]`); moto goes in the dev group;
-core install stays boto3-free (`scripts/smoke_test.sh` must stay green).
-
-**Trap (part of the spec):** (1) scan must stay LIST-only — any per-object
-GetObject/HEAD at scan time reintroduces the download-to-hash cost the
-token exists to avoid; (2) S3 returns `ETag` wrapped in literal double
-quotes — strip before hashing or the token silently differs between code
-paths; (3) paginate ListObjectsV2 (>1000 keys) from day one; (4) verify
-`executor="process"` end-to-end — the Source travels to the loky worker,
-and a lazily-created client must survive the trip.
-
-Acceptance: scan a moto bucket prefix → coordinates; a root step receives
-the object bytes; a re-run reuses untouched objects with **zero GetObject
-calls** (assert by counting calls on the fake/moto client); an object
-overwritten with identical bytes (single-part) stays reused; a changed
-object recomputes exactly its lane; the same pipeline runs under
-`executor="process"` with a `client_factory`; tests follow the standard
-fixture shape (`tests/test_index.py`); `rubedo[s3]` extra installs boto3,
-core install does not.
-
-## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[design settled 2026-07-11; ⚠️ pre-Arrow-rewrite spec — re-verify pointers]**
-
-> **2026-07-18:** this spec predates the Arrow storage rewrite: the
-> `materializations` table, `is_live` partial index, and
-> `_commit_materialization` it references are deleted, and the lane
-> store's Arrow files under `tables/` are a third storage surface the
-> protocol must now cover (or explicitly exclude). The *decisions*
-> (ObjectStore protocol, two-URL config, staging-is-local, conditional
-> puts) stand; re-verify every file/line pointer and re-derive the trap
-> list against current `models.py`/`ledger.py`/`lane_store.py` before
-> building.
-
-Distinct from item 6 (input data) — this is the *internal* materialization
-store (`src/rubedo/store.py`) and ledger DB (`src/rubedo/db.py`) that back
-every run. This — **not** the execution backend — is the real prerequisite
-for genuine multi-machine/cloud execution (item 8): a distributed worker
-can't write to a purely local SQLite file + local objects dir.
-
-**Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
+**Settled decisions (owner design session 2026-07-11, re-verified
+against current code 2026-07-18 — do not re-litigate):**
 
 - **`ObjectStore` protocol** (exists / read / write / delete, write
   carrying conditional-put semantics) with `LocalStore` + `S3Store`
   implementations; `store.py`'s module functions become thin delegates to
   a process-global store instance, so every call site (ledger, planning,
   execution, du, server) stays untouched. GCS rides the same protocol
-  later. Reuse item 6's `client_factory=` pattern for endpoints/tests
-  (fsspec was rejected: a heavyweight layer for four methods that fights
-  item 6's hand-rolled-boto3 choice).
+  later. `client_factory=` pattern for endpoints/tests (fsspec was
+  rejected: a heavyweight layer for four methods).
 - **Staging is a local concept.** `LocalStore` keeps the staging dir +
   fsync + atomic `os.replace`; `S3Store` uploads directly with a
   conditional put (`If-None-Match: "*"`; GCS `ifGenerationMatch=0`) —
   a bucket upload is already atomic, so no staging keys exist and
   `cleanup_staged` is a cloud no-op.
 - **Config = two URLs, no new concepts.** `RUBEDO_DB_PATH` already takes
-  a URL (fix the mangling first — `db.py` wraps any non-sqlite
-  string in `sqlite:///`; anything containing `://` must pass through
+  a URL (fix the mangling first — `db.py:38` wraps any non-`sqlite:///`
+  string in `sqlite:///`, so a `postgresql://` URL silently becomes a
+  SQLite file path; anything containing `://` must pass through
   verbatim, and the makedirs/`_ensure_gitignore` logic must skip URL
   targets — the module docstring currently overpromises here). Add
   `RUBEDO_STORE_URL` (`s3://bucket/prefix`) + a `store=`
   param on `run()`/`plan()` with the same explicit-param-over-env
-  precedence `home=` has. `home=` itself stays local-only (a real cloud
-  deployment points DB and store at different systems, so one root URL
-  can't express it). WAL/`busy_timeout` pragmas stay SQLite-only
-  (already conditional).
+  precedence `home=` has. `home=` itself stays local-only. WAL/
+  `busy_timeout` pragmas stay SQLite-only (already conditional).
 - **Tests: SQLite + moto only for now** (owner call). `S3Store` is
   moto-tested in the always-run suite; real-Postgres correctness is
   deferred to **item 7b**.
 
-**Trap (part of the spec):** **(1) Dialect-sensitive DDL** — any
-`sqlite_where`/SQLite-only index or constraint silently degrades on
-Postgres; audit current `models.py` for dialect-conditional DDL and add
-the `postgresql_*` twin in the same declaration; untested until 7b, so
-do not "clean it up" away. **(2) 412 is success** — a conditional put
-that fails with PreconditionFailed means the object already exists: map
-it to the same idempotent early-return the local exists-check takes,
-never an error. **(3) Missing reads return None** — absent objects must
-read as `None` (du counts them as missing); `S3Store.read` must map
-`NoSuchKey` to `None`, never raise. **(4) Path stragglers** — grep for
-direct `objects/` path construction (du, server download endpoints)
-and move every call site behind the protocol before calling it done.
-**(5) The Arrow lane store** (`tables/`) is local-file I/O via pyarrow —
-decide explicitly whether item 7 covers it or scopes it out, and write
-that decision into the commit.
+**Lane-store plane [needs owner decision — recommendation]:** cloud
+mode writes each buffered flush as its own immutable object
+(`tables/<pipeline>/<step>/<flush-uuid>.arrow`) instead of appending to
+one file — object stores don't append, but the lane store is already
+append-only batches flushed at segment boundaries, so a
+flush-per-object maps 1:1; the reader lists the prefix and
+concatenates. Local layout stays the single file. Compaction (merging
+many small flush objects) is explicitly deferred until a real
+deployment hurts. Ratify before building; if rejected, the fallback is
+scoping item 7 to planes 1–2 and declaring multi-machine reuse
+out-of-scope until a lane-store story exists — which would gut item 8's
+value, so say so explicitly.
+
+**Trap (part of the spec, re-derived 2026-07-18):** **(1) The old
+dialect trap is gone — don't chase it.** The original spec's
+`sqlite_where` partial-index warning died with the `materializations`
+table; `models.py` has **no** dialect-conditional DDL today (verified).
+The dialect-sensitive machinery is now the IHU claim/fulfill UPDATE
+lifecycle, the retry-once IntegrityError commit-collision path, and the
+ORM immutability listeners — 7b covers them on real Postgres. **(2) 412
+is success** — a conditional put failing with PreconditionFailed means
+the object already exists: map it to the same idempotent early-return
+the local exists-check takes, never an error. **(3) Missing reads
+return None** — absent objects must read as `None` (du counts them as
+missing); `S3Store.read` must map `NoSuchKey` to `None`, never raise.
+**(4) Path stragglers** — `gc.py` imports `_get_object_path` directly,
+and the server download endpoints build local paths; grep for direct
+`objects/` path construction and move every call site behind the
+protocol before calling it done. **(5) The lane store's read cache**
+(`drop_table_cache` and friends, see `benchmarks/README.md`) assumes
+local-file mtimes; the cloud reader needs its own invalidation story
+(list-prefix etag set is the natural key).
 
 Acceptance: `examples/count_lines` run twice with `RUBEDO_STORE_URL`
 pointed at a moto/MinIO bucket → identical Created/Reused counts,
-statuses, addresses, and lifecycle rows to the local run; a Postgres
+statuses, addresses, and lifecycle rows to the local run; a second
+process against the same bucket + Postgres DB fully reuses the first's
+outputs (the multi-machine story, simulated locally); a Postgres
 `RUBEDO_DB_PATH` engine-creates cleanly (live behavior verified
 manually until 7b); `rubedo du` against the cloud store makes zero
 per-object API calls; the server payload/download endpoints stream from
@@ -327,16 +336,16 @@ on `RUBEDO_TEST_PG_URL` that cleanly skips when unset (suite stays green
 offline, no docker requirement for local dev), plus a CI job with a
 postgres service container so the gap is covered on every push. Cover
 exactly the dialect-sensitive machinery: the IHU claim/fulfill lifecycle
-under concurrent runs; any dialect-conditional index from item 7 trap 1;
-the IntegrityError retry-once commit-collision path; ORM immutability
-guards raising on update/delete; a `queries.py`/selection smoke pass.
+under concurrent runs; the IntegrityError retry-once commit-collision
+path; ORM immutability guards raising on update/delete; a
+`queries.py`/selection smoke pass.
 Also add the verification note to `AGENTS.md`: touching
 `db.py`/`models.py` ⇒ run the PG suite (`docker run postgres` +
 `RUBEDO_TEST_PG_URL=...`).
 Acceptance: full suite green both with and without `RUBEDO_TEST_PG_URL`
 set; the CI postgres job green on real Postgres.
 
-## 8. Pluggable execution pools (bring-your-own cluster)  **[design settled 2026-07-11]**
+## 8. Pluggable execution pools (bring-your-own cluster)  **[design settled 2026-07-11; independently buildable]**
 
 Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
 The execute path already treats "the pool" as anything satisfying
@@ -390,89 +399,79 @@ factory-executor pipeline serializes; the dask example runs a step on a
 `LocalCluster` and fully reuses on a second run against the plain local
 store — no item-7 machinery involved.
 
-## 13. Pass-by-reference payloads (workers talk to the store directly)  **[depends on items 7 + 8; design settled 2026-07-11; ⚠️ pre-Arrow-rewrite spec — re-verify against inline outputs]**
+## 13. Pass-by-reference payloads (workers talk to the store directly)  **[depends on items 7 + 8; respecced 2026-07-18 — scope shrank to spilled values]**
 
-> **2026-07-18:** this spec predates inline Arrow outputs: most small
-> outputs never touch the object store anymore, so "every payload is a
-> store object" no longer holds — refs only make sense for *spilled*
-> values (`"objects:<hash>"`). Re-derive the activation rule and the
-> shim's read path against `lane_store.py` before building; the
-> decisions below otherwise stand.
+> **2026-07-18 premise update:** inline Arrow outputs changed the
+> economics this spec assumed. Most outputs never touch the object
+> store — they travel inside the `MatRef` the runner already holds, so
+> "the runner is a byte hub" is now only true for **spilled** values
+> (`output` = `"objects:<hash>"` ref strings, `execution.py`'s
+> `_resolve_parent_value` → `read_output`). Refs therefore engage
+> **per-parent, only when the parent's output is a spill ref**, and on
+> the write side **only when the worker's result would spill** (the
+> shim spills it store-side and returns the ref + metadata; small
+> results return by value and the runner writes them inline as today).
+> The payoff is real for blob-heavy pipelines (images, big frames) and
+> zero for inline-only ones — build this last, on demonstrated demand.
 
-With a cloud store and an out-of-process pool, the runner is a *byte hub*:
-GET parent from the bucket → ship to the worker → full result back → PUT to
-the bucket — four network transits per step hop, and aggregate fan-in routes
-all N parent payloads through one process. Refs make bytes flow
-worker↔store directly; the runner handles only hashes and metadata.
-
-**Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
+**Settled decisions (owner design session 2026-07-11 — surviving parts;
+do not re-litigate):**
 
 - **Activation is automatic — no per-step knob.** Refs engage when the
   store is non-local AND the step's executor crosses a process boundary
-  (`"process"` *or* an item-8 factory pool — a local loky worker with a
-  cloud store benefits too; `"thread"` shares the runner's memory and
-  gains nothing). One escape hatch: `run(payload_refs=False)` forces hub
-  routing for the whole run.
+  (`"process"` *or* an item-8 factory pool) AND the parent value /
+  result is spilled per the premise update. One escape hatch:
+  `run(payload_refs=False)` forces hub routing for the whole run.
 - **Credential-less workers degrade, never fail.** Before the first ref
   submission per (pool, run), the runner submits a cheap probe task (the
   shim attempts a store access check worker-side). On failure: warn once
-  (run event + `UserWarning`: grant workers store access, or silence with
-  `payload_refs=False`) and route that pool by value for the rest of the
-  run. Don't probe per lane; don't cache across runs (credentials
+  (run event + `UserWarning`) and route that pool by value for the rest
+  of the run. Don't probe per lane; don't cache across runs (credentials
   change).
 - **Mechanism = a shim wrapping the fn.** The engine submits
   `_ref_call(store_config, refs, fn, …)` instead of `fn`; worker-side the
-  shim GETs and deserializes inputs, calls `fn`, serializes + hashes +
-  conditional-PUTs the result, and returns only
-  `(content_hash, content_type, size_bytes, …)`. The pool contract stays
-  plain `.submit()` — item 8's seam untouched; store config travels via
-  the picklable `client_factory` pattern from items 6/7.
-- **Both directions in v1** (reads and writes). The **ledger commit stays
-  main-thread**: the runner commits from the returned metadata via a
-  commit variant that skips byte staging (the object is
-  already in the store) but runs the full commit machinery unchanged.
-  The crash-safety guarantee survives (`notes/invariants.md`): a worker
-  dying mid-PUT leaves at most an unreferenced object at a
-  content-addressed key and no ledger row; a retry lands idempotently on
-  the same key (item 7's 412-is-success).
-- **Shapes: `map`/`aggregate`/`join`; `expand` stays by-value.** Aggregate
-  fan-in is the biggest win (N payloads fetched in parallel by the
-  worker). `expand` is deferred: the expand path mints coordinates and
-  the anchor from child hashes main-side, so ref-ifying it moves
-  coordinate minting into the shim — wait until it demonstrably bites.
+  shim GETs and deserializes spilled inputs, calls `fn`, and for a
+  spill-worthy result serializes + hashes + conditional-PUTs it,
+  returning only `(ref, content_type, size_bytes, …)`. The pool contract
+  stays plain `.submit()` — item 8's seam untouched; store config
+  travels via the picklable `client_factory` pattern.
+- **Ledger commit stays main-thread**, from the returned metadata, via a
+  commit variant that skips byte staging (the object is already in the
+  store) but runs the full commit machinery unchanged. Crash-safety
+  survives: a worker dying mid-PUT leaves at most an unreferenced object
+  at a content-addressed key and no ledger row; a retry lands
+  idempotently (item 7's 412-is-success).
+- **Shapes: `map`/`aggregate`/`fold`/`join`; `expand` stays by-value**
+  (the expand path mints coordinates and the anchor main-side).
 - **Ephemeral parents stay by value.** `EphemeralRef`/skip_cache outputs
-  aren't in the store by definition; refs are per-parent, so a mixed
-  submission (some parents as refs, ephemeral ones by value) is the
-  normal case, not an error.
+  aren't in the store by definition; refs are per-parent, so mixed
+  submissions are the normal case, not an error.
 
-**Trap (part of the spec):** **(1) The main-side value consumers.** Today
-the runner holds every result value between `call()` and commit, and
-several things quietly depend on that: output validation, data-quality
-`assertions`, and `Filtered` verdict detection. Under refs the
-runner never sees the bytes, so **each of these moves into the shim**
-(assertion callables travel with the submission; the shim returns
-verdicts in its metadata) — grep everything
-that touches `result` between call and commit and account for every
-consumer before shipping. **(2) One hasher.** The worker computes the
-content hash the ledger will trust: the shim must call the *same*
-serialization/hash code the runner uses (import, never copy), or
-identical values could land at different addresses and break dedup.
-**(3) Missing objects worker-side** are a normal step failure with a
-clear error ("parent object <hash> not in store"), never a silent
-None payload. **(4) `size_bytes`** comes from the
-shim's metadata — it must equal what the store reports, since du
-sums the ledger.
+**Trap (part of the spec):** **(1) The main-side value consumers.**
+Output validation, data-quality `assertions`, and `Filtered` verdict
+detection all touch the result value between `call()` and commit; under
+refs the runner never sees spilled bytes, so each moves into the shim
+(assertion callables travel with the submission; verdicts return in the
+metadata) — grep everything that touches `result` between call and
+commit and account for every consumer before shipping. **(2) One
+hasher.** The shim must call the *same* serialization/hash/spill code
+the runner uses (import, never copy), or identical values land at
+different addresses and break dedup — the spill threshold decision
+especially must be one function. **(3) Missing objects worker-side**
+are a normal step failure with a clear error, never a silent None
+payload. **(4) `size_bytes`** in the shim's metadata must equal what
+the store reports, since du sums the ledger.
 
 Acceptance: with a moto/MinIO store and the suite's fake factory pool, a
-chained map pipeline completes with **zero payload GET/PUT calls by the
-runner** for ref-routed steps (assert by instrumenting the runner-side
-store client), and its ledger rows, statuses, and addresses are
-byte-identical to the same pipeline run with `payload_refs=False`; a
-credential-less pool warns once and completes correctly by value; an
-aggregate over N parents fetches all N worker-side; an indexed, asserted,
-filtering step behaves identically under refs and hub routing; `expand`
-pipelines are untouched; a worker killed mid-PUT leaves no ledger row and
-the re-run heals.
+pipeline whose parents are spilled completes with **zero payload GET/PUT
+calls by the runner** for ref-routed steps (assert by instrumenting the
+runner-side store client), and its ledger rows, statuses, and addresses
+are byte-identical to the same pipeline run with `payload_refs=False`;
+an inline-only pipeline never engages refs (assert zero shim
+submissions); a credential-less pool warns once and completes correctly
+by value; an aggregate over N spilled parents fetches all N worker-side;
+`expand` pipelines are untouched; a worker killed mid-PUT leaves no
+ledger row and the re-run heals.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -538,6 +537,10 @@ the re-run heals.
   item 27 that didn't ship: force named fields to the object store,
   overriding the size/type rules. Waits for a real payload that needs
   it.
+- **Moto-tested S3 recipe example** — an `examples/` folder for the
+  `docs/concepts/sources.md` cloud recipe, pinning "re-run reuses with
+  zero GetObject calls" against a moto bucket (the acceptance test the
+  retired item 6 would have had). Small; waits for cloud-user demand.
 - **`plan --why` / recompute-blame.** Itemize which identity slot changed
   for an `execute` decision (input vs params vs code vs version vs stale)
   against the last live generation; the "blame" extension walks lineage
@@ -579,6 +582,20 @@ the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-18 — reprioritize + respec pass:** explicit priority order
+  (29 → 32 → 30 → 31 → 34 → 33); item 30's grouping key settled from
+  the UI's own columns; item 29's fix mechanism settled
+  (`_process_decision` gains `run_id` beside the existing
+  `pipeline_id`); item 33 firmed into a recommended spec (composite
+  `(pipeline_id, address)` IHU key, global sweep preserved, nine-file
+  blast radius enumerated); item 34 split into a settled guard slice +
+  a parked end-state; item 6 **retired** (the recipe shipped in
+  `docs/concepts/sources.md` — nothing left to build); item 7 respecced
+  around the three storage planes (the Arrow lane store is the new one;
+  flush-per-object recommendation awaiting ratification) with a
+  re-derived trap list (the old `sqlite_where` trap is gone — verified
+  no dialect-conditional DDL remains); item 13's premise updated for
+  inline outputs (refs only pay for spilled values — demand-gated).
 - **2026-07-18 — `fold` (item 28 Phase 2):** `in_shape="fold"` shipped —
   streaming accumulator, aggregate-identical caching/planning/ledger,
   coordinate-sorted execution, `fold_init` required + JSON-validated +
@@ -588,6 +605,4 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 - **2026-07-18 — TODO restructure:** old TODO archived verbatim to
   `notes/TODO-obsolete.md`; items 26 (retired) and 27/28 (shipped —
   27 minus the `spills=` valve, now Parked) dropped from the live list;
-  items 29–34 added from the re-verified codebase review; items 6/7/13
-  carry fresh ⚠️ respec banners where the Arrow rewrite invalidated
-  their file pointers.
+  items 29–34 added from the re-verified codebase review.
