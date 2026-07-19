@@ -1,112 +1,35 @@
 import React from 'react'
-import {
-  ArrowRight, Database, History, Repeat, ShieldCheck, Eye,
-} from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import OuroborosLogo from './components/OuroborosLogo'
-import DiamondDag from './components/DiamondDag'
 import CodeBlock from './components/CodeBlock'
-import Tooltip from './components/Tooltip'
+import dashboardRun from './assets/dashboard-run.png'
 import './index.css'
 
 const GITHUB_URL = 'https://github.com/dinosaurav/Rubedo'
 const DOCS_URL = `${import.meta.env.BASE_URL}docs/`
+const EXAMPLES_URL = `${GITHUB_URL}/tree/main/examples`
 
-function Eyebrow({ children }) {
-  return <div className="section-label">{children}</div>
-}
+const HERO_CODE = `from rubedo import pipeline, Filtered
 
-function Pillar({ icon, title, children }) {
-  return (
-    <div className="pillar card">
-      <div className="pillar-icon">{icon}</div>
-      <h3>{title}</h3>
-      <p>{children}</p>
-    </div>
-  )
-}
-
-function Feature({ icon, title, children }) {
-  return (
-    <li className="feature">
-      <span className="feature-icon">{icon}</span>
-      <div>
-        <h4>{title}</h4>
-        <p>{children}</p>
-      </div>
-    </li>
-  )
-}
-
-const NEWSROOM_CODE = `from rubedo import pipeline
-import csv
-
-p = pipeline(name="newsroom")
+p = pipeline(name="triage")
 
 @p.step
-def feeds():
-    with open("feeds.csv") as f:
-        yield from csv.DictReader(f)
+def inbox():
+    for url in open("urls.txt"):
+        yield {"url": url.strip(), "text": download(url)}
 
-@p.step
-def publishers():
-    with open("publishers.csv") as f:
-        yield from csv.DictReader(f)
+@p.step(retries=3, rate_limit="30/min")
+def decide(inbox: dict) -> dict | Filtered:
+    out = ask_llm(f"Keep or drop?\\n{inbox['text'][:2000]}")
+    if out["keep"] is False:
+        return Filtered(out["why"])
+    return {"url": inbox["url"], "topic": out["topic"]}
 
-@p.step
-def feed(feeds: dict) -> dict:
-    return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
+p.run()   # second run: only new urls recompute`
 
-@p.step
-def publisher(publishers: dict) -> dict:
-    return {"publisher": publishers["publisher"], "region": publishers["region"]}
-
-# two sources meet — one lane per matched pair
-@p.step(join_on={"feed": "publisher", "publisher": "publisher"})
-def feed_meta(feed: dict, publisher: dict) -> dict:
-    return {"feed_id": feed["feed_id"], "region": publisher["region"]}
-
-# fan out: a lane per article. cached against its parent,
-# so a re-run re-scrapes nothing. this is the flaky one.
-@p.step(retries=3,
-        retry_on=(TimeoutError, ConnectionError),
-        retry_backoff=2, rate_limit="30/min", stale_after="24h")
-def articles(feed_meta: dict):
-    for title in scrape(feed_meta["feed_id"]):
-        yield {"title": title, "region": feed_meta["region"]}
-
-# fold back: one digest per region
-@p.step(group_key="region")
-def digest(articles: dict) -> dict:
-    titles = sorted(a["title"] for a in articles.values())
-    return {"count": len(titles), "headlines": titles}`
-
-const DIAGRAM_CODE = `Pipeline 'newsroom'
-┌────────────────┐  ┌─────────────────────┐
-│ feeds [expand] │  │ publishers [expand] │
-└────────────────┘  └─────────────────────┘
-    ┌────┘      ┌──────────────┘
-┌──────┐  ┌───────────┐
-│ feed │  │ publisher │
-└──────┘  └───────────┘
-    └─────┐     │
-          ├─────┘
-┌──────────────────┐
-│ feed_meta [join] │
-└──────────────────┘
-          │
-┌───────────────────┐
-│ articles [expand] │
-└───────────────────┘
-         ┌┘
-┌─────────────────┐
-│ digest [reduce] │
-└─────────────────┘`
-
-const RETRY_CODE = `@p.step(retries=3, retry_on=(TimeoutError, ConnectionError),
-        retry_backoff=2, rate_limit="30/min",
-        stale_after="24h",
-        assertions=[check_price_positive])
-def enrich(row: dict): ...`
+const REUSE_PROOF = `# first run          created=8  reused=0
+# second run         created=0  reused=8     # nothing recomputed
+# edit one file...   created=2  reused=6     # only that file's lanes re-run`
 
 const START_CODE = `import os
 from rubedo import pipeline
@@ -117,20 +40,88 @@ p = pipeline(name="count-lines")
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
-        yield {"path": name, "text": open(path).read()}
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
 @p.step
 def count_lines(scan: dict):
     return {"line_count": len(scan["text"].splitlines())}
 
-print(p.plan())      # dry-run: what would run, and why
-summary = p.run()    # execute
+print(p.plan())   # dry-run: what would run, and why
+summary = p.run()
 print(f"created={summary.created_count} reused={summary.reused_count}")`
+
+const PLAN_CODE = `print(p.plan())
+# every lane: reuse | execute | blocked | stale | code-drift
+# no writes, no side effects
+
+summary = p.run()
+# only the execute lanes actually run`
+
+const INVALIDATE_CODE = `from rubedo import Selection, invalidate
+
+invalidate(Selection(index={"company": "acme"}))
+# next run recomputes acme — and only acme's downstream`
+
+const RETRY_CODE = `@p.step(retries=3, retry_on=(TimeoutError, ConnectionError),
+        retry_backoff=2, rate_limit="30/min",
+        stale_after="24h",
+        assertions=[check_price_positive])
+def enrich(row: dict): ...`
+
+const COMPARISON = [
+  {
+    tool: 'Airflow / Prefect / Dagster',
+    job: 'Orchestrate and monitor workflows',
+    angle: 'Different layer — they schedule services. Rubedo gives row-level, content-addressed reuse inside a local script.',
+  },
+  {
+    tool: 'dbt',
+    job: 'Incremental state for SQL',
+    angle: 'Same idea, for Python steps over files, rows, and live sources.',
+  },
+  {
+    tool: 'Make / Snakemake',
+    job: 'File-level rebuilds',
+    angle: 'Rubedo tracks content at row granularity, with a queryable ledger and lineage.',
+  },
+  {
+    tool: 'joblib / diskcache',
+    job: 'Function memoization',
+    angle: 'No DAG awareness, no plan/invalidate story, no crash-honest history.',
+  },
+]
+
+const FAQ = [
+  {
+    q: 'Is this an orchestrator?',
+    a: 'No. Rubedo does not schedule services or replace Airflow/Prefect/Dagster. It gives dbt-style incrementality inside a Python batch DAG — recompute only what changed, at row granularity.',
+  },
+  {
+    q: 'Does it need a daemon or server?',
+    a: 'No. It is a library: pip install, import, run. State lives in a local .rubedo/ directory. rubedo serve is an optional read-only local dashboard.',
+  },
+  {
+    q: 'How stable is the API?',
+    a: 'Pre-1.0. The API is unstable and there are no migrations — schema changes mean deleting .rubedo/ and re-running. The core model (content-addressed lanes, shapes, ledger) is designed and built; polish is ongoing.',
+  },
+  {
+    q: 'When should I bump version?',
+    a: 'Bump version for deliberate behavior changes (or edits the engine cannot see, like helpers your step calls). code="auto" folds source edits into the cache key; the default code="warn" never recomputes on edits but warns loudly when reused code has drifted.',
+  },
+  {
+    q: 'What is it especially good at?',
+    a: 'Batch DAGs you iterate on — enrichment, scraping, transforms — where you want a real edit-test loop: fix a step, re-run, and keep everything that still holds.',
+  },
+]
+
+function Eyebrow({ children }) {
+  return <div className="section-label">{children}</div>
+}
 
 function App() {
   return (
     <div className="landing">
-      {/* ---------------- Nav ---------------- */}
       <header className="landing-nav">
         <a className="brand" href="#top">
           <OuroborosLogo size={28} />
@@ -138,260 +129,248 @@ function App() {
         </a>
         <nav className="nav-links">
           <a href="#why">Why</a>
-          <a href="#how">How</a>
-          <a href="#start">Get started</a>
+          <a href="#try">Try it</a>
+          <a href="#compare">Compare</a>
           <a href={DOCS_URL}>Docs</a>
+          <a href={EXAMPLES_URL} target="_blank" rel="noreferrer">Examples</a>
           <a className="btn btn-outline btn-sm" href={GITHUB_URL} target="_blank" rel="noreferrer">
             GitHub <ArrowRight size={14} />
           </a>
         </nav>
       </header>
 
-      {/* ---------------- Hero: WHAT ---------------- */}
+      {/* -------- Hero -------- */}
       <section className="hero" id="top">
         <div className="hero-inner">
-          <div className="badges">
-            <span className="badge badge-info">Python 3.11+</span>
-            <span className="badge badge-success">MIT</span>
-            <span className="badge badge-warning">pre-1.0</span>
-          </div>
           <h1>
             Reduce. <span className="hero-accent">Reuse.</span> Rubedo.
           </h1>
           <p className="lede">
-            Stateful Python pipelines — run, remember, re-run only what changed.
-          </p>
-          <p className="lede lede-sub">
-            For <strong>data enrichment</strong> over live services, where every batch re-run
-            re-pays for the same LLM calls and API hits.
+            Stateful Python pipelines that remember every step —
+            and only recompute what actually changed.
           </p>
           <div className="hero-cta">
-            <a className="btn btn-primary" href="#start">
-              Get started <ArrowRight size={16} />
+            <a className="btn btn-primary" href="#try">
+              Try it <ArrowRight size={16} />
             </a>
             <a className="btn btn-outline" href={GITHUB_URL} target="_blank" rel="noreferrer">
               View on GitHub
             </a>
           </div>
 
-          <div className="hero-graphic">
-            <div className="diamond-frame">
-              <DiamondDag />
-            </div>
-            <div className="hero-reuse">
-              <div className="snippet-label">Run it twice. Everything reuses.</div>
-              <CodeBlock
-                language="text"
-                className="reuse-block"
-                code={`# first run          created=8  reused=0
-# second run         created=0  reused=8     # nothing recomputed
-# edit one file...   created=2  reused=6     # only that file's lanes re-run`}
-              />
-            </div>
+          <div className="hero-proof">
+            <div className="snippet-label">inbox → decide</div>
+            <CodeBlock language="python" className="code-step hero-code" code={HERO_CODE} />
+            <p className="hero-caption">
+              A two-step DAG. Re-run it and only new urls recompute.
+            </p>
           </div>
         </div>
       </section>
 
-      {/* ---------------- Why ---------------- */}
+      {/* -------- Why -------- */}
       <section className="block" id="why">
         <Eyebrow>Why</Eyebrow>
-        <h2 className="block-title">Built for data enrichment over live services, and the iteration that comes with it.</h2>
+        <h2 className="block-title">An edit-test loop for batch pipelines.</h2>
         <p className="block-lede">
-          Rubedo is a <strong>library, not a platform</strong>. No daemon, no registry; you import the
-          engine, it never imports you. It runs from your laptop on day one, and a managed cloud runtime
-          is coming so the same pipelines scale without a rewrite. State lives in a{' '}
+          Rubedo is a <strong>library, not a platform</strong>. No daemon, no registry;
+          you import the engine, it never imports you. State lives in a{' '}
           <code>.rubedo/</code> directory, created on first run.
         </p>
-        <div className="why-grid">
-          <div className="why-card">
-            <h3>Re-running re-pays.</h3>
-            <p>Every LLM call or API hit you redo on a code tweak is money burned. The results may not even match.</p>
+        <div className="why-list">
+          <div className="why-item">
+            <h3>Fix the last step. Re-run.</h3>
+            <p>
+              Only that step recomputes. Upstream stays put. Downstream follows the
+              new inputs. Iteration that feels like a notebook — for a DAG.
+            </p>
           </div>
-          <div className="why-card">
+          <div className="why-item">
             <h3>Ad-hoc caches go stale silently.</h3>
-            <p>A pickle file or <code>functools.cache</code> can&apos;t tell when an upstream step&apos;s code changed. You rerun and get yesterday&apos;s results mixed with today&apos;s — no warning.</p>
+            <p>
+              A pickle file or <code>functools.cache</code> cannot tell when an upstream
+              step&apos;s code changed. Yesterday&apos;s results mix with today&apos;s — no warning.
+            </p>
           </div>
-          <div className="why-card">
-            <h3>Orchestrators are the wrong tool.</h3>
-            <p>Airflow, Prefect, Dagster schedule services, not row-level incrementality. dbt does, but only SQL.</p>
-          </div>
-          <div className="why-card">
-            <h3>Iterate like a data scientist.</h3>
-            <p>Fix the last step, re-run. Only that step re-pays. An edit-test loop for batches, not just notebooks.</p>
+          <div className="why-item">
+            <h3>Orchestrators are a different tool.</h3>
+            <p>
+              Airflow, Prefect, and Dagster schedule and monitor services.
+              Rubedo is dbt-style incrementality for Python — row by row, content-addressed.
+            </p>
           </div>
         </div>
       </section>
 
-      {/* ---------------- How ---------------- */}
+      {/* -------- Try it -------- */}
+      <section className="block block-tinted" id="try">
+        <div className="block-inner">
+          <Eyebrow>Try it</Eyebrow>
+          <h2 className="block-title">Install. Define. Run. Run again.</h2>
+          <ol className="try-steps">
+            <li>
+              <div className="try-step-label">1. Install</div>
+              <CodeBlock code="pip install rubedo" language="bash" />
+            </li>
+            <li>
+              <div className="try-step-label">2. Define a pipeline</div>
+              <CodeBlock code={START_CODE} language="python" className="code-step" />
+            </li>
+            <li>
+              <div className="try-step-label">3. Run twice — watch reuse</div>
+              <CodeBlock language="text" className="reuse-block" code={REUSE_PROOF} />
+            </li>
+          </ol>
+          <p className="block-lede try-note">
+            Ingestion is a parentless generator step that yields a payload per item —
+            a folder scan, a <code>csv.DictReader</code> loop, a SQL <code>SELECT</code>.
+            Each row mints its own content-addressed lane.
+          </p>
+        </div>
+      </section>
+
+      {/* -------- Compare -------- */}
+      <section className="block" id="compare">
+        <Eyebrow>Where it sits</Eyebrow>
+        <h2 className="block-title">dbt-style state for Python batches.</h2>
+        <div className="compare-table" role="table" aria-label="How Rubedo compares">
+          <div className="compare-row compare-head" role="row">
+            <div role="columnheader">Tool</div>
+            <div role="columnheader">Job</div>
+            <div role="columnheader">Rubedo&apos;s angle</div>
+          </div>
+          {COMPARISON.map((row) => (
+            <div className="compare-row" role="row" key={row.tool}>
+              <div role="cell" className="compare-tool">{row.tool}</div>
+              <div role="cell">{row.job}</div>
+              <div role="cell">{row.angle}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* -------- Capability -------- */}
       <section className="block block-tinted" id="how">
         <div className="block-inner">
-          <div className="block-header-center">
-            <Eyebrow>How it works</Eyebrow>
-            <h2 className="block-title">Three guarantees, one diamond.</h2>
-          </div>
-          <div className="pillars">
-            <Pillar icon={<Database size={22} />} title="Content-addressed caching">
-              Every output lives at{' '}
-              <Tooltip text="The address is determined by the step name, version, the hash of the input data, and the step's code hash. Same inputs + same code = same address = reused. Change any one and a new output is computed.">
-                <code>hash(step, version, input_hash)</code>
-              </Tooltip>
-              . Re-runs recompute only what changed, at row granularity. Survives reordering, dedup, and appends.
-            </Pillar>
-            <Pillar icon={<History size={22} />} title="An append-only run ledger">
-              Every run, lane, and event recorded immutably in{' '}
-              <Tooltip text="A SQLite database inside .rubedo/. Workers can crash mid-run without corrupting already-committed state, because every write is an insert, never an update.">
-                SQLite
-              </Tooltip>
-              . Workers can die at any point without corrupting committed state. Lineage edges connect each output to what produced it.
-            </Pillar>
-            <Pillar icon={<Eye size={22} />} title="Preview before you run">
-              <Tooltip text="A read-only dry-run that walks every lane and prints what would happen: reuse, execute, blocked, stale, code-drift. No writes, no side effects.">
-                <code>p.plan()</code>
-              </Tooltip>{' '}
-              tells you what <code>p.run()</code> would do to every lane and why — without writing anything.
-            </Pillar>
-          </div>
-
-          <div className="shapes-grid">
-            <div className="code-side">
-              <div className="snippet-label">newsroom.py</div>
-              <CodeBlock code={NEWSROOM_CODE} language="python" className="code-step" />
+          <Eyebrow>How it works</Eyebrow>
+          <h2 className="block-title">Know before you run.</h2>
+          <p className="block-lede">
+            <code>p.plan()</code> is a read-only dry-run: every lane, every verdict —
+            reuse, execute, blocked, stale, code-drift — with no writes.
+            Then <code>p.run()</code> does only what still needs doing.
+          </p>
+          <div className="capability-grid">
+            <div>
+              <div className="snippet-label">Dry-run every lane</div>
+              <CodeBlock code={PLAN_CODE} language="python" className="code-step" />
             </div>
-            <div className="diagram-side">
-              <div className="snippet-label">p.describe(format=&quot;ascii&quot;): live engine output</div>
-              <CodeBlock code={DIAGRAM_CODE} language="text" className="diagram-block" />
-              <div className="shape-legend">
-                <span className="legend-item">
-                  <Tooltip text="1:N fan-out — the step yields multiple payloads, each minting its own content-addressed lane. A folder scan or CSV reader is an expand root.">
-                    <span className="legend-tag">expand</span>
-                  </Tooltip>
-                  1 : N
-                </span>
-                <span className="legend-item">
-                  <Tooltip text="N-way equijoin — matches lanes from parent steps on indexed fields, minting one lane per matched tuple.">
-                    <span className="legend-tag">join</span>
-                  </Tooltip>
-                  N : N
-                </span>
-                <span className="legend-item">
-                  <Tooltip text="N:1 fan-in — folds all surviving lanes from the parent into a single output. Use group_key to partition into one output per unique field value.">
-                    <span className="legend-tag">reduce</span>
-                  </Tooltip>
-                  N : 1
-                </span>
-              </div>
+            <div>
+              <div className="snippet-label">Surgical invalidation</div>
+              <CodeBlock code={INVALIDATE_CODE} language="python" className="code-step" />
             </div>
           </div>
 
-          <div className="two-col flaky-row">
-            <div className="flaky-code-wrap">
+          <div className="capability-beats">
+            <div className="beat">
+              <h3>Content-addressed caching</h3>
+              <p>
+                Every output lives at <code>hash(step, version, input_hash, …)</code>.
+                Re-runs recompute only what changed, at row granularity — surviving
+                reordering, dedup, and appends.
+              </p>
+            </div>
+            <div className="beat">
+              <h3>An append-only run ledger</h3>
+              <p>
+                Every run, lane, and event recorded immutably in SQLite. Workers can die
+                mid-run without corrupting committed state. Lineage edges connect each
+                output to what produced it.
+              </p>
+            </div>
+            <div className="beat">
+              <h3>Retries, rate limits, assertions</h3>
               <CodeBlock code={RETRY_CODE} language="python" className="code-step" />
+              <p>
+                Narrow <code>retry_on</code>, paced workers, <code>stale_after</code> TTLs,
+                and assertions that stop bad data before it commits.
+              </p>
             </div>
-            <ul className="features">
-              <Feature icon={<Repeat size={18} />} title="Retries, narrow by type">
-                Only exceptions matching{' '}
-                <Tooltip text="A tuple of exception classes. Only those retry — a deterministic ValueError won't multiply cost. Every attempt lands in the event log.">
-                  <code>retry_on</code>
-                </Tooltip>{' '}
-                retry, so a deterministic bug doesn&apos;t multiply cost. Every attempt lands in the event log.
-              </Feature>
-              <Feature icon={<ShieldCheck size={18} />} title="Assertions guard downstream">
-                Run against the output before it commits. Bad data never propagates; the lane stops here.
-              </Feature>
-              <Feature icon={<History size={18} />} title="stale_after refreshes the clock">
-                Past the{' '}
-                <Tooltip text="A time-to-live like '24h'. Past this age the cached output is considered stale and the step re-executes. Different bytes supersede; identical bytes just refresh the clock.">
-                  <code>stale_after</code>
-                </Tooltip>{' '}
-                TTL the step re-executes. Different bytes supersede; identical bytes just refresh.
-              </Feature>
-            </ul>
           </div>
         </div>
       </section>
 
-      {/* ---------------- Performance ---------------- */}
-      <section className="block" id="performance">
+      {/* -------- Dashboard -------- */}
+      <section className="block" id="dashboard">
+        <Eyebrow>Dashboard</Eyebrow>
+        <h2 className="block-title">See the whole run — locally.</h2>
+        <p className="block-lede">
+          <code>rubedo serve</code> opens a read-only browser over your ledger:
+          DAGs, lineage, every lane. No account, no cloud.
+        </p>
+        <figure className="dashboard-shot">
+          <img
+            src={dashboardRun}
+            alt="Rubedo dashboard run detail: pipeline DAG with every step reused, status cards showing 22 reused and 0 created, and a per-lane coordinates table."
+            width={1280}
+            height={800}
+            loading="lazy"
+          />
+          <figcaption>
+            Second run of <code>examples/count_lines</code> — created 0, reused 22, in 0.1s.
+          </figcaption>
+        </figure>
+      </section>
+
+      {/* -------- Performance note -------- */}
+      <section className="block perf-note" id="performance">
         <Eyebrow>Performance</Eyebrow>
-        <h2 className="block-title">A columnar data plane, built to plan fast.</h2>
-        <p className="block-lede">
-          Outputs live in per-step, append-only{' '}
-          <Tooltip text="Arrow IPC files under .rubedo/tables/ — one row per lane per attempt. SQLite keeps the transactional control plane (runs, liveness, audit log); the data itself is columnar.">
-            <strong>Arrow IPC</strong>
-          </Tooltip>{' '}
-          files, so the reuse checks that dominate plan time are vectorized scans — not row-by-row
-          SQLite queries.
-        </p>
-        <div className="why-grid">
-          <div className="why-card">
-            <h3>O(matches) planning.</h3>
-            <p>
-              Each step&apos;s table carries an in-memory address index; planning touches only the rows
-              that match, however deep the run history. Liveness is a single SQLite query per run, not
-              per step.
-            </p>
-          </div>
-          <div className="why-card">
-            <h3>Memory until it&apos;s not needed.</h3>
-            <p>
-              A parent&apos;s table stays in memory while any upcoming step still reads it, and flushes
-              write through the cache — durability never costs a re-read.
-            </p>
-          </div>
-          <div className="why-card">
-            <h3>Arrow end-to-end.</h3>
-            <p>
-              A fan-in step can take its input as a <code>pyarrow.Table</code> and a fan-out can return
-              one — no Python-dict round trip. Every output field is searchable with no index to
-              declare.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* ---------------- Get started ---------------- */}
-      <section className="block" id="start">
-        <Eyebrow>Get started</Eyebrow>
-        <h2 className="block-title">Install. Define. Run. Run again.</h2>
-        <div className="start-steps">
-          <CodeBlock code="pip install rubedo" language="bash" />
-          <div className="start-arrow"><ArrowRight size={18} /></div>
-          <CodeBlock code={START_CODE} language="python" className="code-step" />
-        </div>
-        <p className="block-lede">
-          Ingestion is a parentless{' '}
-          <Tooltip text="A step whose parameters name no other step is a root, and a generator root infers shape='expand': it yields multiple payloads, each minting its own content-addressed lane. A folder scan, a csv.DictReader loop, a SQL SELECT all start this way.">
-            <code>@p.step</code> generator
-          </Tooltip>{' '}
-          that yields a payload per item: a folder scan, a <code>csv.DictReader</code> loop, a SQL{' '}
-          <code>SELECT</code>. Each row mints its own content-addressed lane, and{' '}
-          <Tooltip text="Selection queries, join matching, and group_key partitioning all read fields straight off the Arrow output column — there is no index declaration.">
-            every output field is searchable
-          </Tooltip>{' '}
-          — no index to declare.
+        <p className="perf-body">
+          Outputs live in per-step, append-only <strong>Arrow IPC</strong> files, so the
+          reuse checks that dominate plan time are vectorized scans — not row-by-row
+          SQLite. Planning stays fast as history grows.{' '}
+          <a href={`${DOCS_URL}`}>Details in the docs</a>
+          {' · '}
+          <a href={`${GITHUB_URL}/tree/main/benchmarks`} target="_blank" rel="noreferrer">
+            benchmarks
+          </a>
+          .
         </p>
       </section>
 
-      {/* ---------------- Closing CTA ---------------- */}
+      {/* -------- FAQ -------- */}
+      <section className="block block-tinted" id="faq">
+        <div className="block-inner">
+          <Eyebrow>FAQ</Eyebrow>
+          <h2 className="block-title">Straight answers.</h2>
+          <dl className="faq-list">
+            {FAQ.map((item) => (
+              <div className="faq-item" key={item.q}>
+                <dt>{item.q}</dt>
+                <dd>{item.a}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
+      {/* -------- Closing CTA -------- */}
       <section className="closing">
         <div className="closing-inner">
-          <h2>Recompute only what changed. Pay for nothing twice.</h2>
-          <p>
-            A data-science loop for batches. Runs locally today; a managed cloud runtime is coming,
-            so the same pipelines scale without a rewrite.
-          </p>
+          <h2>
+            Reduce. <span className="hero-accent">Reuse.</span> Rubedo.
+          </h2>
+          <p>A data-science loop for batches. Local today. MIT licensed.</p>
           <div className="hero-cta">
             <a className="btn btn-primary" href={DOCS_URL}>
               Read the docs <ArrowRight size={16} />
             </a>
-            <a className="btn btn-outline" href={`${GITHUB_URL}/tree/main/examples`} target="_blank" rel="noreferrer">
+            <a className="btn btn-outline" href={EXAMPLES_URL} target="_blank" rel="noreferrer">
               Browse the examples
             </a>
           </div>
         </div>
       </section>
 
-      {/* ---------------- Footer ---------------- */}
       <footer className="landing-footer">
         <div className="footer-inner">
           <div className="brand">
@@ -402,8 +381,8 @@ function App() {
             <a href={GITHUB_URL} target="_blank" rel="noreferrer">GitHub</a>
             <a href={`${GITHUB_URL}/blob/main/README.md`} target="_blank" rel="noreferrer">README</a>
             <a href={DOCS_URL}>Docs</a>
-            <a href={`${GITHUB_URL}/tree/main/examples`} target="_blank" rel="noreferrer">Examples</a>
-            <a href={`${DOCS_URL}development/invariants/`} target="_blank" rel="noreferrer">Invariants</a>
+            <a href={EXAMPLES_URL} target="_blank" rel="noreferrer">Examples</a>
+            <a href={`${DOCS_URL}development/invariants/`}>Invariants</a>
           </nav>
           <div className="footer-meta">
             Pre-1.0. The API is unstable; schema changes mean deleting <code>.rubedo/</code> and
