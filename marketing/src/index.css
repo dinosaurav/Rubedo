@@ -218,7 +218,7 @@ a:hover { color: var(--accent-hover); }
 }
 
 .hero-proof {
-  max-width: 720px;
+  max-width: 640px;
   animation: rise-in 0.65s ease 0.26s both;
 }
 .snippet-label {
@@ -230,11 +230,18 @@ a:hover { color: var(--accent-hover); }
   margin-bottom: 0.5rem;
 }
 .hero-proof .pre-block {
-  font-size: 0.95rem;
+  font-size: 0.82rem;
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
-  line-height: 1.75;
+  line-height: 1.55;
   background: linear-gradient(180deg, #fff 0%, #faf9f7 100%);
+}
+.hero-code { white-space: pre; }
+.hero-caption {
+  margin-top: 0.75rem;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 .reuse-block { color: var(--text-secondary); }
 

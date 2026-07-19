@@ -9,6 +9,24 @@ const GITHUB_URL = 'https://github.com/dinosaurav/Rubedo'
 const DOCS_URL = `${import.meta.env.BASE_URL}docs/`
 const EXAMPLES_URL = `${GITHUB_URL}/tree/main/examples`
 
+const HERO_CODE = `from rubedo import pipeline, Filtered
+
+p = pipeline(name="triage")
+
+@p.step
+def inbox():
+    for url in open("urls.txt"):
+        yield {"url": url.strip(), "text": download(url)}
+
+@p.step
+def decide(inbox: dict) -> dict | Filtered:
+    out = ask_llm(f"Keep or drop?\\n{inbox['text'][:2000]}")
+    if out["keep"] is False:
+        return Filtered(out["why"])
+    return {"url": inbox["url"], "topic": out["topic"]}
+
+p.run()   # second run: only new urls hit the model`
+
 const REUSE_PROOF = `# first run          created=8  reused=0
 # second run         created=0  reused=8     # nothing recomputed
 # edit one file...   created=2  reused=6     # only that file's lanes re-run`
@@ -141,8 +159,11 @@ function App() {
           </div>
 
           <div className="hero-proof">
-            <div className="snippet-label">Run it twice. Everything reuses.</div>
-            <CodeBlock language="text" className="reuse-block" code={REUSE_PROOF} />
+            <div className="snippet-label">inbox → decide</div>
+            <CodeBlock language="python" className="code-step hero-code" code={HERO_CODE} />
+            <p className="hero-caption">
+              A two-step DAG. Re-run it and only new urls call the model.
+            </p>
           </div>
         </div>
       </section>
