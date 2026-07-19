@@ -52,10 +52,15 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
   features:
+    # No navigation.tabs — top tabs hid the API unless you were already
+    # on the Reference tab (left sidebar only showed that section's
+    # children). Full tree on the left matches typical Python docs
+    # (httpx, pydantic, etc.); page TOC stays on the right.
     - navigation.instant
     - navigation.tracking
-    - navigation.tabs
     - navigation.sections
+    - navigation.expand
+    - navigation.indexes
     - search.suggest
     - search.highlight
     - search.share
@@ -100,14 +105,13 @@ nav:
     - Search & Invalidation: guides/search-and-invalidation.md
     - Inspecting Runs: guides/inspecting-runs.md
     - Retention & GC: guides/retention.md
-  - Reference:
-    - Python API:
-      - Overview: reference/api/index.md
-      - Steps: reference/api/step.md
-      - Pipelines: reference/api/pipeline.md
-      - Selection & Invalidation: reference/api/selection.md
-      - GC & Storage: reference/api/gc.md
-    - CLI: reference/cli.md
+  - API Reference:
+    - reference/api/index.md
+    - Steps: reference/api/step.md
+    - Pipelines: reference/api/pipeline.md
+    - Selection & Invalidation: reference/api/selection.md
+    - GC & Storage: reference/api/gc.md
+  - CLI: reference/cli.md
   - Changelog: changelog.md
   - Development:
     - Contributing: development/contributing.md

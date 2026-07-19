@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (and the `tables` extension is enabled), source dumps are off, and the
   custom CSS no longer paints every heading/code block in red (kept the
   brand hairline + link accent only).
+- Docs navigation: drop Material `navigation.tabs` (top tabs hid the API
+  unless you were already on that section) and put the full tree —
+  including a top-level **API Reference** — in the left sidebar, expanded
+  by default. Page TOC stays on the right.
 
 ## [0.3.0] - 2026-07-18
 
