@@ -18,7 +18,7 @@ def inbox():
     for url in open("urls.txt"):
         yield {"url": url.strip(), "text": download(url)}
 
-@p.step
+@p.step(retries=3, rate_limit="30/min")
 def decide(inbox: dict) -> dict | Filtered:
     out = ask_llm(f"Keep or drop?\\n{inbox['text'][:2000]}")
     if out["keep"] is False:
