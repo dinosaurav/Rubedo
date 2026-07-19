@@ -25,7 +25,7 @@ def decide(inbox: dict) -> dict | Filtered:
         return Filtered(out["why"])
     return {"url": inbox["url"], "topic": out["topic"]}
 
-p.run()   # second run: only new urls hit the model`
+p.run()   # second run: only new urls recompute`
 
 const REUSE_PROOF = `# first run          created=8  reused=0
 # second run         created=0  reused=8     # nothing recomputed
@@ -162,7 +162,7 @@ function App() {
             <div className="snippet-label">inbox → decide</div>
             <CodeBlock language="python" className="code-step hero-code" code={HERO_CODE} />
             <p className="hero-caption">
-              A two-step DAG. Re-run it and only new urls call the model.
+              A two-step DAG. Re-run it and only new urls recompute.
             </p>
           </div>
         </div>
