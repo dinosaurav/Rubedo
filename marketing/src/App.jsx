@@ -38,7 +38,7 @@ const PLAN_CODE = `print(p.plan())
 # no writes, no side effects
 
 summary = p.run()
-# only the execute lanes hit your LLM / API`
+# only the execute lanes actually run`
 
 const INVALIDATE_CODE = `from rubedo import Selection, invalidate
 
@@ -55,12 +55,12 @@ const COMPARISON = [
   {
     tool: 'Airflow / Prefect / Dagster',
     job: 'Orchestrate and monitor workflows',
-    angle: 'Wrong layer — they schedule services, not row-level content-addressed reuse inside a local script.',
+    angle: 'Different layer — they schedule services. Rubedo gives row-level, content-addressed reuse inside a local script.',
   },
   {
     tool: 'dbt',
     job: 'Incremental state for SQL',
-    angle: 'Same idea, for Python steps — especially ones you cannot afford to re-run.',
+    angle: 'Same idea, for Python steps over files, rows, and live sources.',
   },
   {
     tool: 'Make / Snakemake',
@@ -92,8 +92,8 @@ const FAQ = [
     a: 'Bump version for deliberate behavior changes (or edits the engine cannot see, like helpers your step calls). code="auto" folds source edits into the cache key; the default code="warn" never recomputes on edits but warns loudly when reused code has drifted.',
   },
   {
-    q: 'Should I use it for cheap pure-Python maps?',
-    a: 'You can — reuse still works — but the win is expensive or non-idempotent steps: LLM calls, scrapes, paid APIs. That is what the ledger and plan/run loop are built for.',
+    q: 'What is it especially good at?',
+    a: 'Batch DAGs you iterate on — enrichment, scraping, transforms — where you want a real edit-test loop: fix a step, re-run, and keep everything that still holds.',
   },
 ]
 
@@ -124,11 +124,12 @@ function App() {
       {/* -------- Hero -------- */}
       <section className="hero" id="top">
         <div className="hero-inner">
-          <h1>Re-run the pipeline. Pay only for what changed.</h1>
-          <p className="brand-line">Reduce. <span className="hero-accent">Reuse.</span> Rubedo.</p>
+          <h1>
+            Reduce. <span className="hero-accent">Reuse.</span> Rubedo.
+          </h1>
           <p className="lede">
-            Content-addressed caching for Python batch pipelines — built for LLM calls,
-            scrapes, and paid APIs you cannot afford to re-run.
+            Stateful Python pipelines that remember every step —
+            and only recompute what actually changed.
           </p>
           <div className="hero-cta">
             <a className="btn btn-primary" href="#try">
@@ -149,7 +150,7 @@ function App() {
       {/* -------- Why -------- */}
       <section className="block" id="why">
         <Eyebrow>Why</Eyebrow>
-        <h2 className="block-title">Built for enrichment over live services — and the iteration that comes with it.</h2>
+        <h2 className="block-title">An edit-test loop for batch pipelines.</h2>
         <p className="block-lede">
           Rubedo is a <strong>library, not a platform</strong>. No daemon, no registry;
           you import the engine, it never imports you. State lives in a{' '}
@@ -157,10 +158,10 @@ function App() {
         </p>
         <div className="why-list">
           <div className="why-item">
-            <h3>Re-running re-pays.</h3>
+            <h3>Fix the last step. Re-run.</h3>
             <p>
-              Every LLM call or API hit you redo on a code tweak is money burned.
-              The results may not even match.
+              Only that step recomputes. Upstream stays put. Downstream follows the
+              new inputs. Iteration that feels like a notebook — for a DAG.
             </p>
           </div>
           <div className="why-item">
@@ -171,10 +172,10 @@ function App() {
             </p>
           </div>
           <div className="why-item">
-            <h3>Orchestrators are the wrong tool.</h3>
+            <h3>Orchestrators are a different tool.</h3>
             <p>
-              Airflow, Prefect, and Dagster schedule services, not row-level incrementality.
-              dbt does — but only for SQL.
+              Airflow, Prefect, and Dagster schedule and monitor services.
+              Rubedo is dbt-style incrementality for Python — row by row, content-addressed.
             </p>
           </div>
         </div>
@@ -210,7 +211,7 @@ function App() {
       {/* -------- Compare -------- */}
       <section className="block" id="compare">
         <Eyebrow>Where it sits</Eyebrow>
-        <h2 className="block-title">dbt-style state for Python batches — not another orchestrator.</h2>
+        <h2 className="block-title">dbt-style state for Python batches.</h2>
         <div className="compare-table" role="table" aria-label="How Rubedo compares">
           <div className="compare-row compare-head" role="row">
             <div role="columnheader">Tool</div>
@@ -231,15 +232,15 @@ function App() {
       <section className="block block-tinted" id="how">
         <div className="block-inner">
           <Eyebrow>How it works</Eyebrow>
-          <h2 className="block-title">Preview, then pay.</h2>
+          <h2 className="block-title">Know before you run.</h2>
           <p className="block-lede">
             <code>p.plan()</code> is a read-only dry-run: every lane, every verdict —
             reuse, execute, blocked, stale, code-drift — with no writes.
-            Then <code>p.run()</code> executes only what actually needs to.
+            Then <code>p.run()</code> does only what still needs doing.
           </p>
           <div className="capability-grid">
             <div>
-              <div className="snippet-label">Plan before you spend</div>
+              <div className="snippet-label">Dry-run every lane</div>
               <CodeBlock code={PLAN_CODE} language="python" className="code-step" />
             </div>
             <div>
@@ -266,10 +267,10 @@ function App() {
               </p>
             </div>
             <div className="beat">
-              <h3>Built for flaky, expensive work</h3>
+              <h3>Retries, rate limits, assertions</h3>
               <CodeBlock code={RETRY_CODE} language="python" className="code-step" />
               <p>
-                Narrow <code>retry_on</code>, rate limits, <code>stale_after</code> TTLs,
+                Narrow <code>retry_on</code>, paced workers, <code>stale_after</code> TTLs,
                 and assertions that stop bad data before it commits.
               </p>
             </div>
@@ -280,10 +281,10 @@ function App() {
       {/* -------- Dashboard -------- */}
       <section className="block" id="dashboard">
         <Eyebrow>Dashboard</Eyebrow>
-        <h2 className="block-title">Browse runs, lineage, and outputs — locally.</h2>
+        <h2 className="block-title">See the whole run — locally.</h2>
         <p className="block-lede">
-          <code>rubedo serve</code> opens a read-only browser over your ledger.
-          Same blueprint aesthetic. No account, no cloud.
+          <code>rubedo serve</code> opens a read-only browser over your ledger:
+          DAGs, lineage, every lane. No account, no cloud.
         </p>
         <figure className="dashboard-shot">
           <img
@@ -334,7 +335,9 @@ function App() {
       {/* -------- Closing CTA -------- */}
       <section className="closing">
         <div className="closing-inner">
-          <h2>Recompute only what changed.</h2>
+          <h2>
+            Reduce. <span className="hero-accent">Reuse.</span> Rubedo.
+          </h2>
           <p>A data-science loop for batches. Local today. MIT licensed.</p>
           <div className="hero-cta">
             <a className="btn btn-primary" href={DOCS_URL}>
