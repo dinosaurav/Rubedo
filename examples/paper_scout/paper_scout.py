@@ -52,13 +52,12 @@ p = pipeline(name="paper-scout", params_model=ScoutParams)
 
 
 @p.step(check_cache=False)
-def discover(params: ScoutParams):
+def discover(params: dict):
     """Search afresh, yielding stable OpenAlex ids rather than full records."""
     query = urllib.parse.urlencode({
-        "search": params.query,
-        "per-page": params.limit,
-        "sort": "publication_date:desc",
-        "select": "id,title,publication_year",
+        "search": params["query"],
+        "per-page": params["limit"],
+        "select": "id",
     })
     payload = _get_json(f"{OPENALEX}/works?{query}")
     for work in payload.get("results", []):
@@ -125,7 +124,9 @@ def main():
     print(p.describe())
     print(f"\nDiscovering {params['limit']} papers about {params['query']!r}…")
     baseline = p.run(params=params, targets=[discover], workers=1)
-    candidates = baseline.cells("discover")
+    if baseline.failed_count or baseline.blocked_count:
+        raise RuntimeError(f"discovery failed: {baseline.failures()}")
+    candidates = baseline.cells("discover", status=("created", "reused"))
     if not candidates:
         raise RuntimeError("OpenAlex returned no papers for this query")
 
@@ -146,6 +147,8 @@ def main():
         targets=[fetch_work],
         workers=4,
     )
+    if trial.failed_count or trial.blocked_count:
+        raise RuntimeError(f"pilot failed: {trial.failures()}")
     for work in trial.output_for("fetch_work").values():
         print(
             f"  • {work['title']} — {work['citations']} citations"
@@ -158,6 +161,8 @@ def main():
 
     print("\nRolling out the full cohort; pilot fetches will be cache hits…")
     full = p.run(params=params, workers=4)
+    if full.failed_count or full.blocked_count:
+        raise RuntimeError(f"rollout failed: {full.failures()}")
     pilot_addresses = {
         cell.output_address
         for cell in trial.cells("fetch_work")
