@@ -72,6 +72,13 @@ Filtered cells are compared honestly (they carry a cached verdict and an
 - Top-level **strings** → unified text diff (`difflib`)
 - Lists / scalars → `old` / `new` without invented element semantics
 
+Arrow represents heterogeneous dictionary outputs with one union struct
+schema, reading keys absent from an individual lane back as null. Structural
+diff treats those null placeholders as absent so added/removed fields remain
+useful. Consequently an explicit `None` value and a missing key are
+indistinguishable at this presentation layer; `output_identity` remains the
+authoritative changed/unchanged test.
+
 ## Coordinate universe
 
 1. **`lanes=`** — explicit freeze (order preserved, duplicates dropped).
@@ -82,6 +89,9 @@ Filtered cells are compared honestly (they carry a cached verdict and an
    missing from `after` (scope_missing) stay in the result as `removed`.
 3. Else — **union** of coordinates observed at that step in either run
    (typical full-vs-full comparison).
+
+An explicitly empty cohort compares zero lanes and is reported as such; it
+does not mean the full baseline was unchanged.
 
 Scope lane keys are only meaningful at the anchor map step. Diffing a
 downstream expand / join / aggregate against a partial's cohort is not

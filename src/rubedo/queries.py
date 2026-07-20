@@ -225,6 +225,7 @@ def get_run_cells(
     step: Optional[str] = None,
     status: Optional[str | Collection[str]] = None,
     resolve_output: bool = False,
+    address_rows: Optional[dict[str, dict[str, Any]]] = None,
 ) -> list[Cell]:
     """Return the ledger cells recorded for a single run."""
     query = session.query(RunCoordinateStatus).filter(RunCoordinateStatus.run_id == run_id)
@@ -235,7 +236,9 @@ def get_run_cells(
         query = query.filter(RunCoordinateStatus.status.in_(statuses))
 
     rows = query.order_by(RunCoordinateStatus.id.asc()).all()
-    arrow_idx = home.lanes.address_row_index()
+    arrow_idx = (
+        address_rows if address_rows is not None else home.lanes.address_row_index()
+    )
     return [
         _cell_from_rc(rc, home=home, arrow_idx=arrow_idx, resolve_output=resolve_output)
         for rc in rows

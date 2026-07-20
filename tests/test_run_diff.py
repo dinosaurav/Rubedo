@@ -464,6 +464,100 @@ def test_added_removed_failed_filtered_and_explicit_lanes():
     assert ghost not in coords
 
 
+def test_parent_propagated_filtered_is_unchanged():
+    create_file("drop.txt", "x")
+
+    @step
+    def gate(scan: dict):
+        return Filtered("not selected")
+
+    @step
+    def child(gate: dict):
+        return gate
+
+    pipe = pipeline(
+        name="propagated-filter-diff",
+        steps=[scan, gate, child],
+        home=TEST_HOME,
+    )
+    before = pipe.run(workers=1)
+    after = pipe.run(workers=1)
+
+    child_cells = after.cells("child")
+    assert len(child_cells) == 1
+    assert child_cells[0].status == "filtered"
+    assert child_cells[0].output_address is None
+
+    diff = TEST_HOME.diff(step="child", before=before, after=after)
+    assert diff.counts["unchanged"] == 1
+    assert diff.counts["changed"] == 0
+
+
+def test_native_arrow_struct_null_fill_keeps_added_removed_semantics():
+    create_file("a.txt", "a")
+    create_file("b.txt", "b")
+
+    @step(name="enrich", version="1")
+    def enrich_v1(scan: dict):
+        if scan["path"] == "a.txt":
+            return {"path": "a.txt", "meta": {"keep": 1, "removed": 2}}
+        return {"path": "b.txt", "meta": {"keep": 1, "other": 9}}
+
+    @step(name="enrich", version="2")
+    def enrich_v2(scan: dict):
+        if scan["path"] == "a.txt":
+            return {"path": "a.txt", "meta": {"keep": 2, "added": 3}}
+        return {"path": "b.txt", "meta": {"keep": 1, "other": 9}}
+
+    before = pipeline(
+        name="struct-field-diff",
+        steps=[scan, enrich_v1],
+        home=TEST_HOME,
+    ).run(workers=1)
+    after = pipeline(
+        name="struct-field-diff",
+        steps=[scan, enrich_v2],
+        home=TEST_HOME,
+    ).run(workers=1)
+
+    coordinate = _coord_for("a.txt")
+    diff = TEST_HOME.diff(
+        step="enrich",
+        before=before,
+        after=after,
+        lanes=[coordinate],
+    )
+    changes = {change.path: change for change in diff.items[0].changes}
+    assert changes["meta.keep"].outcome == "changed"
+    assert changes["meta.removed"].outcome == "removed"
+    assert changes["meta.added"].outcome == "added"
+
+
+def test_empty_partial_cohort_reports_zero_compared_lanes():
+    create_file("a.txt", "a")
+
+    @step
+    def enrich(scan: dict):
+        return scan
+
+    pipe = pipeline(
+        name="empty-cohort-diff",
+        steps=[scan, enrich],
+        home=TEST_HOME,
+    )
+    before = pipe.run(workers=1)
+    after = pipe.run(
+        scope=RunScope.explicit(anchor=enrich, lanes=[]),
+        targets=[enrich],
+        workers=1,
+    )
+
+    diff = TEST_HOME.diff(step="enrich", before=before, after=after)
+    assert diff.items == ()
+    assert sum(diff.counts.values()) == 0
+    assert "empty coordinate universe; compared 0 lanes" in str(diff)
+
+
 # ---------------------------------------------------------------------------
 # Errors + read-only + RunSummary.diff
 # ---------------------------------------------------------------------------

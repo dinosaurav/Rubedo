@@ -139,7 +139,9 @@ class RunDiff:
             for item in self.items
             if item.outcome != "unchanged"
         ]
-        if not interesting:
+        if not self.items:
+            lines.append("  (empty coordinate universe; compared 0 lanes)")
+        elif not interesting:
             lines.append("  (no differences)")
         else:
             for item in interesting:
@@ -181,9 +183,15 @@ def _selection_payload(run: Run) -> Optional[dict[str, Any]]:
         return None
     try:
         payload = json.loads(str(run.selection_json))
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
+    except Exception as exc:
+        raise ValueError(
+            f"run {run.id!r} has invalid selection_json"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"run {run.id!r} selection_json must contain an object"
+        )
+    return payload
 
 
 def _cohort_lanes(run: Run, step: str) -> Optional[list[str]]:
@@ -195,9 +203,11 @@ def _cohort_lanes(run: Run, step: str) -> Optional[list[str]]:
         return None
     if payload.get("anchor") != step:
         return None
-    lanes = payload.get("lanes")
-    if lanes is None:
-        return None
+    if "lanes" not in payload:
+        raise ValueError(
+            f"run {run.id!r} scope at {step!r} has no persisted lanes"
+        )
+    lanes = payload["lanes"]
     if not isinstance(lanes, (list, tuple)):
         raise ValueError(
             f"run {run.id!r} selection_json.lanes must be a list; "
@@ -258,6 +268,27 @@ def _diff_dicts(
     return changes
 
 
+def _without_arrow_null_fill(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Treat null struct fields as absent for structural comparison.
+
+    Arrow unifies heterogeneous dict keys into one struct schema and reads a
+    key missing from a particular lane back as ``None``. The original output
+    identity remains authoritative for whether the value changed; dropping
+    those null placeholders restores useful added/removed field semantics.
+    Explicit ``None`` and an absent key are indistinguishable after this
+    storage round-trip, so both intentionally compare as absent.
+    """
+    return {
+        str(key): (
+            _without_arrow_null_fill(item)
+            if isinstance(item, Mapping)
+            else item
+        )
+        for key, item in value.items()
+        if item is not None
+    }
+
+
 def diff_values(before: Any, after: Any) -> tuple[ValueChange, ...]:
     """Field-level value diff used by cell comparison.
 
@@ -266,8 +297,14 @@ def diff_values(before: Any, after: Any) -> tuple[ValueChange, ...]:
     """
     if before == after:
         return ()
-    if isinstance(before, dict) and isinstance(after, dict):
-        return tuple(_diff_dicts(before, after, prefix=""))
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        return tuple(
+            _diff_dicts(
+                _without_arrow_null_fill(before),
+                _without_arrow_null_fill(after),
+                prefix="",
+            )
+        )
     if isinstance(before, str) and isinstance(after, str):
         return (
             ValueChange(
@@ -301,6 +338,15 @@ def _classify_outcome(
             return "changed"
         before_id = before.output_identity
         after_id = after.output_identity
+        if (
+            before.status == "filtered"
+            and after.status == "filtered"
+            and before_id is None
+            and after_id is None
+        ):
+            # Both are parent-propagated filtered cells. They have no own
+            # materialization/address; the matching status is the full fact.
+            return "unchanged"
         if (
             before_id is not None
             and after_id is not None
@@ -386,12 +432,40 @@ def diff_runs(
                 f"{after_id!r} is {after_pipeline!r}"
             )
 
+        # First read only RCS metadata (an explicit empty row index avoids the
+        # generic all-home Arrow index), then resolve exactly the addresses
+        # present in these two runs from this one step's table.
+        before_meta = get_run_cells(
+            session,
+            home,
+            before_id,
+            step=step,
+            resolve_output=False,
+            address_rows={},
+        )
+        after_meta = get_run_cells(
+            session,
+            home,
+            after_id,
+            step=step,
+            resolve_output=False,
+            address_rows={},
+        )
+        addresses = {
+            cell.output_address
+            for cell in before_meta + after_meta
+            if cell.output_address is not None
+        }
+        address_rows = home.lanes.rows_by_address(
+            before_pipeline, step, addresses
+        )
         before_cells = get_run_cells(
             session,
             home,
             before_id,
             step=step,
             resolve_output=True,
+            address_rows=address_rows,
         )
         after_cells = get_run_cells(
             session,
@@ -399,6 +473,7 @@ def diff_runs(
             after_id,
             step=step,
             resolve_output=True,
+            address_rows=address_rows,
         )
 
         if not _run_mentions_step(before_run, step, before_cells):

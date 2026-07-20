@@ -747,13 +747,26 @@ class LaneStore:
         if not fulfilled_addrs:
             return {}
 
-        # Step 2: filter the Arrow table to only fulfilled addresses using
-        # pc.is_in (C++ vectorized kernel) before converting to Python.
-        # Only the matching rows are materialized — the scan itself stays
-        # in Arrow's native compute engine, not Python dicts.
+        return self.rows_by_address(pipeline_id, step_name, fulfilled_addrs)
+
+    def rows_by_address(
+        self,
+        pipeline_id: str,
+        step_name: str,
+        addresses: set,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Latest historical rows for selected addresses, ignoring liveness.
+
+        Read surfaces such as run diff need superseded/invalidated generations
+        too. This uses the same per-step address index as planning instead of
+        building a Python index over every Arrow file in the home.
+        """
+        if not addresses:
+            return {}
+
         result: Dict[str, Dict[str, Any]] = {}
 
-        # Step 2: use the cached address→row_index for O(matches) lookups.
+        # Use the cached address→row_index for O(matches) lookups.
         # The index covers the on-disk table; in-memory buffer rows (current
         # run, not yet flushed) are scanned linearly after the index probe —
         # they're small and buffer rows override disk rows (newest wins).
@@ -761,7 +774,7 @@ class LaneStore:
 
         # 2a: index probe into the on-disk table
         disk_indices: List[int] = []
-        for addr in fulfilled_addrs:
+        for addr in addresses:
             idx = addr_index.get(addr)
             if idx is not None:
                 disk_indices.append(idx)
@@ -778,19 +791,19 @@ class LaneStore:
         buf_rows = self._buffer(pipeline_id, step_name)
         for row in buf_rows:
             buf_addr: Any = row.get("address")
-            if buf_addr in fulfilled_addrs:
+            if buf_addr in addresses:
                 result[buf_addr] = row
 
         arrow_batches = self._arrow_batch_buffer(pipeline_id, step_name)
         for batch in arrow_batches:
             for row in batch.to_pylist():
                 addr = row.get("address")
-                if addr in fulfilled_addrs:
+                if addr in addresses:
                     result[addr] = row
 
-        # 2c: check the anchor file/buffer for anchor addresses.
+        # Check the anchor file/buffer for anchor addresses.
         # Anchors are stored separately to avoid output-type pollution.
-        anchor_addrs = fulfilled_addrs - set(result)
+        anchor_addrs = addresses - set(result)
         if anchor_addrs:
             akey = self._anchor_key(pipeline_id, step_name)
             anchor_buf = self._run_buffers.get(akey, [])
