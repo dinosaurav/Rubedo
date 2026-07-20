@@ -291,7 +291,7 @@ function App() {
         <h2 className="block-title">See the whole run — locally.</h2>
         <p className="block-lede">
           <code>rubedo serve</code> opens a read-only browser over your ledger:
-          DAGs, lineage, every lane. No account, no cloud.
+          live runs, DAGs, lineage, every lane. No account, no cloud.
         </p>
         <figure className="dashboard-shot">
           <img
