@@ -299,7 +299,6 @@ a:hover { color: var(--accent-hover); }
 .why-item code,
 .beat code,
 .faq-item code,
-.perf-body code,
 .try-note code,
 figcaption code {
   font-family: var(--font-mono);
@@ -388,24 +387,13 @@ figcaption code {
 }
 
 /* ---------- Capability ---------- */
-.capability-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  margin-bottom: 2.5rem;
-}
-.capability-grid .pre-block {
-  margin: 0;
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-md);
-  line-height: 1.6;
-}
 .capability-beats {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  border-top: 1px solid var(--border-color);
-  padding-top: 2rem;
+  border-top: 1px solid var(--border-strong);
+  padding-top: 1.75rem;
+  margin-top: 0.25rem;
 }
 .beat h3 {
   font-size: 1.05rem;
@@ -418,6 +406,7 @@ figcaption code {
   line-height: 1.55;
   max-width: 680px;
 }
+.beat p strong { color: var(--text-primary); font-weight: 700; }
 .beat .pre-block {
   margin: 0 0 0.85rem;
   border: 1px solid var(--border-strong);
@@ -449,21 +438,6 @@ figcaption code {
   border-top: 1px solid var(--border-color);
   background: var(--bg-sidebar);
 }
-
-/* ---------- Performance note ---------- */
-.perf-note {
-  padding-top: 2.75rem;
-  padding-bottom: 2.75rem;
-}
-.perf-note .section-label { margin-bottom: 0.75rem; }
-.perf-body {
-  font-size: 1.02rem;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  max-width: 720px;
-  margin: 0;
-}
-.perf-body strong { color: var(--text-primary); font-weight: 700; }
 
 /* ---------- FAQ ---------- */
 .faq-list {
@@ -529,7 +503,6 @@ figcaption code {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
-  .capability-grid { grid-template-columns: 1fr; }
   .compare-row {
     grid-template-columns: 1fr;
     gap: 0.35rem;
@@ -544,7 +517,6 @@ figcaption code {
   .hero { padding: 3.5rem 1.25rem 3rem; }
   .block { padding: 3rem 1.25rem; }
   .block-tinted { padding-left: 1.25rem; padding-right: 1.25rem; }
-  .perf-note { padding-top: 2.25rem; padding-bottom: 2.25rem; }
   .closing { padding: 3rem 1.25rem; }
   .landing-footer { padding: 2rem 1.25rem 2.5rem; }
 }

@@ -51,18 +51,6 @@ print(p.plan())   # dry-run: what would run, and why
 summary = p.run()
 print(f"created={summary.created_count} reused={summary.reused_count}")`
 
-const PLAN_CODE = `print(p.plan())
-# every lane: reuse | execute | blocked | stale | code-drift
-# no writes, no side effects
-
-summary = p.run()
-# only the execute lanes actually run`
-
-const INVALIDATE_CODE = `from rubedo import Selection, invalidate
-
-invalidate(Selection(index={"company": "acme"}))
-# next run recomputes acme — and only acme's downstream`
-
 const RETRY_CODE = `@p.step(retries=3, retry_on=(TimeoutError, ConnectionError),
         retry_backoff=2, rate_limit="30/min",
         stale_after="24h",
@@ -173,9 +161,8 @@ function App() {
         <Eyebrow>Why</Eyebrow>
         <h2 className="block-title">An edit-test loop for batch pipelines.</h2>
         <p className="block-lede">
-          Rubedo is a <strong>library, not a platform</strong>. No daemon, no registry;
-          you import the engine, it never imports you. State lives in a{' '}
-          <code>.rubedo/</code> directory, created on first run.
+          Rubedo is a <strong>library, not a platform</strong> — no daemon, no
+          registry. State lives in <code>.rubedo/</code>, created on first run.
         </p>
         <div className="why-list">
           <div className="why-item">
@@ -189,7 +176,9 @@ function App() {
             <h3>Ad-hoc caches go stale silently.</h3>
             <p>
               A pickle file or <code>functools.cache</code> cannot tell when an upstream
-              step&apos;s code changed. Yesterday&apos;s results mix with today&apos;s — no warning.
+              step&apos;s code changed — and if anything survives at all, the rules are
+              whoever wrote the tempfile. Rubedo persists every output to disk, with
+              clear, configurable retention.
             </p>
           </div>
           <div className="why-item">
@@ -221,11 +210,6 @@ function App() {
               <CodeBlock language="text" className="reuse-block" code={REUSE_PROOF} />
             </li>
           </ol>
-          <p className="block-lede try-note">
-            Ingestion is a parentless generator step that yields a payload per item —
-            a folder scan, a <code>csv.DictReader</code> loop, a SQL <code>SELECT</code>.
-            Each row mints its own content-addressed lane.
-          </p>
         </div>
       </section>
 
@@ -249,27 +233,11 @@ function App() {
         </div>
       </section>
 
-      {/* -------- Capability -------- */}
+      {/* -------- How it works -------- */}
       <section className="block block-tinted" id="how">
         <div className="block-inner">
           <Eyebrow>How it works</Eyebrow>
-          <h2 className="block-title">Know before you run.</h2>
-          <p className="block-lede">
-            <code>p.plan()</code> is a read-only dry-run: every lane, every verdict —
-            reuse, execute, blocked, stale, code-drift — with no writes.
-            Then <code>p.run()</code> does only what still needs doing.
-          </p>
-          <div className="capability-grid">
-            <div>
-              <div className="snippet-label">Dry-run every lane</div>
-              <CodeBlock code={PLAN_CODE} language="python" className="code-step" />
-            </div>
-            <div>
-              <div className="snippet-label">Surgical invalidation</div>
-              <CodeBlock code={INVALIDATE_CODE} language="python" className="code-step" />
-            </div>
-          </div>
-
+          <h2 className="block-title">Content-addressed. Crash-honest. Fast to plan.</h2>
           <div className="capability-beats">
             <div className="beat">
               <h3>Content-addressed caching</h3>
@@ -295,6 +263,20 @@ function App() {
                 and assertions that stop bad data before it commits.
               </p>
             </div>
+            <div className="beat">
+              <h3>A columnar data plane</h3>
+              <p>
+                Outputs live in per-step, append-only <strong>Arrow IPC</strong> files, so
+                the reuse checks that dominate plan time are vectorized scans — not
+                row-by-row SQLite. Planning stays fast as history grows.{' '}
+                <a href={DOCS_URL}>Details in the docs</a>
+                {' · '}
+                <a href={`${GITHUB_URL}/tree/main/benchmarks`} target="_blank" rel="noreferrer">
+                  benchmarks
+                </a>
+                .
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -305,7 +287,7 @@ function App() {
         <h2 className="block-title">See the whole run — locally.</h2>
         <p className="block-lede">
           <code>rubedo serve</code> opens a read-only browser over your ledger:
-          DAGs, lineage, every lane. No account, no cloud.
+          live runs, DAGs, lineage, every lane. No account, no cloud.
         </p>
         <figure className="dashboard-shot">
           <img
@@ -319,22 +301,6 @@ function App() {
             Second run of <code>examples/count_lines</code> — created 0, reused 22, in 0.1s.
           </figcaption>
         </figure>
-      </section>
-
-      {/* -------- Performance note -------- */}
-      <section className="block perf-note" id="performance">
-        <Eyebrow>Performance</Eyebrow>
-        <p className="perf-body">
-          Outputs live in per-step, append-only <strong>Arrow IPC</strong> files, so the
-          reuse checks that dominate plan time are vectorized scans — not row-by-row
-          SQLite. Planning stays fast as history grows.{' '}
-          <a href={`${DOCS_URL}`}>Details in the docs</a>
-          {' · '}
-          <a href={`${GITHUB_URL}/tree/main/benchmarks`} target="_blank" rel="noreferrer">
-            benchmarks
-          </a>
-          .
-        </p>
       </section>
 
       {/* -------- FAQ -------- */}
