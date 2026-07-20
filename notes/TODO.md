@@ -66,6 +66,17 @@ two — and post-item-34 they all hang off one injected `Home`:
    Arrow IPC under `tables/<pipeline>/<step>.arrow` locally) — the
    content plane: reuse reads it, so a shared deployment must share it.
 
+**Provider north stars — examples, not commitments.** Design the seams
+against **Neon Postgres** for the ledger and **Cloudflare R2** for objects +
+Arrow segments because they give the low-idle-cost shape this project wants;
+the production-locality counterexample is AnyScale on AWS with same-region
+S3. Provider names remain recipes, never engine enums: any normal SQLAlchemy
+Postgres URL (Neon, Supabase, RDS/Aurora, self-hosted) must fit `Home.db`, and
+any S3-compatible endpoint (R2, S3, Backblaze B2, MinIO) must fit the same
+store/lane protocols through endpoint + credential configuration. Native GCS
+may implement those protocols later. Optimize interfaces for this common
+matrix without making any one vendor mandatory.
+
 **Settled decisions (owner design session 2026-07-11; re-verified
 2026-07-18; composition root updated 2026-07-20 after item 34 — do not
 re-litigate the planes, only the attach point):**
@@ -189,6 +200,17 @@ Today `execution.py` offers `executor="thread"|"process"`, both single-machine.
 The execute path already treats "the pool" as anything satisfying
 `.submit(fn, *args, **kwargs) -> Future-with-.result()` —
 the same shape `dask.distributed` and a thin `ray` wrapper expose.
+
+**Provider north star — example, not commitment.** The primary recipe should
+be Rubedo's coordinator running as an **AnyScale Job**, with a factory-built
+Ray executor submitting step bodies to workers. AnyScale/Ray is the design
+fixture, not a named backend: Dask, Ray outside AnyScale, and other
+Future-shaped pools must fit the identical factory seam. Workers never write
+the ledger or Arrow lane plane directly. Direct worker access to spilled
+object bytes is the optional item-13 optimization; inline dict/text payloads
+route by value through Ray first, and measurement decides whether refs are
+needed. An S3/R2 implementation must expose a picklable worker-safe config
+from the start so item 13 does not require redesign.
 
 **Settled decisions (owner design session 2026-07-11 — do not re-litigate):**
 
