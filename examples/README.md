@@ -29,6 +29,7 @@ that the second run recomputes only what actually changed.
 | [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
 | [`dask_executor`](dask_executor/) | local Dask cluster (optional install) | expand → map → reduce | a zero-argument external executor factory; Dask runs step bodies and Rubedo fully reuses the second run |
+| [`ray_executor`](ray_executor/) | local Ray cluster (`ray` in the dev group) | expand → map → reduce | same external-executor shape as Dask, with a thin `ObjectRef.future()` pool adapter |
 | [`expand_feed`](expand_feed/) | local files (self-contained) | expand | the expand shape (inferred from a generator step) — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
 | [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple source-shaped `@p.step` roots, an N-way `join_on=` join, a generator expand, and a `group_key` reduce |
 | [`pdf_digest`](pdf_digest/) | a PDF + a vision & a text LLM | map root → expand → LLM → reduce → 2× LLM | a **source-less `map` root** (the PDF path is a param), a cheap vision LLM on figure pages, and a picture-aware vs text-only summary comparison |

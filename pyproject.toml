@@ -56,9 +56,9 @@ s3 = ["boto3>=1.34.0"]
 
 # Most examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via
 # OpenRouter) using only the standard library. A few need a library (e.g.
-# pdf_digest uses PyMuPDF); those live in the dev dependency group, so
-# `uv run python examples/...` just works. LLM examples read
-# OPENROUTER_API_KEY from a .env file at the repo root.
+# pdf_digest uses PyMuPDF, ray_executor uses Ray); those live in the dev
+# dependency group, so `uv run python examples/...` just works. LLM examples
+# read OPENROUTER_API_KEY from a .env file at the repo root.
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -86,6 +86,7 @@ dev = [
     "pyarrow>=15.0.0",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
+    "ray>=2.40.0",  # examples/ray_executor: local Ray Future-shaped pool
     "ruff>=0.15.20",
     "scipy>=1.17.1",
     "tree-sitter>=0.26.0",

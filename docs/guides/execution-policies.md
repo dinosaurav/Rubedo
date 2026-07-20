@@ -151,7 +151,9 @@ Factories appear in recorded definitions as
 addresses. Prefer a named factory over a lambda so run snapshots are
 readable. See the optional
 [`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor)
-example for a complete two-run reuse demonstration.
+and
+[`ray_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/ray_executor)
+examples for complete two-run reuse demonstrations.
 
 ## `schedule`: execution order, never results
 
