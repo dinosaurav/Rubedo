@@ -404,8 +404,9 @@ figcaption code {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  border-top: 1px solid var(--border-color);
-  padding-top: 2rem;
+  border-top: 1px solid var(--border-strong);
+  padding-top: 1.75rem;
+  margin-top: 0.25rem;
 }
 .beat h3 {
   font-size: 1.05rem;
@@ -418,6 +419,7 @@ figcaption code {
   line-height: 1.55;
   max-width: 680px;
 }
+.beat p strong { color: var(--text-primary); font-weight: 700; }
 .beat .pre-block {
   margin: 0 0 0.85rem;
   border: 1px solid var(--border-strong);
