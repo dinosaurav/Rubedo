@@ -328,31 +328,6 @@ ledger row and the re-run heals.
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
 
-- **Sinks / reverse ETL** (the return leg of the refinement loop:
-  CSV/Sheet in → refined batch back out; Sheets via gspread, Excel via
-  openpyxl as extras, CSV/Parquet trivially). **Owner re-raised
-  2026-07-18 ("reverse ETL") — this is the next design session to
-  schedule.** Belongs **in code, in the pipeline
-  file** — settled. The open fork is **step vs verb**, and it's the
-  real design session. Owner leans *step* for simplicity
-  (2026-07-13): a terminal aggregate that writes the target gets
-  change-detection free from the planner (inputs unchanged → reuse →
-  no write — the incremental-sync diff with zero new concepts), shows
-  delivery in `describe()`/lineage, and is in fact writable today
-  with no new machinery. The tension to resolve before blessing it:
-  the ledger is trustworthy because it describes a store the engine
-  owns; a Sheet is mutable external state, so a *cached* "delivered"
-  can silently go false (hand-edited/replaced target won't re-write
-  without a version bump), delivery failures conflate with refinement
-  failures in run outcomes, and the sink's materialization is a
-  receipt, not data — entering GC/retention/lineage machinery built
-  for data. Candidate synthesis: declared in the pipeline and drawn
-  in the DAG like a step, but diffs against the ledger's own record
-  (not assumed target state) and logs delivery as events rather than
-  materializations. Verb alternative (`p.export(select=..., to=...)`
-  as a ledger projection at the server's altitude) stays on the table
-  as the re-assertable/repair-friendly shape.
-
 - **Bucketed aggregation / `allocate`** (batching lanes into ~N-sized
   groups — owner re-raised 2026-07-18 as an "allocate" shape). The naive
   "first 50 to finish" is nondeterministic and breaks order-independent
@@ -423,6 +398,19 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-20 — reverse ETL descoped (owner design session):** no sink
+  shape, terminal-only rule, export verb, delivery ledger, or connector
+  protocol. An external write is an ordinary step whose materialized
+  output is its receipt; that receipt may feed downstream steps like any
+  other data. Map gives surgical per-lane delivery, aggregate/fold gives
+  batch delivery, and existing cache/retry/rate-limit/staleness/
+  invalidation policies cover execution and repair. Reuse means only that
+  the operation previously succeeded for those inputs, never that mutable
+  external state was just verified; verification is a separate read step.
+  Destination code stays user-owned. Revisit only for a demonstrated
+  missing primitive — most plausibly exposing a deterministic execution
+  id/output address so an idempotent destination can close the
+  write-succeeded/receipt-not-committed crash window.
 - **2026-07-20 — item 35 shipped (public read/query surface +
   ephemeral Home):** `queries.py` now exposes `Cell` plus
   `get_run_cells`, `get_current_cells`, and `select_cells`; `Home.cells`,
