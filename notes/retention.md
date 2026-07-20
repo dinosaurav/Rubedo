@@ -96,8 +96,11 @@ and the sweep is a pure consequence of liveness.
 
 ## Guarantees
 
-- **The latest run of every pipeline always survives**, under both
-  policies.
+- **The latest execution and the latest *full* (`kind='process'`) run of
+  every pipeline always survive**, under both policies. Thus a fresh partial
+  trial remains reusable, while that newer `kind='partial'` run cannot
+  displace the authoritative full snapshot from the keep-set or global-budget
+  protection.
 - **Ledger rows are never deleted.** A pruned generation keeps its
   materialization row, its lineage edges, its index entries, and gains a
   `pruned` lifecycle row. `trace` still walks through it; only the payload

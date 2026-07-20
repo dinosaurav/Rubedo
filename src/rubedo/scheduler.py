@@ -19,7 +19,7 @@ concurrently within the same segment.
 """
 
 import concurrent.futures
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import loky
 
@@ -28,6 +28,9 @@ from .ledger import _commit_execution_result, _record_planned, _RunContext
 from .models import Filtered
 from .planning import ROOT_LANE, RootItem, StepDecision, _plan_step, _step_accepts_params
 from .spec import PipelineSpec, StepSpec
+
+if TYPE_CHECKING:
+    from .scope import RunScope
 
 SCHEDULES = ("broad", "deep")
 
@@ -95,6 +98,7 @@ def _run_segment(
     workers: Optional[int],
     memo: _RunMemo,
     progress_cb: Optional[Callable[[str, str, str], None]],
+    scope: Optional["RunScope"] = None,
 ) -> None:
     """Drive one segment of the DAG to completion — the one scheduler.
 
@@ -108,6 +112,10 @@ def _run_segment(
 
     Scheduling changes order only: addresses, statuses, and lifecycle rows
     are computed by the same planning/ledger code either way.
+
+    When ``scope`` is set, the anchor step plans *only* requested
+    coordinates (via ``_plan_step(..., lanes=...)``). Out-of-scope lanes are
+    absent — no ``filtered`` decisions and no ``RunCoordinateStatus`` rows.
     """
     in_segment = {s.name for s in seg_steps}
     consumers: Dict[str, List[StepSpec]] = {}
@@ -126,6 +134,14 @@ def _run_segment(
     thread_pools: Dict[str, concurrent.futures.ThreadPoolExecutor] = {}
     process_pools: Dict[str, Any] = {}
     in_flight: Dict[concurrent.futures.Future, StepSpec] = {}
+    scope_lanes = frozenset(scope.lanes) if scope is not None else None
+    scope_anchor = scope.anchor if scope is not None else None
+    if scope_anchor is not None:
+        from .scope import coordinate_preserving_scope_steps
+
+        scoped_steps = coordinate_preserving_scope_steps(pipeline, scope_anchor)
+    else:
+        scoped_steps = set()
 
     def dispatch(step: StepSpec, decision: StepDecision) -> None:
         # Two layers, on purpose: the thread pool orchestrates the retry
@@ -162,6 +178,14 @@ def _run_segment(
 
     def plan_cells(step: StepSpec, lanes: Optional[List[str]]) -> None:
         """Plan a step (whole, or one lane's cell) and act on the decisions."""
+        if step.name in scoped_steps:
+            assert scope_lanes is not None
+            if lanes is None:
+                lanes = sorted(scope_lanes)
+            else:
+                lanes = [c for c in lanes if c in scope_lanes]
+                if not lanes:
+                    return
         decisions = _plan_step(
             session,
             step,
@@ -174,6 +198,9 @@ def _run_segment(
             pipeline_id=ctx.pipeline_id,
             home=ctx.home,
         )
+        if scope_anchor is not None and step.name == scope_anchor:
+            for d in decisions:
+                ctx.scope_reached.add(d.coordinate)
         _record_planned(session, ctx, step, decisions)
         session.commit()
         if progress_cb:

@@ -75,7 +75,12 @@ Successful committed output. The `materializations` SQLite table is
 metadata. A materialization is a filled Arrow row + `input_hash_usages.fulfilled=True`.
 
 **Run:**
-A user-triggered execution attempt over some scope.
+A user-triggered execution attempt over some scope. Full batch runs use
+`kind='process'`; a scoped sample / target-bounded trial uses
+`kind='partial'` (exact cohort in `selection_json`). Declarations,
+invalidations, and GC passes are other kinds. `home.current()` and
+retention's "latest snapshot" always mean the latest terminal
+`process` run — partial trials never redefine authoritative membership.
 
 **Attempt/event:**
 Something that happened during execution, successful or not.
@@ -211,10 +216,11 @@ directly and, at most, point at this file in general terms.
   next run sees "recompute" and retries. Cleaner than the old model,
   where failure had to be inferred from `run_events` because no mat row
   existed.
-- **(2.4) Users enumerate through current views (the latest run's active
-  lanes), never raw object storage.** What you're shown is always ledger
-  truth, never an accidental read of bytes the ledger doesn't currently
-  vouch for.
+- **(2.4) Users enumerate through current views (the latest full
+  `kind='process'` run's active lanes), never raw object storage.** Partial
+  trials remain queryable by run id but do not redefine the full batch's
+  membership. What you're shown is always ledger truth, never an accidental
+  read of bytes the ledger doesn't currently vouch for.
 - **(2.5) Run status lives on the run-coordinate edge, not on output
   bytes.** The same output can be `created` in one run and `reused` in
   the next — that's a fact about the run, not a property of the object,

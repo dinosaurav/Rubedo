@@ -624,7 +624,10 @@ def get_pipelines_api(request: Request):
                 func.max(Run.started_at).label("last_run_at"),
                 func.count(Run.id).label("run_count"),
             )
-            .filter(Run.pipeline_id.isnot(None), Run.kind.in_(["process", "declaration"]))
+            .filter(
+                Run.pipeline_id.isnot(None),
+                Run.kind.in_(["process", "partial", "declaration"]),
+            )
             .group_by(Run.pipeline_id)
             .subquery()
         )

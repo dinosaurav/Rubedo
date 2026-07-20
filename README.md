@@ -203,6 +203,20 @@ Two independent axes on `@step`:
 
 `p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
 
+### Partial runs and sampling
+
+To trial an expensive step on a frozen cohort without paying for the whole batch (and without changing cache identity):
+
+```python
+from rubedo import RunScope
+
+scope = RunScope.sample_n(anchor="classify", cells=candidates, n=100, seed="v2")
+trial = p.run(scope=scope, targets=["classify"])  # kind='partial'
+p.run()  # full run reuses those classify addresses
+```
+
+Scope and targets never enter output addresses. Partial runs do not displace `home.current()` (latest full `process` run) or steal retention protection from it. See [partial runs](docs/concepts/partial-runs.md).
+
 `trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
 
 ```python

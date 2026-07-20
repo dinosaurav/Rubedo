@@ -27,6 +27,7 @@ from .runner import RunPlan
 from .runner import plan as _plan_pipeline
 from .runner import run as _run_pipeline
 from .scheduler import SCHEDULES
+from .scope import RunScope, StepRef
 from .spec import PipelineSpec, StepSpec
 from .spec import definition as _definition
 from .spec import step as _step_decorator
@@ -379,6 +380,8 @@ class Pipeline:
         progress: bool = False,
         workers: Optional[int] = None,
         progress_cb: Optional[Callable[[str, str, str], None]] = None,
+        scope: Optional[RunScope] = None,
+        targets: Optional[Sequence[StepRef]] = None,
     ) -> RunSummary:
         """Run this pipeline — the single entry point.
 
@@ -387,6 +390,10 @@ class Pipeline:
         state. `progress=True` prints a live terminal progress view;
         `progress_cb` (step_name, coordinate, status) is a lower-level hook
         for the same events.
+
+        ``scope`` / ``targets`` select a partial run over a frozen lane
+        cohort and/or a target-bounded subgraph. Neither enters cache
+        identity — sampled map outputs remain reusable by a later full run.
         """
         return _run_pipeline(
             self.spec,
@@ -397,11 +404,27 @@ class Pipeline:
             progress=progress,
             progress_cb=progress_cb,
             schedule=self.schedule,
+            scope=scope,
+            targets=targets,
         )
 
-    def plan(self, *, params: Optional[dict] = None, force: bool = False) -> RunPlan:
+    def plan(
+        self,
+        *,
+        params: Optional[dict] = None,
+        force: bool = False,
+        scope: Optional[RunScope] = None,
+        targets: Optional[Sequence[StepRef]] = None,
+    ) -> RunPlan:
         """Dry-run: what would `run()` do, and why — without writing anything."""
-        return _plan_pipeline(self.spec, params=params, force=force, home=self.home)
+        return _plan_pipeline(
+            self.spec,
+            params=params,
+            force=force,
+            home=self.home,
+            scope=scope,
+            targets=targets,
+        )
 
     def describe(self, format: Optional[str] = None) -> str:
         """Render this pipeline's DAG before ever running it.

@@ -111,6 +111,13 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   concurrent runs share buffers/engine; different homes are independent.
   Injected via `pipeline(home=...)` and carried on `_RunContext` — no
   process-global DB/store/lane-table state.
+- `src/rubedo/scope.py` — partial execution: frozen `RunScope` cohorts at
+  one non-root map step plus deterministic exact-N / hash-threshold sampling
+  helpers. `Pipeline.run()` / `.plan(scope=..., targets=...)` record a
+  `kind="partial"` invocation, plan only requested anchor lanes, and stop at
+  the target ancestor closure. Scope never enters cache identity; excluded
+  lanes are absent, not filtered. Partial runs are queryable by run id but
+  never replace the latest full `process` run in `Home.current()`.
 - `src/rubedo/render.py` — `describe()` (text/Mermaid/ascii DAG rendering)
   and the ascii layout internals (`_AsciiNode`, `_ascii_layers`,
   `_ascii_positions`, `_describe_ascii`). Sits above `spec.py` and

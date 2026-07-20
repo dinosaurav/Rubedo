@@ -328,31 +328,6 @@ ledger row and the re-run heals.
   build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
   the doc's open-questions section.
 
-- **Sinks / reverse ETL** (the return leg of the refinement loop:
-  CSV/Sheet in → refined batch back out; Sheets via gspread, Excel via
-  openpyxl as extras, CSV/Parquet trivially). **Owner re-raised
-  2026-07-18 ("reverse ETL") — this is the next design session to
-  schedule.** Belongs **in code, in the pipeline
-  file** — settled. The open fork is **step vs verb**, and it's the
-  real design session. Owner leans *step* for simplicity
-  (2026-07-13): a terminal aggregate that writes the target gets
-  change-detection free from the planner (inputs unchanged → reuse →
-  no write — the incremental-sync diff with zero new concepts), shows
-  delivery in `describe()`/lineage, and is in fact writable today
-  with no new machinery. The tension to resolve before blessing it:
-  the ledger is trustworthy because it describes a store the engine
-  owns; a Sheet is mutable external state, so a *cached* "delivered"
-  can silently go false (hand-edited/replaced target won't re-write
-  without a version bump), delivery failures conflate with refinement
-  failures in run outcomes, and the sink's materialization is a
-  receipt, not data — entering GC/retention/lineage machinery built
-  for data. Candidate synthesis: declared in the pipeline and drawn
-  in the DAG like a step, but diffs against the ledger's own record
-  (not assumed target state) and logs delivery as events rather than
-  materializations. Verb alternative (`p.export(select=..., to=...)`
-  as a ledger projection at the server's altitude) stays on the table
-  as the re-assertable/repair-friendly shape.
-
 - **Bucketed aggregation / `allocate`** (batching lanes into ~N-sized
   groups — owner re-raised 2026-07-18 as an "allocate" shape). The naive
   "first 50 to finish" is nondeterministic and breaks order-independent
@@ -395,12 +370,15 @@ ledger row and the re-run heals.
   strictly last, after every child — an early anchor + a mid-expansion
   crash reads as a complete, reusable expansion on the next run. Unrelated
   to item 14/scan; parked on demand, not on design doubt.
-- **Step-version diff.** The ledger already holds *both generations*
-  across a version bump — a `diff("step", "v1", "v2")` showing per-lane
-  output changes is prompt A/B testing as a read-only ledger query
-  (run v2 on a sample, compare, then commit to the batch). Data model
-  needs nothing; pairs with the parked run-diff/code-diff ideas
-  (2026-07-13).
+- **Step-version / run-to-run diff.** The ledger already holds *both
+  generations* across a version bump — a
+  `home.diff(step=..., before=run_a, after=run_b)` showing per-lane
+  output changes is prompt A/B testing as a read-only ledger query.
+  Pairs with the shipped **partial-run / sampling** primitive
+  (`RunScope`, `p.run(scope=..., targets=...)` — see
+  `docs/concepts/partial-runs.md`): sample → compare → full rollout.
+  Diff itself is still parked (2026-07-20); data model needs nothing
+  new once the trial run's exact cohort is in `selection_json`.
 - **Per-lane cost tracking / $-saved.** Steps that call paid APIs
   record cost per lane; run summary reports "reused $N of prior work."
   The product's value prop as a number, printed every run. Rides the
@@ -423,6 +401,31 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-20 — partial execution / sampling MVP shipped:** public
+  frozen `RunScope` (exact lanes at a map anchor) with
+  `explicit` / `from_cells` / `sample_n` / `sample_fraction` helpers;
+  `Pipeline.run`/`plan(scope=, targets=)` persist `kind='partial'` and
+  the cohort in `Run.selection_json` (no schema change). Scope never
+  enters cache identity; out-of-scope lanes are absent (not filtered);
+  targets restrict to ancestor closure. MVP anchors: non-root
+  `in_shape='one'`/`out_shape='one'` (reject root/aggregate/fold/join/
+  expand/`skip_cache`). `home.current()` and retention protect the
+  latest full `kind='process'` run so partial trials cannot displace
+  it. Docs: `docs/concepts/partial-runs.md`. Run-to-run diff remains
+  Parked.
+- **2026-07-20 — reverse ETL descoped (owner design session):** no sink
+  shape, terminal-only rule, export verb, delivery ledger, or connector
+  protocol. An external write is an ordinary step whose materialized
+  output is its receipt; that receipt may feed downstream steps like any
+  other data. Map gives surgical per-lane delivery, aggregate/fold gives
+  batch delivery, and existing cache/retry/rate-limit/staleness/
+  invalidation policies cover execution and repair. Reuse means only that
+  the operation previously succeeded for those inputs, never that mutable
+  external state was just verified; verification is a separate read step.
+  Destination code stays user-owned. Revisit only for a demonstrated
+  missing primitive — most plausibly exposing a deterministic execution
+  id/output address so an idempotent destination can close the
+  write-succeeded/receipt-not-committed crash window.
 - **2026-07-20 — item 35 shipped (public read/query surface +
   ephemeral Home):** `queries.py` now exposes `Cell` plus
   `get_run_cells`, `get_current_cells`, and `select_cells`; `Home.cells`,

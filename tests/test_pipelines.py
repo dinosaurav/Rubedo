@@ -85,6 +85,22 @@ def test_run_pipeline_appears_with_definition_snapshot():
     assert step_def["params_schema"]["properties"]["my_val"]["default"] == 7
 
 
+def test_partial_only_pipeline_appears():
+    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+        f.write("hello")
+
+    pipe = make_pipeline()
+    summary = pipe.run(targets=["my-step"], workers=1)
+    assert summary.kind == "partial"
+
+    res = client.get("/api/pipelines")
+    assert res.status_code == 200
+    (item,) = res.json()
+    assert item["id"] == "test-proc"
+    assert item["run_count"] == 1
+    assert item["last_run_id"] == summary.run_id
+
+
 def test_describe_renders_dag_without_running():
     pipe = make_pipeline()
 

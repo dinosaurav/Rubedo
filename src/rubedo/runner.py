@@ -17,7 +17,7 @@ import threading
 import traceback
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 import contextlib
 
 from .execution import _RunMemo
@@ -34,6 +34,14 @@ from .planning import (
     topological_sort,
 )
 from .scheduler import SCHEDULES, _partition_segments, _run_segment, _scanned_for
+from .scope import (
+    RunScope,
+    ScopeCounts,
+    StepRef,
+    coordinate_preserving_scope_steps,
+    invocation_selection_json,
+    normalize_partial_invocation,
+)
 from .spec import PipelineSpec, definition
 from .util import utcnow_iso
 
@@ -188,12 +196,25 @@ class RunPlan:
     items: List[PlannedCoordinate]
     counts: Dict[str, int]
     warnings: List[str] = field(default_factory=list)
+    # Partial-invocation metadata (absent / None on a full plan).
+    kind: str = "process"
+    scope: Optional[Dict[str, Any]] = None
+    targets: Optional[List[str]] = None
+    scope_counts: Optional[Dict[str, Any]] = None
 
     def __str__(self) -> str:
+        kind_bit = f" [{self.kind}]" if self.kind != "process" else ""
         lines = [
-            f"Plan for '{self.pipeline_id}' over {self.source_id}: "
+            f"Plan for '{self.pipeline_id}' over {self.source_id}{kind_bit}: "
             + ", ".join(f"{v} {k}" for k, v in sorted(self.counts.items()))
         ]
+        if self.scope_counts:
+            lines.append(
+                "  scope: "
+                f"requested={self.scope_counts.get('scope_requested', 0)} "
+                f"reached={self.scope_counts.get('scope_reached', 0)} "
+                f"missing={self.scope_counts.get('scope_missing', 0)}"
+            )
         for w in self.warnings:
             lines.append(f"  ! {w}")
         for it in self.items:
@@ -208,6 +229,8 @@ def plan(
     params: Optional[dict] = None,
     force: bool = False,
     home: Optional[Home] = None,
+    scope: Optional[RunScope] = None,
+    targets: Optional[Sequence[StepRef]] = None,
 ) -> RunPlan:
     """Dry-run: what would run() do, and why — without writing anything.
 
@@ -219,6 +242,11 @@ def plan(
     "execute" for @root if it isn't (first run) or the step has
     check_cache=False.
 
+    ``scope`` / ``targets`` restrict the plan the same way ``run()`` would:
+    ancestors plan normally; at the scope anchor only requested coordinates
+    appear (out-of-scope lanes are absent, not filtered); omitted targets'
+    downstream steps are not planned. Neither argument enters cache identity.
+
     home, if given, is the storage root for this plan. When omitted, the
     default `.rubedo`/RUBEDO_HOME home is used.
     """
@@ -227,16 +255,33 @@ def plan(
     home = home or Home.default()
 
     pipeline, params = _resolve_invocation(pipeline, params)
+    inv = normalize_partial_invocation(pipeline, scope=scope, targets=targets)
     topo_steps = topological_sort(pipeline)
+    if inv.active_steps is not None:
+        topo_steps = [s for s in topo_steps if s.name in inv.active_steps]
     params_hash = hash_json(params or {})
 
     items: List[PlannedCoordinate] = []
     plan_warnings: List[str] = []
     coord_step_mats: Dict[tuple, Any] = {}
+    scope_reached: set = set()
+    scope_lanes = (
+        frozenset(inv.scope.lanes) if inv.scope is not None else None
+    )
+    scope_anchor = inv.scope.anchor if inv.scope is not None else None
+    scoped_steps = (
+        coordinate_preserving_scope_steps(pipeline, scope_anchor)
+        if scope_anchor is not None
+        else set()
+    )
 
     with home.session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
+            lanes = None
+            if step.name in scoped_steps:
+                assert scope_lanes is not None
+                lanes = sorted(scope_lanes)
             decisions = _plan_step(
                 session,
                 step,
@@ -245,9 +290,29 @@ def plan(
                 params_hash,
                 force,
                 accepts_params,
+                lanes=lanes,
                 pipeline_id=pipeline.name,
                 home=home,
             )
+            if scope_anchor is not None and step.name == scope_anchor:
+                # A dry plan cannot enumerate children of an executing expand
+                # root. The frozen cohort still tells us which anchor cells
+                # are requested, but their parent values are unknowable until
+                # run time: represent them as pending instead of falsely
+                # reporting the historical coordinates as missing.
+                represented = {d.coordinate for d in decisions}
+                parent_pending = any(
+                    value == "pending" and dep in step.depends_on
+                    for (_coordinate, dep), value in coord_step_mats.items()
+                )
+                if parent_pending:
+                    assert scope_lanes is not None
+                    decisions.extend(
+                        StepDecision(coordinate=coordinate, action="pending")
+                        for coordinate in sorted(scope_lanes - represented)
+                    )
+                for d in decisions:
+                    scope_reached.add(d.coordinate)
             drifted = sum(1 for d in decisions if d.code_drift)
             if drifted:
                 plan_warnings.append(_code_drift_message(step, drifted))
@@ -269,12 +334,35 @@ def plan(
     for it in items:
         counts[it.action] = counts.get(it.action, 0) + 1
 
+    scope_counts_dict: Optional[Dict[str, Any]] = None
+    scope_meta: Optional[Dict[str, Any]] = None
+    if inv.scope is not None:
+        missing = sorted(set(inv.scope.lanes) - scope_reached)
+        sc = ScopeCounts(
+            requested=len(inv.scope.lanes),
+            reached=len(scope_reached),
+            missing=len(missing),
+            missing_lanes=missing,
+        )
+        scope_counts_dict = sc.as_dict()
+        if missing:
+            plan_warnings.append(
+                f"scope at '{inv.scope.anchor}': {len(missing)} requested "
+                f"lane(s) missing (no parent output): {missing[:5]}"
+                + ("…" if len(missing) > 5 else "")
+            )
+        scope_meta = inv.scope.to_invocation_dict(inv.targets)
+
     return RunPlan(
         pipeline_id=pipeline.name,
         source_id=_run_source_id(pipeline),
         items=items,
         counts=counts,
         warnings=plan_warnings,
+        kind="partial" if inv.is_partial else "process",
+        scope=scope_meta,
+        targets=list(inv.targets) if inv.targets is not None else None,
+        scope_counts=scope_counts_dict,
     )
 
 
@@ -288,6 +376,8 @@ def run(
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
     schedule: str = "broad",
+    scope: Optional[RunScope] = None,
+    targets: Optional[Sequence[StepRef]] = None,
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
@@ -301,6 +391,10 @@ def run(
     through consecutive 1:1 steps as soon as its own inputs commit, while
     reduce/join (and, for now, expand and multi-parent maps) still
     synchronize on all lanes.
+
+    ``scope`` / ``targets`` select a partial run (``kind='partial'``). Scope
+    never enters cache identity; sampled map outputs remain reusable by a
+    later full ``kind='process'`` run.
     """
     pipeline, params = _resolve_invocation(pipeline, params)
     return run_pipeline(
@@ -312,6 +406,8 @@ def run(
         progress=progress,
         progress_cb=progress_cb,
         schedule=schedule,
+        scope=scope,
+        targets=targets,
     )
 
 
@@ -365,6 +461,8 @@ def run_pipeline(
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
     schedule: str = "broad",
+    scope: Optional[RunScope] = None,
+    targets: Optional[Sequence[StepRef]] = None,
 ) -> RunSummary:
     """
     Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
@@ -379,6 +477,10 @@ def run_pipeline(
         schedule (str): "broad" (default) stages step by step; "deep"
             pipelines lanes through consecutive 1:1 steps. Order only —
             results and ledger rows are identical either way.
+        scope (Optional[RunScope]): Frozen lane cohort at a map anchor.
+        targets (Optional[Sequence]): Restrict execution to the ancestor
+            closure of these steps. Scope and targets never enter cache
+            identity; either one makes this a ``kind='partial'`` run.
 
     Returns:
         RunSummary: A summary of the executed run.
@@ -389,10 +491,13 @@ def run_pipeline(
         )
 
     home = home or Home.default()
+    inv = normalize_partial_invocation(pipeline, scope=scope, targets=targets)
 
     from .progress import TerminalProgress
 
     topo_steps = topological_sort(pipeline)
+    if inv.active_steps is not None:
+        topo_steps = [s for s in topo_steps if s.name in inv.active_steps]
     ctx = _RunContext(
         run_id=f"run_{uuid.uuid4().hex[:12]}",
         pipeline_id=pipeline.name,
@@ -406,15 +511,19 @@ def run_pipeline(
         },
     )
 
+    run_kind = "partial" if inv.is_partial else "process"
+    selection_json = invocation_selection_json(inv.scope, inv.targets)
+
     with home.session() as session:
         now = utcnow_iso()
         session.add(
             Run(
                 id=ctx.run_id,
-                kind="process",
+                kind=run_kind,
                 pipeline_id=ctx.pipeline_id,
                 source_id=ctx.source_id,
                 params_json=json.dumps(params or {}, sort_keys=True),
+                selection_json=selection_json,
                 definition_json=json.dumps(definition(pipeline)),
                 started_at=now,
                 last_heartbeat_at=now,
@@ -427,6 +536,10 @@ def run_pipeline(
             "run_started",
             pipeline_id=ctx.pipeline_id,
             message=f"Starting run {ctx.run_id}",
+            data={
+                "kind": run_kind,
+                "scope": json.loads(selection_json) if selection_json else None,
+            },
         )
         session.commit()
 
@@ -455,7 +568,34 @@ def run_pipeline(
                         workers,
                         memo,
                         progress_cb,
+                        scope=inv.scope,
                     )
+
+                if inv.scope is not None:
+                    missing = sorted(set(inv.scope.lanes) - ctx.scope_reached)
+                    sc = ScopeCounts(
+                        requested=len(inv.scope.lanes),
+                        reached=len(ctx.scope_reached),
+                        missing=len(missing),
+                        missing_lanes=missing,
+                    )
+                    ctx.scope_counts = sc.as_dict()
+                    if missing:
+                        _emit_event(
+                            session,
+                            ctx.run_id,
+                            "warning",
+                            "scope_lanes_missing",
+                            pipeline_id=ctx.pipeline_id,
+                            step_name=inv.scope.anchor,
+                            message=(
+                                f"{len(missing)} requested scope lane(s) at "
+                                f"'{inv.scope.anchor}' had no parent output "
+                                f"and were not executed"
+                            ),
+                            data={"missing_lanes": missing},
+                        )
+                        session.commit()
 
                 summary = _finish_run(ctx)
                 _post_run_retention(session, pipeline, ctx, summary)
