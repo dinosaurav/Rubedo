@@ -121,11 +121,11 @@ def reading_list(fetch_work: dict) -> str:
 
 @step(name="assess", version="1")
 def assess_v1(fetch_work: dict) -> dict:
-    """Baseline policy: only heavily cited papers enter the shortlist."""
+    """Baseline policy: only established landmark papers enter the shortlist."""
     return {
         "openalex_id": fetch_work["openalex_id"],
         "title": fetch_work["title"],
-        "decision": "read" if fetch_work["citations"] >= 300 else "skip",
+        "decision": "read" if fetch_work["citations"] >= 700 else "skip",
         "policy": "citations-only",
     }
 
