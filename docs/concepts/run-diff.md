@@ -35,6 +35,11 @@ print(diff)
 p.run()
 ```
 
+For a complete keyless run against a live API, `examples/paper_scout` fetches
+OpenAlex metadata under a `12/min` budget, compares two shortlist-policy
+versions on a deterministic cohort, prints the diff, and rolls out v2 while
+reusing both sampled assessments and prior API fetches.
+
 `RunSummary.diff` is the same comparison with the summary as `before`:
 
 ```python
