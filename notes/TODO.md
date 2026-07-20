@@ -187,7 +187,7 @@ item 7b.
 
 ## 7b. Postgres ledger test coverage  **[follows item 7]**
 
-**Implemented 2026-07-20; pending CI confirmation:** psycopg 3 dev driver,
+**Implemented 2026-07-20; Postgres + full CI green:** psycopg 3 dev driver,
 env-gated real-Postgres fixture, Postgres 16 CI service job, concurrent
 native-upsert coverage for IHU claim/fulfill and lineage edges,
 immutability guards, and query/selection smoke. The stale “retry-once”
