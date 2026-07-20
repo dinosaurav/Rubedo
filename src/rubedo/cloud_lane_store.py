@@ -295,10 +295,31 @@ class CloudLaneStore(LaneStore):
             if len(parts) != 4 or parts[2] not in {"main", "anchor"}:
                 continue
             steps.add((unquote(parts[0]), unquote(parts[1]), parts[2] == "anchor"))
+        for pipeline_id, buffered_step in self._run_buffers:
+            if buffered_step.endswith("#anchor"):
+                steps.add(
+                    (pipeline_id, buffered_step.removesuffix("#anchor"), True)
+                )
+            else:
+                steps.add((pipeline_id, buffered_step, False))
+        for pipeline_id, step_name in self._arrow_batch_buffers:
+            steps.add((pipeline_id, step_name, False))
         for pipeline_id, step_name, anchor in steps:
-            table = self._read_cloud_table(
-                pipeline_id, step_name, anchor=anchor
-            )
+            if anchor:
+                disk = self._read_anchor_disk_table(pipeline_id, step_name)
+                rows = self._run_buffers.get(
+                    self._anchor_key(pipeline_id, step_name), []
+                )
+                buffered = (
+                    pa.Table.from_pylist(rows, schema=_schema(pa, pa.string()))
+                    if rows
+                    else None
+                )
+                table = self._concat_compatible_tables(
+                    [item for item in (disk, buffered) if item is not None]
+                )
+            else:
+                table = self._combined_table(pipeline_id, step_name)
             if table is None:
                 continue
             for row in table.to_pylist():
@@ -400,11 +421,15 @@ class CloudLaneStore(LaneStore):
 
         def renew() -> None:
             while not stop.wait(self.lease_renew_seconds):
-                new_etag = self._put_conditional(
-                    key,
-                    self._lease_payload(run_id),
-                    if_match=state["etag"],
-                )
+                try:
+                    new_etag = self._put_conditional(
+                        key,
+                        self._lease_payload(run_id),
+                        if_match=state["etag"],
+                    )
+                except Exception:
+                    lost.set()
+                    return
                 if new_etag is None:
                     lost.set()
                     return

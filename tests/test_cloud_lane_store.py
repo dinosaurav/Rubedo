@@ -53,6 +53,7 @@ def test_segment_visible_to_second_lane_store(tmp_path):
     second = CloudLaneStore(str(tmp_path / "second"), _store(client))
 
     _append(first)
+    assert first.all_filled_rows()[0]["address"] == "address"
     first.flush_step("pipe", "work")
 
     rows = second.rows_by_address("pipe", "work", {"address"})
