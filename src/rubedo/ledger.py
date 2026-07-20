@@ -54,22 +54,22 @@ def _upsert_input_hash_usage(
     if dialect == "postgresql":
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        statement = pg_insert(InputHashUsage).values(**values)
-        statement = statement.on_conflict_do_update(
+        pg_statement = pg_insert(InputHashUsage).values(**values)
+        pg_statement = pg_statement.on_conflict_do_update(
             index_elements=[InputHashUsage.address],
             set_=updates,
         )
-        session.execute(statement)
+        session.execute(pg_statement)
         return
     if dialect == "sqlite":
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        statement = sqlite_insert(InputHashUsage).values(**values)
-        statement = statement.on_conflict_do_update(
+        sqlite_statement = sqlite_insert(InputHashUsage).values(**values)
+        sqlite_statement = sqlite_statement.on_conflict_do_update(
             index_elements=[InputHashUsage.address],
             set_=updates,
         )
-        session.execute(statement)
+        session.execute(sqlite_statement)
         return
 
     existing = session.get(InputHashUsage, address)
