@@ -52,9 +52,9 @@ def _upsert_input_hash_usage(
 
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        statement = insert(InputHashUsage).values(**values)
+        statement = pg_insert(InputHashUsage).values(**values)
         statement = statement.on_conflict_do_update(
             index_elements=[InputHashUsage.address],
             set_=updates,
@@ -62,9 +62,9 @@ def _upsert_input_hash_usage(
         session.execute(statement)
         return
     if dialect == "sqlite":
-        from sqlalchemy.dialects.sqlite import insert
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        statement = insert(InputHashUsage).values(**values)
+        statement = sqlite_insert(InputHashUsage).values(**values)
         statement = statement.on_conflict_do_update(
             index_elements=[InputHashUsage.address],
             set_=updates,
@@ -93,10 +93,10 @@ def _insert_materialization_edge(
     }
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         session.execute(
-            insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
+            pg_insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
                 index_elements=[
                     MaterializationEdge.parent_address,
                     MaterializationEdge.child_address,
@@ -105,10 +105,10 @@ def _insert_materialization_edge(
         )
         return
     if dialect == "sqlite":
-        from sqlalchemy.dialects.sqlite import insert
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         session.execute(
-            insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
+            sqlite_insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
                 index_elements=[
                     MaterializationEdge.parent_address,
                     MaterializationEdge.child_address,
