@@ -275,10 +275,7 @@ def plan(
         else set()
     )
 
-    # Cloud lane stores use a durable per-pipeline writer lease. Local lane
-    # stores return a no-op context manager. Acquire before the Run row so
-    # contention fails without leaving an orphaned run.
-    with home.lanes.writer_lease(ctx.pipeline_id, ctx.run_id), home.session() as session:
+    with home.session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
             lanes = None
@@ -517,7 +514,12 @@ def run_pipeline(
     run_kind = "partial" if inv.is_partial else "process"
     selection_json = invocation_selection_json(inv.scope, inv.targets)
 
-    with home.session() as session:
+    # Cloud lane stores use a durable per-pipeline writer lease. Local lane
+    # stores return a no-op context manager. Acquire before the Run row so
+    # contention fails without leaving an orphaned run.
+    with home.lanes.writer_lease(
+        ctx.pipeline_id, ctx.run_id
+    ), home.session() as session:
         now = utcnow_iso()
         session.add(
             Run(

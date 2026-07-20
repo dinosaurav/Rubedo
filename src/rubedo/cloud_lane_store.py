@@ -6,7 +6,6 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, Optional
 from urllib.parse import quote, unquote
 
