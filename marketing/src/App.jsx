@@ -161,9 +161,8 @@ function App() {
         <Eyebrow>Why</Eyebrow>
         <h2 className="block-title">An edit-test loop for batch pipelines.</h2>
         <p className="block-lede">
-          Rubedo is a <strong>library, not a platform</strong>. No daemon, no registry;
-          you import the engine, it never imports you. State lives in a{' '}
-          <code>.rubedo/</code> directory, created on first run.
+          Rubedo is a <strong>library, not a platform</strong> — no daemon, no
+          registry. State lives in <code>.rubedo/</code>, created on first run.
         </p>
         <div className="why-list">
           <div className="why-item">
