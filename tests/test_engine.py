@@ -43,20 +43,9 @@ def _coord_for_path(session, run_id, step_name, filename):
     `scan` step's `path` output field — coordinates are row-<hash>, not
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
-    rows = (
-        session.query(RunCoordinateStatus)
-        .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
-        .filter(RunCoordinateStatus.output_address.isnot(None))
-        .all()
-    )
-    addr_index = TEST_HOME.lanes.address_row_index()
-    for rc in rows:
-        row = addr_index.get(str(rc.output_address))
-        if row is None:
-            continue
-        output = row.get("output")
-        if isinstance(output, dict) and output.get("path") == filename:
-            return rc.coordinate
+    cells = TEST_HOME.select(f"step:scan path:{filename}", run_id=run_id)
+    if cells:
+        return cells[0].coordinate
     return None
 
 
@@ -186,17 +175,13 @@ def test_select_by_coordinate_glob():
     make_test_pipeline().run(workers=1)
 
     sel = Selection(source_id="scan", coordinate_glob="row-*")
-    from rubedo.selection import get_selection_addresses
 
-    with TEST_HOME.session() as session:
-        addrs = get_selection_addresses(session, sel, home=TEST_HOME)
-        idx = TEST_HOME.lanes.address_row_index()
-        rows = [idx[a] for a in addrs if a in idx]
-        # every live materialization's latest coordinate matches row-* —
-        # both scan's own lanes and count-lines' (which shares its
-        # parent's coordinate, a 1:1 dependent map)
-        assert len(rows) == 4
-        assert all(r.get("input_hash") is not None for r in rows)
+    cells = TEST_HOME.select(sel)
+    # every live materialization's latest coordinate matches row-* —
+    # both scan's own lanes and count-lines' (which shares its
+    # parent's coordinate, a 1:1 dependent map)
+    assert len(cells) == 4
+    assert all(c.input_hash is not None for c in cells)
 
 
 def test_invalidate_selected():

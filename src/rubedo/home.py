@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Mapping, Optional, Union
+from collections.abc import Collection
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -20,6 +21,10 @@ from .lane_store import LaneStore
 from .store import LocalStore
 
 PathLike = Union[str, os.PathLike]
+
+if TYPE_CHECKING:
+    from .queries import Cell
+    from .selection import Selection
 
 _registry_lock = threading.Lock()
 _registry: dict[str, "Home"] = {}
@@ -47,10 +52,10 @@ class Home:
         db_engine: Optional[Engine] = None,
         db_connect_args: Optional[Mapping[str, Any]] = None,
         db_poolclass: Any = None,
-        _fresh: bool = False,
+        fresh: bool = False,
     ):
         resolved = _resolve_path(path)
-        if _fresh:
+        if fresh:
             obj = object.__new__(cls)
             obj._init_state(
                 resolved,
@@ -71,7 +76,7 @@ class Home:
                     # so tests don't silently share the wrong engine.
                     raise ValueError(
                         f"Home({resolved!r}) is already constructed; pass "
-                        f"_fresh=True for an unshared instance, or reuse the "
+                        f"fresh=True for an unshared instance, or reuse the "
                         f"existing Home without db_* overrides"
                     )
                 return existing
@@ -137,6 +142,26 @@ class Home:
         return cls(None)
 
     @classmethod
+    def ephemeral(
+        cls,
+        path=None,
+        *,
+        db_url=None,
+        db_engine=None,
+        db_connect_args=None,
+        db_poolclass=None,
+    ) -> "Home":
+        """Unshared Home — not interned. For tests and short-lived roots."""
+        return cls(
+            path,
+            db_url=db_url,
+            db_engine=db_engine,
+            db_connect_args=db_connect_args,
+            db_poolclass=db_poolclass,
+            fresh=True,
+        )
+
+    @classmethod
     def clear_registry_for_tests(cls) -> None:
         """Drop interned homes so tests can rebuild with fresh engines."""
         with _registry_lock:
@@ -150,6 +175,65 @@ class Home:
     def session(self) -> Session:
         """Open a new SQLAlchemy session on this home's ledger."""
         return self.db.session()
+
+    def cells(
+        self,
+        *,
+        run_id: str,
+        step: Optional[str] = None,
+        status: Optional[str | Collection[str]] = None,
+        resolve_output: bool = False,
+    ) -> list["Cell"]:
+        """Read the cells recorded for one run."""
+        from .queries import get_run_cells
+
+        with self.session() as session:
+            return get_run_cells(
+                session,
+                self,
+                run_id,
+                step=step,
+                status=status,
+                resolve_output=resolve_output,
+            )
+
+    def current(
+        self,
+        *,
+        pipeline: Optional[str] = None,
+        step: Optional[str] = None,
+        resolve_output: bool = False,
+    ) -> list["Cell"]:
+        """Read the latest run's live cells for each pipeline."""
+        from .queries import get_current_cells
+
+        with self.session() as session:
+            return get_current_cells(
+                session,
+                self,
+                pipeline=pipeline,
+                step=step,
+                resolve_output=resolve_output,
+            )
+
+    def select(
+        self,
+        selection: "Selection | str",
+        *,
+        run_id: Optional[str] = None,
+        resolve_output: bool = False,
+    ) -> list["Cell"]:
+        """Read cells matching a Selection query."""
+        from .queries import select_cells
+
+        with self.session() as session:
+            return select_cells(
+                session,
+                self,
+                selection,
+                run_id=run_id,
+                resolve_output=resolve_output,
+            )
 
     def __repr__(self) -> str:
         return f"Home({self.path!r})"

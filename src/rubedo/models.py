@@ -1,6 +1,7 @@
 """
 SQLAlchemy models and immutability guards for the Rubedo ledger.
 """
+from collections.abc import Collection
 from typing import Any, Optional, Dict
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 from sqlalchemy import (
@@ -301,24 +302,36 @@ class RunSummary(BaseModel):
         with h.session() as session:
             return get_run_failures(session, self.run_id)
 
+    def cells(
+        self,
+        step=None,
+        *,
+        status: Optional[str | Collection[str]] = None,
+        resolve_output: bool = False,
+        home=None,
+    ):
+        """Retrieve cells recorded for this run."""
+        from .queries import get_run_cells
+
+        h = self._bound_home(home)
+        with h.session() as session:
+            return get_run_cells(
+                session,
+                h,
+                self.run_id,
+                step=step,
+                status=status,
+                resolve_output=resolve_output,
+            )
+
     def output_for(self, step_name: str, *, home=None) -> dict[str, Any]:
         """Fetch the output values for a specific step from this run.
         
         Returns a dict mapping coordinates to their materialization payload.
         """
-        h = self._bound_home(home)
-        with h.session() as session:
-            statuses = (
-                session.query(RunCoordinateStatus)
-                .filter_by(run_id=self.run_id, step_name=step_name)
-                .all()
-            )
-            result: dict[str, Any] = {}
-            for s in statuses:
-                if s.status in ("created", "filtered", "reused") and s.output_address:
-                    row = h.lanes.address_row_index().get(str(s.output_address))
-                    if row:
-                        result[str(s.coordinate)] = h.store.read_output(
-                            row.get("output"), row.get("content_type")
-                        )
-            return result
+        return {
+            cell.coordinate: cell.output
+            for cell in self.cells(step_name, resolve_output=True, home=home)
+            if cell.status in ("created", "filtered", "reused")
+            and cell.output_address
+        }

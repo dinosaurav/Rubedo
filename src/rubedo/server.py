@@ -259,83 +259,12 @@ def get_current_outputs(request: Request):
     """
     home = _request_home(request)
     with home.session() as session:
-        # The latest run per pipeline (by start time).
-        latest_started = (
-            session.query(
-                Run.pipeline_id.label("pid"),
-                func.max(Run.started_at).label("mx"),
-            )
-            .group_by(Run.pipeline_id)
-            .subquery()
-        )
-        latest_run_ids = (
-            session.query(Run.id)
-            .join(
-                latest_started,
-                (Run.pipeline_id == latest_started.c.pid)
-                & (Run.started_at == latest_started.c.mx),
-            )
-            .subquery()
-        )
-        latest_ids_subq = (
-            session.query(func.max(RunCoordinateStatus.id).label("max_id"))
-            .filter(
-                RunCoordinateStatus.run_id.in_(session.query(latest_run_ids.c.id))
-            )
-            .group_by(
-                RunCoordinateStatus.pipeline_id,
-                RunCoordinateStatus.step_name,
-                RunCoordinateStatus.source_id,
-                RunCoordinateStatus.coordinate,
-            )
-            .subquery()
-        )
-        rows = (
-            session.query(RunCoordinateStatus)
-            .filter(RunCoordinateStatus.id.in_(session.query(latest_ids_subq.c.max_id)))
-            .filter(RunCoordinateStatus.status.in_(["created", "reused", "filtered"]))
-            .all()
-        )
+        from .queries import cell_to_current_output, get_current_cells
 
-        results = []
-        # Build an address→row index from Arrow for metadata lookups
-        arrow_idx = home.lanes.address_row_index()
-        fulfilled_addrs = {
-            str(u.address) for u in session.query(InputHashUsage)
-            .filter(InputHashUsage.fulfilled.is_(True))
-            .all()
-        }
-        for rc in rows:
-            addr = str(rc.output_address) if rc.output_address else None
-            if not addr:
-                continue
-            arrow_row = arrow_idx.get(addr)
-            if not arrow_row:
-                continue
-            # Skip non-fulfilled (dead) outputs
-            if addr not in fulfilled_addrs:
-                continue
-            results.append(
-                {
-                    "source_id": rc.source_id,
-                    "coordinate": rc.coordinate,
-                    "status": rc.status,
-                    # Read pipeline_id/step_name off the RunCoordinateStatus row
-                    # itself, not the Arrow row's cached metadata: since the
-                    # output address is content-addressed (no pipeline_id in
-                    # the hash), two pipelines can share the same Arrow row,
-                    # and its metadata reflects whichever pipeline wrote it
-                    # first — not necessarily this rc's pipeline/step.
-                    "pipeline_id": rc.pipeline_id,
-                    "step_name": rc.step_name,
-                    "code_version": arrow_row.get("code_version"),
-                    "input_hash": rc.input_hash,
-                    "output_address": rc.output_address,
-                    "run_id": rc.run_id,
-                    "updated_at": str(arrow_row.get("ts", "")) if arrow_row.get("ts") else rc.created_at,
-                }
-            )
-        return results
+        return [
+            cell_to_current_output(cell)
+            for cell in get_current_cells(session, home)
+        ]
 
 
 @app.get("/api/runs/{run_id}/search")

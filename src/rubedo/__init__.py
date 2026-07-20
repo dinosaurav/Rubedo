@@ -13,6 +13,7 @@ from .pipeline import Pipeline, pipeline
 from .home import Home
 from .models import Filtered, RunSummary
 from .selection import Selection
+from .queries import Cell
 from .invalidation import invalidate
 from .runner import RunPlan
 from .progress import TerminalProgress
@@ -26,6 +27,7 @@ __all__ = [
     "Filtered",
     "Home",
     "RunSummary",
+    "Cell",
     "Selection",
     "step",
     "pipeline",

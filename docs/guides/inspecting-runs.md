@@ -1,10 +1,37 @@
 # Inspecting Runs
 
-Rubedo gives you three read-only ways to look at what a pipeline did or
-would do, without changing anything: `p.plan()` (before you run), `trace()`
-(after you run, follow lineage from any point), and `rubedo du` /
-`storage_report()` (how big the store is and why). All three, plus the run
-event log and the web dashboard, are covered here.
+Rubedo gives you read-only ways to look at what a pipeline did or would
+do, without changing anything: `p.plan()` (before you run), the `Cell`
+query surface on `Home` / `RunSummary` (after you run), `trace()` (lineage
+from any point), and `rubedo du` / `storage_report()` (how big the store
+is and why). Those, plus the run event log and the web dashboard, are
+covered here.
+
+## `Cell`: reading what a run produced
+
+After `summary = pipe.run()`, the unit of read is a **`Cell`** — one
+(run, step, lane) outcome with status and optional payload:
+
+```python
+from rubedo import Home
+
+# Bound on the summary returned by run():
+for cell in summary.cells("count_lines", resolve_output=True):
+    print(cell.coordinate, cell.status, cell.output)
+
+# Same payloads as a coord → value map (unchanged):
+summary.output_for("count_lines")
+
+# Latest live outputs across pipelines (same as /api/current-outputs):
+home.current(pipeline="count-lines", resolve_output=True)
+
+# Selection language — including output fields like path:
+home.select("step:scan path:a.txt", resolve_output=True)
+```
+
+`resolve_output=False` (the default) lists cells cheaply without
+deserializing spilled payloads. Pipeline/step identity always comes from
+the run ledger, not from shared Arrow row metadata.
 
 ## `p.plan()`: the dry-run
 
