@@ -123,6 +123,29 @@ def test_pipeline_writer_lease_renews(tmp_path):
 
 
 @mock_aws
+def test_lost_writer_lease_fences_commits_and_flushes(tmp_path, monkeypatch):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket=BUCKET)
+    lanes = CloudLaneStore(
+        str(tmp_path),
+        _store(client),
+        lease_renew_seconds=0.02,
+    )
+
+    with lanes.writer_lease("pipe", "run-one"):
+        monkeypatch.setattr(lanes, "_put_conditional", lambda *a, **kw: None)
+        time.sleep(0.05)
+        with pytest.raises(PipelineLeaseError, match="was lost"):
+            lanes.check_writer_lease("pipe")
+        _append(lanes)
+        with pytest.raises(PipelineLeaseError, match="was lost"):
+            lanes.flush_step("pipe", "work")
+
+    # Context cleanup does not retroactively fail an already-fenced caller.
+    assert "pipe" not in lanes._active_leases
+
+
+@mock_aws
 def test_second_home_reuses_cloud_lane_segments(tmp_path):
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket=BUCKET)

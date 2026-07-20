@@ -202,6 +202,10 @@ class LaneStore:
         """
         return contextlib.nullcontext()
 
+    def check_writer_lease(self, pipeline_id: str) -> None:
+        """Raise if this process has lost its cloud writer lease."""
+        return None
+
     def compact_pipeline(self, pipeline_id: str) -> None:
         """Compact cloud segments at run end. Local single-file stores no-op."""
         return None

@@ -306,6 +306,9 @@ def _commit_execution_result(
     ctx: _RunContext, step: StepSpec, outcome: ExecutionOutcome
 ):
     """Persist one execution outcome in its own transaction."""
+    # Fence a cloud writer whose renewable lease was lost before it can
+    # fulfill SQLite liveness or buffer another Arrow row.
+    ctx.home.lanes.check_writer_lease(ctx.pipeline_id)
     decision = outcome.decision
     result = outcome.result
     attempts_meta = (

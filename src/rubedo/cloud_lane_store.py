@@ -59,6 +59,7 @@ class CloudLaneStore(LaneStore):
         self.lease_ttl_seconds = lease_ttl_seconds
         self.lease_renew_seconds = lease_renew_seconds
         self._cloud_versions: Dict[tuple[str, str], tuple] = {}
+        self._active_leases: Dict[str, tuple[str, threading.Event]] = {}
 
     def clear_read_caches(self):
         super().clear_read_caches()
@@ -243,6 +244,7 @@ class CloudLaneStore(LaneStore):
         anchor: bool = False,
         compacted: bool = False,
     ) -> None:
+        self.check_writer_lease(pipeline_id)
         label = "base" if compacted else "segment"
         relative = self._relative_prefix(
             pipeline_id, step_name, anchor=anchor
@@ -360,6 +362,7 @@ class CloudLaneStore(LaneStore):
         self._cloud_versions.pop(cache_key, None)
 
     def compact_pipeline(self, pipeline_id: str) -> None:
+        self.check_writer_lease(pipeline_id)
         prefix = f"tables/{_safe(pipeline_id)}/"
         objects = self._list(prefix)
         qualified = self._qualified(prefix)
@@ -411,6 +414,13 @@ class CloudLaneStore(LaneStore):
             )
         return etag
 
+    def check_writer_lease(self, pipeline_id: str) -> None:
+        active = self._active_leases.get(pipeline_id)
+        if active is not None and active[1].is_set():
+            raise PipelineLeaseError(
+                f"pipeline {pipeline_id!r} writer lease was lost"
+            )
+
     @contextmanager
     def writer_lease(self, pipeline_id: str, run_id: str) -> Iterator[None]:
         key = self._lease_key(pipeline_id)
@@ -418,6 +428,7 @@ class CloudLaneStore(LaneStore):
         stop = threading.Event()
         lost = threading.Event()
         state = {"etag": etag}
+        self._active_leases[pipeline_id] = (run_id, lost)
 
         def renew() -> None:
             while not stop.wait(self.lease_renew_seconds):
@@ -439,10 +450,6 @@ class CloudLaneStore(LaneStore):
         thread.start()
         try:
             yield
-            if lost.is_set():
-                raise PipelineLeaseError(
-                    f"pipeline {pipeline_id!r} writer lease was lost"
-                )
         finally:
             stop.set()
             thread.join(timeout=1)
@@ -454,3 +461,6 @@ class CloudLaneStore(LaneStore):
                     payload = {}
                 if payload.get("owner") == run_id:
                     self._delete_key(key, if_match=current[1])
+            active = self._active_leases.get(pipeline_id)
+            if active is not None and active[0] == run_id:
+                self._active_leases.pop(pipeline_id, None)

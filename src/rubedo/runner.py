@@ -562,6 +562,7 @@ def run_pipeline(
                 memo = _RunMemo(home)
 
                 for seg_steps in _partition_segments(topo_steps, schedule):
+                    home.lanes.check_writer_lease(ctx.pipeline_id)
                     _run_segment(
                         session,
                         ctx,
@@ -575,6 +576,7 @@ def run_pipeline(
                         progress_cb,
                         scope=inv.scope,
                     )
+                    home.lanes.check_writer_lease(ctx.pipeline_id)
 
                 if inv.scope is not None:
                     missing = sorted(set(inv.scope.lanes) - ctx.scope_reached)
@@ -604,6 +606,7 @@ def run_pipeline(
 
                 # Cloud flushes are immutable segments. Compact while the
                 # writer lease is still held, before recording terminal state.
+                home.lanes.check_writer_lease(ctx.pipeline_id)
                 home.lanes.flush_all()
                 home.lanes.compact_pipeline(ctx.pipeline_id)
                 summary = _finish_run(ctx)
@@ -614,12 +617,14 @@ def run_pipeline(
                 # Flush whatever completed to disk — per-segment flush already
                 # wrote completed segments; this catches the current segment's
                 # successfully committed lanes.
-                home.lanes.flush_all()
                 try:
+                    home.lanes.check_writer_lease(ctx.pipeline_id)
+                    home.lanes.flush_all()
                     home.lanes.compact_pipeline(ctx.pipeline_id)
                 except Exception:
-                    # Segments are already durable; preserve the original
-                    # execution error and compact on a later successful run.
+                    # Preserve the original error. A lost cloud writer must not
+                    # flush after takeover; missing rows fail the normal
+                    # liveness+content reuse gate and recompute next run.
                     pass
                 with home.session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
