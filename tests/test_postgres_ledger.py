@@ -110,6 +110,13 @@ def test_postgres_immutability_guards_and_mutable_ihu(pg_home):
         session.rollback()
 
     with pg_home.session() as session:
+        edge = session.query(MaterializationEdge).first()
+        edge.parent_address = "tampered"
+        with pytest.raises(ImmutabilityError, match="append-only"):
+            session.commit()
+        session.rollback()
+
+    with pg_home.session() as session:
         run = session.get(Run, summary.run_id)
         run.status = "completed"
         session.commit()
@@ -140,7 +147,7 @@ def test_postgres_concurrent_ihu_upserts(pg_home):
 
     def claim(run_id: str) -> None:
         with pg_home.session() as session:
-            barrier.wait()
+            barrier.wait(timeout=5)
             _upsert_input_hash_usage(
                 session,
                 address=address,
@@ -157,12 +164,34 @@ def test_postgres_concurrent_ihu_upserts(pg_home):
         assert usage.fulfilled is True  # claims preserve a live generation
         assert usage.last_run_id in {"run-a", "run-b"}
 
+    missing_address = "first-claim"
+    missing_barrier = threading.Barrier(2)
+
+    def first_claim(run_id: str) -> None:
+        with pg_home.session() as session:
+            missing_barrier.wait(timeout=5)
+            _upsert_input_hash_usage(
+                session,
+                address=missing_address,
+                run_id=run_id,
+            )
+            session.commit()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(first_claim, ("run-first-a", "run-first-b")))
+
+    with pg_home.session() as session:
+        usage = session.get(InputHashUsage, missing_address)
+        assert usage is not None
+        assert usage.fulfilled is False
+        assert usage.last_run_id in {"run-first-a", "run-first-b"}
+
     fulfill_address = "first-fulfill"
     fulfill_barrier = threading.Barrier(2)
 
     def fulfill(run_id: str) -> None:
         with pg_home.session() as session:
-            fulfill_barrier.wait()
+            fulfill_barrier.wait(timeout=5)
             _upsert_input_hash_usage(
                 session,
                 address=fulfill_address,
@@ -184,7 +213,7 @@ def test_postgres_concurrent_lineage_edge_insert(pg_home):
 
     def insert_edge() -> None:
         with pg_home.session() as session:
-            barrier.wait()
+            barrier.wait(timeout=5)
             _insert_materialization_edge(
                 session,
                 parent_address="parent",
