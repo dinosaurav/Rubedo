@@ -31,7 +31,7 @@ import urllib.request
 
 from pydantic import BaseModel, Field
 
-from rubedo import RunScope, pipeline, step
+from rubedo import Home, RunScope, pipeline, step
 
 OPENALEX = "https://api.openalex.org"
 
@@ -51,7 +51,11 @@ class ScoutParams(BaseModel):
     limit: int = Field(default=6, ge=1, le=20)
 
 
-p = pipeline(name="paper-scout", params_model=ScoutParams)
+p = pipeline(
+    name="paper-scout",
+    params_model=ScoutParams,
+    home=Home.default(),
+)
 
 
 @p.step(check_cache=False)
