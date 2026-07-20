@@ -91,9 +91,7 @@ class CellDiff:
 
     def __str__(self) -> str:
         lines = [f"{self.outcome:<9} {self.coordinate}"]
-        if self.outcome in ("changed", "failed") and (
-            self.before_status or self.after_status
-        ):
+        if self.outcome == "failed" or self.before_status != self.after_status:
             lines.append(
                 f"          status {self.before_status!r} → {self.after_status!r}"
             )
