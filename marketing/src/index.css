@@ -316,7 +316,6 @@ a:hover { color: var(--accent-hover); }
 .why-item code,
 .beat code,
 .faq-item code,
-.try-note code,
 figcaption code {
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -369,7 +368,6 @@ figcaption code {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-md);
 }
-.try-note { margin-bottom: 0; }
 .code-step { white-space: pre; }
 
 /* ---------- Comparison table ---------- */
