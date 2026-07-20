@@ -370,15 +370,6 @@ ledger row and the re-run heals.
   strictly last, after every child — an early anchor + a mid-expansion
   crash reads as a complete, reusable expansion on the next run. Unrelated
   to item 14/scan; parked on demand, not on design doubt.
-- **Step-version / run-to-run diff.** The ledger already holds *both
-  generations* across a version bump — a
-  `home.diff(step=..., before=run_a, after=run_b)` showing per-lane
-  output changes is prompt A/B testing as a read-only ledger query.
-  Pairs with the shipped **partial-run / sampling** primitive
-  (`RunScope`, `p.run(scope=..., targets=...)` — see
-  `docs/concepts/partial-runs.md`): sample → compare → full rollout.
-  Diff itself is still parked (2026-07-20); data model needs nothing
-  new once the trial run's exact cohort is in `selection_json`.
 - **Per-lane cost tracking / $-saved.** Steps that call paid APIs
   record cost per lane; run summary reports "reused $N of prior work."
   The product's value prop as a number, printed every run. Rides the
@@ -401,6 +392,22 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-20 — run history + run-to-run diff shipped:** `Home.runs(...)`
+  lists historical runs (newest first; filters `pipeline` / `kind` /
+  effective `status` / `limit`; includes partials; reuses
+  `RunListItem` + extended `get_recent_runs`). `Home.diff(step=, before=,
+  after=, lanes=None)` and `RunSummary.diff(other, step=, …)` compare one
+  step's RCS cells across two runs (read-only). Run refs: run-id str,
+  `RunSummary`, `RunListItem`. Outcomes: `unchanged` (equal
+  `output_identity` even across version/address), `changed`, `added`,
+  `removed`, `failed` (after failed/blocked); filtered cells compared
+  honestly. Cohort default: when `after` is partial and `step` equals
+  persisted scope anchor, universe = exact `selection_json.lanes`
+  (missing scoped lanes → `removed`, not dropped); otherwise union of
+  observed coordinates; `lanes=` freezes explicitly. Value changes:
+  nested dict dotted paths; top-level unified text diff; lists/scalars
+  keep old/new. Public types: `RunDiff` / `CellDiff` / `ValueChange`.
+  Docs: `docs/concepts/run-diff.md`. No schema change; no CLI/UI yet.
 - **2026-07-20 — partial execution / sampling MVP shipped:** public
   frozen `RunScope` (exact lanes at a map anchor) with
   `explicit` / `from_cells` / `sample_n` / `sample_fraction` helpers;
@@ -411,8 +418,8 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
   `in_shape='one'`/`out_shape='one'` (reject root/aggregate/fold/join/
   expand/`skip_cache`). `home.current()` and retention protect the
   latest full `kind='process'` run so partial trials cannot displace
-  it. Docs: `docs/concepts/partial-runs.md`. Run-to-run diff remains
-  Parked.
+  it. Docs: `docs/concepts/partial-runs.md`. Run-to-run diff: see Done
+  entry above.
 - **2026-07-20 — reverse ETL descoped (owner design session):** no sink
   shape, terminal-only rule, export verb, delivery ledger, or connector
   protocol. An external write is an ordinary step whose materialized

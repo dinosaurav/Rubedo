@@ -53,13 +53,39 @@ def _to_dict(obj):
     return d
 
 
-def get_recent_runs(session: Session, limit: int = 50) -> List[RunListItem]:
-    """List recent pipeline runs, ordered by most recent."""
-    runs = session.query(Run).order_by(Run.started_at.desc()).limit(limit).all()
+def get_recent_runs(
+    session: Session,
+    limit: int = 50,
+    *,
+    pipeline: Optional[str] = None,
+    kind: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[RunListItem]:
+    """List recent pipeline runs, newest first.
+
+    ``status`` filters on *effective* status (terminal stored status, or
+    ``running`` / ``interrupted`` derived from heartbeat). Partial runs are
+    included unless ``kind`` excludes them. Existing callers that pass only
+    ``session`` / ``limit`` are unchanged.
+    """
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
+    query = session.query(Run)
+    if pipeline is not None:
+        query = query.filter(Run.pipeline_id == pipeline)
+    if kind is not None:
+        query = query.filter(Run.kind == kind)
+    query = query.order_by(Run.started_at.desc(), Run.id.desc())
+    # Effective running/interrupted status is derived from heartbeat, so a
+    # status-filtered query cannot be capped in SQL without potentially hiding
+    # older matches behind arbitrarily many newer non-matches.
+    runs = query.limit(limit).all() if status is None else query.all()
     results = []
     for run in runs:
         d = _to_dict(run)
         d["status"] = effective_run_status(run)
+        if status is not None and d["status"] != status:
+            continue
         summary = {}
         if run.summary_json:
             try:
@@ -72,6 +98,8 @@ def get_recent_runs(session: Session, limit: int = 50) -> List[RunListItem]:
         d["blocked_count"] = summary.get("blocked", 0)
         d["filtered_count"] = summary.get("filtered", 0)
         results.append(RunListItem(**d))
+        if len(results) >= limit:
+            break
     return results
 
 

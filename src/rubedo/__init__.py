@@ -15,6 +15,8 @@ from .models import Filtered, RunSummary
 from .selection import Selection
 from .queries import Cell
 from .scope import RunScope
+from .diff import CellDiff, RunDiff, ValueChange
+from .schemas import RunListItem
 from .invalidation import invalidate
 from .runner import RunPlan
 from .progress import TerminalProgress
@@ -29,6 +31,10 @@ __all__ = [
     "Home",
     "RunSummary",
     "Cell",
+    "CellDiff",
+    "RunDiff",
+    "RunListItem",
+    "ValueChange",
     "Selection",
     "RunScope",
     "step",

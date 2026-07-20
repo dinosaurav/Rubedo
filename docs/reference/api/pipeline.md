@@ -14,3 +14,11 @@ snapshot, and the result objects a run or plan hands back.
 ::: rubedo.runner.RunPlan
 
 ::: rubedo.models.RunSummary
+
+::: rubedo.home.Home
+
+::: rubedo.diff.RunDiff
+
+::: rubedo.diff.CellDiff
+
+::: rubedo.diff.ValueChange

@@ -155,6 +155,15 @@ def main():
             f"{' — open access' if work['open_access'] else ''}"
         )
 
+    # Historical lookup (partials included). home.diff(step=..., before=...,
+    # after=...) compares a version-bumped trial to a baseline when you A/B
+    # a prompt — this example keeps one fetch_work version, so skip that.
+    recent = p.home.runs(pipeline="paper-scout", limit=5)
+    print(
+        "recent runs: "
+        + ", ".join(f"{item.kind}/{item.status}" for item in recent)
+    )
+
     if os.environ.get("PAPER_SCOUT_SAMPLE_ONLY") == "1":
         print("\nPilot complete. Unset PAPER_SCOUT_SAMPLE_ONLY to roll out.")
         return

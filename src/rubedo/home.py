@@ -23,7 +23,9 @@ from .store import LocalStore
 PathLike = Union[str, os.PathLike]
 
 if TYPE_CHECKING:
+    from .diff import RunDiff, RunRef
     from .queries import Cell
+    from .schemas import RunListItem
     from .selection import Selection
 
 _registry_lock = threading.Lock()
@@ -237,6 +239,71 @@ class Home:
                 run_id=run_id,
                 resolve_output=resolve_output,
             )
+
+    def runs(
+        self,
+        *,
+        pipeline: Optional[str] = None,
+        kind: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> list["RunListItem"]:
+        """List historical runs on this home, newest first.
+
+        Args:
+            pipeline: Restrict to this pipeline name.
+            kind: Restrict to a run kind (``process``, ``partial``, …).
+            status: Restrict to effective status (``completed``,
+                ``running``, ``interrupted``, …).
+            limit: Maximum rows to return.
+
+        Returns:
+            ``RunListItem`` rows (``.id`` is a valid ``Home.diff`` run ref).
+            Partial runs are included unless ``kind`` excludes them.
+        """
+        from .queries import get_recent_runs
+
+        with self.session() as session:
+            return get_recent_runs(
+                session,
+                limit=limit,
+                pipeline=pipeline,
+                kind=kind,
+                status=status,
+            )
+
+    def diff(
+        self,
+        *,
+        step: str,
+        before: "RunRef",
+        after: "RunRef",
+        lanes: Optional[Collection[str]] = None,
+    ) -> "RunDiff":
+        """Compare one step's outputs across two runs (read-only).
+
+        Args:
+            step: Step name within both runs' pipeline.
+            before: Earlier run (id str, ``RunSummary``, or ``RunListItem``).
+            after: Later run (same ref forms).
+            lanes: Optional explicit coordinate universe. When omitted and
+                ``after`` is a partial whose scope anchor equals ``step``,
+                defaults to that run's ``selection_json.lanes``; otherwise
+                the union of coordinates observed at ``step``.
+
+        Returns:
+            A ``RunDiff`` with per-coordinate outcomes and value changes.
+            Writes nothing to the ledger.
+        """
+        from .diff import diff_runs
+
+        return diff_runs(
+            self,
+            step=step,
+            before=before,
+            after=after,
+            lanes=lanes,
+        )
 
     def __repr__(self) -> str:
         return f"Home({self.path!r})"
