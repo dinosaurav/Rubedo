@@ -122,8 +122,16 @@ def test_cloudflare_r2_object_store_and_pipeline_reuse(
 
         written.update(obj.key for obj in store.inventory())
     finally:
-        # Prefix is unique, but delete only hashes observed by this test.
+        # Remove content-addressed objects through the public API.
         for content_hash in written:
             store.delete(content_hash)
+        # Cloud lanes and leases share this test's unique store prefix.
+        client = _client(creds)
+        listed = client.list_objects_v2(Bucket=creds.bucket, Prefix=prefix)
+        for obj in listed.get("Contents") or []:
+            client.delete_object(Bucket=creds.bucket, Key=obj["Key"])
 
-    assert list(store.inventory()) == []
+    remaining = _client(creds).list_objects_v2(
+        Bucket=creds.bucket, Prefix=prefix
+    )
+    assert not remaining.get("Contents")

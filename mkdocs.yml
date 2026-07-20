@@ -99,6 +99,7 @@ nav:
     - The Model: concepts/model.md
     - Shapes: concepts/shapes.md
     - Sources: concepts/sources.md
+    - Cloud Storage: concepts/cloud-storage.md
     - Code Changes & Versioning: concepts/versioning.md
     - Partial Runs & Sampling: concepts/partial-runs.md
     - Run History & Diff: concepts/run-diff.md

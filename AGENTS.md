@@ -153,7 +153,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
-- `src/rubedo/lane_store.py` — `LaneStore` (per-home): per-step Arrow IPC
+- `src/rubedo/lane_store.py` — local `LaneStore` (per-home): per-step Arrow IPC
   files under `$home/tables/`: append-only rows of lane metadata (row_id, lane_key,
   address, input_hash, code_version, output, output_identity, content_type,
   code_hash, ts, run_id, filtered). `output` holds the value
@@ -170,6 +170,13 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   Pure data — no tombstones, no liveness. The
   `batch_lookup_by_address` method is the planning phase's reuse lookup
   (SQLite `input_hash_usages` for liveness, Arrow for content).
+- `src/rubedo/cloud_lane_store.py` — `CloudLaneStore`, selected
+  automatically when `Home.store` is `S3Store`: each flush writes an
+  immutable `tables/<pipeline>/<step>/<kind>/<uuid>.arrow` object. Readers
+  LIST and concatenate with `row_id` dedupe; the key/etag/size set versions
+  the read cache. End-of-run compaction is thresholded and protected by a
+  renewable conditional-put pipeline lease under `leases/`. `.plan()` is
+  read-only and never leases.
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
   events, the commit path (Arrow row via `home.lanes.append_filled` +
   `input_hash_usages.fulfilled=True` + address-based `MaterializationEdge`;

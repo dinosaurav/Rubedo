@@ -15,8 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pip install 'rubedo[s3]'`. `rubedo du` / GC sizing use sized inventory
   (zero per-object HEAD/GET). Destructive `gc(delete=True)` hard-refuses
   cloud stores until versioned-bucket gating; server object download
-  streams from the store. Lane-store cloud segments and Postgres ledger
-  remain later slices of item 7 / 7b.
+  streams from the store.
+- **Shared cloud lane store (TODO 7, content plane):** an S3-backed Home
+  automatically writes immutable Arrow segments under `tables/`, with
+  `row_id` dedupe, LIST-etag cache invalidation, threshold compaction, and
+  renewable conditional-put writer leases per pipeline. A second Home
+  against the same ledger and bucket reuses the first's lanes. Read-only
+  plans remain lease-free. Postgres correctness coverage remains item 7b.
 - **Public read/query surface (TODO 35):** `Cell` is one (run, step, lane)
   outcome. `Home.cells` / `Home.current` / `Home.select` (and
   `RunSummary.cells`) share an implementation with `/api/current-outputs`.

@@ -176,11 +176,14 @@ cleanly (live behavior verified manually until 7b); `rubedo du` against
 the cloud store makes zero per-object API calls; the server
 payload/download endpoints stream from the bucket via `app.state.home`.
 
-**Progress (2026-07-20):** object-store plane shipped — `ObjectStore` +
-`LocalStore`/`S3Store`, `Home(store=/store_url=)` / `RUBEDO_STORE_URL`,
-protocol-routed `du`/`gc`/`server`, moto suite. Remaining for item 7:
-cloud Arrow lane segments + single-writer lease + compaction; Postgres
-correctness stays item 7b.
+**Progress (2026-07-20):** object and lane planes shipped —
+`ObjectStore` + `LocalStore`/`S3Store`, immutable cloud Arrow segments,
+`row_id` dedupe, LIST-etag cache invalidation, writer-side compaction,
+and renewable single-writer leases. `Home(store=/store_url=)` /
+`RUBEDO_STORE_URL` selects both cloud planes; `du`/`gc`/`server` use the
+protocol. Moto covers second-Home reuse, leases, and compaction; the
+env-gated R2 test covers the real provider. Postgres correctness remains
+item 7b.
 
 ## 7b. Postgres ledger test coverage  **[follows item 7]**
 

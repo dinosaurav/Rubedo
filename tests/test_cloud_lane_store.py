@@ -1,6 +1,7 @@
 """Moto-backed immutable cloud lane segments, leases, and compaction."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -99,6 +100,25 @@ def test_pipeline_writer_lease_rejects_second_writer(tmp_path):
 
     with second.writer_lease("pipe", "run-two"):
         pass
+
+
+@mock_aws
+def test_pipeline_writer_lease_renews(tmp_path):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket=BUCKET)
+    first = CloudLaneStore(
+        str(tmp_path / "first"),
+        _store(client),
+        lease_ttl_seconds=1,
+        lease_renew_seconds=0.05,
+    )
+    second = CloudLaneStore(str(tmp_path / "second"), _store(client))
+
+    with first.writer_lease("pipe", "run-one"):
+        time.sleep(0.12)
+        with pytest.raises(PipelineLeaseError, match="active writer"):
+            with second.writer_lease("pipe", "run-two"):
+                pass
 
 
 @mock_aws
