@@ -125,7 +125,10 @@ def enrich(row: dict): ...
 - **`rate_limit`** paces the step evenly across all its workers, retries included.
 - **`stale_after`** expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh the clock.
 - **`assertions`** run against the output value before it commits; if any raise, the step fails and bad data never propagates downstream.
-- **`executor="process"`** switches a step from the default thread pool to a process pool (`loky` + `cloudpickle`, so closures are fine) for CPU-bound work.
+- **`executor="process"` or `executor=<factory>`** switches a step from the
+  default thread path to a `loky` process pool or any Future-shaped external
+  pool returned by a zero-argument factory. Executor choice never changes
+  cache identity.
 - **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `aggregate`/`join` always synchronize on all lanes either way.
 
 A step can **decline an item** by returning `Filtered(reason=...)`: downstream steps skip it with status `filtered` instead of executing, and the verdict itself is cached like any output — an expensive LLM-based filter runs once per input, not once per run. When the input changes, the decision is made fresh.

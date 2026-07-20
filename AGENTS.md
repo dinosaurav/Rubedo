@@ -90,8 +90,11 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   a plain step fed a value instead of scanning for one; same params reuse,
   changed params recompute (`ROOT_LANE` in `planning.py`). A pipeline may
   declare several source-shaped roots; `join` doesn't care that its parents
-  are roots. `executor` is `"thread"` (default) or `"process"` (a `loky` pool
-  serializing via `cloudpickle`, so closures are fine). **`spec.py` never
+  are roots. `executor` is `"thread"` (default), `"process"` (a `loky` pool
+  serializing via `cloudpickle`, so closures are fine), or a zero-argument
+  factory returning a Future-shaped external pool. Rubedo owns and shuts
+  down factory-returned pools; definitions record `external:<qualname>`.
+  **`spec.py` never
   imports `pipeline.py`/`runner.py`/`scheduler.py`** — the owner considers
   it a flagship human-readable file; validation and machinery live above it
   (TODO 15's whole point: rotate the dependency so no lazy imports are

@@ -7,6 +7,11 @@ from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal, Un
 from pydantic import BaseModel
 from dataclasses import dataclass
 
+ExecutorSpec = Union[
+    Literal["thread", "process"],
+    Callable[[], Any],
+]
+
 _RATE_PERIODS = {"s": 1.0, "sec": 1.0, "second": 1.0,
                  "m": 60.0, "min": 60.0, "minute": 60.0,
                  "h": 3600.0, "hour": 3600.0}
@@ -72,7 +77,7 @@ class StepSpec:
     check_cache: bool = True  # when False, always re-execute (still commits, like --force for one step)
     in_shape: str = "one"  # one | aggregate | fold | join
     out_shape: str = "one"  # one | many
-    executor: str = "thread"
+    executor: ExecutorSpec = "thread"
     group_key: Optional[str] = None  # aggregate/fold: field to group lanes by
     join_on: Optional[Dict[str, str]] = None  # join: {parent: field}
     arrow_aggregate: bool = False  # aggregate: pass parent's output as pa.Table, not dict-of-lanes
@@ -195,7 +200,7 @@ def step(
     shape: Optional[str] = None,
     in_shape: Optional[str] = None,
     out_shape: Optional[str] = None,
-    executor: str = "thread",
+    executor: ExecutorSpec = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
     arrow_aggregate: bool = False,
@@ -465,8 +470,30 @@ def step(
                 f"Step '{step_name}': in_shape='one' + out_shape='many' takes at most one parent — "
                 "none = a root (a source that yields the initial lanes); two+ would be a join"
             )
-        if executor not in ("thread", "process"):
-            raise ValueError(f"Step '{step_name}': executor must be 'thread' or 'process', got {executor!r}")
+        if isinstance(executor, str):
+            if executor not in ("thread", "process"):
+                raise ValueError(
+                    f"Step '{step_name}': executor must be 'thread', "
+                    f"'process', or a zero-argument pool factory, got "
+                    f"{executor!r}"
+                )
+        elif callable(executor):
+            try:
+                inspect.signature(executor).bind()
+            except TypeError as exc:
+                raise ValueError(
+                    f"Step '{step_name}': executor factory must accept "
+                    "zero arguments"
+                ) from exc
+            except (ValueError, AttributeError):
+                # Some extension callables have no inspectable signature;
+                # invocation at run time remains the authoritative check.
+                pass
+        else:
+            raise ValueError(
+                f"Step '{step_name}': executor must be 'thread', 'process', "
+                f"or a zero-argument pool factory, got {executor!r}"
+            )
         if resolved_in in ("aggregate", "fold") and skip_cache:
             raise ValueError(
                 f"Step '{step_name}': skip_cache is meaningless with in_shape={resolved_in!r} "
@@ -638,7 +665,17 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         if s.join_on is not None:
             entry["join_on"] = dict(s.join_on)
         if s.executor != "thread":
-            entry["executor"] = s.executor
+            if isinstance(s.executor, str):
+                entry["executor"] = s.executor
+            else:
+                module = getattr(s.executor, "__module__", "")
+                qualname = getattr(
+                    s.executor,
+                    "__qualname__",
+                    type(s.executor).__qualname__,
+                )
+                name = f"{module}.{qualname}" if module else qualname
+                entry["executor"] = f"external:{name}"
         if s.output_model is not None:
             entry["output_schema"] = s.output_model.model_json_schema()
         if s.assertions:

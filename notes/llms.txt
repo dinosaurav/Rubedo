@@ -31,7 +31,9 @@ A step's output is cached based on:
 - `stale_after="24h"`: Force recomputation if the cached result is older than 24 hours.
 - `skip_cache=True`: Mark a utility step (e.g., a simple parse) to run every time without writing to disk. Its output identity fuses with the downstream step. Not allowed on `expand` or `aggregate` steps.
 - `assertions=[callable, ...]`: A list of callables that take the output value. If any raise an exception, the step fails.
-- `executor="process"`: run this step's lanes in a `loky` process pool (via `cloudpickle`) instead of the default thread pool — for CPU-bound work.
+- `executor="process"` runs a step in a `loky` process pool; a zero-argument
+  `executor=<factory>` may return any Future-shaped external pool. Retries,
+  rate limits, and commits remain coordinator-side.
 - `in_shape="aggregate"` (the only shape you still write out, for the plain `@all` aggregate; `shape="reduce"` is the alias): receives `{lane_key: payload}` for all lanes and returns one output. `group_key="field"` (a field of the parent; implies the aggregate, so drop `in_shape=`) emits one output per group instead of one over `@all`.
 - `join_on={parent: field, ...}` (implies `in_shape="join"`): N-way equijoin matching each side on a field of its parent output; mints one lane per matched tuple (coordinate `a|b`). The sides are independent roots (not a shared-lineage "diamond"); `filter` (return `Filtered`) after the join for non-equi predicates.
 - A generator function is `out_shape="many"` automatically (the `shape="expand"` alias): `yield` a payload per item; each mints a content-addressed downstream lane (identical payloads collapse). Cached against the parent, so a scrape/fetch runs once. Use for feeds, scraping, splitting a blob into records, or ingestion (a parentless expand = a source).

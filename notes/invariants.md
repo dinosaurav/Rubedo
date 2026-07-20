@@ -254,8 +254,9 @@ directly and, at most, point at this file in general terms.
   (pipelining consecutive ≤1-parent map steps through a lane) are a
   scheduling choice only — the resulting ledger rows are identical either
   way.
-- **(3.3)** `executor="thread"` vs `executor="process"` changes how step
-  functions are run, never what address or content they produce.
+- **(3.3)** `executor="thread"` vs `executor="process"` vs an external
+  Future-shaped pool factory changes how step functions are run, never
+  what address or content they produce.
 - **(3.4)** `aggregate`/`join` fan-in is keyed on which lanes survived (by
   content, via `group_key`/`join_on`), never on the order lanes happened
   to finish in.

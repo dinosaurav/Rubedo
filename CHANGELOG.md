@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bring-your-own execution pools (TODO 8):** `executor=` accepts a
+  zero-argument factory returning any Future-shaped pool alongside
+  `"thread"` and `"process"`. Factories are called once per step segment,
+  returned pools are shut down by Rubedo, and definition snapshots record
+  stable `external:<module>.<qualname>` markers without changing cache
+  identity. Includes fake-pool parity tests and an optional Dask
+  `LocalCluster` example.
 - **S3-compatible object store (TODO 7, object plane):** `ObjectStore`
   protocol with `LocalStore` + `S3Store` (AWS S3 / R2 / B2 / MinIO via
   endpoint URL). Configure with `Home(store=...)`, `Home(store_url=...)`,

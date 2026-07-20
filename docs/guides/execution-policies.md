@@ -112,6 +112,45 @@ Each step with `executor="process"` gets its own pool, created on first use
 and shut down at the end of the segment that runs it — a mixed pipeline
 (some steps `"thread"`, some `"process"`) is completely normal.
 
+### Bring your own pool
+
+`executor=` can also be a zero-argument factory returning any pool with:
+
+```python
+pool.submit(fn, *args, **kwargs)  # returns a Future with .result()
+```
+
+For example, Dask's executor already has that shape:
+
+```python
+from dask.distributed import Client
+
+def make_pool():
+    return Client("tcp://scheduler:8786").get_executor()
+
+@step(executor=make_pool, workers=8)
+def analyze(row: dict): ...
+```
+
+Rubedo has no named `"dask"` or `"ray"` backend and never imports cluster
+libraries. The factory owns provider configuration; Rubedo calls it once
+per step segment and shuts down the returned object with
+`shutdown(wait=True)` (or `close()` when that is its lifecycle method).
+
+The per-step `workers` value still bounds the number of in-flight lane
+submissions from Rubedo. It does not resize the external cluster. Retries,
+rate limits, assertions, parent-value resolution, and ledger writes remain
+coordinator-side; only the step function and arguments cross into the pool.
+Consequently, spilled values currently route through the coordinator too
+(direct worker/store references are a later optimization).
+
+Factories appear in recorded definitions as
+`"external:<module>.<qualname>"`, but executor choice never changes cache
+addresses. Prefer a named factory over a lambda so run snapshots are
+readable. See the optional
+[`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor)
+example for a complete two-run reuse demonstration.
+
 ## `schedule`: execution order, never results
 
 ```python

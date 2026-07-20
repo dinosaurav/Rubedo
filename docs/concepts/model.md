@@ -160,7 +160,7 @@ detail lives in [`../development/invariants.md`](../development/invariants.md)):
 3. **Order and parallelism never change results.** Output addresses come
    from `step`/`version`/`input_hash`(/`params`/`code`), never from
    wall-clock order or worker assignment, so `schedule="broad"` vs
-   `"deep"` and `executor="thread"` vs `"process"` always converge on
+   `"deep"` and thread vs process vs external-pool executors always converge on
    identical ledger rows.
 4. **Bytes are disposable, facts are not.** Invalidation and retention
    delete facts never, bytes sometimes: retention GC (see

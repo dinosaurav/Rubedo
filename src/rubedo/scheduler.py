@@ -35,6 +35,17 @@ if TYPE_CHECKING:
 SCHEDULES = ("broad", "deep")
 
 
+def _shutdown_worker_pool(pool: Any) -> None:
+    """Shut down a process/external pool created by this segment."""
+    shutdown = getattr(pool, "shutdown", None)
+    if callable(shutdown):
+        shutdown(wait=True)
+        return
+    close = getattr(pool, "close", None)
+    if callable(close):
+        close()
+
+
 def _scanned_for(step: StepSpec) -> List[RootItem]:
     """The synthetic items feeding a source-less root's plan.
 
@@ -132,7 +143,7 @@ def _run_segment(
         for s in seg_steps
     }
     thread_pools: Dict[str, concurrent.futures.ThreadPoolExecutor] = {}
-    process_pools: Dict[str, Any] = {}
+    worker_pools: Dict[str, Any] = {}
     in_flight: Dict[concurrent.futures.Future, StepSpec] = {}
     scope_lanes = frozenset(scope.lanes) if scope is not None else None
     scope_anchor = scope.anchor if scope is not None else None
@@ -155,12 +166,25 @@ def _run_segment(
                 max_workers=workers or step.workers
             )
             thread_pools[step.name] = tp
-        pp = None
+        worker_pool = None
         if step.executor == "process":
-            pp = process_pools.get(step.name)
-            if pp is None:
-                pp = loky.ProcessPoolExecutor(max_workers=workers or step.workers)
-                process_pools[step.name] = pp
+            worker_pool = worker_pools.get(step.name)
+            if worker_pool is None:
+                worker_pool = loky.ProcessPoolExecutor(
+                    max_workers=workers or step.workers
+                )
+                worker_pools[step.name] = worker_pool
+        elif callable(step.executor):
+            worker_pool = worker_pools.get(step.name)
+            if worker_pool is None:
+                worker_pool = step.executor()
+                if not callable(getattr(worker_pool, "submit", None)):
+                    raise TypeError(
+                        f"Step {step.name!r}: executor factory returned "
+                        f"{type(worker_pool).__name__}, expected an object "
+                        "with submit(fn, *args, **kwargs)"
+                    )
+                worker_pools[step.name] = worker_pool
         fut = tp.submit(
             _process_decision,
             step,
@@ -170,7 +194,7 @@ def _run_segment(
             params_hash,
             memo,
             limiters[step.name],
-            pp,
+            worker_pool,
             ctx.pipeline_id,
             ctx.run_id,
         )
@@ -266,5 +290,5 @@ def _run_segment(
     finally:
         for tp in thread_pools.values():
             tp.shutdown(wait=True)
-        for pp in process_pools.values():
-            pp.shutdown()
+        for pool in worker_pools.values():
+            _shutdown_worker_pool(pool)
