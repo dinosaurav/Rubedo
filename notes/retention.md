@@ -159,9 +159,11 @@ removes the bytes of outputs that are merely old (their correctness is not
 in question). Both demote liveness through the same paired-lifecycle
 machinery; they differ in *why* and in what happens to the bytes.
 
-The store is local-only today. When the cloud object store lands (TODO
-item 7), `gc` must hard-refuse non-local stores until dry-run auditing and
-object-versioned buckets gate it — S3/GCS deletes have no trash can.
+The store supports a local filesystem backend and an S3-compatible
+``ObjectStore`` (TODO item 7). Destructive ``gc(delete=True)`` hard-refuses
+non-local stores until dry-run auditing and object-versioned buckets gate
+it — S3/GCS deletes have no trash can. Cloud retention still demotes
+liveness (``auto_prune``) without deleting bytes.
 
 Implementation: `src/rubedo/gc.py` (module docstring covers internals),
 `tests/test_gc.py` (each guarantee above is pinned by a test). Decision

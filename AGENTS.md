@@ -107,10 +107,12 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   `retention=`/`params_model=` as construction-time settings. `home=` is a
   `Home` instance (see `home.py`), not a path string.
 - `src/rubedo/home.py` — `Home`: one storage root owning `Database` +
-  `LocalStore` + `LaneStore`. Interned by absolute path so same-home
-  concurrent runs share buffers/engine; different homes are independent.
-  Injected via `pipeline(home=...)` and carried on `_RunContext` — no
-  process-global DB/store/lane-table state. Public read verbs:
+  `ObjectStore` (`LocalStore` or `S3Store`) + `LaneStore`. Interned by
+  absolute path so same-home concurrent runs share buffers/engine;
+  different homes are independent. Injected via `pipeline(home=...)` and
+  carried on `_RunContext` — no process-global DB/store/lane-table state.
+  Object store via `store=` / `store_url=` / `RUBEDO_STORE_URL`
+  (`s3://bucket/prefix`); ledger via `db_url=` / `RUBEDO_DB_PATH`. Public read verbs:
   `.cells` / `.current` / `.select` / `.runs` (historical list via
   `get_recent_runs`) / `.diff` (run-to-run step comparison; see
   `diff.py`).

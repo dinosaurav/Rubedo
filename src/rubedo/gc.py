@@ -35,6 +35,7 @@ from .models import (
     RunCoordinateStatus,
     effective_run_status,
 )
+from .store import resolve_object_sizes
 from .util import utcnow_iso
 
 # Warn-only threshold: at the end of an *unconfigured* run, if the store is
@@ -275,8 +276,8 @@ def _object_sizes_and_refs(
         .filter(InputHashUsage.fulfilled.is_(True))
         .all()
     }
-    size_of: Dict[str, int] = {}
     refs_by_hash: Dict[str, List[Tuple[str, bool]]] = {}
+    needed: Set[str] = set()
     for row in home.lanes.all_filled_rows():
         addr = row.get("address", "")
         output = row.get("output")
@@ -288,11 +289,11 @@ def _object_sizes_and_refs(
         content_hash = output[len("objects:"):]
         is_live = addr in fulfilled
         refs_by_hash.setdefault(content_hash, []).append((addr, is_live))
-        if content_hash not in size_of:
-            try:
-                size_of[content_hash] = os.path.getsize(home.store.object_path(content_hash))
-            except OSError:
-                size_of[content_hash] = -1  # absent; can't be reclaimed
+        needed.add(content_hash)
+    present = resolve_object_sizes(home.store, needed)
+    size_of: Dict[str, int] = {
+        h: present[h] if h in present else -1 for h in needed
+    }
     return size_of, refs_by_hash
 
 
@@ -437,22 +438,22 @@ def _apply(
             usage.fulfilled = False  # type: ignore[assignment]
             usage.last_run_id = run_id  # type: ignore[assignment]
             home.lanes.mark_unfulfilled(addr)
-    for content_hash, size in reclaimed:
-        session.add(
-            ObjectReclamation(
-                content_hash=content_hash,
-                bytes=size,
-                trigger=trigger,
-                run_id=run_id,
-                created_at=utcnow_iso(),
+    can_delete = home.store.capabilities.destructive_gc
+    if can_delete:
+        for content_hash, size in reclaimed:
+            session.add(
+                ObjectReclamation(
+                    content_hash=content_hash,
+                    bytes=size,
+                    trigger=trigger,
+                    run_id=run_id,
+                    created_at=utcnow_iso(),
+                )
             )
-        )
     session.commit()
-    for content_hash, _ in reclaimed:
-        try:
-            os.remove(home.store.object_path(content_hash))
-        except OSError:
-            pass  # already gone, or unwritable: ledger already records it
+    if can_delete:
+        for content_hash, _ in reclaimed:
+            home.store.delete(content_hash)
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +486,16 @@ def gc(
                     applied=False,
                     refused=f"{len(running)} run(s) still running "
                     f"({', '.join(running)}); retry when idle",
+                    max_bytes=max_bytes,
+                )
+            if not home.store.capabilities.destructive_gc:
+                return GcReport(
+                    applied=False,
+                    refused=(
+                        "object store does not allow destructive GC "
+                        "(cloud backends hard-refuse until versioned-bucket "
+                        "gating lands); dry-run with delete=False still works"
+                    ),
                     max_bytes=max_bytes,
                 )
 
@@ -532,6 +543,10 @@ def auto_prune(
     if running:
         return None
     demote, reclaimed, total_before = _plan(session, home, {pipeline_id: retention}, None)
+    # Cloud stores hard-refuse byte deletion until versioned-bucket gating;
+    # retention still demotes liveness so the keep-window stays honest.
+    if not home.store.capabilities.destructive_gc:
+        reclaimed = []
     if demote or reclaimed:
         _apply(session, home, demote, reclaimed, trigger="auto_prune", run_id=run_id)
     return GcReport(
@@ -545,17 +560,16 @@ def auto_prune(
 def cheap_store_bytes(home: Optional[Home] = None) -> int:
     """A cached, cheap estimate of total object-store bytes for the warn check.
 
-    A full scandir sum is walked at most once per TTL and cached in a sidecar,
-    so the warn-threshold check never pays an O(store) stat storm on every run.
+    Sizes come from ``store.inventory()`` (one sized listing when the backend
+    advertises it). A sidecar on ``home.path`` caches the sum for the TTL so
+    the warn-threshold check never pays an O(store) walk on every run.
     """
     import json
 
     from .util import iso_age_seconds
 
     home = home or Home.default()
-    root = home.store.root
-    objects_dir = home.store.objects_dir
-    cache_path = os.path.join(root, ".store_size_cache.json")
+    cache_path = os.path.join(home.path, ".store_size_cache.json")
     try:
         with open(cache_path) as f:
             cached = json.load(f)
@@ -564,13 +578,7 @@ def cheap_store_bytes(home: Optional[Home] = None) -> int:
     except (OSError, ValueError, KeyError):
         pass
 
-    total = 0
-    for dirpath, _dirs, files in os.walk(objects_dir):
-        for name in files:
-            try:
-                total += os.path.getsize(os.path.join(dirpath, name))
-            except OSError:
-                pass
+    total = sum(info.size for info in home.store.inventory())
     try:
         with open(cache_path, "w") as f:
             json.dump({"bytes": total, "computed_at": utcnow_iso()}, f)

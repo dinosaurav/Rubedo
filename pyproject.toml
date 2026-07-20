@@ -52,6 +52,7 @@ rubedo = "rubedo.cli:main"
 
 [project.optional-dependencies]
 server = ["fastapi", "uvicorn"]
+s3 = ["boto3>=1.34.0"]
 
 # Most examples call real services (Hacker News, GitHub, Open-Meteo, an LLM via
 # OpenRouter) using only the standard library. A few need a library (e.g.
@@ -70,12 +71,14 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
+    "boto3>=1.34.0",
     "fastapi",
     "httpx>=0.25.0",
     "litellm>=1.91.0",
     "mcp>=1.28.1",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.6",
+    "moto[s3]>=5.0.0",
     "mypy>=2.1.0",
     "networkx>=3.6.1",
     "pymupdf>=1.24.0",  # examples/pdf_digest: PDF text + page rasterization

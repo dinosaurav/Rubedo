@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .db import Database
 from .lane_store import LaneStore
-from .store import LocalStore
+from .store import LocalStore, ObjectStore, open_store
 
 PathLike = Union[str, os.PathLike]
 
@@ -38,12 +38,30 @@ def _resolve_path(path: Optional[PathLike]) -> str:
     return os.path.abspath(os.fspath(path))
 
 
+def _resolve_store(
+    *,
+    path: str,
+    store: Optional[ObjectStore],
+    store_url: Optional[str],
+) -> ObjectStore:
+    """Explicit ``store=`` wins; else ``store_url=``; else ``RUBEDO_STORE_URL``;
+    else a local filesystem store under ``path``."""
+    if store is not None and store_url is not None:
+        raise ValueError("Home: pass store= or store_url=, not both")
+    if store is not None:
+        return store
+    url = store_url if store_url is not None else os.environ.get("RUBEDO_STORE_URL")
+    if url:
+        return open_store(url)
+    return LocalStore(path)
+
+
 class Home:
     """Storage root: ``db`` + ``store`` + ``lanes`` for one filesystem path."""
 
     path: str
     db: Database
-    store: LocalStore
+    store: ObjectStore
     lanes: LaneStore
 
     def __new__(
@@ -54,6 +72,8 @@ class Home:
         db_engine: Optional[Engine] = None,
         db_connect_args: Optional[Mapping[str, Any]] = None,
         db_poolclass: Any = None,
+        store: Optional[ObjectStore] = None,
+        store_url: Optional[str] = None,
         fresh: bool = False,
     ):
         resolved = _resolve_path(path)
@@ -65,6 +85,8 @@ class Home:
                 db_engine=db_engine,
                 db_connect_args=db_connect_args,
                 db_poolclass=db_poolclass,
+                store=store,
+                store_url=store_url,
             )
             return obj
         with _registry_lock:
@@ -72,14 +94,21 @@ class Home:
             if existing is not None:
                 if any(
                     x is not None
-                    for x in (db_url, db_engine, db_connect_args, db_poolclass)
+                    for x in (
+                        db_url,
+                        db_engine,
+                        db_connect_args,
+                        db_poolclass,
+                        store,
+                        store_url,
+                    )
                 ):
                     # Already interned — conflicting hooks are a hard error
-                    # so tests don't silently share the wrong engine.
+                    # so tests don't silently share the wrong engine/store.
                     raise ValueError(
                         f"Home({resolved!r}) is already constructed; pass "
                         f"fresh=True for an unshared instance, or reuse the "
-                        f"existing Home without db_* overrides"
+                        f"existing Home without db_*/store overrides"
                     )
                 return existing
             obj = object.__new__(cls)
@@ -89,6 +118,8 @@ class Home:
                 db_engine=db_engine,
                 db_connect_args=db_connect_args,
                 db_poolclass=db_poolclass,
+                store=store,
+                store_url=store_url,
             )
             _registry[resolved] = obj
             return obj
@@ -105,6 +136,8 @@ class Home:
         db_engine: Optional[Engine] = None,
         db_connect_args: Optional[Mapping[str, Any]] = None,
         db_poolclass: Any = None,
+        store: Optional[ObjectStore] = None,
+        store_url: Optional[str] = None,
     ) -> None:
         self.path = path
         os.makedirs(self.path, exist_ok=True)
@@ -135,12 +168,15 @@ class Home:
                     connect_args=db_connect_args,
                     poolclass=db_poolclass,
                 )
-        self.store = LocalStore(self.path)
+        self.store = _resolve_store(path=self.path, store=store, store_url=store_url)
         self.lanes = LaneStore(self.path)
 
     @classmethod
     def default(cls) -> "Home":
-        """The ambient home (``RUBEDO_HOME`` or ``.rubedo``)."""
+        """The ambient home (``RUBEDO_HOME`` or ``.rubedo``).
+
+        Honors ``RUBEDO_STORE_URL`` for the object-store plane when set.
+        """
         return cls(None)
 
     @classmethod
@@ -152,6 +188,8 @@ class Home:
         db_engine=None,
         db_connect_args=None,
         db_poolclass=None,
+        store=None,
+        store_url=None,
     ) -> "Home":
         """Unshared Home — not interned. For tests and short-lived roots."""
         return cls(
@@ -160,6 +198,8 @@ class Home:
             db_engine=db_engine,
             db_connect_args=db_connect_args,
             db_poolclass=db_poolclass,
+            store=store,
+            store_url=store_url,
             fresh=True,
         )
 

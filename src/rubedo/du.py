@@ -3,9 +3,8 @@
 storage_report() walks the Arrow lane_store rows + input_hash_usages —
 never the store directory (direction-of-truth rule: the ledger is the
 truth about what the store contains; enumerating `objects/` would invert
-that). File sizes are read via os.path.getsize on ledger-named paths,
-which is fine: the ledger names the path, the filesystem only supplies
-the byte count.
+that). Byte sizes come from ``ObjectStore`` via ``resolve_object_sizes``
+(one sized inventory pass when the backend advertises it).
 
 The load-bearing subtlety is sharing. The store is content-addressed and
 dedupes identical bytes, so one physical object (keyed by
@@ -20,9 +19,9 @@ Because groups share objects, per-step and per-pipeline byte totals are
 each deduped within their own scope and can sum to more than total_bytes —
 that is the honest reading of shared storage, not a bug.
 
-A ledger-named path missing from disk is counted and reported as missing,
-never a crash; missing objects contribute zero bytes and are excluded from
-the reclaimable estimate (there are no bytes to reclaim).
+A ledger-named object missing from the store is counted and reported as
+missing, never a crash; missing objects contribute zero bytes and are
+excluded from the reclaimable estimate (there are no bytes to reclaim).
 
 Retention GC (10b) deletes objects *deliberately* and logs each in the
 append-only object_reclamations table. So an absent object is disambiguated:
@@ -31,12 +30,12 @@ absent + not logged = **missing** (corruption). A reclaimed hash that a later
 lazy-heal re-wrote is present again and accounts as a normal live object — the
 old reclamation row is simply ignored once the bytes are back.
 """
-import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from .home import Home
 from .models import InputHashUsage, ObjectReclamation
+from .store import resolve_object_sizes
 
 
 @dataclass
@@ -174,28 +173,25 @@ def storage_report(home: Optional[Home] = None) -> StorageReport:
         rows.append((row.get("pipeline_id", ""), row.get("step_name", ""), content_hash, is_live))
 
     # Physical objects: group spilled materializations by content hash.
-    size_of: Dict[str, int] = {}
-    missing: Set[str] = set()
-    reclaimed: Set[str] = set()
+    needed: Set[str] = set()
     live_refs: Dict[str, int] = {}
     for _, _, content_hash, is_live in rows:
         if content_hash is None:
             continue  # inline value: no object-store bytes
-        if (
-            content_hash not in size_of
-            and content_hash not in missing
-            and content_hash not in reclaimed
-        ):
-            try:
-                size_of[content_hash] = os.path.getsize(home.store.object_path(content_hash))
-            except OSError:
-                # Absent: a logged deletion is a deliberate reclaim; otherwise
-                # the object is genuinely missing (corruption).
-                if content_hash in reclaimed_bytes_of:
-                    reclaimed.add(content_hash)
-                else:
-                    missing.add(content_hash)
+        needed.add(content_hash)
         live_refs[content_hash] = live_refs.get(content_hash, 0) + (1 if is_live else 0)
+
+    present = resolve_object_sizes(home.store, needed)
+    size_of: Dict[str, int] = {}
+    missing: Set[str] = set()
+    reclaimed: Set[str] = set()
+    for content_hash in needed:
+        if content_hash in present:
+            size_of[content_hash] = present[content_hash]
+        elif content_hash in reclaimed_bytes_of:
+            reclaimed.add(content_hash)
+        else:
+            missing.add(content_hash)
 
     reclaimable = [
         h

@@ -176,6 +176,12 @@ cleanly (live behavior verified manually until 7b); `rubedo du` against
 the cloud store makes zero per-object API calls; the server
 payload/download endpoints stream from the bucket via `app.state.home`.
 
+**Progress (2026-07-20):** object-store plane shipped — `ObjectStore` +
+`LocalStore`/`S3Store`, `Home(store=/store_url=)` / `RUBEDO_STORE_URL`,
+protocol-routed `du`/`gc`/`server`, moto suite. Remaining for item 7:
+cloud Arrow lane segments + single-writer lease + compaction; Postgres
+correctness stays item 7b.
+
 ## 7b. Postgres ledger test coverage  **[follows item 7]**
 
 The suite stays SQLite-only through item 7 (owner call, 2026-07-11);

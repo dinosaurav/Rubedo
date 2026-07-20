@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **S3-compatible object store (TODO 7, object plane):** `ObjectStore`
+  protocol with `LocalStore` + `S3Store` (AWS S3 / R2 / B2 / MinIO via
+  endpoint URL). Configure with `Home(store=...)`, `Home(store_url=...)`,
+  or `RUBEDO_STORE_URL` (`s3://bucket/prefix`). Optional extra:
+  `pip install 'rubedo[s3]'`. `rubedo du` / GC sizing use sized inventory
+  (zero per-object HEAD/GET). Destructive `gc(delete=True)` hard-refuses
+  cloud stores until versioned-bucket gating; server object download
+  streams from the store. Lane-store cloud segments and Postgres ledger
+  remain later slices of item 7 / 7b.
 - **Public read/query surface (TODO 35):** `Cell` is one (run, step, lane)
   outcome. `Home.cells` / `Home.current` / `Home.select` (and
   `RunSummary.cells`) share an implementation with `/api/current-outputs`.
@@ -20,13 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Breaking:** `pipeline(home=...)` takes a `Home` instance, not a path
   string (`TypeError` otherwise). `Home` owns the ledger (`Database`),
-  object store (`LocalStore`), and lane tables (`LaneStore`) for one root
-  — process-global `_init_home` and the one-home-per-process guard are
-  gone. Concurrent runs against different homes in one process are
-  supported. Construct with `Home("/path")` (or `home=None` for the
-  ambient `RUBEDO_HOME`/`.rubedo` default); same absolute path interns to
-  the same instance. `trace`/`gc`/`storage_report`/`invalidate` and
-  `create_app(home=)` take `Home` the same way. (TODO 34 end-state)
+  object store (`ObjectStore` — local or S3-compatible), and lane tables
+  (`LaneStore`) for one root — process-global `_init_home` and the
+  one-home-per-process guard are gone. Concurrent runs against different
+  homes in one process are supported. Construct with `Home("/path")` (or
+  `home=None` for the ambient `RUBEDO_HOME`/`.rubedo` default); same
+  absolute path interns to the same instance. `trace`/`gc`/
+  `storage_report`/`invalidate` and `create_app(home=)` take `Home` the
+  same way. (TODO 34 end-state)
 
 ### Fixed
 - Mypy's analysis target is now Python 3.12 so numpy≥2.5's PEP 695 stub

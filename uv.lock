@@ -255,6 +255,34 @@ wheels = [
 ]
 
 [[package]]
+name = "boto3"
+version = "1.43.52"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+    { name = "jmespath" },
+    { name = "s3transfer" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/93/5f98e422ced57a359e3b7827ab79b359d67456abb9c5840b0c5eb7b90e6b/boto3-1.43.52.tar.gz", hash = "sha256:3da09a393c050906d407023bee5fb5b5fb333378513af1a1a51159db870b572f", size = 112680, upload-time = "2026-07-20T19:31:28.396Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/57/31e6f45c3e236273f9f83f047ae579a90c4be8c6dc1b8366d63a6dcd9841/boto3-1.43.52-py3-none-any.whl", hash = "sha256:1af1950c2b2400267c93d971d588367fc73554e02b4f435a50a5e930a7c93526", size = 140026, upload-time = "2026-07-20T19:31:26.247Z" },
+]
+
+[[package]]
+name = "botocore"
+version = "1.43.52"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jmespath" },
+    { name = "python-dateutil" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/18/f6f02b1acea9a7c42571813ad4c3e19460206e67ca99af402b7ae3d7584d/botocore-1.43.52.tar.gz", hash = "sha256:3c25e11796ae6e295f1cc3a7760e808c26c432cd580d6a608f32da24715c389b", size = 15717429, upload-time = "2026-07-20T19:31:17.296Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/e8/99f83445500c565e1850b20d510821d1eb635283171573340aa310d478b5/botocore-1.43.52-py3-none-any.whl", hash = "sha256:43715e971b306f86d5918b3b728ec62aae3f4be49e1606058ef1f0b87dcbad9e", size = 15402564, upload-time = "2026-07-20T19:31:13.936Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
@@ -1032,6 +1060,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jmespath"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
 name = "jsonschema"
 version = "4.26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1423,6 +1460,30 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/b6/e858701499d57eee8b3fd8e78168083956c6683ddbe727b46758b19e1119/mkdocstrings_python-2.0.5.tar.gz", hash = "sha256:3a4d92556ad39637e88af94a5374213af9a8e3040c3824ceaed04b486c017594", size = 199578, upload-time = "2026-06-19T10:41:08.868Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/fc/10ab7e80650a9c9e8f4f1105f8c8e73567f88ed0c06ada589ab81d38687c/mkdocstrings_python-2.0.5-py3-none-any.whl", hash = "sha256:30c837bbff016549f659fcba6539ac351303f0fd7e713c89a040611072236e9d", size = 104951, upload-time = "2026-06-19T10:41:07.378Z" },
+]
+
+[[package]]
+name = "moto"
+version = "5.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "cryptography" },
+    { name = "requests" },
+    { name = "responses" },
+    { name = "werkzeug" },
+    { name = "xmltodict" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/47/63/d944f387582cc53f53febbff2b3fa36a6d2ed7c1feef8990bf646cfa9cba/moto-5.2.2.tar.gz", hash = "sha256:aac8023a429e125e91c91f8f4730a67b54f518cda587352f7e67252fe3168f75", size = 8678761, upload-time = "2026-06-06T18:57:54.931Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/45/13cff46f4f617a6e97e1d497d75abd913e250bb4c823a4985668c6e593e4/moto-5.2.2-py3-none-any.whl", hash = "sha256:3817f1e39721ca833579b921e53e3b68547ace6a34d848c9486fbb5905808de9", size = 6698689, upload-time = "2026-06-06T18:57:51.435Z" },
+]
+
+[package.optional-dependencies]
+s3 = [
+    { name = "py-partiql-parser" },
+    { name = "pyyaml" },
 ]
 
 [[package]]
@@ -1956,6 +2017,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py-partiql-parser"
+version = "0.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/7a/a0f6bda783eb4df8e3dfd55973a1ac6d368a89178c300e1b5b91cd181e5e/py_partiql_parser-0.6.3.tar.gz", hash = "sha256:09cecf916ce6e3da2c050f0cb6106166de42c33d34a078ec2eb19377ea70389a", size = 17456, upload-time = "2025-10-18T13:56:13.441Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/33/a7cbfccc39056a5cf8126b7aab4c8bafbedd4f0ca68ae40ecb627a2d2cd3/py_partiql_parser-0.6.3-py2.py3-none-any.whl", hash = "sha256:deb0769c3346179d2f590dcbde556f708cdb929059fb654bad75f4cf6e07f582", size = 23752, upload-time = "2025-10-18T13:56:12.256Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "25.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2460,6 +2530,20 @@ wheels = [
 ]
 
 [[package]]
+name = "responses"
+version = "0.26.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f0/1a/4af3e6d659394b809838490b144e4ab8d7ed3b9fecc7ca78f5d2f79b1a3d/responses-0.26.2.tar.gz", hash = "sha256:9c9259b46a8349197edebf43cfa68a87e1a2802ef503ff8b2fecbabc0b45afd8", size = 84030, upload-time = "2026-07-03T16:44:50.325Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/28/693e1d9ebf72baa062ded80d837a035b86ce75eda5a269379e9e2b1008a8/responses-0.26.2-py3-none-any.whl", hash = "sha256:6fdfeabd58e5ec473b98dfe02e6d46d3173bd8dd573eff2ccccf1a05a5135364", size = 35609, upload-time = "2026-07-03T16:44:49.1Z" },
+]
+
+[[package]]
 name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2610,6 +2694,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+s3 = [
+    { name = "boto3" },
+]
 server = [
     { name = "fastapi" },
     { name = "uvicorn" },
@@ -2617,6 +2704,7 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "boto3" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "litellm" },
@@ -2624,6 +2712,7 @@ dev = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "moto", extra = ["s3"] },
     { name = "mypy" },
     { name = "networkx" },
     { name = "polars" },
@@ -2641,6 +2730,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "fastapi", marker = "extra == 'server'" },
     { name = "loky", specifier = ">=3.5.6" },
@@ -2651,10 +2741,11 @@ requires-dist = [
     { name = "sqlalchemy" },
     { name = "uvicorn", marker = "extra == 'server'" },
 ]
-provides-extras = ["server"]
+provides-extras = ["server", "s3"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "boto3", specifier = ">=1.34.0" },
     { name = "fastapi" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "litellm", specifier = ">=1.91.0" },
@@ -2662,6 +2753,7 @@ dev = [
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-material", specifier = ">=9.7.6" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6" },
+    { name = "moto", extras = ["s3"], specifier = ">=5.0.0" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "networkx", specifier = ">=3.6.1" },
     { name = "polars", specifier = ">=1.0.0" },
@@ -2702,6 +2794,18 @@ wheels = [
 ]
 
 [[package]]
+name = "s3transfer"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/da/4bef7ce7bb989b222aa4785a413896dbec53306dfc59c6ce7d16a7ffbd6a/s3transfer-0.19.1.tar.gz", hash = "sha256:d3d6371dc3f1e5c5427b2b457bcf13bcf87bec334c95aed18642eae61f6926f3", size = 165354, upload-time = "2026-07-10T19:32:04.849Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/23/e84c64ad0e8bc59cd1b2ef98def848deff0ef3456c542afe74d51e9e8c85/s3transfer-0.19.1-py3-none-any.whl", hash = "sha256:d5fd7005ee39307455ad5f310b5ea67f4b1960d7fed5b3671ee50c249de675de", size = 90072, upload-time = "2026-07-10T19:32:03.673Z" },
+]
+
+[[package]]
 name = "scipy"
 version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2710,7 +2814,7 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -2788,7 +2892,7 @@ resolution-markers = [
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" } },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -3143,6 +3247,27 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/07/f6/d0e5b343768e8bcb4cda79f0f2f55051bf26177ecd5651f84c07567461cf/watchdog-6.0.0-py3-none-win32.whl", hash = "sha256:07df1fdd701c5d4c8e55ef6cf55b8f0120fe1aef7ef39a1c6fc6bc2e606d517a", size = 79065, upload-time = "2024-11-01T14:07:09.525Z" },
     { url = "https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl", hash = "sha256:cbafb470cf848d93b5d013e2ecb245d4aa1c8fd0504e863ccefa32445359d680", size = 79070, upload-time = "2024-11-01T14:07:10.686Z" },
     { url = "https://files.pythonhosted.org/packages/33/e8/e40370e6d74ddba47f002a32919d91310d6074130fe4e17dabcafc15cbf1/watchdog-6.0.0-py3-none-win_ia64.whl", hash = "sha256:a1914259fa9e1454315171103c6a30961236f508b9b623eae470268bbcc6a22f", size = 79067, upload-time = "2024-11-01T14:07:11.845Z" },
+]
+
+[[package]]
+name = "werkzeug"
+version = "3.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz", hash = "sha256:9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44", size = 875852, upload-time = "2026-04-02T18:49:14.268Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/8c/2e650f2afeb7ee576912636c23ddb621c91ac6a98e66dc8d29c3c69446e1/werkzeug-3.1.8-py3-none-any.whl", hash = "sha256:63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50", size = 226459, upload-time = "2026-04-02T18:49:12.72Z" },
+]
+
+[[package]]
+name = "xmltodict"
+version = "1.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/70/80f3b7c10d2630aa66414bf23d210386700aa390547278c789afa994fd7e/xmltodict-1.0.4.tar.gz", hash = "sha256:6d94c9f834dd9e44514162799d344d815a3a4faec913717a9ecbfa5be1bb8e61", size = 26124, upload-time = "2026-02-22T02:21:22.074Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/34/98a2f52245f4d47be93b580dae5f9861ef58977d73a79eb47c58f1ad1f3a/xmltodict-1.0.4-py3-none-any.whl", hash = "sha256:a4a00d300b0e1c59fc2bfccb53d7b2e88c32f200df138a0dd2229f842497026a", size = 13580, upload-time = "2026-02-22T02:21:21.039Z" },
 ]
 
 [[package]]

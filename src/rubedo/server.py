@@ -410,12 +410,11 @@ def _resolve_arrow_row(home: Home, output_address: str) -> Optional[Dict[str, An
     return home.lanes.address_row_index().get(output_address)
 
 
-def _resolve_object_path(home: Home, arrow_row: Dict[str, Any]) -> Optional[str]:
-    """If the output is a spilled ref string, return the object store path.
-    Returns None for inline values (no on-disk file)."""
+def _resolve_spill_hash(arrow_row: Dict[str, Any]) -> Optional[str]:
+    """If the output is a spilled ref string, return its content hash."""
     output = arrow_row.get("output", "")
     if isinstance(output, str) and output.startswith("objects:"):
-        return home.store.object_path(output[len("objects:"):])
+        return output[len("objects:"):]
     return None
 
 
@@ -428,10 +427,10 @@ def get_object_metadata(output_address: str, request: Request):
         raise HTTPException(404, "Object not found")
 
     output = arrow_row.get("output")
-    obj_path = _resolve_object_path(home, arrow_row)
+    spill_hash = _resolve_spill_hash(arrow_row)
 
     # For inline values (native Arrow types or JSON strings), preview directly
-    if obj_path is None:
+    if spill_hash is None:
         if isinstance(output, str):
             size = len(output.encode("utf-8"))
             preview_text = output[:4096]
@@ -458,16 +457,18 @@ def get_object_metadata(output_address: str, request: Request):
             except Exception:
                 preview_json = None
     else:
-        if not os.path.exists(obj_path):
+        sized = home.store.size_of(spill_hash)
+        if sized is None:
             raise HTTPException(404, "Object bytes not found in store")
-        size = os.path.getsize(obj_path)
+        size = sized
         preview_kind = "binary"
         preview_text = None
         preview_json = None
         if size < 1024 * 1024 * 10:
-            try:
-                with open(obj_path, "r", encoding="utf-8") as f:
-                    content = f.read(4096)
+            raw = home.store.read(spill_hash)
+            if raw is not None:
+                try:
+                    content = raw[:4096].decode("utf-8")
                     preview_text = content
                     preview_kind = "text"
                     try:
@@ -475,8 +476,8 @@ def get_object_metadata(output_address: str, request: Request):
                         preview_kind = "json"
                     except Exception:
                         pass
-            except UnicodeDecodeError:
-                pass
+                except UnicodeDecodeError:
+                    pass
 
     with home.session() as session:
         is_live = _is_fulfilled(session, output_address)
@@ -526,12 +527,25 @@ def download_object(output_address: str, request: Request):
         raise HTTPException(404, "Object not found")
 
     output = arrow_row.get("output")
-    obj_path = _resolve_object_path(home, arrow_row)
+    spill_hash = _resolve_spill_hash(arrow_row)
 
-    if obj_path is not None:
-        if not os.path.exists(obj_path):
+    if spill_hash is not None:
+        # Prefer zero-copy FileResponse for local stores; otherwise stream.
+        if home.store.capabilities.local_paths and hasattr(home.store, "object_path"):
+            obj_path = home.store.object_path(spill_hash)
+            if not os.path.exists(obj_path):
+                raise HTTPException(404, "Object bytes not found in store")
+            return FileResponse(obj_path, filename=output_address)
+        chunks = home.store.stream(spill_hash)
+        if chunks is None:
             raise HTTPException(404, "Object bytes not found in store")
-        return FileResponse(obj_path, filename=output_address)
+        return StreamingResponse(
+            chunks,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{output_address}"'
+            },
+        )
     else:
         # Inline value — serialize native Arrow value to JSON for download
         import json as _json
