@@ -1,10 +1,9 @@
 import os
-import shutil
 import json
 
 import pytest
 
-from conftest import make_home
+from conftest import isolated_test_env
 from rubedo import step, pipeline, Filtered
 from rubedo.models import (
     InputHashUsage,
@@ -21,19 +20,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
+    with isolated_test_env("reduce") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -62,22 +51,9 @@ def coord_for_path(filename):
     """The coordinate scan minted for `filename` — coordinates are
     row-<hash>, not the filename. A dependent 1:1 map step (parse) shares
     its ancestor's coordinate unchanged."""
-    with TEST_HOME.session() as session:
-        rows = (
-            session.query(RunCoordinateStatus)
-            .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-            .all()
-        )
-        addr_index = TEST_HOME.lanes.address_row_index()
-        for rc in rows:
-            row = addr_index.get(str(rc.output_address))
-            if row is None:
-                continue
-            output = row.get("output")
-            if isinstance(output, dict) and output.get("path") == filename:
-                return rc.coordinate
-    return None
+    cells = TEST_HOME.select(f"step:scan path:{filename}", resolve_output=True)
+    assert cells, f"no lane for path={filename}"
+    return cells[0].coordinate
 
 
 def _latest_live_row(session, step_name):

@@ -17,13 +17,11 @@ this causes:
 These tests verify that canonicalization makes identity stable across
 the Arrow write/read round-trip, so both symptoms are fixed.
 """
-import os
-import shutil
 
 import pytest
 
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_hetero_data"
 ENV_FOLDER = ".test_hetero_env"
@@ -34,20 +32,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test = os.path.abspath(TEST_FOLDER)
-    abs_env = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test, abs_env):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test, abs_env):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("hetero") as env:
+        TEST_HOME = env.home
+        yield
 
 def test_heterogeneous_expand_root_no_phantom_churn():
     """Expand root yields heterogeneous dicts.  On re-run, children

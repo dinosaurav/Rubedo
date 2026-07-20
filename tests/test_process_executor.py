@@ -1,9 +1,8 @@
 import os
-import shutil
 import pytest
 
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_process_data"
 ENV_FOLDER = ".test_process_env"
@@ -13,29 +12,13 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-        
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        "sqlite:///:memory:?cache=shared"
-    )
-    
-    with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
-        f.write("A")
-    with open(os.path.join(abs_test_folder, "b.txt"), "w") as f:
-        f.write("B")
-        
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-    
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
+    with isolated_test_env("process") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write("A")
+        with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
+            f.write("B")
+        yield
 
 # Folder recipe: walk TEST_FOLDER, yield each file's content. Must
 # also be module-level since it's shared across process-executor pipelines.

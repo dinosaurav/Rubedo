@@ -14,7 +14,6 @@ one Pipeline instance with different settings per call.
 """
 
 import os
-import shutil
 import threading
 import time
 
@@ -25,8 +24,7 @@ from rubedo.models import (
     InputHashUsage,
     RunCoordinateStatus,
 )
-from rubedo.planning import _ArrowRowRef
-from conftest import make_home
+from conftest import isolated_test_env, make_home
 
 TEST_FOLDER = ".test_schedule_data"
 ENV_FOLDER = ".test_schedule_env"
@@ -37,20 +35,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("schedule") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -70,22 +57,9 @@ def coord_for_path(filename):
     """The coordinate scan minted for `filename` — coordinates are
     row-<hash>, not the filename. A dependent 1:1 map step shares its
     ancestor's coordinate unchanged."""
-    with TEST_HOME.session() as session:
-        rows = (
-            session.query(RunCoordinateStatus)
-            .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-            .all()
-        )
-        addr_index = TEST_HOME.lanes.address_row_index()
-        for rc in rows:
-            row = addr_index.get(str(rc.output_address))
-            if row is None:
-                continue
-            output = row.get("output")
-            if isinstance(output, dict) and output.get("path") == filename:
-                return rc.coordinate
-    return None
+    cells = TEST_HOME.select(f"step:scan path:{filename}", resolve_output=True)
+    assert cells, f"no lane for path={filename}"
+    return cells[0].coordinate
 
 
 def _chain_steps():
@@ -359,13 +333,11 @@ def test_deep_reduce_barrier_receives_all_lanes():
 
     assert summary.status == "completed"
     assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
+    (total_cell,) = summary.cells("total", resolve_output=True)
     with TEST_HOME.session() as session:
-        total_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "total"]
-        assert total_rows
-        total_row = total_rows[0]
-        ihu = session.query(InputHashUsage).filter_by(address=total_row["address"]).first()
+        ihu = session.query(InputHashUsage).filter_by(address=total_cell.output_address).first()
         assert ihu is not None and ihu.fulfilled is True
-        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(total_row)) == {"n": 3, "total": 12}
+        assert total_cell.output == {"n": 3, "total": 12}
 
 
 # (h) The rate limiter is one instance per step per run, shared across every

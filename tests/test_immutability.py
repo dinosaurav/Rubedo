@@ -1,11 +1,10 @@
 """The ledger is append-only: guards reject illegal writes, history survives."""
 
 import os
-import shutil
 
 import pytest
 
-from conftest import make_home
+from conftest import isolated_test_env
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.models import (
     ImmutabilityError,
@@ -25,20 +24,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("immutability") as env:
+        TEST_HOME = env.home
+        yield
 
 @step
 def scan():

@@ -30,7 +30,7 @@ import pytest
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.models import InputHashUsage, ObjectReclamation
-from conftest import make_home
+from conftest import isolated_test_env
 
 FOLDER_A = ".test_cpl_data_a"
 FOLDER_B = ".test_cpl_data_b"
@@ -42,21 +42,19 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_a = os.path.abspath(FOLDER_A)
-    abs_b = os.path.abspath(FOLDER_B)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_a, abs_b, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_a, abs_b, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("cpl", with_data=False) as env:
+        data_dirs = [os.path.abspath(FOLDER_A), os.path.abspath(FOLDER_B)]
+        for d in data_dirs:
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            os.makedirs(d, exist_ok=True)
+        TEST_HOME = env.home
+        try:
+            yield
+        finally:
+            for d in data_dirs:
+                if os.path.exists(d):
+                    shutil.rmtree(d)
 
 def write(folder, name, content):
     with open(os.path.join(folder, name), "w") as f:

@@ -12,14 +12,12 @@ existed:
     alias dict) always disables it.
 """
 
-import os
-import shutil
 
 import pytest
 
 from rubedo import pipeline, step
 from rubedo.spec import definition
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_shape_dep_inference_data"
 ENV_FOLDER = ".test_shape_dep_inference_env"
@@ -30,20 +28,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("shape_dep_inference") as env:
+        TEST_HOME = env.home
+        yield
 
 # ---------- shape inference (decoration time) ----------
 

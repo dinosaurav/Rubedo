@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Public read/query surface (TODO 35):** `Cell` is one (run, step, lane)
+  outcome. `Home.cells` / `Home.current` / `Home.select` (and
+  `RunSummary.cells`) share an implementation with `/api/current-outputs`.
+  `home.select("step:scan path:a.txt")` replaces hand-rolled
+  coord-for-path lookups. `RunSummary.output_for` stays the payload map,
+  now via resolved cells.
+- **`Home.ephemeral(...)`** — unshared Home (not interned); `fresh=` is
+  the public constructor knob (replaces private `_fresh=`).
+
 ### Changed
 - **Breaking:** `pipeline(home=...)` takes a `Home` instance, not a path
   string (`TypeError` otherwise). `Home` owns the ledger (`Database`),

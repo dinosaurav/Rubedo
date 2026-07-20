@@ -6,13 +6,11 @@ unaffected — the result lands in cache, so downstream steps reuse and a
 later run with check_cache=True (default) sees the fresh output.
 """
 
-import os
-import shutil
 
 import pytest
 
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
 ENV_FOLDER = ".test_check_cache_env"
 
@@ -22,19 +20,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    if os.path.exists(abs_env_folder):
-        shutil.rmtree(abs_env_folder)
-    os.makedirs(abs_env_folder, exist_ok=True)
-
-
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    if os.path.exists(abs_env_folder):
-        shutil.rmtree(abs_env_folder)
-
+    with isolated_test_env("check_cache", with_data=False) as env:
+        TEST_HOME = env.home
+        yield
 
 def test_check_cache_false_reruns_but_commits():
     """A check_cache=False step re-executes every run, but its output is

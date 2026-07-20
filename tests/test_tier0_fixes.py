@@ -5,15 +5,13 @@ commit. Redistribute into the per-feature test files if they grow.
 """
 
 import os
-import shutil
 import threading
 
 import pytest
 
 from rubedo import Filtered, Selection, invalidate, pipeline, step
-from rubedo.models import InputHashUsage, Run, RunCoordinateStatus
-from rubedo.planning import _ArrowRowRef
-from conftest import make_home
+from rubedo.models import InputHashUsage, Run
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_tier0_data"
 ENV_FOLDER = ".test_tier0_env"
@@ -24,20 +22,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("tier0") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     path = os.path.join(TEST_FOLDER, name)
@@ -200,9 +187,9 @@ def test_invalidate_scoped_to_pipeline():
             .filter(InputHashUsage.fulfilled.is_(False)).all()
         }
         assert len(dead_addrs) == 1
-        dead_row = TEST_HOME.lanes.address_row_index().get(next(iter(dead_addrs)))
-        assert dead_row is not None
-        assert dead_row.get("pipeline_id") == "p2"
+        dead_cells = TEST_HOME.select(f"address:{next(iter(dead_addrs))} live:false")
+        assert len(dead_cells) == 1
+        assert dead_cells[0].pipeline_id == "p2"
 
 
 # --- B5: skip_cache parents of join/group_key are rejected (validated
@@ -278,15 +265,7 @@ def test_expand_yields_bytes_and_reuses():
     # read (1) + two bytes children + two size outputs; the anchor is not a lane
     assert s1.created_count == 5
 
-    with TEST_HOME.session() as session:
-        addr_index = TEST_HOME.lanes.address_row_index()
-        sizes = {
-            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-            for r in session.query(RunCoordinateStatus)
-            .filter_by(step_name="size", status="created")
-            .all()
-            if (row := addr_index.get(str(r.output_address)))
-        }
+    sizes = set(s1.output_for("size", home=TEST_HOME).values())
     assert sizes == {5, 4}  # alpha, beta
 
     s2 = make_pipe().run(params=params, workers=1)

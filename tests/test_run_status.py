@@ -1,5 +1,4 @@
 import os
-import tempfile
 import pytest
 import json
 from rubedo.models import (
@@ -8,9 +7,9 @@ from rubedo.models import (
     RunEvent,
 )
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
-TEST_FOLDER = "input"
+TEST_FOLDER = ".test_run_status_data"
 
 TEST_HOME = None
 
@@ -18,23 +17,15 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME
-    orig_dir = os.getcwd()
-    temp_dir = tempfile.mkdtemp()
-    os.chdir(temp_dir)
-
-    input_dir = os.path.join(temp_dir, "input")
-    os.makedirs(input_dir, exist_ok=True)
-    with open(os.path.join(input_dir, "a.txt"), "w") as f:
-        f.write("one")
-    with open(os.path.join(input_dir, "b.txt"), "w") as f:
-        f.write("two")
-    with open(os.path.join(input_dir, "c.txt"), "w") as f:
-        f.write("three")
-
-    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
-    yield input_dir
-    os.chdir(orig_dir)
-
+    with isolated_test_env("run_status") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write('one')
+        with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
+            f.write('two')
+        with open(os.path.join(TEST_FOLDER, "c.txt"), "w") as f:
+            f.write('three')
+        yield env.data_dir
 
 @step(check_cache=False)
 def scan():
@@ -55,24 +46,12 @@ def coord_for_path(filename, run_id=None):
     filter this could resolve to a stale generation's coordinate — scope to
     a specific run when that matters.
     """
-    with TEST_HOME.session() as session:
-        q = (
-            session.query(RunCoordinateStatus)
-            .filter(RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-        )
-        if run_id is not None:
-            q = q.filter(RunCoordinateStatus.run_id == run_id)
-        rows = q.all()
-        addr_index = TEST_HOME.lanes.address_row_index()
-        for rc in rows:
-            row = addr_index.get(str(rc.output_address))
-            if row is None:
-                continue
-            output = row.get("output")
-            if isinstance(output, dict) and output.get("path") == filename:
-                return rc.coordinate
-    return None
+    kwargs = {"run_id": run_id} if run_id is not None else {}
+    cells = TEST_HOME.select(
+        f"step:scan path:{filename}", resolve_output=True, **kwargs
+    )
+    assert cells, f"no lane for path={filename}"
+    return cells[0].coordinate
 
 
 @step(name="dummy")
@@ -200,9 +179,8 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
         assert "removed" not in summary
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        # Output bytes still exist logically (Arrow row still there)
-        mat = TEST_HOME.lanes.address_row_index().get(old_address)
-        assert mat is not None
+        # Output bytes still exist logically (the old run can still resolve it).
+        assert TEST_HOME.select(f"address:{old_address}", run_id=res1.run_id)
 
 
 def test_failed_coordinate_records_failed(setup_teardown):

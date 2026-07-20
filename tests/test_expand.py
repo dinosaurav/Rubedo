@@ -1,12 +1,10 @@
 import os
-import shutil
 
 import pytest
 
 from rubedo import step, pipeline
 from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent
-from rubedo.planning import _ArrowRowRef
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_expand_data"
 ENV_FOLDER = ".test_expand_env"
@@ -17,20 +15,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("expand") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -108,19 +95,10 @@ def test_expand_mints_child_lanes_and_chains_downstream():
     # scan: 2 files, read: 2 files, split: 3 minted lines, shout: 3 lines
     assert (s1.created_count, s1.reused_count) == (10, 0)
 
+    shout = s1.cells("shout", status="created", resolve_output=True)
+    assert len(shout) == 3  # alpha, beta, gamma → 3 content-addressed lanes
+    values = {cell.output for cell in shout}
     with TEST_HOME.session() as session:
-        shout = (
-            session.query(RunCoordinateStatus)
-            .filter_by(step_name="shout", status="created")
-            .all()
-        )
-        assert len(shout) == 3  # alpha, beta, gamma → 3 content-addressed lanes
-        addr_index = TEST_HOME.lanes.address_row_index()
-        values = {
-            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-            for r in shout
-            if (row := addr_index.get(str(r.output_address)))
-        }
         assert values == {"ALPHA", "BETA", "GAMMA"}
 
         # Lineage: 2 scan->read edges + 3 read->split edges + 3 split->shout edges
@@ -245,16 +223,10 @@ def test_source_decorator():
     assert (s2.created_count, s2.reused_count) == (0, 6)
     assert calls == [1]  # reused via anchor — generator not re-run
 
-    with TEST_HOME.session() as session:
-        addr_index = TEST_HOME.lanes.address_row_index()
-        vals = {
-            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-            for r in session.query(RunCoordinateStatus)
-            .filter_by(step_name="up")
-            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
-            .all()
-            if (row := addr_index.get(str(r.output_address)))
-        }
+    vals = {
+        cell.output
+        for cell in s.cells("up", status={"created", "reused"}, resolve_output=True)
+    }
     assert vals == {"A", "B", "C"}
 
 
@@ -288,16 +260,10 @@ def test_root_expand_is_a_source():
     s2 = assert_run(pipe)
     assert (s2.created_count, s2.reused_count) == (0, 6)
 
-    with TEST_HOME.session() as session:
-        addr_index = TEST_HOME.lanes.address_row_index()
-        vals = {
-            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-            for r in session.query(RunCoordinateStatus)
-            .filter_by(step_name="double")
-            .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
-            .all()
-            if (row := addr_index.get(str(r.output_address)))
-        }
+    vals = {
+        cell.output
+        for cell in s.cells("double", status={"created", "reused"}, resolve_output=True)
+    }
     assert vals == {0, 2, 4}
 
 

@@ -7,7 +7,6 @@ effective_run_status(), which the query layer applies for the CLI and API.
 """
 
 import os
-import shutil
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -20,7 +19,7 @@ from rubedo.models import (
 )
 from rubedo.queries import get_recent_runs, get_run_summary
 from rubedo.util import utcnow_iso
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_run_liveness_data"
 ENV_FOLDER = ".test_run_liveness_env"
@@ -31,20 +30,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("run_liveness") as env:
+        TEST_HOME = env.home
+        yield
 
 def _stale_iso() -> str:
     then = datetime.now(timezone.utc) - timedelta(

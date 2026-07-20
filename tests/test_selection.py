@@ -1,39 +1,25 @@
 import os
-import shutil
 import pytest
 
 from rubedo import step, pipeline, Selection
 from rubedo.invalidation import invalidate
-from conftest import make_home
+from conftest import isolated_test_env
 
 
 TEST_FOLDER = ".test_selection_data"
+ENV_FOLDER = ".test_selection_env"
 
 TEST_HOME = None
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME
-    os.getcwd()
-    
-    if os.path.exists(TEST_FOLDER):
-        shutil.rmtree(TEST_FOLDER)
-    os.makedirs(TEST_FOLDER, exist_ok=True)
-
-    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
-        f.write("a")
-    with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
-        f.write("b")
-    with open(os.path.join(TEST_FOLDER, "c.txt"), "w") as f:
-        f.write("c")
-
-    TEST_HOME = make_home(".test_home_env")
-    yield
-
-    # Teardown
-    if os.path.exists(TEST_FOLDER):
-        shutil.rmtree(TEST_FOLDER)
-
+    with isolated_test_env("selection") as env:
+        TEST_HOME = env.home
+        for name, content in (("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")):
+            with open(os.path.join(TEST_FOLDER, name), "w") as f:
+                f.write(content)
+        yield
 
 @step(name="scan", version="9", shape="expand")
 def scan():

@@ -1,12 +1,11 @@
 import os
-import tempfile
 import pytest
 from fastapi.testclient import TestClient
 from rubedo import step, pipeline
 from rubedo.server import create_app
-from conftest import make_home
+from conftest import isolated_test_env
 
-TEST_FOLDER = "test_input"
+TEST_FOLDER = ".test_api_data"
 
 TEST_HOME = None
 client = None
@@ -34,25 +33,16 @@ def make_test_pipeline():
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME, client
-    orig_dir = os.getcwd()
-    temp_dir = tempfile.mkdtemp()
-    os.chdir(temp_dir)
-
-    os.makedirs("test_input", exist_ok=True)
-    with open("test_input/a.txt", "w") as f:
-        f.write("one\ntwo")
-    with open("test_input/b.txt", "w") as f:
-        f.write("one")
-
-    # Run a process to populate DB
-    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
-    client = TestClient(create_app(home=TEST_HOME))
-    make_test_pipeline().run(workers=1)
-
-    yield
-    client = None
-    os.chdir(orig_dir)
-
+    with isolated_test_env("api") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write("one\ntwo")
+        with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
+            f.write("one")
+        client = TestClient(create_app(home=TEST_HOME))
+        make_test_pipeline().run(workers=1)
+        yield
+        client = None
 
 def test_get_runs():
     response = client.get("/api/runs")
