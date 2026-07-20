@@ -179,6 +179,7 @@ def _run_segment(
             if worker_pool is None:
                 worker_pool = step.executor()
                 if not callable(getattr(worker_pool, "submit", None)):
+                    _shutdown_worker_pool(worker_pool)
                     raise TypeError(
                         f"Step {step.name!r}: executor factory returned "
                         f"{type(worker_pool).__name__}, expected an object "

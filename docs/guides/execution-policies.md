@@ -136,6 +136,8 @@ Rubedo has no named `"dask"` or `"ray"` backend and never imports cluster
 libraries. The factory owns provider configuration; Rubedo calls it once
 per step segment and shuts down the returned object with
 `shutdown(wait=True)` (or `close()` when that is its lifecycle method).
+If the factory itself raises after allocating provider resources, it must
+clean those partial resources before propagating the exception.
 
 The per-step `workers` value still bounds the number of in-flight lane
 submissions from Rubedo. It does not resize the external cluster. Retries,

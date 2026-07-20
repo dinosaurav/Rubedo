@@ -10,9 +10,10 @@ reuses the plain local Rubedo cache and does not create another cluster.
 """
 from __future__ import annotations
 
+import tempfile
 from typing import Any
 
-from rubedo import pipeline, step
+from rubedo import Home, pipeline, step
 
 
 _cluster: Any = None
@@ -46,25 +47,29 @@ def total(square: dict):
     return sum(row["square"] for row in square.values())
 
 
-pipe = pipeline(
-    name="dask_executor",
-    steps=[numbers, square, total],
-)
-
-
 def main() -> None:
     try:
-        first = pipe.run(workers=4)
-        second = pipe.run(workers=4)
-        print(
-            f"First: Created {first.created_count}, Reused {first.reused_count}"
-        )
-        print(
-            f"Second: Created {second.created_count}, Reused {second.reused_count}"
-        )
-        assert first.created_count == 17  # 8 source + 8 square + 1 aggregate
-        assert second.created_count == 0
-        assert second.reused_count == first.created_count
+        # A fresh temporary Home guarantees this manual acceptance example
+        # actually exercises Dask even when the repo's normal cache is warm.
+        with tempfile.TemporaryDirectory(prefix="rubedo-dask-") as root:
+            pipe = pipeline(
+                name="dask_executor",
+                steps=[numbers, square, total],
+                home=Home.ephemeral(root),
+            )
+            first = pipe.run(workers=4)
+            second = pipe.run(workers=4)
+            print(
+                f"First: Created {first.created_count}, "
+                f"Reused {first.reused_count}"
+            )
+            print(
+                f"Second: Created {second.created_count}, "
+                f"Reused {second.reused_count}"
+            )
+            assert first.created_count == 17
+            assert second.created_count == 0
+            assert second.reused_count == first.created_count
     finally:
         if _client is not None:
             _client.close()

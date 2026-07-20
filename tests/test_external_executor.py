@@ -50,6 +50,19 @@ def _double(work: dict):
     return {"value": work["value"] * 2}
 
 
+def _numbers():
+    for value in range(3):
+        yield {"value": value}
+
+
+def _square(numbers: dict):
+    return {"value": numbers["value"] ** 2}
+
+
+def _tag(square: dict):
+    return {"value": square["value"], "tagged": True}
+
+
 def _snapshot(home, run_id: str) -> list[tuple[str, str, str]]:
     with home.session() as session:
         rows = (
@@ -121,6 +134,54 @@ def test_mixed_factory_and_thread_steps_reuse(tmp_path):
     assert POOLS[0].submit_count == 1
 
 
+def test_multi_lane_factory_runs_once_per_deep_segment(tmp_path):
+    POOLS.clear()
+    home = make_home(str(tmp_path / "home"))
+    source = step(name="numbers")(_numbers)
+    external_step = step(name="square", executor=make_fake_pool)(_square)
+    thread_step = step(name="tag")(_tag)
+    pipe = pipeline(
+        name="executor-deep",
+        steps=[source, external_step, thread_step],
+        home=home,
+        schedule="deep",
+    )
+
+    summary = pipe.run(workers=3)
+
+    assert summary.created_count == 9
+    assert len(POOLS) == 1
+    assert POOLS[0].submit_count == 3
+    assert POOLS[0].shutdown_called
+
+
+def test_external_pool_retries_and_shuts_down(tmp_path):
+    POOLS.clear()
+    attempts: list[int] = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("transient")
+        return {"ok": True}
+
+    home = make_home(str(tmp_path / "home"))
+    external_step = step(
+        name="flaky",
+        executor=make_fake_pool,
+        retries=1,
+        retry_on=RuntimeError,
+    )(flaky)
+    pipe = pipeline(name="executor-retry", steps=[external_step], home=home)
+
+    summary = pipe.run(workers=1)
+
+    assert summary.created_count == 1
+    assert len(attempts) == 2
+    assert POOLS[0].submit_count == 2
+    assert POOLS[0].shutdown_called
+
+
 def test_definition_serializes_factory_marker(tmp_path):
     home = make_home(str(tmp_path / "home"))
     external_step = step(name="work", executor=make_fake_pool)(_work)
@@ -143,9 +204,18 @@ def test_invalid_executor_values_reject():
 
 
 def test_factory_must_return_submit_pool(tmp_path):
+    class InvalidPool:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    invalid = InvalidPool()
     home = make_home(str(tmp_path / "home"))
-    invalid_step = step(name="work", executor=lambda: object())(_work)
+    invalid_step = step(name="work", executor=lambda: invalid)(_work)
     pipe = pipeline(name="executor-invalid-pool", steps=[invalid_step], home=home)
 
     with pytest.raises(TypeError, match="expected an object with submit"):
         pipe.run(workers=1)
+    assert invalid.closed

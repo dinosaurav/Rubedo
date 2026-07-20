@@ -668,7 +668,11 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             if isinstance(s.executor, str):
                 entry["executor"] = s.executor
             else:
-                module = getattr(s.executor, "__module__", "")
+                module = getattr(
+                    s.executor,
+                    "__module__",
+                    type(s.executor).__module__,
+                )
                 qualname = getattr(
                     s.executor,
                     "__qualname__",
