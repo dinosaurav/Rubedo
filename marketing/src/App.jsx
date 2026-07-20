@@ -211,11 +211,6 @@ function App() {
               <CodeBlock language="text" className="reuse-block" code={REUSE_PROOF} />
             </li>
           </ol>
-          <p className="block-lede try-note">
-            Start with a generator that yields one item at a time — scan a folder,
-            read a CSV, run a SQL <code>SELECT</code>. Each item becomes its own
-            content-addressed lane.
-          </p>
         </div>
       </section>
 
