@@ -9,7 +9,7 @@ Items keep their historical numbers for stable cross-references. The
 pre-restructure TODO (with the full Done changelog and every shipped
 item's spec) is archived verbatim at `notes/TODO-obsolete.md` — gaps in
 the numbering below are shipped or retired items, documented there. New
-items continue from **29**. Items tagged **[needs owner decision]** have
+items continue from **35**. Items tagged **[needs owner decision]** have
 a settled problem statement and a recommended spec but an unratified
 fix — one line from the owner unlocks them; do not build first.
 Unsettled ideas live in **Parked** at the bottom — do not build those
@@ -18,11 +18,144 @@ without a design session.
 Items 29–34 come from the 2026-07-18 full-codebase review; every
 finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
-before being written down.
+before being written down. Item 35 is the post-Home read-surface gap
+(2026-07-20).
 
-**Priority order:** review items 29–34 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) stays demand-gated — 8 is independently buildable if a
-cluster user shows up first.
+**Priority order:** review items 29–34 are all shipped. Item 35 is
+user-facing and waits on owner ratification of the API shape. The cloud
+chain (7 → 7b → 8 → 13) stays demand-gated — 8 is independently
+buildable if a cluster user shows up first.
+
+──────────────────────────────────────────────────────────────────────
+
+## 35. Public read / query surface on `Home`  **[needs owner decision]**
+
+**Problem (settled):** after a run, the only first-class Python reads are
+`RunSummary.output_for(step)` (coord → payload for created/reused/
+filtered) and `RunSummary.failures()`. Everything else — statuses,
+live-vs-dead, “current” outputs, mapping a source field like `path` back
+to a content-addressed lane — is reinvented in tests and partially
+reimplemented in the HTTP layer. Concrete evidence (2026-07-20): ~24
+test files stitch `RunCoordinateStatus` + `home.lanes.address_row_index()`
++ `_ArrowRowRef` + `store.read_*`; ~7 copy a near-identical
+`coord_for_path`; the server already has `/api/current-outputs`,
+`/api/runs/{id}/coordinates`, `/api/runs/{id}/steps/{step}/outputs`,
+and `Selection` preview — none of which have a matching Python
+one-liner on `Home`. `queries.py` today is run-list/detail/failures
+only. Painful test setup here is the same signal Home fixed for
+storage: the product is missing a read model.
+
+**Non-goals:** rewriting Selection/invalidation; exposing lane-store
+internals (`_combined_table`, `_get_step_file`); a general ORM;
+changing content-addressed lanes.
+
+**Recommended API (unratified — pick or amend, then build):**
+
+One row type, three entry points, Selection as the filter language.
+
+```python
+@dataclass(frozen=True)
+class Cell:
+    """One (run, step, lane) outcome — the unit of read."""
+    run_id: str
+    pipeline_id: str
+    step_name: str
+    coordinate: str
+    status: str                    # created|reused|failed|blocked|filtered
+    output_address: Optional[str]
+    output: Any = None             # payload if resolve_output; else None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+# Home — composition root (mirrors how writes already go through Home)
+home.cells(
+    *,
+    run_id: str,
+    step: Optional[str] = None,
+    status: Optional[str | Collection[str]] = None,
+    resolve_output: bool = False,
+) -> list[Cell]
+
+home.current(
+    *,
+    pipeline: Optional[str] = None,
+    step: Optional[str] = None,
+    resolve_output: bool = False,
+) -> list[Cell]
+# Semantics identical to GET /api/current-outputs: each pipeline's
+# latest run's live (fulfilled) created|reused|filtered lanes.
+
+home.select(
+    selection: Selection | str,
+    *,
+    run_id: Optional[str] = None,   # None → current/live scope (Selection today)
+    resolve_output: bool = False,
+) -> list[Cell]
+# Selection stays the language (coord:, step:, path:a.txt, live:…).
+# Today get_selection_addresses returns addresses; this returns Cells.
+# Replaces the coord_for_path helper: home.select("step:scan path:a.txt").
+
+# RunSummary — sugar over the same machinery (home already bound)
+summary.cells(step=None, *, resolve_output=False) -> list[Cell]
+summary.output_for(step)  # keep; implement as
+#   {c.coordinate: c.output for c in self.cells(step, resolve_output=True)
+#    if c.status in ("created","reused","filtered") and c.output_address}
+summary.failures()        # keep; or thin over cells(status="failed")
+```
+
+**Attach point:** implement in `queries.py` (shared by CLI + server +
+Home methods). `Home.cells` / `.current` / `.select` and
+`RunSummary.cells` are thin wrappers that open `home.session()` and
+pass `home` into the query functions — same layering as today, no
+second read path. Server handlers for current-outputs / step outputs /
+selection preview should call the same functions (delete the
+hand-rolled Arrow index loops in `server.py`).
+
+**Settled constraints (do not re-litigate if the shape is accepted):**
+
+- **Liveness is IHU `fulfilled`**, not “row exists in Arrow.” `current`
+  and default `select` must gate on fulfilled exactly as
+  `/api/current-outputs` and `get_selection_addresses` do today.
+- **Pipeline/step identity comes from `RunCoordinateStatus`**, never
+  from the Arrow row’s cached metadata (item 30 — content-addressed
+  rows can be shared across pipelines).
+- **`resolve_output=False` by default** — listing cells is cheap;
+  deserializing spilled payloads is not. Callers opt in.
+- **No new query language.** Selection already searches output struct
+  fields; `home.select("path:a.txt")` is the coord_for_path answer.
+- **Home-scoped.** Every read takes the `Home` (explicit or bound on
+  `RunSummary`); no process-global session.
+
+**Forks for the owner (amend before building):**
+
+1. **Name:** `Cell` vs `LaneResult` vs `RunCell` — recommendation `Cell`
+   (short; matches “one cell of the run grid”).
+2. **`home.current` vs only `home.select(live)`** — recommendation keep
+   `current` as named sugar with the exact HTTP semantics; Selection’s
+   live filter is address-oriented and easy to misuse for “latest run.”
+3. **Whether `cells` accepts a `Selection` too** — recommendation no;
+   `cells` is run-scoped mechanical filter, `select` is the language.
+4. **Public ephemeral `Home`** (`Home.ephemeral` / documented `fresh=`)
+   is a *separate* tiny item — do not fold it in here.
+
+**Trap:** **(1)** Do not teach `output_for` to return statuses — two
+shapes in one method is how the gap grew. Cells carry status; output_for
+stays payload map. **(2)** `current` must not invent cross-run
+“removed” bookkeeping — vanished lanes simply aren’t in the latest run
+(server docstring already states this). **(3)** Resolving output must
+use `home.store.read_output` (protocol boundary for item 7), never
+assume `LocalStore` paths. **(4)** Tests that today poke
+`_ArrowRowRef` should migrate to `cells`/`select`; keep raw lane_store
+access only in lane_store unit tests.
+
+Acceptance: (a) `summary.cells(resolve_output=True)` replaces the
+RunCoordinateStatus+address_index stitch in at least `test_expand` /
+`test_reduce` / `test_engine` without importing lane_store; (b)
+`home.select("step:scan path:a.txt")` returns the scan lane that
+`coord_for_path` finds today, and the seven duplicated helpers are
+deleted; (c) `/api/current-outputs` and `home.current()` share one
+implementation and agree on fixtures; (d) `output_for` / `failures`
+behavior unchanged (wrappers).
 
 ──────────────────────────────────────────────────────────────────────
 
