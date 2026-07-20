@@ -2,46 +2,25 @@ import os
 import tempfile
 import pytest
 import json
-from rubedo.db import init_db, get_session
-import rubedo.db as db
 from rubedo.models import (
     Run,
     RunCoordinateStatus,
     RunEvent,
 )
-from rubedo import step, pipeline, lane_store
-import uuid
-from sqlalchemy.pool import StaticPool
-from sqlalchemy import create_engine
+from rubedo import step, pipeline
+from conftest import make_home
 
 TEST_FOLDER = "input"
+
+TEST_HOME = None
 
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
+    global TEST_HOME
     orig_dir = os.getcwd()
     temp_dir = tempfile.mkdtemp()
     os.chdir(temp_dir)
-
-    os.makedirs(".rubedo/objects", exist_ok=True)
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    if db.engine is not None:
-        db.engine.dispose()
-
-    db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    db.Base.metadata.create_all(bind=db.engine)
-    from sqlalchemy.orm import sessionmaker
-
-    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
 
     input_dir = os.path.join(temp_dir, "input")
     os.makedirs(input_dir, exist_ok=True)
@@ -52,12 +31,8 @@ def setup_teardown():
     with open(os.path.join(input_dir, "c.txt"), "w") as f:
         f.write("three")
 
+    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
     yield input_dir
-
-    db.Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
-    db.engine = None
-    db.SessionLocal = None
     os.chdir(orig_dir)
 
 
@@ -80,7 +55,7 @@ def coord_for_path(filename, run_id=None):
     filter this could resolve to a stale generation's coordinate — scope to
     a specific run when that matters.
     """
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         q = (
             session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
@@ -89,7 +64,7 @@ def coord_for_path(filename, run_id=None):
         if run_id is not None:
             q = q.filter(RunCoordinateStatus.run_id == run_id)
         rows = q.all()
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         for rc in rows:
             row = addr_index.get(str(rc.output_address))
             if row is None:
@@ -105,7 +80,8 @@ def dummy_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
 
-p_dummy = pipeline(name="p-dummy", steps=[scan, dummy_processor])
+def dummy_pipeline():
+    return pipeline(name="p-dummy", steps=[scan, dummy_processor], home=TEST_HOME)
 
 
 @step(name="failing")
@@ -115,13 +91,14 @@ def failing_processor(scan: dict) -> str:
     return f"processed_{scan['path']}"
 
 
-p_fail = pipeline(name="p-fail", steps=[scan, failing_processor])
+def failing_pipeline():
+    return pipeline(name="p-fail", steps=[scan, failing_processor], home=TEST_HOME)
 
 
 def test_first_run_creates_statuses(setup_teardown):
-    res = p_dummy.run(workers=1)
+    res = dummy_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
         assert len(coords) == 6  # 3 files x (scan + dummy)
         for c in coords:
@@ -137,10 +114,10 @@ def test_first_run_creates_statuses(setup_teardown):
 
 
 def test_second_run_reuses_statuses(setup_teardown):
-    p_dummy.run(workers=1)
-    res2 = p_dummy.run(workers=1)
+    dummy_pipeline().run(workers=1)
+    res2 = dummy_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         assert len(coords) == 6
         for c in coords:
@@ -151,25 +128,25 @@ def test_second_run_reuses_statuses(setup_teardown):
         assert summary["reused"] == 6
         assert summary["created"] == 0
 
-        rows = lane_store.all_filled_rows()
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 7  # 6 lanes + 1 root-anchor (no new materializations)
 
 
 def test_changed_file_creates_one(setup_teardown):
     input_dir = setup_teardown
-    p_dummy.run(workers=1)
+    dummy_pipeline().run(workers=1)
 
     # modify one file
     with open(os.path.join(input_dir, "a.txt"), "w") as f:
         f.write("one_modified")
 
-    res2 = p_dummy.run(workers=1)
+    res2 = dummy_pipeline().run(workers=1)
 
     coord_a = coord_for_path("a.txt", run_id=res2.run_id)
     coord_b = coord_for_path("b.txt", run_id=res2.run_id)
     coord_c = coord_for_path("c.txt", run_id=res2.run_id)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         statuses = (
             session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         )
@@ -186,17 +163,17 @@ def test_changed_file_creates_one(setup_teardown):
         assert summary["created"] == 2  # scan(a) + dummy(a)
         assert summary["reused"] == 4  # scan/dummy for b, c
 
-        rows = lane_store.all_filled_rows()
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 10  # 6 original + 2 anchors + 2 new (scan-a, dummy-a)
 
 
 def test_deleted_file_absent_from_next_run(setup_teardown):
     input_dir = setup_teardown
-    res1 = p_dummy.run(workers=1)
+    res1 = dummy_pipeline().run(workers=1)
 
     # get old address (the "dummy" step's)
     coord_a = coord_for_path("a.txt")
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         old_mat_a = (
             session.query(RunCoordinateStatus)
             .filter_by(run_id=res1.run_id, coordinate=coord_a, step_name="dummy")
@@ -206,9 +183,9 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
 
     os.remove(os.path.join(input_dir, "a.txt"))
 
-    res2 = p_dummy.run(workers=1)
+    res2 = dummy_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = {
             c.coordinate
             for c in session.query(RunCoordinateStatus)
@@ -224,18 +201,18 @@ def test_deleted_file_absent_from_next_run(setup_teardown):
         assert summary["reused"] == 4  # scan/dummy for b, c
 
         # Output bytes still exist logically (Arrow row still there)
-        mat = lane_store.address_row_index().get(old_address)
+        mat = TEST_HOME.lanes.address_row_index().get(old_address)
         assert mat is not None
 
 
 def test_failed_coordinate_records_failed(setup_teardown):
-    res = p_fail.run(workers=1)
+    res = failing_pipeline().run(workers=1)
 
     coord_a = coord_for_path("a.txt")
     coord_b = coord_for_path("b.txt")
     coord_c = coord_for_path("c.txt")
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         statuses = (
             session.query(RunCoordinateStatus).filter_by(run_id=res.run_id).all()
         )
@@ -256,14 +233,14 @@ def test_failed_coordinate_records_failed(setup_teardown):
         assert summary["created"] == 5  # 3 scan + 2 failing (a, c)
 
         # Ensure no materialization created for b.txt's failing step
-        mats = [r for r in lane_store.all_filled_rows() if r.get("run_id") == res.run_id]
+        mats = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("run_id") == res.run_id]
         assert len(mats) == 6  # 5 lanes + 1 root-anchor
 
 
 def test_event_log_populated(setup_teardown):
-    res = p_dummy.run(workers=1)
+    res = dummy_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         events = session.query(RunEvent).filter_by(run_id=res.run_id).all()
         types = [e.event_type for e in events]
         assert "run_started" in types

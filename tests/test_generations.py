@@ -4,25 +4,23 @@ import itertools
 import json as _json
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus, InputHashUsage
-from rubedo import lane_store
 from rubedo.hashing import hash_bytes
-from rubedo.store import init_store, _get_object_path
+from conftest import make_home
 
 TEST_FOLDER = ".test_generations_data"
 ENV_FOLDER = ".test_generations_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -30,36 +28,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -96,21 +65,21 @@ def make_nondeterministic_pipeline(pipe_id="gen"):
     def summarize(generate):
         return f"attempt={generate['attempt']}"
 
-    return pipeline(name=pipe_id, steps=[generate, summarize])
+    return pipeline(name=pipe_id, steps=[generate, summarize], home=TEST_HOME)
 
 
 def get_mats(step_name):
     """All Arrow rows for a step, sorted by ts (creation order)."""
     return [
         r for r in sorted(
-            (r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name),
+            (r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name),
             key=lambda r: r.get("ts", ""),
         )
     ]
 
 
 def _is_live(addr):
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         u = session.query(InputHashUsage).filter_by(address=addr).first()
         return bool(u and u.fulfilled)
 
@@ -120,7 +89,7 @@ def _object_path_for(row):
     in the Arrow row, not the object store)."""
     out = row.get("output")
     if isinstance(out, str) and out.startswith("objects:"):
-        return _get_object_path(out[len("objects:"):])
+        return TEST_HOME.store.object_path(out[len("objects:"):])
     return None
 
 
@@ -133,7 +102,7 @@ def test_invalidate_nondeterministic_creates_new_generation():
     (gen1,) = get_mats("generate")
     (sum1,) = get_mats("summarize")
 
-    invalidate(Selection(step="generate"), reason="bad output")
+    invalidate(Selection(step="generate"), reason="bad output", home=TEST_HOME)
 
     summary = pipe.run(params=params, workers=1)
     assert summary.failed_count == 0
@@ -166,7 +135,7 @@ def test_invalidate_nondeterministic_creates_new_generation():
     _gen1_output = gens[1].get("output")
     _gen1_key = _gen1_output.encode("utf-8") if isinstance(_gen1_output, str) else _json.dumps(_gen1_output, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert sums[1].get("input_hash") == hash_bytes(_gen1_key)
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = (
             session.query(RunCoordinateStatus)
             .filter_by(run_id=summary.run_id, step_name="summarize")
@@ -204,7 +173,7 @@ def test_force_deterministic_reuses_live_row():
     def stable(params):
         return open(params["path"]).read().upper()
 
-    pipe = pipeline(name="det", steps=[stable])
+    pipe = pipeline(name="det", steps=[stable], home=TEST_HOME)
     path = create_file("f1.txt", "hello")
     params = {"path": path}
 
@@ -233,6 +202,8 @@ def test_params_are_part_of_cache_identity():
 
     pipe = pipeline(
         name="par", steps=[score, label], params_model=Thresh
+    ,
+        home=TEST_HOME,
     )
     path = create_file("f1.txt", "hello")
 
@@ -264,7 +235,7 @@ def test_params_do_not_churn_param_free_pipelines():
     def upper():
         return open(path).read().upper()
 
-    pipe = pipeline(name="nopar", steps=[upper])
+    pipe = pipeline(name="nopar", steps=[upper], home=TEST_HOME)
 
     pipe.run(workers=1)
     s2 = pipe.run(params={"anything": 42}, workers=1)
@@ -281,7 +252,7 @@ def test_string_payload_round_trips_as_string():
         assert isinstance(emit, str), f"expected str, got {type(emit)}"
         return emit + "!"
 
-    pipe = pipeline(name="types", steps=[emit, check])
+    pipe = pipeline(name="types", steps=[emit, check], home=TEST_HOME)
     path = create_file("f1.txt", "x")
 
     summary = pipe.run(params={"path": path}, workers=1)
@@ -300,7 +271,7 @@ def test_bytes_payload_round_trips_as_bytes():
         assert isinstance(emit_b, bytes)
         return {"length": len(emit_b)}
 
-    pipe = pipeline(name="types-b", steps=[emit_b, check_b])
+    pipe = pipeline(name="types-b", steps=[emit_b, check_b], home=TEST_HOME)
     path = create_file("f1.txt", "x")
 
     summary = pipe.run(params={"path": path}, workers=1)

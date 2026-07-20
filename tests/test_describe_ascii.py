@@ -8,12 +8,15 @@ DB/store fixture entirely.
 import pytest
 
 from rubedo import pipeline
+from conftest import make_home
+
+TEST_HOME = make_home(".test_describe_ascii_env")
 
 
 def _count_lines_shaped():
     """A linear chain: expand root -> map -> map -> reduce, mirroring
     examples/count_lines/count_lines.py's DAG shape."""
-    p = pipeline(name="count-lines")
+    p = pipeline(name="count-lines", home=TEST_HOME)
 
     @p.step
     def input_files():
@@ -37,7 +40,7 @@ def _count_lines_shaped():
 def _newsroom_shaped():
     """join -> expand -> group_key reduce, mirroring
     examples/newsroom/newsroom.py's DAG shape."""
-    p = pipeline(name="newsroom")
+    p = pipeline(name="newsroom", home=TEST_HOME)
 
     @p.step
     def feeds():
@@ -116,7 +119,6 @@ NEWSROOM_ASCII = (
     "└────────────────────┘"
 )
 
-
 def test_ascii_count_lines_shaped_is_byte_identical():
     pipe = _count_lines_shaped()
     assert pipe.describe(format="ascii") == COUNT_LINES_ASCII
@@ -146,7 +148,7 @@ def test_ascii_is_deterministic_across_calls():
 
 
 def test_ascii_falls_back_to_text_when_a_layer_is_too_wide():
-    pipe = pipeline(name="wide")
+    pipe = pipeline(name="wide", home=TEST_HOME)
     for i in range(15):
         def _make(i):
             @pipe.step(name=f"step_number_{i:02d}")

@@ -20,41 +20,9 @@ finding and every sub-decision inside the specs (grouping keys, fix
 mechanisms, blast radii) was re-verified against source on 2026-07-18
 before being written down.
 
-**Priority order:** 34 is the last open review item (29–33 all
-shipped 2026-07-18); its guard slice closes the list. The cloud chain (7 → 7b → 8 → 13)
-stays demand-gated — 8 is independently buildable if a cluster user
-shows up first.
-
-──────────────────────────────────────────────────────────────────────
-
-## 34. `home=` is process-global — guard slice  **[slice settled; end-state needs owner decision]**
-
-`_init_home` (`src/rubedo/runner.py:43`) repoints module-global DB,
-object-store, and lane-table state. Two concurrent runs in one process
-targeting different homes will silently switch each other's backing
-store mid-run. Single-home processes (the normal case, and every test)
-are unaffected.
-
-**Buildable slice (settled):** a module-level guard in `runner.py` —
-track the active effective home plus a live-run counter (increment when
-a run starts, decrement in the finally that ends it); a run starting
-with a *different* home while the counter is nonzero raises a clear
-error naming both homes. Same-home concurrency and the no-home default
-pass through untouched. Document one-home-per-process where `home=` is
-documented.
-
-**End-state [needs owner decision]:** a per-run context object carrying
-db/store/lane-table handles, killing the module globals. Real plumbing
-cost across `db.py`/`store.py`/`lane_store.py`/`runner.py` — decide
-whether multi-home-per-process is a workload that will ever exist
-before paying it. Recommendation: don't build until a real embedding
-use-case (e.g. the cloud control plane's shared workers) demands it;
-the guard makes the current limitation safe instead of silent.
-
-Acceptance (slice): two threads running pipelines with different
-`home=` values → the second raises a clear error naming both homes;
-same-home concurrency and the no-home default are untouched; docs state
-the constraint.
+**Priority order:** review items 29–34 are all shipped. The cloud chain
+(7 → 7b → 8 → 13) stays demand-gated — 8 is independently buildable if a
+cluster user shows up first.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -433,6 +401,14 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-20 — item 34 shipped (Home injection, end-state):**
+  `Home` owns `Database` + `LocalStore` + `LaneStore` for one root;
+  `pipeline(home=Home(...))` injects it (path strings raise TypeError).
+  Process-global `_init_home` / one-home-per-process guard deleted —
+  concurrent different homes in one process are correct by construction
+  (intern-by-abspath; tests in `tests/test_home_concurrency.py`).
+  `_RunContext` / `_RunMemo` / `RunSummary` carry the home; planning,
+  ledger, gc/du/trace/invalidate, CLI, and `create_app(home=)` follow.
 - **2026-07-18 — item 33 shipped (the address salt):**
   compute_output_address gained a required `pipeline` parameter,
   appended as the always-last labeled segment; five planning.py call

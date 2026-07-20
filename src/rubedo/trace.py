@@ -20,13 +20,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from .db import get_session
+from .home import Home
 from .models import (
     MaterializationEdge,
     RunCoordinateStatus,
     InputHashUsage,
 )
-from . import lane_store
 from .selection import Selection, get_selection_addresses
 
 
@@ -130,7 +129,7 @@ def trace(
     *,
     include_superseded: bool = False,
     resolve_roots: bool = True,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
 ) -> TraceResult:
     """Follow lineage up and down from the materializations a selection matches.
 
@@ -139,16 +138,10 @@ def trace(
     reads the stored payload of lineage roots so a trace can show the human
     what source item everything came from.
     """
-    from .runner import _check_home_guard
+    home = home or Home.default()
 
-    _check_home_guard(home)
-    if home is not None:
-        from .runner import _init_home
-
-        _init_home(home)
-
-    with get_session() as session:
-        seed_addrs = set(get_selection_addresses(session, selection))
+    with home.session() as session:
+        seed_addrs = set(get_selection_addresses(session, selection, home=home))
         if not seed_addrs:
             return TraceResult(nodes=[], edges=[])
 
@@ -178,7 +171,7 @@ def trace(
             return TraceResult(nodes=[], edges=[])
 
         # Build nodes from Arrow rows + RCS coordinates
-        arrow_idx = lane_store.address_row_index()
+        arrow_idx = home.lanes.address_row_index()
         # Filter out expand-anchor rows — they're cache entries (the child
         # hashes), not real lanes. They have no RCS, no edges, and their
         # output is {"_children": [...]} — not a user payload.
@@ -213,8 +206,6 @@ def trace(
         }
         root_values: Dict[str, Any] = {}
         if resolve_roots:
-            from .store import read_output
-
             for addr in all_addrs - parented:
                 row = arrow_idx.get(addr)
                 if row:
@@ -223,7 +214,7 @@ def trace(
                     if row.get("lane_key") == "@root":
                         continue
                     try:
-                        root_values[addr] = read_output(
+                        root_values[addr] = home.store.read_output(
                             row.get("output"), row.get("content_type")
                         )
                     except Exception:

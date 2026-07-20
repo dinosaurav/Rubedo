@@ -5,30 +5,20 @@ recompute?"  ``fulfilled=True`` means a filled Arrow row exists (reuse);
 ``fulfilled=False`` means recompute (crash, in-flight claim, or invalidation).
 Two data columns, one PK — the minimal liveness gate."""
 
-import os
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
-from rubedo.db import init_db, get_session
 from rubedo.models import InputHashUsage, Run
 from rubedo.util import utcnow_iso
+from conftest import make_home
+
+TEST_HOME = None
 
 
 @pytest.fixture(autouse=True)
 def isolated_db():
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_ihu_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-    import rubedo.db
-    rubedo.db._engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    global TEST_HOME
+    TEST_HOME = make_home(".test_home_env")
     yield
 
 
@@ -52,7 +42,7 @@ def _make_usage(session, address="addr_001", run_id="run_001", fulfilled=False):
 
 
 def test_fulfilled_true_means_reuse():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, fulfilled=True)
         s.commit()
         u = s.query(InputHashUsage).filter_by(address="addr_001").first()
@@ -61,7 +51,7 @@ def test_fulfilled_true_means_reuse():
 
 
 def test_fulfilled_false_means_recompute():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, fulfilled=False)
         s.commit()
         u = s.query(InputHashUsage).filter_by(address="addr_001").first()
@@ -70,7 +60,7 @@ def test_fulfilled_false_means_recompute():
 
 
 def test_no_row_means_cold_cache():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_run(s, "run_001")
         s.commit()
         u = s.query(InputHashUsage).filter_by(address="nonexistent").first()
@@ -83,7 +73,7 @@ def test_no_row_means_cold_cache():
 
 
 def test_soft_lock_claim_then_fulfill():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, address="addr_lock", fulfilled=False)
         s.commit()
         u = s.query(InputHashUsage).filter_by(address="addr_lock").first()
@@ -95,7 +85,7 @@ def test_soft_lock_claim_then_fulfill():
 
 
 def test_soft_lock_claim_crash_leaves_unfulfilled():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, address="addr_crash", run_id="run_crash", fulfilled=False)
         s.commit()
         u = s.query(InputHashUsage).filter_by(address="addr_crash").first()
@@ -109,7 +99,7 @@ def test_soft_lock_claim_crash_leaves_unfulfilled():
 
 
 def test_invalidation_flips_fulfilled_false():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, address="addr_inval", run_id="run_orig", fulfilled=True)
         s.commit()
         _make_run(s, "run_inval", kind="invalidate")
@@ -131,7 +121,7 @@ def test_address_is_primary_key():
     """Two rows with the same address should fail — address is the PK."""
     from sqlalchemy.exc import IntegrityError
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, address="addr_dup", run_id="run_a")
         s.commit()
         _make_run(s, "run_b")
@@ -146,7 +136,7 @@ def test_address_is_primary_key():
 
 
 def test_last_run_id_tracks_most_recent_run():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         _make_usage(s, address="addr_gc", run_id="run_old", fulfilled=True)
         s.commit()
         _make_run(s, "run_new")

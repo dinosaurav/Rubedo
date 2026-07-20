@@ -3,24 +3,22 @@
 import json
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import InputHashUsage, RunCoordinateStatus
-from rubedo import lane_store
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_filters_data"
 ENV_FOLDER = ".test_filters_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -28,36 +26,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -95,12 +64,12 @@ def build_pipeline(calls=None):
     def summarize(screen):
         return screen.upper()
 
-    pipe = pipeline(name="flt", steps=[scan, screen, summarize])
+    pipe = pipeline(name="flt", steps=[scan, screen, summarize], home=TEST_HOME)
     return pipe, calls
 
 
 def statuses(step_name):
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         return {
             c.coordinate: c
             for c in session.query(RunCoordinateStatus)
@@ -115,14 +84,14 @@ def coord_for_path(run_id, filename):
     `path` output field — coordinates are row-<hash>, not the filename.
     A dependent 1:1 map step (screen, summarize) shares its ancestor's
     coordinate all the way down the chain."""
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rows = (
             session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
             .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         for rc in rows:
             row = addr_index.get(str(rc.output_address))
             if row is None:
@@ -177,8 +146,8 @@ def test_filter_decision_is_cached():
     assert summary.filtered_count == 2
     assert summary.created_count == 0
 
-    with get_session() as session:
-        rows = lane_store.all_filled_rows()
+    with TEST_HOME.session() as session:
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 3  # scan's real lane + root-anchor + screen's filtered marker
         screen_row = next(r for r in rows if r.get("step_name") == "screen")
         assert screen_row.get("filtered") is True
@@ -222,7 +191,7 @@ def test_plan_shows_filtered_chain():
     def summarize(screen):
         return screen.upper()
 
-    pipe = pipeline(name="flt2", steps=[screen, summarize])
+    pipe = pipeline(name="flt2", steps=[screen, summarize], home=TEST_HOME)
     params = {"text": "tiny"}
     pipe.run(params=params, workers=1)
 
@@ -243,10 +212,10 @@ def test_skip_cache_step_cannot_filter():
     def use(util):
         return util
 
-    pipe = pipeline(name="bad", steps=[scan, util, use])
+    pipe = pipeline(name="bad", steps=[scan, util, use], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).filter_by(step_name="use").one()
         assert "must be materialized" in rc.error_message

@@ -172,6 +172,7 @@ def _run_segment(
             accepts[step.name],
             lanes=lanes,
             pipeline_id=ctx.pipeline_id,
+            home=ctx.home,
         )
         _record_planned(session, ctx, step, decisions)
         session.commit()
@@ -233,9 +234,8 @@ def _run_segment(
         # The flushed table stays in the disk-table cache so downstream
         # lookups get a cache hit (no re-read).  The write buffers are
         # cleared (data is on disk + in cache).
-        from . import lane_store
         for s in seg_steps:
-            lane_store.flush_step(ctx.pipeline_id, s.name)
+            ctx.home.lanes.flush_step(ctx.pipeline_id, s.name)
     finally:
         for tp in thread_pools.values():
             tp.shutdown(wait=True)

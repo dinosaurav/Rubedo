@@ -1,4 +1,4 @@
-"""trace(): lane-following over lineage edges, seeded by a selection.
+"""trace(home=TEST_HOME): lane-following over lineage edges, seeded by a selection.
 
 Semantics under test: live-only seeding by default (include_superseded=True
 widens it), traversal follows real edges regardless of liveness, lineage
@@ -8,22 +8,21 @@ output struct fields searchable via Selection.
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline, trace
-from rubedo.db import init_db
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_trace_data"
 ENV_FOLDER = ".test_trace_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -31,36 +30,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -99,7 +69,7 @@ def make_pipeline():
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 
-    return pipeline(name="tr", steps=[scan, extract, summarize, total])
+    return pipeline(name="tr", steps=[scan, extract, summarize, total], home=TEST_HOME)
 
 
 def _by_step(result):
@@ -113,7 +83,7 @@ def test_trace_downstream_from_field_seed():
 
     # Seed at extract (company field) — downstream reaches acme's
     # summarize and the reduce, upstream reaches acme's scan lane.
-    result = trace(Selection(step="extract", index={"company": "acme"}))
+    result = trace(Selection(step="extract", index={"company": "acme"}), home=TEST_HOME)
 
     steps = _by_step(result)
     # Seeded at extract; downstream reaches acme's summarize and the reduce,
@@ -138,7 +108,7 @@ def test_trace_upstream_resolves_root_payload():
     create_file("a.txt", "acme,10")
     make_pipeline().run()
 
-    result = trace(Selection(step="summarize"))
+    result = trace(Selection(step="summarize"), home=TEST_HOME)
 
     steps = _by_step(result)
     assert [n.relation for n in steps["extract"]] == ["upstream"]
@@ -157,14 +127,14 @@ def test_trace_live_only_seeding_and_include_superseded():
     create_file("a.txt", "acme,10")
     make_pipeline().run()
 
-    invalidate(Selection(index={"company": "acme"}), reason="test")
+    invalidate(Selection(index={"company": "acme"}), reason="test", home=TEST_HOME)
 
     # Default: the invalidated materialization no longer seeds a trace.
-    assert trace(Selection(index={"company": "acme"})).nodes == []
+    assert trace(Selection(index={"company": "acme"}), home=TEST_HOME).nodes == []
 
     # include_superseded seeds it; traversal still reaches live descendants,
     # and the non-live seed is marked, not hidden.
-    result = trace(Selection(index={"company": "acme"}), include_superseded=True)
+    result = trace(Selection(index={"company": "acme"}), include_superseded=True, home=TEST_HOME)
     steps = _by_step(result)
     assert steps["extract"][0].is_live is False
     assert steps["total"][0].relation == "downstream"
@@ -174,7 +144,7 @@ def test_trace_coordinates_present():
     create_file("a.txt", "acme,10")
     make_pipeline().run()
 
-    result = trace(Selection(index={"company": "acme"}))
+    result = trace(Selection(index={"company": "acme"}), home=TEST_HOME)
     coords = {n.step_name: n.coordinate for n in result.nodes}
     # Coordinates are content-addressed (row-<hash>), not "a.txt" — but a
     # 1:1 map chain propagates its parent's coordinate unchanged, so

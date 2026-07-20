@@ -10,33 +10,32 @@ import shutil
 import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import get_session
 from rubedo.gc import (
     _anchor_addresses,
     _retention_demote_addresses,
     auto_prune,
     gc,
 )
-from rubedo import lane_store
 from rubedo.models import (
     InputHashUsage,
     ObjectReclamation,
     Run,
     RunCoordinateStatus,
 )
-from rubedo.store import _get_object_path
 from rubedo.util import utcnow_iso
+from conftest import make_home
 
 TEST_FOLDER = ".test_gc_data"
 ENV_FOLDER = ".test_gc_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -44,40 +43,12 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
     os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
-    from rubedo.db import init_db
 
-    init_db()
 
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    from rubedo.store import init_store
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -135,6 +106,8 @@ def make_pipe(retention=None, folder=TEST_FOLDER, pid="gcp"):
     return pipeline(
         name=pid,
         steps=[_shout(folder)], retention=retention,
+    
+        home=TEST_HOME,
     )
 
 
@@ -148,12 +121,12 @@ def _hash_of(row):
 
 
 def live_hashes():
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         live_addrs = {
             str(u.address) for u in s.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(True)).all()
         }
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         return {
             h
             for addr in live_addrs
@@ -189,8 +162,8 @@ def test_retention_demotes_only_the_oldest_generation():
     write("a.txt", "gen3")
     s3 = make_pipe(retention=2).run(workers=1)  # auto-prune fires here
 
-    with get_session() as s:
-        rows = lane_store.all_filled_rows()
+    with TEST_HOME.session() as s:
+        rows = TEST_HOME.lanes.all_filled_rows()
         mats = {_hash_of(r): r for r in rows if _hash_of(r) is not None}
         assert len(mats) == 3
         live_addrs = {
@@ -213,11 +186,11 @@ def test_retention_demotes_only_the_oldest_generation():
         assert len(recl) == 1
         assert recl[0].content_hash == _hash_of(gen1)
         assert recl[0].trigger == "auto_prune"
-        assert not os.path.exists(_get_object_path(_hash_of(gen1)))
+        assert not os.path.exists(TEST_HOME.store.object_path(_hash_of(gen1)))
 
     # The two kept objects survive on disk.
     for h in live_hashes():
-        assert os.path.exists(_get_object_path(h))
+        assert os.path.exists(TEST_HOME.store.object_path(h))
     # Latest output byte-identical (coordinates are row-<hash>, not "a.txt").
     assert list(s3.output_for("shout").values()) == [b"GEN3"]
 
@@ -235,7 +208,7 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
     try:
         # Pipeline B produces "SHARED" and keeps it live forever.
         write("b.txt", "SHARED", folder=other)
-        pb = pipeline(name="pb", steps=_norm_chain(other))
+        pb = pipeline(name="pb", steps=_norm_chain(other), home=TEST_HOME)
         pb.run(workers=1)
 
         # Pipeline A: gen1 also normalizes to "SHARED" (same object, different
@@ -245,9 +218,9 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
         write("a.txt", "OTHER")
         make_pipe_norm(retention=1).run(workers=1)  # auto-prune demotes gen1
 
-        with get_session() as s:
+        with TEST_HOME.session() as s:
             shared_hash = None
-            for r in lane_store.all_filled_rows():
+            for r in TEST_HOME.lanes.all_filled_rows():
                 if r.get("pipeline_id") == "pb":
                     h = _hash_of(r)
                     if h is not None:
@@ -255,7 +228,7 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
             assert shared_hash is not None
             # gen1 (pipeline A, "SHARED") was demoted...
             a_shared = [
-                r for r in lane_store.all_filled_rows()
+                r for r in TEST_HOME.lanes.all_filled_rows()
                 if r.get("pipeline_id") == "gcp" and _hash_of(r) == shared_hash
             ]
             assert a_shared
@@ -264,7 +237,7 @@ def test_shared_object_with_live_reference_in_another_pipeline_survives():
             # ...but the object was NOT reclaimed: B's live reference keeps it.
             recl_hashes = {r.content_hash for r in s.query(ObjectReclamation).all()}
             assert shared_hash not in recl_hashes
-        assert os.path.exists(_get_object_path(shared_hash))
+        assert os.path.exists(TEST_HOME.store.object_path(shared_hash))
     finally:
         shutil.rmtree(other)
 
@@ -273,6 +246,8 @@ def make_pipe_norm(retention=None):
     return pipeline(
         name="gcp",
         steps=_norm_chain(TEST_FOLDER), retention=retention,
+    
+        home=TEST_HOME,
     )
 
 
@@ -289,27 +264,27 @@ def test_pruned_lane_reappears_and_lazily_heals():
     write("a.txt", "gen3")
     make_pipe(retention=2).run(workers=1)  # gen1 pruned + object deleted
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         live_addrs = {
             str(u.address) for u in s.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(True)).all()
         }
         gen1 = [
-            r for r in lane_store.all_filled_rows() if r.get("address") not in live_addrs
+            r for r in TEST_HOME.lanes.all_filled_rows() if r.get("address") not in live_addrs
         ][0]
         gen1_hash = _hash_of(gen1)
         gen1_addr = gen1["address"]
-    assert not os.path.exists(_get_object_path(gen1_hash))
+    assert not os.path.exists(TEST_HOME.store.object_path(gen1_hash))
 
     # The input reappears: recompute rewrites the bytes and restores the row.
     write("a.txt", "gen1")
     make_pipe(retention=2).run(workers=1)
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         ihu = s.query(InputHashUsage).filter_by(address=gen1_addr).first()
         assert ihu is not None and ihu.fulfilled is True  # restored
         # Lifecycle rows gone in the new model
-    assert os.path.exists(_get_object_path(gen1_hash))  # bytes back on disk
+    assert os.path.exists(TEST_HOME.store.object_path(gen1_hash))  # bytes back on disk
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +301,7 @@ def test_gc_refuses_and_auto_prune_skips_while_a_run_is_live():
     make_pipe().run(workers=1)  # no retention -> nothing pruned yet
 
     # Inject a run whose heartbeat is fresh (effective status == running).
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         s.add(
             Run(
                 id="run_live",
@@ -339,19 +314,19 @@ def test_gc_refuses_and_auto_prune_skips_while_a_run_is_live():
         s.commit()
 
     # gc --delete refuses; nothing is written or deleted.
-    report = gc(delete=True, max_bytes=1)
+    report = gc(delete=True, max_bytes=1, home=TEST_HOME)
     assert report.refused is not None
     assert not report.applied
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         assert s.query(ObjectReclamation).count() == 0
         assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
 
     # A dry-run is still allowed (touches nothing).
-    dry = gc(delete=False, max_bytes=1)
+    dry = gc(delete=False, max_bytes=1, home=TEST_HOME)
     assert dry.refused is None
 
     # auto_prune skips (returns None) for a *different* run while run_live beats.
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         assert auto_prune(s, "gcp", "run_other", 1) is None
 
 
@@ -370,18 +345,17 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     make_pipe().run(workers=1)
 
     # Map each generation's output bytes -> content hash while all are present.
-    from rubedo.store import read_materialization_output
     from rubedo.planning import _ArrowRowRef
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         hash_of = {
-            read_materialization_output(_ArrowRowRef(r)): _hash_of(r)
-            for r in lane_store.all_filled_rows()
+            TEST_HOME.store.read_materialization_output(_ArrowRowRef(r)): _hash_of(r)
+            for r in TEST_HOME.lanes.all_filled_rows()
             if _hash_of(r) is not None
         }
 
     # Total = 15 bytes; budget 11 forces dropping the oldest 4-byte object.
-    dry = gc(delete=False, max_bytes=11)
+    dry = gc(delete=False, max_bytes=11, home=TEST_HOME)
     assert not dry.applied
     assert len(dry.demoted_addresses) == 1
     assert dry.reclaimed_bytes == 4  # the "AAAA" generation
@@ -389,23 +363,23 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
     dry_reclaimed = list(dry.reclaimed)
 
     # Dry-run wrote nothing: all still live, all objects present.
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
         assert s.query(ObjectReclamation).count() == 0
 
     # --delete performs exactly what the dry-run listed.
-    done = gc(delete=True, max_bytes=11)
+    done = gc(delete=True, max_bytes=11, home=TEST_HOME)
     assert done.applied
     assert done.demoted_addresses == dry_ids
     assert done.reclaimed == dry_reclaimed
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         unfulfilled_addrs = {
             str(u.address) for u in s.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(False)).all()
         }
         assert sorted(unfulfilled_addrs) == sorted(dry_ids)
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         demoted_row = next((addr_index[a] for a in unfulfilled_addrs), None)
         assert demoted_row is not None
         assert _hash_of(demoted_row) == hash_of[b"AAAA"]  # oldest
@@ -419,7 +393,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
             if addr_index.get(a)
         }
         assert hash_of[b"CCCCCC"] in live
-    assert not os.path.exists(_get_object_path(dry_reclaimed[0][0]))
+    assert not os.path.exists(TEST_HOME.store.object_path(dry_reclaimed[0][0]))
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +447,8 @@ def make_expand_pipe(retention=None):
     return pipeline(
         name="xp",
         steps=[_scan(), _read(), _split(), _upper()], retention=retention,
+    
+        home=TEST_HOME,
     )
 
 
@@ -484,14 +460,14 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
     make_expand_pipe(retention=2).run(workers=1)
     make_expand_pipe(retention=2).run(workers=1)  # auto-prune fires
 
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         # The anchor = the split-step Arrow row with no status row.
         rcs_addrs = {
             str(r.output_address)
             for r in s.query(RunCoordinateStatus).all()
             if r.output_address
         }
-        split_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "split"]
+        split_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "split"]
         anchors = [r for r in split_rows if r["address"] not in rcs_addrs]
         assert len(anchors) == 1
         anchor = anchors[0]
@@ -504,8 +480,12 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
         # protects it, and WITHOUT the widening it would be demoted.
         anchor_addrs = _anchor_addresses(s)
         assert anchor["address"] in anchor_addrs
-        assert anchor["address"] not in _retention_demote_addresses(s, {"xp": 2}, anchor_addrs)
-        assert anchor["address"] in _retention_demote_addresses(s, {"xp": 2}, set())
+        assert anchor["address"] not in _retention_demote_addresses(
+            s, TEST_HOME, {"xp": 2}, anchor_addrs
+        )
+        assert anchor["address"] in _retention_demote_addresses(
+            s, TEST_HOME, {"xp": 2}, set()
+        )
 
     # A subsequent run still reuses via the anchor: the expand fn is NOT called.
     calls_before = _split_calls["n"]
@@ -520,7 +500,7 @@ def test_expand_anchor_kept_by_widened_keepset_and_still_reuses():
 
 
 def test_gc_applies_recorded_retention_policy_manually():
-    # Runs carry retention=2 but we can still call gc() to reconcile; here the
+    # Runs carry retention=2 but we can still call gc(home=TEST_HOME) to reconcile; here the
     # auto-prune already trimmed to the window, so a manual gc is a no-op.
     write("a.txt", "gen1")
     make_pipe(retention=2).run(workers=1)
@@ -529,9 +509,9 @@ def test_gc_applies_recorded_retention_policy_manually():
     write("a.txt", "gen3")
     make_pipe(retention=2).run(workers=1)
 
-    report = gc(delete=True)  # reads retention=2 from latest run's definition
+    report = gc(delete=True, home=TEST_HOME)  # reads retention=2 from latest run's definition
     assert report.applied
     # gen1 already auto-pruned; nothing left to do.
     assert report.demoted_count == 0
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         assert s.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count() == 3  # 2 lanes + 1 root-anchor

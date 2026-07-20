@@ -35,10 +35,8 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from .db import get_session
+from .home import Home
 from .models import InputHashUsage, ObjectReclamation
-from .store import _get_object_path
-from . import lane_store
 
 
 @dataclass
@@ -131,21 +129,14 @@ def _human_bytes(n: int) -> str:
     return f"{int(n)} B"  # pragma: no cover
 
 
-def storage_report(home: Optional[str] = None) -> StorageReport:
+def storage_report(home: Optional[Home] = None) -> StorageReport:
     """Compute the storage report by walking the ledger (read-only).
 
-    home (optional): point the DB and object store at a custom root for this
-    call, mirroring trace()/run().
+    home (optional): storage root for this call, mirroring trace()/run().
     """
-    from .runner import _check_home_guard
+    home = home or Home.default()
 
-    _check_home_guard(home)
-    if home is not None:
-        from .runner import _init_home
-
-        _init_home(home)
-
-    with get_session() as session:
+    with home.session() as session:
         # Bytes logged at deletion for each reclaimed hash (latest row wins, so
         # a re-reclaimed object reflects its most recent deletion).
         reclaimed_bytes_of: Dict[str, int] = {}
@@ -164,7 +155,7 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
         }
 
     # Content hashes + pipeline/step from the Arrow lane_store rows.
-    arrow_rows = lane_store.all_filled_rows()
+    arrow_rows = home.lanes.all_filled_rows()
 
     # Build (pipeline_id, step_name, content_hash, is_live) tuples.
     # content_hash is parsed from the `output` ref string for spilled
@@ -196,7 +187,7 @@ def storage_report(home: Optional[str] = None) -> StorageReport:
             and content_hash not in reclaimed
         ):
             try:
-                size_of[content_hash] = os.path.getsize(_get_object_path(content_hash))
+                size_of[content_hash] = os.path.getsize(home.store.object_path(content_hash))
             except OSError:
                 # Absent: a logged deletion is a deliberate reclaim; otherwise
                 # the object is genuinely missing (corruption).

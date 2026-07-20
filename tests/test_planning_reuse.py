@@ -18,21 +18,21 @@ assertions unchanged — that's the verification."""
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, Filtered, invalidate, pipeline, step
-from rubedo.db import init_db
+from conftest import make_home
 
 TEST_FOLDER = ".test_planning_reuse_data"
 ENV_FOLDER = ".test_planning_reuse_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -40,24 +40,9 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-    import rubedo.lane_store
 
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-    rubedo.lane_store.TABLES_DIR = f"{abs_env_folder}/tables"
 
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_plan_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-    import rubedo.db
-    rubedo.db._engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -83,7 +68,7 @@ def test_basic_reuse():
     def consumer(producer):
         return producer["n"] * 10
 
-    p = pipeline(name="reuse-test", steps=[producer, consumer])
+    p = pipeline(name="reuse-test", steps=[producer, consumer], home=TEST_HOME)
     s1 = p.run(workers=1)
     assert s1.created_count == 2
     assert s1.reused_count == 0
@@ -109,7 +94,7 @@ def test_version_bump_recomputes():
         call_count += 1
         return {"v": 0}
 
-    p = pipeline(name="ver-test", steps=[gen_v0])
+    p = pipeline(name="ver-test", steps=[gen_v0], home=TEST_HOME)
     p.run(workers=1)
     assert call_count == 1
 
@@ -119,7 +104,7 @@ def test_version_bump_recomputes():
         call_count += 1
         return {"v": 1}
 
-    p2 = pipeline(name="ver-test", steps=[gen_v1])
+    p2 = pipeline(name="ver-test", steps=[gen_v1], home=TEST_HOME)
     s = p2.run(workers=1)
     assert s.created_count == 1
     assert s.reused_count == 0
@@ -150,7 +135,7 @@ def test_params_change_recomputes():
         threshold = params["threshold"] if isinstance(params, dict) else params.threshold
         return {"passed": data_src["x"] > threshold}
 
-    p = pipeline(name="params-test", steps=[data_src, filter_step], params_model=Params)
+    p = pipeline(name="params-test", steps=[data_src, filter_step], params_model=Params, home=TEST_HOME)
     s1 = p.run(workers=1, params={"threshold": 10})
     assert s1.created_count == 2
     assert call_count == 1
@@ -185,12 +170,12 @@ def test_invalidation_recomputes():
     def consumer(producer):
         return {"doubled": producer["value"] * 2}
 
-    p = pipeline(name="inval-test", steps=[producer, consumer])
+    p = pipeline(name="inval-test", steps=[producer, consumer], home=TEST_HOME)
     p.run(workers=1)
     assert call_count == 1
 
     # Invalidate the producer
-    invalidate(Selection.parse("step:producer value:acme"), reason="test")
+    invalidate(Selection.parse("step:producer value:acme"), reason="test", home=TEST_HOME)
     # Consumer should also be invalidated (downstream)
 
     s = p.run(workers=1)
@@ -222,7 +207,7 @@ def test_filtered_output_cached_and_reused():
     def consumer(filter_step):
         return filter_step
 
-    p = pipeline(name="filter-test", steps=[source, filter_step, consumer])
+    p = pipeline(name="filter-test", steps=[source, filter_step, consumer], home=TEST_HOME)
     s1 = p.run(workers=1)
     # source created, filter_step filtered (cached), consumer filtered (parent filtered)
     assert s1.created_count >= 1
@@ -243,7 +228,7 @@ def test_code_warn_reuses_with_warning():
     def gen():
         return {"n": 1}
 
-    p = pipeline(name="drift-test", steps=[gen])
+    p = pipeline(name="drift-test", steps=[gen], home=TEST_HOME)
     p.run(workers=1)
 
     # Redefine with same version but different code → drift warning, but reuse
@@ -251,7 +236,7 @@ def test_code_warn_reuses_with_warning():
     def gen():  # noqa: F811 — intentional redefinition for drift test
         return {"n": 2}
 
-    p2 = pipeline(name="drift-test", steps=[gen])
+    p2 = pipeline(name="drift-test", steps=[gen], home=TEST_HOME)
     with pytest.warns(UserWarning, match="source code changed"):
         s = p2.run(workers=1)
     # Reused (not re-executed) — code="warn" never recomputes on edits
@@ -283,7 +268,7 @@ def test_partial_recompute_on_input_change():
     def count(scan: dict):
         return {"path": scan["path"], "lines": len(scan["text"].splitlines())}
 
-    p = pipeline(name="partial-test", steps=[scan, count])
+    p = pipeline(name="partial-test", steps=[scan, count], home=TEST_HOME)
     s1 = p.run(workers=1)
     assert s1.created_count > 0
 

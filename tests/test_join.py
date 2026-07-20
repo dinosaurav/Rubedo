@@ -1,60 +1,29 @@
 import csv
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent, InputHashUsage
-from rubedo import lane_store
-from rubedo.store import init_store, read_materialization_output
+from conftest import make_home
 
 DATA = ".test_join_data"
 ENV = ".test_join_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     dirs = [os.path.abspath(d) for d in (DATA, ENV)]
     for d in dirs:
         if os.path.exists(d):
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{os.path.abspath(ENV)}/store/objects"
-    rubedo.store.STAGING_DIR = f"{os.path.abspath(ENV)}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV)
     yield
 
     for d in dirs:
@@ -84,7 +53,7 @@ def csv_source(name):
 def assert_run(pipe, **kw):
     summary = pipe.run(workers=1, **kw)
     if summary.failed_count > 0:
-        with get_session() as session:
+        with TEST_HOME.session() as session:
             for e in (
                 session.query(RunEvent)
                 .filter_by(run_id=summary.run_id, level="error")
@@ -98,8 +67,8 @@ def _outputs(step_name):
     from rubedo.planning import _ArrowRowRef
 
     result = {}
-    idx = lane_store.address_row_index()
-    with get_session() as session:
+    idx = TEST_HOME.lanes.address_row_index()
+    with TEST_HOME.session() as session:
         for st in (
             session.query(RunCoordinateStatus)
             .filter_by(step_name=step_name)
@@ -111,7 +80,7 @@ def _outputs(step_name):
                 continue
             usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
             if usage and usage.fulfilled:
-                result[st.coordinate] = read_materialization_output(_ArrowRowRef(row))
+                result[st.coordinate] = TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
     return result
 
 
@@ -140,6 +109,8 @@ def test_two_way_equijoin():
     pipe = pipeline(
         name="j",
         steps=[orders_src, customers_src, order, customer, enrich],
+    
+        home=TEST_HOME,
     )
     assert_run(pipe)
 
@@ -149,8 +120,8 @@ def test_two_way_equijoin():
         "o1": "Alice", "o2": "Alice", "o3": "Bob",
     }
     # each joined lane edges to both its sides
-    with get_session() as session:
-        enrich_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "enrich"]
+    with TEST_HOME.session() as session:
+        enrich_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "enrich"]
         assert len(enrich_rows) >= 1
         addr = enrich_rows[0].get("address")
         assert session.query(MaterializationEdge).filter_by(child_address=addr).count() == 2
@@ -189,6 +160,8 @@ def test_four_way_star_join():
     pipe = pipeline(
         name="star",
         steps=[*srcs, a, b, c, d, merge],
+    
+        home=TEST_HOME,
     )
     assert_run(pipe)
 
@@ -223,13 +196,15 @@ def test_join_failed_parent_lane():
     pipe = pipeline(
         name="join_fail",
         steps=[a_src, b_src, load_a, load_b, merge],
+    
+        home=TEST_HOME,
     )
     s1 = pipe.run(workers=1)
     
     assert s1.failed_count == 1
     assert s1.blocked_count == 1
     
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="merge").one()
         assert status.status == "blocked"
         assert "a:row-" in status.metadata_json
@@ -258,6 +233,8 @@ def test_join_failed_parent_lane_use_passed():
     pipe = pipeline(
         name="join_fail_pass",
         steps=[a_src, b_src, load_a, load_b, merge],
+    
+        home=TEST_HOME,
     )
     s1 = pipe.run(workers=1)
 
@@ -314,6 +291,8 @@ def test_join_empty():
     pipe = pipeline(
         name="join_empty",
         steps=[a_src, b_src, load_a, load_b, merge],
+    
+        home=TEST_HOME,
     )
     s1 = pipe.run(workers=1)
 

@@ -2,23 +2,22 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import Run, RunEvent
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_plan_data"
 ENV_FOLDER = ".test_plan_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -26,36 +25,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -88,7 +58,7 @@ def make_pipeline(pipe_id="pl"):
     def upper(read):
         return read.upper()
 
-    return pipeline(name=pipe_id, steps=[scan, read, upper])
+    return pipeline(name=pipe_id, steps=[scan, read, upper], home=TEST_HOME)
 
 
 def actions(run_plan):
@@ -140,7 +110,7 @@ def test_invalidation_does_not_change_the_coarse_plan_shape():
     create_file("f1.txt", "hello")
     pipe.run(workers=1)
 
-    invalidate(Selection(step="read"), reason="redo")
+    invalidate(Selection(step="read"), reason="redo", home=TEST_HOME)
     p = pipe.plan()
     # Same coarse shape as any fresh/cached state — invalidating a lane
     # that plan() can't even see yet has no visible effect on a dry-run.
@@ -173,14 +143,14 @@ def test_plan_writes_nothing():
     create_file("f1.txt", "hello")
     pipe.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         runs_before = session.query(Run).count()
         events_before = session.query(RunEvent).count()
 
     pipe.plan()
     pipe.plan(force=True)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         assert session.query(Run).count() == runs_before
         assert session.query(RunEvent).count() == events_before
 

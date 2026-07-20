@@ -2,7 +2,7 @@
 SQLAlchemy models and immutability guards for the Rubedo ledger.
 """
 from typing import Any, Optional, Dict
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 from sqlalchemy import (
     Boolean,
     Column,
@@ -269,6 +269,8 @@ class Filtered:
 
 class RunSummary(BaseModel):
     """A summary of the outcomes of a completed run."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     run_id: str
     status: str
     created_count: int = 0
@@ -276,22 +278,36 @@ class RunSummary(BaseModel):
     failed_count: int = 0
     blocked_count: int = 0
     filtered_count: int = 0
+    _home: Any = PrivateAttr(default=None)
 
-    def failures(self) -> list[Dict[str, Any]]:
+    def bind_home(self, home) -> "RunSummary":
+        self._home = home
+        return self
+
+    def _bound_home(self, home=None):
+        if home is not None:
+            return home
+        if self._home is not None:
+            return self._home
+        from .home import Home
+
+        return Home.default()
+
+    def failures(self, *, home=None) -> list[Dict[str, Any]]:
         """Retrieve the failed coordinates and errors for this run."""
-        from .db import get_session
         from .queries import get_run_failures
-        with get_session() as session:
+
+        h = self._bound_home(home)
+        with h.session() as session:
             return get_run_failures(session, self.run_id)
 
-    def output_for(self, step_name: str) -> dict[str, Any]:
+    def output_for(self, step_name: str, *, home=None) -> dict[str, Any]:
         """Fetch the output values for a specific step from this run.
         
         Returns a dict mapping coordinates to their materialization payload.
         """
-        from .db import get_session
-        from .store import read_output
-        with get_session() as session:
+        h = self._bound_home(home)
+        with h.session() as session:
             statuses = (
                 session.query(RunCoordinateStatus)
                 .filter_by(run_id=self.run_id, step_name=step_name)
@@ -300,11 +316,9 @@ class RunSummary(BaseModel):
             result: dict[str, Any] = {}
             for s in statuses:
                 if s.status in ("created", "filtered", "reused") and s.output_address:
-                    from . import lane_store
-
-                    row = lane_store.address_row_index().get(str(s.output_address))
+                    row = h.lanes.address_row_index().get(str(s.output_address))
                     if row:
-                        result[str(s.coordinate)] = read_output(
+                        result[str(s.coordinate)] = h.store.read_output(
                             row.get("output"), row.get("content_type")
                         )
             return result

@@ -2,24 +2,23 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
 from pydantic import BaseModel
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_dq_data"
 ENV_FOLDER = ".test_dq_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -27,36 +26,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -91,7 +61,7 @@ def test_output_model_success():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(name="p", steps=[scan, parse])
+    pipe = pipeline(name="p", steps=[scan, parse], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     assert summary.created_count == 2  # scan's lane + parse's lane
@@ -106,14 +76,14 @@ def test_output_model_failure():
     def parse(scan):
         return {"name": "alice"}
 
-    pipe = pipeline(name="p", steps=[scan, parse])
+    pipe = pipeline(name="p", steps=[scan, parse], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     # scan's own lane still succeeds; only the dependent parse lane fails.
     assert summary.created_count == 1
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).filter_by(step_name="parse").one()
         assert rc.status == "failed"
         assert rc.error_message is not None
@@ -131,7 +101,7 @@ def test_assertions_success():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(name="p", steps=[scan, parse])
+    pipe = pipeline(name="p", steps=[scan, parse], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     assert summary.created_count == 2  # scan's lane + parse's lane
@@ -150,14 +120,14 @@ def test_assertions_failure():
         parts = scan["text"].split(",")
         return {"id": int(parts[0]), "name": parts[1]}
 
-    pipe = pipeline(name="p", steps=[scan, parse])
+    pipe = pipeline(name="p", steps=[scan, parse], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     # scan's own lane still succeeds; only the dependent parse lane fails.
     assert summary.created_count == 1
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).filter_by(step_name="parse").one()
         assert rc.status == "failed"
         assert rc.error_message is not None
@@ -176,13 +146,13 @@ def test_expand_step_validation():
         yield {"num": 1}
         yield {"bad_key": 2} # This should fail validation
 
-    pipe = pipeline(name="p", steps=[produce])
+    pipe = pipeline(name="p", steps=[produce], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     # Expand step runs once per parent. The entire parent execution fails if any child fails.
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).one()
         assert rc.status == "failed"
         assert rc.error_message is not None

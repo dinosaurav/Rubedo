@@ -1,27 +1,27 @@
-"""Global test fixtures.
-
-Per-test isolation for the lane_store (arrow-storage-rewrite branch): every
-test gets a fresh, empty ``tables/`` directory under its own env folder so
-Arrow IPC files from one test don't leak into another.  Mirrors the
-per-test OBJECTS_DIR / STAGING_DIR pattern every test file already uses for
-the object store; doing it once here means existing tests don't each need
-the lane_store setup boilerplate while the parallel-write migration runs.
-"""
-
 import os
-import shutil
-import tempfile
+import uuid
 
 import pytest
+from sqlalchemy.pool import StaticPool
+
+from rubedo import Home
+
+
+def make_home(env_folder: str) -> Home:
+    Home.clear_registry_for_tests()
+    abs_env = os.path.abspath(env_folder)
+    os.makedirs(abs_env, exist_ok=True)
+    return Home(
+        abs_env,
+        db_url=f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true",
+        db_connect_args={"check_same_thread": False},
+        db_poolclass=StaticPool,
+        _fresh=True,
+    )
 
 
 @pytest.fixture(autouse=True)
-def _isolated_lane_store():
-    tmp = tempfile.mkdtemp(prefix="rubedo-lane-store-")
-    import rubedo.lane_store
-
-    rubedo.lane_store.TABLES_DIR = os.path.join(tmp, "tables")
-    rubedo.lane_store.clear_run_buffers()
+def _clear_home_registry_between_tests():
+    Home.clear_registry_for_tests()
     yield
-    rubedo.lane_store.clear_run_buffers()
-    shutil.rmtree(tmp, ignore_errors=True)
+    Home.clear_registry_for_tests()

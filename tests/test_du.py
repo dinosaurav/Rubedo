@@ -5,22 +5,21 @@ import shutil
 import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline
-from rubedo.db import get_session
 from rubedo.du import storage_report
 from rubedo.models import InputHashUsage
-from rubedo import lane_store
-from rubedo.store import _get_object_path, read_materialization_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_du_data"
 ENV_FOLDER = ".test_du_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -28,40 +27,12 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
     os.environ["RUBEDO_DB_PATH"] = (
         f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
     )
-    from rubedo.db import init_db
 
-    init_db()
 
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    from rubedo.store import init_store
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -87,7 +58,7 @@ def make_shout_pipeline():
             if os.path.isfile(path):
                 yield open(path).read().upper().encode("utf-8")
 
-    return pipeline(name="du", steps=[shout])
+    return pipeline(name="du", steps=[shout], home=TEST_HOME)
 
 
 def test_sizes_and_counts_for_populated_store():
@@ -97,7 +68,7 @@ def test_sizes_and_counts_for_populated_store():
     summary = make_shout_pipeline().run(workers=1)
     assert summary.created_count == 2
 
-    report = storage_report()
+    report = storage_report(home=TEST_HOME)
     assert report.total_objects == 2
     assert report.total_bytes == 7  # hand-count: 5 + 2
     assert report.total_materializations == 3  # 2 lanes + 1 root-anchor
@@ -124,10 +95,10 @@ def test_invalidated_only_object_is_reclaimable():
     create_file("a.txt", "alpha")
     make_shout_pipeline().run(workers=1)
 
-    res = invalidate(Selection(step="shout"), reason="test")
+    res = invalidate(Selection(step="shout"), reason="test", home=TEST_HOME)
     assert res["invalidated_count"] == 2  # 1 child lane + 1 root-anchor
 
-    report = storage_report()
+    report = storage_report(home=TEST_HOME)
     assert report.total_objects == 1
     assert report.total_bytes == 5
     assert report.live_materializations == 0
@@ -167,11 +138,11 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     def norm(scan):
         return scan["text"].strip().encode("utf-8")
 
-    summary = pipeline(name="du", steps=[scan, norm]).run(workers=1)
+    summary = pipeline(name="du", steps=[scan, norm], home=TEST_HOME).run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4  # 2 files x (scan + norm)
 
-    report = storage_report()
+    report = storage_report(home=TEST_HOME)
     assert report.total_materializations == 5  # 2 scan + 2 norm + 1 root-anchor
     # scan yields small dicts -> inline JSON (no object-store bytes); norm's
     # two materializations dedupe to one physical bytes object.
@@ -187,8 +158,8 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     assert norm_usage.bytes == len("same")
     assert report.total_bytes == scan_usage.bytes + norm_usage.bytes
 
-    with get_session():
-        norm_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "norm"]
+    with TEST_HOME.session():
+        norm_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "norm"]
         addresses = {r.get("address") for r in norm_rows}
         hashes = {
             r.get("output", "")[len("objects:"):]
@@ -201,9 +172,9 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     def coordinate_for_path(path_value):
         from rubedo.planning import _ArrowRowRef
 
-        with get_session() as session:
-            for r in [row for row in lane_store.all_filled_rows() if row.get("step_name") == "scan" and row.get("lane_key") != "@root"]:
-                if read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
+        with TEST_HOME.session() as session:
+            for r in [row for row in TEST_HOME.lanes.all_filled_rows() if row.get("step_name") == "scan" and row.get("lane_key") != "@root"]:
+                if TEST_HOME.store.read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
                     from rubedo.models import RunCoordinateStatus
 
                     rc = (
@@ -217,10 +188,12 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     coord_a = coordinate_for_path("a.txt")
     res = invalidate(
         Selection(coordinate_glob=coord_a, step="norm"), reason="test"
+    ,
+        home=TEST_HOME,
     )
     assert res["invalidated_count"] == 1
 
-    report = storage_report()
+    report = storage_report(home=TEST_HOME)
     norm_live = [
         m
         for m in report.pipelines[0].steps
@@ -233,8 +206,8 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
 
     # Kill the last live reference and the object becomes reclaimable.
     coord_b = coordinate_for_path("b.txt")
-    invalidate(Selection(coordinate_glob=coord_b, step="norm"), reason="test")
-    report = storage_report()
+    invalidate(Selection(coordinate_glob=coord_b, step="norm"), reason="test", home=TEST_HOME)
+    report = storage_report(home=TEST_HOME)
     assert report.reclaimable_objects == 1
     assert report.reclaimable_bytes == 4
 
@@ -243,17 +216,17 @@ def test_missing_object_file_is_reported_not_crashed():
     create_file("a.txt", "alpha")
     make_shout_pipeline().run(workers=1)
 
-    with get_session():
-        rows = lane_store.all_filled_rows()
+    with TEST_HOME.session():
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 2  # 1 child lane + 1 root-anchor
         # The child is bytes-spilled; the anchor is inline JSON.
         child_row = next(r for r in rows if r.get("lane_key") != "@root")
         out = child_row.get("output", "")
         assert out.startswith("objects:")
         content_hash = out[len("objects:"):]
-    os.remove(_get_object_path(content_hash))
+    os.remove(TEST_HOME.store.object_path(content_hash))
 
-    report = storage_report()  # must not raise
+    report = storage_report(home=TEST_HOME)  # must not raise
     assert report.missing_objects == 1
     assert report.total_objects == 1  # the ledger still names it
     assert report.total_bytes == 0
@@ -277,16 +250,16 @@ def test_reclaimed_object_reported_separately_from_missing():
         create_file("a.txt", content)
         make_shout_pipeline().run(workers=1)
 
-    before = storage_report()
+    before = storage_report(home=TEST_HOME)
     assert before.total_objects == 3
     assert before.missing_objects == 0
     assert before.reclaimed_objects == 0
 
     # Budget-driven gc deletes the oldest object deliberately.
-    done = gc(delete=True, max_bytes=before.total_bytes - 1)
+    done = gc(delete=True, max_bytes=before.total_bytes - 1, home=TEST_HOME)
     assert done.applied and len(done.reclaimed) >= 1
 
-    after = storage_report()
+    after = storage_report(home=TEST_HOME)
     # The swept object is reclaimed, NOT missing (it was deleted on purpose).
     assert after.reclaimed_objects == len(done.reclaimed)
     assert after.reclaimed_bytes == done.reclaimed_bytes
@@ -294,12 +267,12 @@ def test_reclaimed_object_reported_separately_from_missing():
     assert "reclaimed" in str(after)
 
     # A genuinely missing object still reads as missing, alongside the reclaimed.
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         fulfilled_addrs = {
             str(u.address) for u in session.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(True)).all()
         }
-    idx = lane_store.address_row_index()
+    idx = TEST_HOME.lanes.address_row_index()
     # Pick a *child* lane (lane_key != "@root"); the expand anchor's
     # output is a JSON list of child hashes ('["b:<hash>"]'), not an
     # "objects:<hash>" ref string, so the un-filtered next() was flaky
@@ -310,7 +283,7 @@ def test_reclaimed_object_reported_separately_from_missing():
     )
     live_out = live_row.get("output", "")
     assert live_out.startswith("objects:")
-    os.remove(_get_object_path(live_out[len("objects:"):]))
-    mixed = storage_report()
+    os.remove(TEST_HOME.store.object_path(live_out[len("objects:"):]))
+    mixed = storage_report(home=TEST_HOME)
     assert mixed.missing_objects == 1
     assert mixed.reclaimed_objects == len(done.reclaimed)

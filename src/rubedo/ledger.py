@@ -9,11 +9,10 @@ only code that should be writing run history.
 import json
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from .db import get_session
 from .execution import ExecutionOutcome, _materialized_ancestors
 from .models import (
     Filtered,
@@ -25,9 +24,10 @@ from .models import (
 )
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
-from .store import serialize_output
-from . import lane_store
 from .util import utcnow_iso
+
+if TYPE_CHECKING:
+    from .home import Home
 
 
 @dataclass
@@ -36,6 +36,7 @@ class _RunContext:
     run_id: str
     pipeline_id: str
     source_id: str
+    home: "Home"
     totals: Dict[str, int]
     by_step: Dict[str, Dict[str, int]]
     coord_step_mats: Dict[tuple, Any] = field(default_factory=dict)
@@ -308,7 +309,7 @@ def _commit_execution_result(
         json.dumps({"attempts": outcome.attempts}) if outcome.attempts > 1 else None
     )
 
-    with get_session() as session:
+    with ctx.home.session() as session:
         for i, attempt_trace in enumerate(outcome.attempt_errors, start=1):
             _emit(
                 session,
@@ -352,7 +353,7 @@ def _commit_execution_result(
                 # is a new generation, not a reuse.
                 mat_action = "created"
                 content_type = "json"
-                batch_row = lane_store.arrow_batch_row_by_address(
+                batch_row = ctx.home.lanes.arrow_batch_row_by_address(
                     ctx.pipeline_id, step.name, str(decision.output_address)
                 )
                 output_string = batch_row.get("output") if batch_row else None
@@ -375,11 +376,11 @@ def _commit_execution_result(
                     .first()
                 )
                 if existing_usage and existing_usage.fulfilled:
-                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    existing_row = ctx.home.lanes.address_row_index().get(str(decision.output_address))
                     if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused"
                 if mat_action != "reused":
-                    lane_store.append_anchor(
+                    ctx.home.lanes.append_anchor(
                         pipeline_id=ctx.pipeline_id,
                         step_name=step.name,
                         lane_key=decision.coordinate,
@@ -393,7 +394,7 @@ def _commit_execution_result(
                         output_identity=identity,
                     )
             else:
-                output_string, content_type = serialize_output(
+                output_string, content_type = ctx.home.store.serialize_output(
                     ctx.run_id, decision.coordinate, result
                 )
                 identity = _identity_of(output_string)
@@ -409,12 +410,12 @@ def _commit_execution_result(
                     .first()
                 )
                 if existing_usage and existing_usage.fulfilled:
-                    existing_row = lane_store.address_row_index().get(str(decision.output_address))
+                    existing_row = ctx.home.lanes.address_row_index().get(str(decision.output_address))
                     if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused" if not decision.stale else "refreshed"
 
                 if mat_action != "reused":
-                    lane_store.append_filled(
+                    ctx.home.lanes.append_filled(
                         pipeline_id=ctx.pipeline_id,
                         step_name=step.name,
                         lane_key=decision.coordinate,
@@ -451,7 +452,7 @@ def _commit_execution_result(
                 )
             # Update the fulfilled cache so the next planning phase
             # sees this address as live without a SQLite re-query.
-            lane_store.mark_fulfilled(str(decision.output_address))
+            ctx.home.lanes.mark_fulfilled(str(decision.output_address))
 
             if outcome.is_anchor:
                 # Cache anchor only: stored so a re-run's plan can skip the
@@ -558,8 +559,7 @@ def _commit_execution_result(
                 metadata_json=attempts_meta,
             )
         finally:
-            from .store import cleanup_staged
-            cleanup_staged(ctx.run_id)
+            ctx.home.store.cleanup_staged(ctx.run_id)
 
         session.commit()
 
@@ -571,7 +571,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
     # anchor rows from expand steps that weren't in the segment's step
     # list).  On exception paths, clear_run_buffers drops only the
     # current segment's in-flight work; completed segments are on disk.
-    lane_store.flush_all()
+    ctx.home.lanes.flush_all()
 
     full_summary = {
         "created": ctx.totals["created"],
@@ -583,7 +583,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         "by_step": ctx.by_step,
     }
 
-    with get_session() as session:
+    with ctx.home.session() as session:
         final_run = session.query(Run).filter_by(id=ctx.run_id).first()
         if ctx.totals["failed"] == 0 and ctx.totals["blocked"] == 0:
             final_run.status = "completed"  # type: ignore
@@ -612,4 +612,4 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         failed_count=ctx.totals["failed"],
         blocked_count=ctx.totals["blocked"],
         filtered_count=ctx.totals["filtered"],
-    )
+    ).bind_home(ctx.home)

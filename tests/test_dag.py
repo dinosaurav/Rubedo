@@ -1,20 +1,19 @@
 import pytest
 import os
 import shutil
-from rubedo.db import init_db, get_session
-from rubedo.store import init_store, read_materialization_output
 from rubedo import step, pipeline
 from rubedo.planning import topological_sort, _ArrowRowRef
 from rubedo.models import RunCoordinateStatus, MaterializationEdge, InputHashUsage
-from rubedo import lane_store
-import uuid
-from sqlalchemy import create_engine
+from conftest import make_home
 
 TEST_FOLDER = ".test_dag_data"
+
+TEST_HOME = None
 
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
+    global TEST_HOME
     # Setup
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     if os.path.exists(abs_test_folder):
@@ -26,44 +25,11 @@ def setup_teardown():
         shutil.rmtree(DB_FOLDER)
     os.makedirs(DB_FOLDER, exist_ok=True)
 
-    os.environ["RUBEDO_STORE_DIR"] = f"{DB_FOLDER}/store"
-    # patch store dirs
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{DB_FOLDER}/store/objects"
-    rubedo.store.STAGING_DIR = f"{DB_FOLDER}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    # Need to make sure the engine is created with StaticPool for in-memory shared
-    from sqlalchemy.pool import StaticPool
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
     if os.path.exists(TEST_FOLDER):
         shutil.rmtree(TEST_FOLDER)
     os.makedirs(TEST_FOLDER, exist_ok=True)
 
+    TEST_HOME = make_home(DB_FOLDER)
     yield
 
     # Teardown
@@ -91,11 +57,11 @@ def coordinate_for_path(step_name, path_value):
     """The migrated coordinate is a content hash (row-<hash>), not the
     literal filename. Recover it by scanning that step's live
     materializations for the one whose payload carries this path."""
-    idx = lane_store.address_row_index()
-    with get_session() as session:
+    idx = TEST_HOME.lanes.address_row_index()
+    with TEST_HOME.session() as session:
         for rc in session.query(RunCoordinateStatus).filter_by(step_name=step_name).all():
             row = idx.get(str(rc.output_address)) if rc.output_address else None
-            if row is not None and read_materialization_output(_ArrowRowRef(row)).get("path") == path_value:
+            if row is not None and TEST_HOME.store.read_materialization_output(_ArrowRowRef(row)).get("path") == path_value:
                 return rc.coordinate
     return None
 
@@ -113,7 +79,7 @@ def test_topological_sort():
     def c(b):
         pass
 
-    p = pipeline(name="p1", steps=[scan, a, b, c])
+    p = pipeline(name="p1", steps=[scan, a, b, c], home=TEST_HOME)
     topo = topological_sort(p.spec)
     assert [s.name for s in topo] == ["scan", "a", "b", "c"]
 
@@ -127,14 +93,14 @@ def test_linear_dag():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(name="p1", steps=[scan, read, upper])
+    pipe = pipeline(name="p1", steps=[scan, read, upper], home=TEST_HOME)
 
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
     pipe.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # Check coordinates created
         statuses = session.query(RunCoordinateStatus).all()
         # 2 files * 3 steps (scan, read, upper) — scan's own lanes now count
@@ -152,7 +118,7 @@ def test_linear_dag():
             .filter_by(coordinate=coord_f1, step_name="read")
             .first()
         )
-        idx = lane_store.address_row_index()
+        idx = TEST_HOME.lanes.address_row_index()
         read_row = idx.get(str(rc_read.output_address)) if rc_read and rc_read.output_address else None
         assert read_row is not None
 
@@ -178,12 +144,12 @@ def test_cache_hit():
     def read(scan):
         return scan["text"].strip()
 
-    pipe = pipeline(name="p2", steps=[scan, read])
+    pipe = pipeline(name="p2", steps=[scan, read], home=TEST_HOME)
 
     create_file("f1.txt", "hello")
     pipe.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         statuses = session.query(RunCoordinateStatus).all()
         assert len(statuses) == 2  # scan's lane + read's lane
         assert {s.status for s in statuses} == {"created"}
@@ -191,7 +157,7 @@ def test_cache_hit():
     # Run again, should be reused
     pipe.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # 2 from first run, 2 from second run
         statuses = (
             session.query(RunCoordinateStatus)
@@ -214,12 +180,12 @@ def test_invalidate_downstream_then_rerun():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(name="p4", steps=[scan, read, upper])
+    pipe = pipeline(name="p4", steps=[scan, read, upper], home=TEST_HOME)
 
     create_file("f1.txt", "hello")
     pipe.run(workers=1)
 
-    res = invalidate(Selection(step="upper"), reason="bad output")
+    res = invalidate(Selection(step="upper"), reason="bad output", home=TEST_HOME)
     assert res["invalidated_count"] == 1
 
     # Recompute resurrects the tombstoned materialization; its lineage
@@ -228,8 +194,8 @@ def test_invalidate_downstream_then_rerun():
     assert summary.created_count == 1
     assert summary.failed_count == 0
 
-    with get_session() as session:
-        upper_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "upper"]
+    with TEST_HOME.session() as session:
+        upper_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "upper"]
         # 2 rows: old (invalidated, history) + new (live).  The latest
         # one (by ts) is the live one.
         assert len(upper_rows) == 2
@@ -261,7 +227,7 @@ def test_duplicate_content_files_share_materialization():
     def upper(scan_nopath):
         return scan_nopath["text"].strip().upper()
 
-    pipe = pipeline(name="p5", steps=[scan_nopath, upper])
+    pipe = pipeline(name="p5", steps=[scan_nopath, upper], home=TEST_HOME)
 
     # Same content -> same lane -> one materialization and one lineage edge,
     # without a unique-constraint crash, even though the generator yields it
@@ -272,8 +238,8 @@ def test_duplicate_content_files_share_materialization():
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
 
-    with get_session() as session:
-        upper_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "upper"]
+    with TEST_HOME.session() as session:
+        upper_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "upper"]
         assert len(upper_rows) == 1
         edges = (
             session.query(MaterializationEdge).filter_by(child_address=upper_rows[0].get("address")).all()
@@ -290,13 +256,13 @@ def test_dag_blocked_on_failure():
     def upper(read):
         return read.upper()
 
-    pipe = pipeline(name="p3", steps=[scan, read, upper])
+    pipe = pipeline(name="p3", steps=[scan, read, upper], home=TEST_HOME)
 
     create_file("f1.txt", "hello")
 
     pipe.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc_read = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name="read")

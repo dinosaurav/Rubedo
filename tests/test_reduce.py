@@ -1,28 +1,26 @@
 import os
 import shutil
-import uuid
 import json
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
+from conftest import make_home
 from rubedo import step, pipeline, Filtered
-from rubedo.db import init_db, get_session
 from rubedo.models import (
     InputHashUsage,
     MaterializationEdge,
     RunCoordinateStatus,
     RunEvent,
 )
-from rubedo import lane_store
-from rubedo.store import init_store
 
 TEST_FOLDER = ".test_reduce_data"
 ENV_FOLDER = ".test_reduce_env"
 
+TEST_HOME = None
+
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -30,36 +28,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -73,7 +42,7 @@ def create_file(name, content):
 def assert_run(pipe):
     summary = pipe.run(workers=1)
     if summary.failed_count > 0:
-        with get_session() as session:
+        with TEST_HOME.session() as session:
             events = session.query(RunEvent).filter_by(run_id=summary.run_id, level="error").all()
             for e in events:
                 print(f"FAIL: {e.step_name}:{e.coordinate} -> {e.message}")
@@ -93,14 +62,14 @@ def coord_for_path(filename):
     """The coordinate scan minted for `filename` — coordinates are
     row-<hash>, not the filename. A dependent 1:1 map step (parse) shares
     its ancestor's coordinate unchanged."""
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rows = (
             session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
             .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         for rc in rows:
             row = addr_index.get(str(rc.output_address))
             if row is None:
@@ -116,7 +85,7 @@ def _latest_live_row(session, step_name):
     equivalent).  Mirrors the old
     ``session.query(Materialization).filter_by(step_name=…, is_live=True)
     .order_by(id.desc()).first()`` lookup."""
-    rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name]
+    rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name]
     live_addrs = {
         str(u.address) for u in session.query(InputHashUsage)
         .filter(InputHashUsage.fulfilled.is_(True)).all()
@@ -140,12 +109,12 @@ def test_reduce_basic_and_lineage():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce1", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce1", steps=[scan, parse, sum_values], home=TEST_HOME)
     summary = assert_run(pipe)
 
     assert summary.created_count == 7  # 3 scan + 3 parse + 1 reduce
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         sum_row = _latest_live_row(session, "sum")
         assert sum_row is not None
         assert sum_row["address"] is not None
@@ -165,7 +134,7 @@ def test_reduce_caching():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce2", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce2", steps=[scan, parse, sum_values], home=TEST_HOME)
 
     # Run 1: Create
     s1 = assert_run(pipe)
@@ -211,10 +180,10 @@ def test_reduce_filtered_lane():
             assert 20 in parse.values()
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce3", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce3", steps=[scan, parse, sum_values], home=TEST_HOME)
     assert_run(pipe)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         sum_row = _latest_live_row(session, "sum")
         edges = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         # Edge only from the survived lane
@@ -227,7 +196,7 @@ def test_reduce_filtered_lane():
     assert s2.created_count == 3  # scan(b-new), parse(b-new), sum
     assert s2.reused_count == 2  # scan(a), parse(a)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         sum_row = _latest_live_row(session, "sum")
         edges2 = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         assert len(edges2) == 2
@@ -247,14 +216,14 @@ def test_reduce_failed_parent_lane():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce4", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce4", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
     assert s1.blocked_count == 1
 
     coord_b = coord_for_path("b.txt")
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "blocked"
         meta = json.loads(status.metadata_json)
@@ -276,7 +245,7 @@ def test_reduce_failed_parent_lane_use_passed():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce4_use_passed", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce4_use_passed", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
@@ -284,7 +253,7 @@ def test_reduce_failed_parent_lane_use_passed():
     assert s1.created_count == 6  # 3 scan + 2 parse successes + 1 sum
 
     coord_b = coord_for_path("b.txt")
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "created"
         meta = json.loads(status.metadata_json)
@@ -305,12 +274,12 @@ def test_reduce_downstream_map():
     def format_val(sum):
         return f"Total: {sum}"
 
-    pipe = pipeline(name="reduce5", steps=[scan, parse, sum_values, format_val])
+    pipe = pipeline(name="reduce5", steps=[scan, parse, sum_values, format_val], home=TEST_HOME)
     s1 = assert_run(pipe)
 
     assert s1.created_count == 4  # scan + parse + sum + format
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="format").one()
         assert status.coordinate == "@all"
         assert status.status == "created"
@@ -326,7 +295,7 @@ def test_reduce_plan():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce6", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce6", steps=[scan, parse, sum_values], home=TEST_HOME)
 
     p1 = pipe.plan()
     # scan (a root expand) always plans as "execute"; everything downstream
@@ -363,7 +332,7 @@ def test_registration_errors():
     def sum_v3():
         pass
     with pytest.raises(ValueError, match="requires at least one parent"):
-        pipeline(name="pe", steps=[sum_v3]).spec
+        pipeline(name="pe", steps=[sum_v3], home=TEST_HOME).spec
 
 def test_reduce_all_filtered():
     create_file("a.txt", "10")
@@ -378,7 +347,7 @@ def test_reduce_all_filtered():
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce_empty", steps=[scan, parse, sum_values])
+    pipe = pipeline(name="reduce_empty", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 0
@@ -386,6 +355,6 @@ def test_reduce_all_filtered():
     assert s1.filtered_count == 2
     assert s1.created_count == 3  # 2 scan + 1 sum
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         status = session.query(RunCoordinateStatus).filter_by(run_id=s1.run_id, step_name="sum").one()
         assert status.status == "created"

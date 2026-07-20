@@ -2,26 +2,22 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
-from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
-from rubedo.models import (
-    MaterializationEdge,
-    RunCoordinateStatus,
-)
-from rubedo.store import init_store
+from conftest import make_home
+from rubedo import pipeline, step
+from rubedo.models import MaterializationEdge, RunCoordinateStatus
 
 TEST_FOLDER = ".test_skipcache_data"
 ENV_FOLDER = ".test_skipcache_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -29,36 +25,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -96,9 +63,7 @@ def build_pipeline(calls, util_version="1"):
     def report(parse):
         return f"report: {parse}"
 
-    return pipeline(
-        name="sc", steps=[scan, read, parse, report]
-    )
+    return pipeline(name="sc", steps=[scan, read, parse, report], home=TEST_HOME)
 
 
 def test_util_never_materialized_or_recorded():
@@ -110,24 +75,22 @@ def test_util_never_materialized_or_recorded():
     assert summary.created_count == 3  # scan + read + report; parse invisible
     assert calls == ["parse"]
 
-    with get_session() as session:
-        from rubedo import lane_store
+    with TEST_HOME.session() as session:
         from rubedo.planning import _ArrowRowRef
-        from rubedo.store import read_materialization_output
 
-        step_names = {r.get("step_name") for r in lane_store.all_filled_rows()}
+        step_names = {r.get("step_name") for r in TEST_HOME.lanes.all_filled_rows()}
         assert step_names == {"scan", "read", "report"}
         rc_steps = {c.step_name for c in session.query(RunCoordinateStatus).all()}
         assert rc_steps == {"scan", "read", "report"}
 
         # Value flowed through the util correctly
-        lane_store.address_row_index()
-        report_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "report")
-        assert read_materialization_output(_ArrowRowRef(report_row)) == "report: hello"
+        TEST_HOME.lanes.address_row_index()
+        report_row = next(r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "report")
+        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(report_row)) == "report: hello"
 
         # Lineage skips through: report's parent is read (not scan, and not
         # the fused-away parse util)
-        read_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "read")
+        read_row = next(r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "read")
         edge = session.query(MaterializationEdge).filter_by(
             parent_address=read_row.get("address"), child_address=report_row.get("address")
         ).one()
@@ -183,8 +146,7 @@ def test_util_shared_by_two_consumers_runs_once():
     def length(norm):
         return {"len": len(norm)}
 
-    pipe = pipeline(
-name="fan", steps=[scan, read, norm, upper, length])
+    pipe = pipeline(name="fan", steps=[scan, read, norm, upper, length], home=TEST_HOME)
     summary = pipe.run(workers=2)
     assert summary.failed_count == 0
     assert calls == ["norm"], "memoized per run despite two consumers"
@@ -205,12 +167,11 @@ def test_util_failure_fails_the_consumer():
     def use(boom):
         return boom
 
-    pipe = pipeline(
-name="fail", steps=[scan, read, boom, use])
+    pipe = pipeline(name="fail", steps=[scan, read, boom, use], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).filter_by(step_name="use").one()
         assert rc.status == "failed"
         assert "util exploded" in rc.error_message
@@ -231,12 +192,11 @@ def test_blocked_propagates_through_util():
     def use(mid):
         return mid
 
-    pipe = pipeline(
-name="blk", steps=[scan, read, mid, use])
+    pipe = pipeline(name="blk", steps=[scan, read, mid, use], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).filter_by(step_name="use").one()
         assert rc.status == "blocked"
 
@@ -260,19 +220,15 @@ def test_chained_utils():
     def out(lower):
         return lower
 
-    pipe = pipeline(
-name="chain", steps=[scan, read, strip, lower, out])
+    pipe = pipeline(name="chain", steps=[scan, read, strip, lower, out], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
 
-    from rubedo.store import read_materialization_output
-
-    with get_session():
-        from rubedo import lane_store
+    with TEST_HOME.session():
         from rubedo.planning import _ArrowRowRef
 
-        out_row = next(r for r in lane_store.all_filled_rows() if r.get("step_name") == "out")
-        assert read_materialization_output(_ArrowRowRef(out_row)) == "hello"
+        out_row = next(r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "out")
+        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(out_row)) == "hello"
 
 
 def test_plan_omits_utils():
@@ -300,4 +256,4 @@ def test_registration_validations():
     # skip_cache-has-no-consumer validation runs lazily on first `.spec`
     # access.
     with pytest.raises(ValueError, match="no consumer"):
-        pipeline(name="bad", steps=[orphan]).spec
+        pipeline(name="bad", steps=[orphan], home=TEST_HOME).spec

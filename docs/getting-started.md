@@ -119,17 +119,22 @@ store (`objects/`). It's created automatically and gitignored automatically
     export RUBEDO_HOME=/var/lib/myproject/.rubedo
     ```
 
-    or the lower-level `RUBEDO_DB_PATH` to point at the SQLite file
-    directly. Precedence is `RUBEDO_DB_PATH` > `RUBEDO_HOME`/`rubedo.sqlite`
-    > `.rubedo/rubedo.sqlite` (the CWD-relative default). `pipeline(...)`
-    also takes a `home=` keyword (`pipeline(name=..., home="/var/lib/myproject/.rubedo")`)
-    that wins over both env vars for every run/plan of that pipeline.
+    or the lower-level `RUBEDO_DB_PATH` to point at the SQLite ledger
+    directly. Precedence for the ambient default is `RUBEDO_DB_PATH` >
+    `RUBEDO_HOME`/`rubedo.sqlite` > `.rubedo/rubedo.sqlite` (the
+    CWD-relative default). The Python API takes a `Home` instance
+    instead of a path string:
 
-    A process supports only **one home at a time**: if two runs are in
-    flight concurrently (e.g. two threads) with different `home=` values,
-    the second raises rather than silently repointing the first run's
-    storage. Same-home concurrency, and the no-`home=` default, are
-    unaffected — run different homes from separate processes instead.
+    ```python
+    from rubedo import Home, pipeline
+
+    home = Home("/var/lib/myproject/.rubedo")
+    pipe = pipeline(name="...", home=home, steps=[...])
+    ```
+
+    Each `Home` owns its own ledger, object store, and lane tables, so
+    concurrent runs against different homes in one process are safe —
+    construct one `Home` per root and inject it.
 
 ## Registering steps as a list
 

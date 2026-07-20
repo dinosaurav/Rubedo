@@ -1,33 +1,31 @@
-"""invalidate(..., downstream=True): lane-level (downstream) invalidation.
+"""invalidate(..., downstream=True, home=TEST_HOME): lane-level (downstream) invalidation.
 
 Semantics under test: seeds are the selection's *live* matches (mirroring
 trace's default seeding); the flipped set is seeds plus the full downstream
 closure over MaterializationEdge (trace's own _bfs); already-non-live nodes
 are passed through but never re-flipped; upstream is never touched; every
-flip pairs with exactly one lifecycle row; and trace() is the exact preview
+flip pairs with exactly one lifecycle row; and trace(home=TEST_HOME) is the exact preview
 of the blast radius. downstream=False keeps the pre-existing behavior.
 """
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Selection, invalidate, step, pipeline, trace
-from rubedo.db import get_session, init_db
 from rubedo.models import InputHashUsage
-from rubedo import lane_store
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_invalidate_downstream_data"
 ENV_FOLDER = ".test_invalidate_downstream_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -35,36 +33,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -104,13 +73,15 @@ def make_pipeline():
 
     return pipeline(
         name="invd", steps=[scan, extract, summarize, total]
+    ,
+        home=TEST_HOME,
     )
 
 
 def _liveness_by_id():
     """Returns {address: (step_name, is_fulfilled)} for all outputs."""
-    with get_session() as session:
-        idx = lane_store.address_row_index()
+    with TEST_HOME.session() as session:
+        idx = TEST_HOME.lanes.address_row_index()
         result = {}
         for addr, row in idx.items():
             usage = session.query(InputHashUsage).filter_by(address=addr).first()
@@ -125,6 +96,8 @@ def test_downstream_flips_seed_and_descendants_then_heals():
 
     result = invalidate(
         Selection(step="extract", index={"company": "acme"}), reason="bad extract", downstream=True
+    ,
+        home=TEST_HOME,
     )
 
     # acme's extract (seed) + acme's summarize + the reduce output.
@@ -135,7 +108,7 @@ def test_downstream_flips_seed_and_descendants_then_heals():
     flipped = set(result["addresses"])
     liveness = _liveness_by_id()
     # Check via IHU that all flipped addresses are unfulfilled
-    with get_session() as s:
+    with TEST_HOME.session() as s:
         for addr in flipped:
             usage = s.query(InputHashUsage).filter_by(address=addr).first()
             assert usage is not None
@@ -160,16 +133,16 @@ def test_downstream_flipped_set_equals_trace_preview():
     make_pipeline().run()
 
     sel = Selection(step="extract", index={"company": "acme"})
-    # trace() is the preview: capture its live nodes BEFORE invalidating,
-    # excluding upstream context (scan) — invalidate(downstream=True) never
+    # trace(home=TEST_HOME) is the preview: capture its live nodes BEFORE invalidating,
+    # excluding upstream context (scan) — invalidate(downstream=True, home=TEST_HOME) never
     # touches upstream, only the seed and its downstream closure.
     preview = {
         n.output_address
-        for n in trace(sel).nodes
+        for n in trace(sel, home=TEST_HOME).nodes
         if n.is_live and n.relation != "upstream"
     }
 
-    result = invalidate(sel, reason="preview parity", downstream=True)
+    result = invalidate(sel, reason="preview parity", downstream=True, home=TEST_HOME)
 
     assert set(result["addresses"]) == preview
 
@@ -180,9 +153,9 @@ def test_downstream_invalidation_is_idempotent():
     make_pipeline().run()
 
     sel = Selection(step="extract", index={"company": "acme"})
-    invalidate(sel, reason="first", downstream=True)
+    invalidate(sel, reason="first", downstream=True, home=TEST_HOME)
 
-    second = invalidate(sel, reason="second", downstream=True)
+    second = invalidate(sel, reason="second", downstream=True, home=TEST_HOME)
 
     # Nothing left to flip: no re-flips.
     assert second["invalidated_count"] == 0
@@ -196,7 +169,7 @@ def test_default_invalidation_touches_only_direct_matches():
     create_file("b.txt", "globex,5")
     make_pipeline().run()
 
-    result = invalidate(Selection(step="extract", index={"company": "acme"}), reason="just the seed")
+    result = invalidate(Selection(step="extract", index={"company": "acme"}), reason="just the seed", home=TEST_HOME)
 
     assert result["invalidated_count"] == 1
     assert result["seed_count"] == 1
@@ -214,7 +187,7 @@ def test_default_invalidation_touches_only_direct_matches():
 
 
 def test_invalidate_then_plan_sees_recompute():
-    """invalidate() followed by .plan() (no run in between) must report
+    """invalidate(home=TEST_HOME) followed by .plan() (no run in between) must report
     the invalidated lane as 'execute', not stale 'reuse'.  Regression
     guard for the _FULFILLED_CACHE not being evicted on invalidation.
 
@@ -237,7 +210,7 @@ def test_invalidate_then_plan_sees_recompute():
     def summarize(fan: dict):
         return {"company": fan["company"], "double": fan["amount"] * 2}
 
-    pipe = pipeline(name="invd_plan", steps=[root, fan, summarize])
+    pipe = pipeline(name="invd_plan", steps=[root, fan, summarize], home=TEST_HOME)
     pipe.run()
 
     # Prime the fulfilled cache by planning once — the map root and
@@ -248,7 +221,7 @@ def test_invalidate_then_plan_sees_recompute():
     )
 
     # Invalidate the acme summarize lane
-    invalidate(Selection(step="summarize", index={"company": "acme"}), reason="test")
+    invalidate(Selection(step="summarize", index={"company": "acme"}), reason="test", home=TEST_HOME)
 
     # Plan again WITHOUT running in between — the cache must reflect
     # the invalidation, not stale fulfilled=True

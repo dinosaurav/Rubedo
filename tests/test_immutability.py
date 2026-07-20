@@ -2,15 +2,11 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
+from conftest import make_home
 from rubedo import Selection, invalidate, step, pipeline
-from rubedo.db import init_db, get_session
-from rubedo import lane_store
 from rubedo.models import (
     ImmutabilityError,
     InputHashUsage,
@@ -19,14 +15,16 @@ from rubedo.models import (
     RunCoordinateStatus,
     RunEvent,
 )
-from rubedo.store import init_store
 
 TEST_FOLDER = ".test_immutability_data"
 ENV_FOLDER = ".test_immutability_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -34,36 +32,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -85,7 +54,7 @@ def run_simple_pipeline(pipe_id="imm"):
     def read(scan):
         return scan["text"].strip()
 
-    pipe = pipeline(name=pipe_id, steps=[scan, read])
+    pipe = pipeline(name=pipe_id, steps=[scan, read], home=TEST_HOME)
     with open(os.path.join(TEST_FOLDER, "f1.txt"), "w") as f:
         f.write("hello")
     return pipe, pipe.run(workers=1)
@@ -93,7 +62,7 @@ def run_simple_pipeline(pipe_id="imm"):
 
 def test_append_only_rows_reject_updates():
     pipe, _ = run_simple_pipeline()
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rc = session.query(RunCoordinateStatus).first()
         rc.status = "tampered"
         with pytest.raises(ImmutabilityError, match="append-only"):
@@ -103,7 +72,7 @@ def test_append_only_rows_reject_updates():
 
 def test_append_only_rows_reject_deletes():
     pipe, _ = run_simple_pipeline()
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         event = session.query(RunEvent).first()
         session.delete(event)
         with pytest.raises(ImmutabilityError, match="cannot be deleted"):
@@ -113,7 +82,7 @@ def test_append_only_rows_reject_deletes():
 
 def test_materialization_edge_is_immutable():
     pipe, _ = run_simple_pipeline()
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         edge = session.query(MaterializationEdge).first()
         edge.parent_address = "tampered"
         with pytest.raises(ImmutabilityError, match="append-only"):
@@ -123,7 +92,7 @@ def test_materialization_edge_is_immutable():
 
 def test_input_hash_usage_liveness_is_mutable():
     pipe, _ = run_simple_pipeline()
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         ihu = session.query(InputHashUsage).first()
         ihu.fulfilled = False
         ihu.last_run_id = "different"
@@ -134,12 +103,12 @@ def test_input_hash_usage_liveness_is_mutable():
 
 def test_run_identity_is_immutable_but_lifecycle_is_not():
     pipe, summary = run_simple_pipeline()
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         run_row = session.get(Run, summary.run_id)
         run_row.status = "completed"  # lifecycle projection: allowed
         session.commit()
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         run_row = session.get(Run, summary.run_id)
         run_row.source_id = "folder:elsewhere"
         with pytest.raises(ImmutabilityError, match="immutable"):
@@ -150,15 +119,15 @@ def test_run_identity_is_immutable_but_lifecycle_is_not():
 def test_restore_preserves_invalidation_history():
     pipe, _ = run_simple_pipeline()
 
-    invalidate(Selection(step="read"), reason="looked wrong")
+    invalidate(Selection(step="read"), reason="looked wrong", home=TEST_HOME)
     # Deterministic step: rerun produces identical bytes -> restored, not new row
     summary = pipe.run(workers=1)
     assert summary.created_count == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # Only "read"'s materialization was invalidated; "scan"'s own lane
         # materialization is untouched, so filter to the step under test.
-        read_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "read"]
+        read_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "read"]
         assert read_rows
         ihu = session.query(InputHashUsage).filter_by(address=read_rows[0]["address"]).first()
         assert ihu is not None and ihu.fulfilled is True

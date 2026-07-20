@@ -14,23 +14,22 @@ existed:
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import pipeline, step
-from rubedo.db import init_db
 from rubedo.spec import definition
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_shape_dep_inference_data"
 ENV_FOLDER = ".test_shape_dep_inference_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -38,36 +37,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -130,7 +100,7 @@ def test_param_name_infers_depends_on():
     def extract(scan):
         return scan
 
-    p = pipeline(name="infer", steps=[scan, extract])
+    p = pipeline(name="infer", steps=[scan, extract], home=TEST_HOME)
     assert p.spec.steps[1].depends_on == ["scan"]
 
 
@@ -140,7 +110,7 @@ def test_parentless_generator_behaves_as_a_source_with_zero_kwargs():
         yield {"v": 1}
         yield {"v": 2}
 
-    p = pipeline(name="root-src", steps=[rows])
+    p = pipeline(name="root-src", steps=[rows], home=TEST_HOME)
     assert p.spec.steps[0].depends_on == []
     assert p.spec.steps[0].out_shape == "many"
 
@@ -157,7 +127,7 @@ def test_unmatched_parameter_raises_naming_step_parameter_and_candidates():
     def extract(nope):
         return nope
 
-    p = pipeline(name="bad-param", steps=[scan, extract])
+    p = pipeline(name="bad-param", steps=[scan, extract], home=TEST_HOME)
     with pytest.raises(ValueError) as exc_info:
         p.spec
 
@@ -176,7 +146,7 @@ def test_varargs_signature_skips_inference():
     def sink(*args, **kwargs):
         return None
 
-    p = pipeline(name="varargs", steps=[scan, sink])
+    p = pipeline(name="varargs", steps=[scan, sink], home=TEST_HOME)
     # Ambiguous signature: inference is skipped entirely, so `sink` falls
     # out as its own (unrelated) root rather than raising.
     assert p.spec.steps[1].depends_on == []
@@ -194,7 +164,7 @@ def test_explicit_depends_on_disables_inference_even_when_matching():
     def extract(scan):
         return scan
 
-    p = pipeline(name="explicit-wins", steps=[scan, extract])
+    p = pipeline(name="explicit-wins", steps=[scan, extract], home=TEST_HOME)
     assert p.spec.steps[1].depends_on == []
 
 
@@ -210,7 +180,7 @@ def test_depends_on_dict_alias_binds_execution_kwarg():
     def extract(raw):
         return {"got": raw["v"]}
 
-    p = pipeline(name="alias", steps=[scan, extract])
+    p = pipeline(name="alias", steps=[scan, extract], home=TEST_HOME)
     assert p.spec.steps[1].depends_on == ["scan"]
     assert p.spec.steps[1].depends_on_aliases == {"scan": "raw"}
 
@@ -244,7 +214,7 @@ def test_depends_on_dict_alias_on_join():
     def enrich(o, c):
         return {"oid": o["oid"], "name": c["name"]}
 
-    p = pipeline(name="join-alias", steps=[orders_src, customers_src, order, customer, enrich])
+    p = pipeline(name="join-alias", steps=[orders_src, customers_src, order, customer, enrich], home=TEST_HOME)
     assert p.spec.steps[-1].depends_on == ["order", "customer"]
     assert p.spec.steps[-1].depends_on_aliases == {"order": "o", "customer": "c"}
 
@@ -263,7 +233,7 @@ def test_depends_on_dict_alias_on_reduce():
     def total(raw):
         return {"sum": sum(v["v"] for v in raw.values())}
 
-    p = pipeline(name="reduce-alias", steps=[scan, total])
+    p = pipeline(name="reduce-alias", steps=[scan, total], home=TEST_HOME)
     assert p.spec.steps[-1].depends_on == ["scan"]
     assert p.spec.steps[-1].depends_on_aliases == {"scan": "raw"}
 
@@ -284,7 +254,7 @@ def test_inferred_pipeline_definition_is_byte_identical_to_explicit_twin():
     def extract(scan):
         return scan
 
-    inferred = pipeline(name="twin", steps=[scan, extract])
+    inferred = pipeline(name="twin", steps=[scan, extract], home=TEST_HOME)
 
     @step(name="scan", version="0", shape="expand")
     def scan_explicit():
@@ -294,7 +264,7 @@ def test_inferred_pipeline_definition_is_byte_identical_to_explicit_twin():
     def extract_explicit(scan):
         return scan
 
-    explicit = pipeline(name="twin", steps=[scan_explicit, extract_explicit])
+    explicit = pipeline(name="twin", steps=[scan_explicit, extract_explicit], home=TEST_HOME)
 
     inferred_def = inferred.definition()
     explicit_def = explicit.definition()
@@ -319,7 +289,7 @@ def test_rerun_over_existing_store_fully_reuses():
     def extract(scan):
         return {"doubled": scan["v"] * 2}
 
-    p = pipeline(name="reuse-check", steps=[scan, extract])
+    p = pipeline(name="reuse-check", steps=[scan, extract], home=TEST_HOME)
     first = p.run()
     assert first.created_count == 4  # 2 scan lanes + 2 extract lanes
     assert first.reused_count == 0
@@ -343,7 +313,7 @@ def test_explicit_twin_reuses_the_inferred_pipelines_store():
     def extract(scan):
         return {"doubled": scan["v"] * 2}
 
-    inferred = pipeline(name="same-store", steps=[scan, extract])
+    inferred = pipeline(name="same-store", steps=[scan, extract], home=TEST_HOME)
     first = inferred.run()
     assert first.created_count == 2
 
@@ -355,7 +325,7 @@ def test_explicit_twin_reuses_the_inferred_pipelines_store():
     def extract_explicit(scan):
         return {"doubled": scan["v"] * 2}
 
-    explicit = pipeline(name="same-store", steps=[scan_explicit, extract_explicit])
+    explicit = pipeline(name="same-store", steps=[scan_explicit, extract_explicit], home=TEST_HOME)
     second = explicit.run()
     assert second.created_count == 0
     assert second.reused_count == 2

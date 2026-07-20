@@ -19,23 +19,21 @@ the Arrow write/read round-trip, so both symptoms are fixed.
 """
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
-from rubedo import lane_store
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_hetero_data"
 ENV_FOLDER = ".test_hetero_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test = os.path.abspath(TEST_FOLDER)
     abs_env = os.path.abspath(ENV_FOLDER)
     for d in (abs_test, abs_env):
@@ -43,36 +41,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test, abs_env):
@@ -97,7 +66,7 @@ def test_heterogeneous_expand_root_no_phantom_churn():
     def leaf(transform: dict):
         return {"final": transform["out"] + "_f"}
 
-    pipe = pipeline(name="hetero_expand", steps=[source, transform, leaf])
+    pipe = pipeline(name="hetero_expand", steps=[source, transform, leaf], home=TEST_HOME)
 
     s1 = pipe.run(workers=1)
     assert s1.failed_count == 0
@@ -131,7 +100,7 @@ def test_heterogeneous_map_step_no_downstream_bust():
     def leaf(process: dict):
         return {"final": process["a"] + "_f"}
 
-    pipe = pipeline(name="hetero_map", steps=[source, process, leaf])
+    pipe = pipeline(name="hetero_map", steps=[source, process, leaf], home=TEST_HOME)
 
     s1 = pipe.run(workers=1)
     assert s1.failed_count == 0
@@ -158,7 +127,7 @@ def test_heterogeneous_nested_dicts_reuse():
     def downstream(source: dict):
         return {"out": source["meta"]["name"]}
 
-    pipe = pipeline(name="hetero_nested", steps=[source, downstream])
+    pipe = pipeline(name="hetero_nested", steps=[source, downstream], home=TEST_HOME)
 
     s1 = pipe.run(workers=1)
     assert s1.failed_count == 0
@@ -181,18 +150,18 @@ def test_arrow_row_count_stable_across_runs():
     def transform(source: dict):
         return {"out": source["a"]}
 
-    pipe = pipeline(name="hetero_rows", steps=[source, transform])
+    pipe = pipeline(name="hetero_rows", steps=[source, transform], home=TEST_HOME)
 
     pipe.run(workers=1)
-    rows_after_r1 = lane_store.get_filled_rows("hetero_rows", "source")
+    rows_after_r1 = TEST_HOME.lanes.get_filled_rows("hetero_rows", "source")
     assert len(rows_after_r1) == 2  # 2 children (anchor in separate file)
 
     pipe.run(workers=1)
-    rows_after_r2 = lane_store.get_filled_rows("hetero_rows", "source")
+    rows_after_r2 = TEST_HOME.lanes.get_filled_rows("hetero_rows", "source")
     assert len(rows_after_r2) == 2, (
         f"Arrow file grew: {len(rows_after_r1)} → {len(rows_after_r2)} rows"
     )
 
     pipe.run(workers=1)
-    rows_after_r3 = lane_store.get_filled_rows("hetero_rows", "source")
+    rows_after_r3 = TEST_HOME.lanes.get_filled_rows("hetero_rows", "source")
     assert len(rows_after_r3) == 2

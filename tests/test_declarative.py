@@ -9,17 +9,17 @@ import shutil
 import pytest
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
-from rubedo import lane_store
-import rubedo.store as store
-from rubedo.store import read_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_declarative_data"
 ENV_FOLDER = ".test_declarative_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test = os.path.abspath(TEST_FOLDER)
     abs_env = os.path.abspath(ENV_FOLDER)
     for d in (abs_test, abs_env):
@@ -27,11 +27,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d)
 
-    store.OBJECTS_DIR = f"{abs_env}/objects"
-    store.STAGING_DIR = f"{abs_env}/staging"
-    os.environ["RUBEDO_DB_PATH"] = f"sqlite:///{abs_env}/rubedo.sqlite"
-    init_db()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test, abs_env):
@@ -40,9 +36,9 @@ def isolated_env():
 
 
 def _outputs(step_name):
-    rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name]
+    rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name]
     return {
-        r.get("lane_key"): read_output(r.get("output"), r.get("content_type"))
+        r.get("lane_key"): TEST_HOME.store.read_output(r.get("output"), r.get("content_type"))
         for r in rows
     }
 
@@ -63,7 +59,7 @@ def test_declarative_join_nested_output():
         yield {"cid": "alice", "name": "Alice Smith"}
         yield {"cid": "bob", "name": "Bob Jones"}
 
-    p = pipeline(name="dj1", steps=[orders, customers])
+    p = pipeline(name="dj1", steps=[orders, customers], home=TEST_HOME)
     p.join(name="joined", join_on={"orders": "cust", "customers": "cid"})
 
     @p.step
@@ -91,7 +87,7 @@ def test_declarative_join_reuses():
     def customers():
         yield {"cid": "alice", "name": "Alice"}
 
-    p = pipeline(name="dj2", steps=[orders, customers])
+    p = pipeline(name="dj2", steps=[orders, customers], home=TEST_HOME)
     p.join(name="joined", join_on={"orders": "cust", "customers": "cid"})
 
     s1 = p.run(workers=1)
@@ -111,19 +107,19 @@ def test_declarative_join_requires_name():
     def b():
         yield {"k": "x"}
 
-    p = pipeline(name="dj3", steps=[a, b])
+    p = pipeline(name="dj3", steps=[a, b], home=TEST_HOME)
     with pytest.raises(TypeError, match="name"):
         p.join(join_on={"a": "k", "b": "k"})
 
 
 def test_declarative_join_rejects_empty_join_on():
-    p = pipeline(name="dj4", steps=[])
+    p = pipeline(name="dj4", steps=[], home=TEST_HOME)
     with pytest.raises(ValueError, match="Step 'j': .*at least two parents"):
         p.join(name="j", join_on={})
 
 
 def test_declarative_join_rejects_single_parent():
-    p = pipeline(name="dj5", steps=[])
+    p = pipeline(name="dj5", steps=[], home=TEST_HOME)
     with pytest.raises(ValueError, match="Step 'j': .*at least two parents"):
         p.join(name="j", join_on={"a": "x"})
 
@@ -143,7 +139,7 @@ def test_declarative_union_merges_lane_sets():
         yield {"val": 3}
         yield {"val": 1}  # dup of source_a's val=1
 
-    p = pipeline(name="du1", steps=[source_a, source_b])
+    p = pipeline(name="du1", steps=[source_a, source_b], home=TEST_HOME)
     p.union(name="combined", depends_on=["source_a", "source_b"])
 
     @p.step
@@ -168,7 +164,7 @@ def test_declarative_union_reuses():
     def source_b():
         yield {"val": 2}
 
-    p = pipeline(name="du2", steps=[source_a, source_b])
+    p = pipeline(name="du2", steps=[source_a, source_b], home=TEST_HOME)
     p.union(name="combined", depends_on=["source_a", "source_b"])
 
     s1 = p.run(workers=1)
@@ -185,7 +181,7 @@ def test_declarative_union_single_parent_passthrough():
         yield {"val": 10}
         yield {"val": 20}
 
-    p = pipeline(name="du3", steps=[source])
+    p = pipeline(name="du3", steps=[source], home=TEST_HOME)
     p.union(name="passed", depends_on=["source"])
 
     @p.step
@@ -202,6 +198,6 @@ def test_declarative_union_single_parent_passthrough():
 
 
 def test_declarative_union_rejects_no_parents():
-    p = pipeline(name="du4", steps=[])
+    p = pipeline(name="du4", steps=[], home=TEST_HOME)
     with pytest.raises(ValueError, match="Step 'u': .*at least one parent"):
         p.union(name="u", depends_on=[])

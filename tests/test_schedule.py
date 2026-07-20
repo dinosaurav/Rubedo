@@ -17,28 +17,26 @@ import os
 import shutil
 import threading
 import time
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, pipeline, step
-from rubedo.db import init_db, get_session
 from rubedo.models import (
     InputHashUsage,
     RunCoordinateStatus,
 )
-from rubedo import lane_store
 from rubedo.planning import _ArrowRowRef
-from rubedo.store import init_store, read_materialization_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_schedule_data"
 ENV_FOLDER = ".test_schedule_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -46,36 +44,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -101,14 +70,14 @@ def coord_for_path(filename):
     """The coordinate scan minted for `filename` — coordinates are
     row-<hash>, not the filename. A dependent 1:1 map step shares its
     ancestor's coordinate unchanged."""
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         rows = (
             session.query(RunCoordinateStatus)
             .filter(RunCoordinateStatus.step_name == "scan")
             .filter(RunCoordinateStatus.output_address.isnot(None))
             .all()
         )
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         for rc in rows:
             row = addr_index.get(str(rc.output_address))
             if row is None:
@@ -138,9 +107,10 @@ def _chain_steps():
     return [scan, s1, s2, s3]
 
 
-def _status_rows(run_id):
+def _status_rows(run_id, home=None):
     """The (step, coordinate, address, status) facts a run recorded."""
-    with get_session() as session:
+    home = home or TEST_HOME
+    with home.session() as session:
         rows = (
             session.query(RunCoordinateStatus).filter_by(run_id=run_id).all()
         )
@@ -149,12 +119,13 @@ def _status_rows(run_id):
         }
 
 
-def _mat_hashes():
+def _mat_hashes(home=None):
     import json
+    home = home or TEST_HOME
     return {
         r.get("output") if isinstance(r.get("output"), str)
         else json.dumps(r.get("output"), sort_keys=True, default=str)
-        for r in lane_store.all_filled_rows()
+        for r in home.lanes.all_filled_rows()
     }
 
 
@@ -165,19 +136,19 @@ def test_mode_equivalence_fresh_stores():
     create_file("c.txt", "gamma")
     steps = _chain_steps()
 
-    home_a = os.path.join(os.path.abspath(ENV_FOLDER), "homeA")
-    home_b = os.path.join(os.path.abspath(ENV_FOLDER), "homeB")
+    home_a = make_home(os.path.join(os.path.abspath(ENV_FOLDER), "homeA"))
+    home_b = make_home(os.path.join(os.path.abspath(ENV_FOLDER), "homeB"))
 
     pipe_broad = pipeline(name="equiv", steps=steps, schedule="broad", home=home_a)
     pipe_deep = pipeline(name="equiv", steps=steps, schedule="deep", home=home_b)
 
     s_broad = pipe_broad.run()
-    facts_broad = _status_rows(s_broad.run_id)  # read before re-pointing at B
-    hashes_broad = _mat_hashes()
+    facts_broad = _status_rows(s_broad.run_id, home_a)
+    hashes_broad = _mat_hashes(home_a)
 
     s_deep = pipe_deep.run()
-    facts_deep = _status_rows(s_deep.run_id)
-    hashes_deep = _mat_hashes()
+    facts_deep = _status_rows(s_deep.run_id, home_b)
+    hashes_deep = _mat_hashes(home_b)
 
     assert s_broad.status == s_deep.status == "completed"
     assert (s_broad.created_count, s_deep.created_count) == (12, 12)  # 3 files x (scan+s1+s2+s3)
@@ -190,7 +161,7 @@ def test_broad_then_deep_reuses_everything():
     create_file("a.txt", "alpha")
     create_file("b.txt", "beta")
     steps = _chain_steps()
-    home = os.path.join(os.path.abspath(ENV_FOLDER), "homeC")
+    home = make_home(os.path.join(os.path.abspath(ENV_FOLDER), "homeC"))
 
     pipe_broad = pipeline(name="cross1", steps=steps, schedule="broad", home=home)
     pipe_deep = pipeline(name="cross1", steps=steps, schedule="deep", home=home)
@@ -205,7 +176,7 @@ def test_deep_then_broad_reuses_everything():
     create_file("a.txt", "alpha")
     create_file("b.txt", "beta")
     steps = _chain_steps()
-    home = os.path.join(os.path.abspath(ENV_FOLDER), "homeD")
+    home = make_home(os.path.join(os.path.abspath(ENV_FOLDER), "homeD"))
 
     pipe_deep = pipeline(name="cross2", steps=steps, schedule="deep", home=home)
     pipe_broad = pipeline(name="cross2", steps=steps, schedule="broad", home=home)
@@ -240,7 +211,7 @@ def test_deep_pipelines_lanes_across_steps():
             gate.set()  # proves s2(A) ran before s1(B) completed
         return s1.upper()
 
-    pipe = pipeline(name="deep_pipe", steps=[scan, s1, s2], schedule="deep")
+    pipe = pipeline(name="deep_pipe", steps=[scan, s1, s2], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert gate.is_set()
@@ -275,7 +246,7 @@ def test_broad_stages_whole_steps():
         s2_started.append(time.monotonic())
         return s1 * 2
 
-    pipe = pipeline(name="staged", steps=[scan, s1, s2])  # broad is the default
+    pipe = pipeline(name="staged", steps=[scan, s1, s2], home=TEST_HOME)  # broad is the default
     summary = pipe.run()
 
     assert summary.created_count == 6  # 2 files x (scan + s1 + s2)
@@ -304,7 +275,7 @@ def test_deep_failure_cascades_to_downstream_cells():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(name="cascade", steps=[scan, s1, s2, s3], schedule="deep")
+    pipe = pipeline(name="cascade", steps=[scan, s1, s2, s3], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert summary.status == "completed_with_failures"
@@ -347,7 +318,7 @@ def test_deep_filtered_mid_chain():
     def s3(s2):
         return s2 + "!"
 
-    pipe = pipeline(name="filt", steps=[scan, s1, s2, s3], schedule="deep")
+    pipe = pipeline(name="filt", steps=[scan, s1, s2, s3], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert summary.status == "completed"
@@ -383,18 +354,18 @@ def test_deep_reduce_barrier_receives_all_lanes():
     def total(dbl):
         return {"n": len(dbl), "total": sum(dbl.values())}
 
-    pipe = pipeline(name="barrier", steps=[scan, parse, dbl, total], schedule="deep")
+    pipe = pipeline(name="barrier", steps=[scan, parse, dbl, total], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert summary.status == "completed"
     assert summary.created_count == 10  # 3 scan + 3 parse + 3 dbl + 1 total
-    with get_session() as session:
-        total_rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == "total"]
+    with TEST_HOME.session() as session:
+        total_rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "total"]
         assert total_rows
         total_row = total_rows[0]
         ihu = session.query(InputHashUsage).filter_by(address=total_row["address"]).first()
         assert ihu is not None and ihu.fulfilled is True
-        assert read_materialization_output(_ArrowRowRef(total_row)) == {"n": 3, "total": 12}
+        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(total_row)) == {"n": 3, "total": 12}
 
 
 # (h) The rate limiter is one instance per step per run, shared across every
@@ -417,7 +388,7 @@ def test_deep_shared_rate_limiter_paces_across_lanes():
         starts.append(time.monotonic())
         return fetch * 2
 
-    pipe = pipeline(name="paced", steps=[scan, fetch, enrich], schedule="deep")
+    pipe = pipeline(name="paced", steps=[scan, fetch, enrich], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert summary.status == "completed"
@@ -455,7 +426,7 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
         post_starts.append(time.monotonic())
         return mid + "!"
 
-    pipe = pipeline(name="overlap", steps=[scan, src, mid, post], schedule="deep")
+    pipe = pipeline(name="overlap", steps=[scan, src, mid, post], schedule="deep", home=TEST_HOME)
     summary = pipe.run()
 
     assert summary.status == "completed"
@@ -467,7 +438,7 @@ def test_deep_overlaps_downstream_with_rate_limited_stage():
     )
 
 
-# (g) Anything but broad/deep is rejected loudly at pipeline() construction
+# (g) Anything but broad/deep is rejected loudly at pipeline(home=TEST_HOME) construction
 # time.
 def test_invalid_schedule_raises():
     @step
@@ -475,7 +446,7 @@ def test_invalid_schedule_raises():
         return scan["text"]
 
     with pytest.raises(ValueError, match="schedule"):
-        pipeline(name="bad", steps=[scan, s1], schedule="sideways")
+        pipeline(name="bad", steps=[scan, s1], schedule="sideways", home=TEST_HOME)
 
 
 # (h) Independent root expands run concurrently under deep — two sources
@@ -514,6 +485,8 @@ def test_deep_concurrent_root_expands():
         name="concurrent_roots",
         steps=[source_a, source_b, process_a, process_b],
         schedule="deep",
+    
+        home=TEST_HOME,
     )
     summary = pipe.run()
 

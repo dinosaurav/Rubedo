@@ -7,22 +7,22 @@ on cache hit the original Python type is reconstructed."""
 
 import os
 import shutil
-import uuid
 
 import pyarrow as pa
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import pipeline, step
-from rubedo.db import init_db
+from conftest import make_home
 
 TEST_FOLDER = ".test_arrow_data"
 ENV_FOLDER = ".test_arrow_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -30,24 +30,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    rubedo.db._engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -158,7 +141,7 @@ def test_dataframe_step_caches_and_reuses():
         call_count += 1
         return pl.DataFrame({"amount": [0, 500_000, 10], "name": ["X", "Y", "Z"]})
 
-    p = pipeline(name="arrow-cached", steps=[make_df])
+    p = pipeline(name="arrow-cached", steps=[make_df], home=TEST_HOME)
     p.run(workers=1)
     assert call_count == 1
 
@@ -188,7 +171,7 @@ def test_dataframe_recompute_on_version_bump():
         calls += 1
         return pl.DataFrame({"v": [calls]})
 
-    p = pipeline(name="arrow-ver", steps=[gen])
+    p = pipeline(name="arrow-ver", steps=[gen], home=TEST_HOME)
     p.run(workers=1)
     assert calls == 1
 
@@ -198,7 +181,7 @@ def test_dataframe_recompute_on_version_bump():
         calls += 1
         return pl.DataFrame({"v": [calls]})
 
-    p2 = pipeline(name="arrow-ver", steps=[gen2])
+    p2 = pipeline(name="arrow-ver", steps=[gen2], home=TEST_HOME)
     s = p2.run(workers=1)
     assert calls == 2
     assert s.created_count == 1

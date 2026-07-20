@@ -2,53 +2,28 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import pipeline, step
-from rubedo.db import init_db
 from rubedo.hashing import hash_json
-from rubedo.store import init_store
+from conftest import make_home
 
 
 ENV_FOLDER = ".test_fold_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     if os.path.exists(abs_env_folder):
         shutil.rmtree(abs_env_folder)
     os.makedirs(abs_env_folder, exist_ok=True)
 
-    import rubedo.db
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-    init_store()
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
     shutil.rmtree(abs_env_folder, ignore_errors=True)
 
@@ -68,7 +43,7 @@ def test_fold_accumulates_lanes_in_coordinate_order_and_reuses():
         calls.append(source["value"])
         return acc + source["value"]
 
-    pipe = pipeline(name="fold-basic", steps=[source, combine])
+    pipe = pipeline(name="fold-basic", steps=[source, combine], home=TEST_HOME)
     first = pipe.run(workers=1)
     assert first.created_count == 4
     expected_order = [
@@ -98,7 +73,7 @@ def test_fold_groups_and_resets_its_accumulator():
     def total(acc, source):
         return acc + source["amount"]
 
-    pipe = pipeline(name="fold-groups", steps=[source, total])
+    pipe = pipeline(name="fold-groups", steps=[source, total], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.created_count == 5
     assert summary.output_for("total") == {"east": 7, "west": 3}
@@ -120,7 +95,7 @@ def test_fold_check_cache_false_reexecutes():
         calls.append(source["value"])
         return acc + source["value"]
 
-    pipe = pipeline(name="fold-no-cache", steps=[source, total])
+    pipe = pipeline(name="fold-no-cache", steps=[source, total], home=TEST_HOME)
     pipe.run(workers=1)
     pipe.run(workers=1)
     assert calls == [1, 1]
@@ -137,7 +112,7 @@ def test_fold_copies_mutable_initial_values_per_group():
         acc.append(source["value"])
         return acc
 
-    pipe = pipeline(name="fold-mutable-init", steps=[source, collect])
+    pipe = pipeline(name="fold-mutable-init", steps=[source, collect], home=TEST_HOME)
     assert pipe.run(workers=1).output_for("collect") == {
         "east": ["a"],
         "west": ["b"],

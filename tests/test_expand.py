@@ -1,24 +1,22 @@
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
-from rubedo import lane_store
 from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent
 from rubedo.planning import _ArrowRowRef
-from rubedo.store import init_store, read_materialization_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_expand_data"
 ENV_FOLDER = ".test_expand_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -26,36 +24,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -71,7 +40,7 @@ def create_file(name, content):
 def assert_run(pipe):
     summary = pipe.run(workers=1)
     if summary.failed_count > 0:
-        with get_session() as session:
+        with TEST_HOME.session() as session:
             events = (
                 session.query(RunEvent)
                 .filter_by(run_id=summary.run_id, level="error")
@@ -125,6 +94,8 @@ def make_pipe():
     return pipeline(
         name="x",
         steps=[_scan(), _read(), _split(), _shout()],
+    
+        home=TEST_HOME,
     )
 
 
@@ -137,16 +108,16 @@ def test_expand_mints_child_lanes_and_chains_downstream():
     # scan: 2 files, read: 2 files, split: 3 minted lines, shout: 3 lines
     assert (s1.created_count, s1.reused_count) == (10, 0)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         shout = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name="shout", status="created")
             .all()
         )
         assert len(shout) == 3  # alpha, beta, gamma → 3 content-addressed lanes
-        addr_index = lane_store.address_row_index()
+        addr_index = TEST_HOME.lanes.address_row_index()
         values = {
-            read_materialization_output(_ArrowRowRef(row))
+            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
             for r in shout
             if (row := addr_index.get(str(r.output_address)))
         }
@@ -185,6 +156,8 @@ def test_expand_caches_anchor_and_skips_fn_on_rerun():
 
     pipe = pipeline(
         name="c", steps=[_scan(), _read(), split, shout]
+    ,
+        home=TEST_HOME,
     )
     assert_run(pipe)
     assert len(calls) == 1  # scraped once
@@ -236,9 +209,11 @@ def test_expand_identical_payloads_collapse():
 
     pipe = pipeline(
         name="d", steps=[_scan(), _read(), dup]
+    ,
+        home=TEST_HOME,
     )
     assert_run(pipe)
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         lanes = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name="dup")
@@ -261,7 +236,7 @@ def test_source_decorator():
     def up(things):
         return things["x"].upper()
 
-    pipe = pipeline(name="s", steps=[things, up])  # a bare @step root
+    pipe = pipeline(name="s", steps=[things, up], home=TEST_HOME)  # a bare @step root
     s = assert_run(pipe)
     assert (s.created_count, s.reused_count) == (6, 0)  # 3 things + 3 up
     assert calls == [1]
@@ -270,10 +245,10 @@ def test_source_decorator():
     assert (s2.created_count, s2.reused_count) == (0, 6)
     assert calls == [1]  # reused via anchor — generator not re-run
 
-    with get_session() as session:
-        addr_index = lane_store.address_row_index()
+    with TEST_HOME.session() as session:
+        addr_index = TEST_HOME.lanes.address_row_index()
         vals = {
-            read_materialization_output(_ArrowRowRef(row))
+            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="up")
             .filter(RunCoordinateStatus.status.in_(["created", "reused"]))
@@ -304,7 +279,7 @@ def test_root_expand_is_a_source():
     def double(rows):
         return rows["n"] * 2
 
-    pipe = pipeline(name="r", steps=[rows, double])  # no source
+    pipe = pipeline(name="r", steps=[rows, double], home=TEST_HOME)  # no source
     s = assert_run(pipe)
     assert (s.created_count, s.reused_count) == (6, 0)  # 3 rows + 3 double
 
@@ -313,10 +288,10 @@ def test_root_expand_is_a_source():
     s2 = assert_run(pipe)
     assert (s2.created_count, s2.reused_count) == (0, 6)
 
-    with get_session() as session:
-        addr_index = lane_store.address_row_index()
+    with TEST_HOME.session() as session:
+        addr_index = TEST_HOME.lanes.address_row_index()
         vals = {
-            read_materialization_output(_ArrowRowRef(row))
+            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="double")
             .filter(RunCoordinateStatus.status.in_(["created", "reused"]))

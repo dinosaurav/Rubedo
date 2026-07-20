@@ -3,19 +3,25 @@ Invalidation logic for marking outputs as no longer live.
 """
 import json
 import uuid
+from typing import Optional
+
+from .home import Home
 from .models import (
     Run,
     InputHashUsage,
     RunEvent,
 )
-from . import lane_store
-from .db import get_session
 from .selection import Selection, get_selection_addresses
 from .trace import _bfs
 from .util import utcnow_iso
 
 
-def invalidate(selection: Selection, reason: str, downstream: bool = False) -> dict:
+def invalidate(
+    selection: Selection,
+    reason: str,
+    downstream: bool = False,
+    home: Optional[Home] = None,
+) -> dict:
     """
     Invalidate materializations matching the given selection.
 
@@ -32,9 +38,10 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
     Returns:
         dict: A summary of the invalidation run.
     """
+    home = home or Home.default()
     run_id = f"run_{uuid.uuid4().hex[:12]}"
 
-    with get_session() as session:
+    with home.session() as session:
         # Create invalidate run
         now = utcnow_iso()
         run = Run(
@@ -59,7 +66,7 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
         session.commit()
 
         try:
-            addresses = get_selection_addresses(session, selection)
+            addresses = get_selection_addresses(session, selection, home=home)
 
             # Downstream closure: seed on the selection's *live* matches
             # (mirrors trace's default seeding), then walk derivation edges
@@ -94,7 +101,7 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
                 # invalidation.
                 usage.fulfilled = False  # type: ignore
                 usage.last_run_id = run_id  # type: ignore
-                lane_store.mark_unfulfilled(addr)
+                home.lanes.mark_unfulfilled(addr)
                 return True
 
             flipped_addrs: list[str] = []
@@ -122,7 +129,7 @@ def invalidate(selection: Selection, reason: str, downstream: bool = False) -> d
             )
             session.add(event)
             session.commit()
-            lane_store.flush_all()
+            home.lanes.flush_all()
 
             return {
                 "run_id": run_id,

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `pipeline(home=...)` takes a `Home` instance, not a path
+  string (`TypeError` otherwise). `Home` owns the ledger (`Database`),
+  object store (`LocalStore`), and lane tables (`LaneStore`) for one root
+  — process-global `_init_home` and the one-home-per-process guard are
+  gone. Concurrent runs against different homes in one process are
+  supported. Construct with `Home("/path")` (or `home=None` for the
+  ambient `RUBEDO_HOME`/`.rubedo` default); same absolute path interns to
+  the same instance. `trace`/`gc`/`storage_report`/`invalidate` and
+  `create_app(home=)` take `Home` the same way. (TODO 34 end-state)
+
 ### Fixed
 - Mypy's analysis target is now Python 3.12 so numpy≥2.5's PEP 695 stub
   syntax parses under either a 3.11 or 3.12 interpreter. Runtime floor

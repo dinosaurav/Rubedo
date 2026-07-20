@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
-from .db import get_session
+from .home import Home
 from .models import (
     InputHashUsage,
     ObjectReclamation,
@@ -35,9 +35,7 @@ from .models import (
     RunCoordinateStatus,
     effective_run_status,
 )
-from .store import _get_object_path
 from .util import utcnow_iso
-from . import lane_store
 
 # Warn-only threshold: at the end of an *unconfigured* run, if the store is
 # bigger than this, print one line pointing at retention= / rubedo gc.
@@ -193,6 +191,7 @@ def retention_policies(session: Session) -> Dict[str, int]:
 
 def _fulfilled_addrs_by_pipeline(
     session: Session,
+    home: Home,
 ) -> Dict[str, Set[str]]:
     """Fulfilled addresses grouped by pipeline_id.  IHU doesn't store
     pipeline_id, so we cross-reference with the Arrow lane_store rows
@@ -207,7 +206,7 @@ def _fulfilled_addrs_by_pipeline(
         return {}
     # Group by pipeline via the Arrow rows
     by_pipe: Dict[str, Set[str]] = {}
-    for row in lane_store.all_filled_rows():
+    for row in home.lanes.all_filled_rows():
         addr = row.get("address")
         if addr and addr in fulfilled:
             by_pipe.setdefault(row["pipeline_id"], set()).add(addr)
@@ -215,12 +214,12 @@ def _fulfilled_addrs_by_pipeline(
 
 
 def _retention_demote_addresses(
-    session: Session, policies: Dict[str, int], anchors: Set[str]
+    session: Session, home: Home, policies: Dict[str, int], anchors: Set[str]
 ) -> Set[str]:
     """Live (fulfilled) addresses to demote so each pipeline keeps only its
     last N runs' outputs."""
     demote: Set[str] = set()
-    fulfilled_by_pipe = _fulfilled_addrs_by_pipeline(session)
+    fulfilled_by_pipe = _fulfilled_addrs_by_pipeline(session, home)
     for pipeline_id, n in policies.items():
         runs = _terminal_runs(session, pipeline_id, limit=n)
         keep = _addresses_for_runs(session, [str(r.id) for r in runs]) | anchors
@@ -231,6 +230,7 @@ def _retention_demote_addresses(
 
 def _object_sizes_and_refs(
     session: Session,
+    home: Home,
 ) -> Tuple[Dict[str, int], Dict[str, List[Tuple[str, bool]]]]:
     """(size_of, refs_by_hash): present-on-disk byte size per content hash,
     and the (address, fulfilled) references to each hash across *all*
@@ -243,7 +243,7 @@ def _object_sizes_and_refs(
     }
     size_of: Dict[str, int] = {}
     refs_by_hash: Dict[str, List[Tuple[str, bool]]] = {}
-    for row in lane_store.all_filled_rows():
+    for row in home.lanes.all_filled_rows():
         addr = row.get("address", "")
         output = row.get("output")
         # Parse ref strings from the output column — native inline values
@@ -256,7 +256,7 @@ def _object_sizes_and_refs(
         refs_by_hash.setdefault(content_hash, []).append((addr, is_live))
         if content_hash not in size_of:
             try:
-                size_of[content_hash] = os.path.getsize(_get_object_path(content_hash))
+                size_of[content_hash] = os.path.getsize(home.store.object_path(content_hash))
             except OSError:
                 size_of[content_hash] = -1  # absent; can't be reclaimed
     return size_of, refs_by_hash
@@ -354,12 +354,12 @@ def _budget_demote_addresses(
 
 
 def _plan(
-    session: Session, policies: Dict[str, int], max_bytes: Optional[int]
+    session: Session, home: Home, policies: Dict[str, int], max_bytes: Optional[int]
 ) -> Tuple[Set[str], List[Tuple[str, int]], int]:
     """Compute (demote_addresses, reclaimed_objects, total_bytes_before) — pure."""
     anchors = _anchor_addresses(session)
-    demote = _retention_demote_addresses(session, policies, anchors)
-    size_of, refs_by_hash = _object_sizes_and_refs(session)
+    demote = _retention_demote_addresses(session, home, policies, anchors)
+    size_of, refs_by_hash = _object_sizes_and_refs(session, home)
     if max_bytes is not None:
         demote |= _budget_demote_addresses(
             session, demote, anchors, size_of, refs_by_hash, max_bytes
@@ -371,6 +371,7 @@ def _plan(
 
 def _apply(
     session: Session,
+    home: Home,
     demote: Set[str],
     reclaimed: List[Tuple[str, int]],
     *,
@@ -394,6 +395,7 @@ def _apply(
         if usage:
             usage.fulfilled = False  # type: ignore[assignment]
             usage.last_run_id = run_id  # type: ignore[assignment]
+            home.lanes.mark_unfulfilled(addr)
     for content_hash, size in reclaimed:
         session.add(
             ObjectReclamation(
@@ -407,7 +409,7 @@ def _apply(
     session.commit()
     for content_hash, _ in reclaimed:
         try:
-            os.remove(_get_object_path(content_hash))
+            os.remove(home.store.object_path(content_hash))
         except OSError:
             pass  # already gone, or unwritable: ledger already records it
 
@@ -420,7 +422,7 @@ def _apply(
 def gc(
     delete: bool = False,
     max_bytes: Optional[int] = None,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
 ) -> GcReport:
     """Apply every recorded retention policy, then (if max_bytes) prune
     oldest-first across pipelines until the store fits — the ops entry point
@@ -432,15 +434,9 @@ def gc(
     another run's heartbeat is live, in which case GC refuses (the restore race,
     trap 3).
     """
-    from .runner import _check_home_guard
+    home = home or Home.default()
 
-    _check_home_guard(home)
-    if home is not None:
-        from .runner import _init_home
-
-        _init_home(home)
-
-    with get_session() as session:
+    with home.session() as session:
         if delete:
             running = _running_run_ids(session)
             if running:
@@ -452,7 +448,7 @@ def gc(
                 )
 
         policies = retention_policies(session)
-        demote, reclaimed, total_before = _plan(session, policies, max_bytes)
+        demote, reclaimed, total_before = _plan(session, home, policies, max_bytes)
 
         if delete and (demote or reclaimed):
             run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -467,7 +463,7 @@ def gc(
                 )
             )
             session.commit()
-            _apply(session, demote, reclaimed, trigger="gc", run_id=run_id)
+            _apply(session, home, demote, reclaimed, trigger="gc", run_id=run_id)
 
         return GcReport(
             applied=delete,
@@ -479,19 +475,24 @@ def gc(
 
 
 def auto_prune(
-    session: Session, pipeline_id: str, run_id: str, retention: int
+    session: Session,
+    pipeline_id: str,
+    run_id: str,
+    retention: int,
+    home: Optional[Home] = None,
 ) -> Optional[GcReport]:
     """End-of-run hook: prune this one pipeline to its retention window.
 
     Set-and-forget — always applies (delete). Skips (returns None) instead of
     erroring if *another* run's heartbeat is live (the current run is excluded,
     since it is still finishing). Reuses the finished run's id as the trigger."""
+    home = home or Home.default()
     running = _running_run_ids(session, exclude_run_id=run_id)
     if running:
         return None
-    demote, reclaimed, total_before = _plan(session, {pipeline_id: retention}, None)
+    demote, reclaimed, total_before = _plan(session, home, {pipeline_id: retention}, None)
     if demote or reclaimed:
-        _apply(session, demote, reclaimed, trigger="auto_prune", run_id=run_id)
+        _apply(session, home, demote, reclaimed, trigger="auto_prune", run_id=run_id)
     return GcReport(
         applied=True,
         demoted_addresses=sorted(demote),
@@ -500,7 +501,7 @@ def auto_prune(
     )
 
 
-def cheap_store_bytes(home: Optional[str] = None) -> int:
+def cheap_store_bytes(home: Optional[Home] = None) -> int:
     """A cached, cheap estimate of total object-store bytes for the warn check.
 
     A full scandir sum is walked at most once per TTL and cached in a sidecar,
@@ -508,11 +509,11 @@ def cheap_store_bytes(home: Optional[str] = None) -> int:
     """
     import json
 
-    from .store import OBJECTS_DIR
     from .util import iso_age_seconds
 
-    root = home if home is not None else os.path.dirname(OBJECTS_DIR)
-    objects_dir = os.path.join(root, "objects") if home is not None else OBJECTS_DIR
+    home = home or Home.default()
+    root = home.store.root
+    objects_dir = home.store.objects_dir
     cache_path = os.path.join(root, ".store_size_cache.json")
     try:
         with open(cache_path) as f:
