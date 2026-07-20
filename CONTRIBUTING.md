@@ -23,6 +23,25 @@ Also do a live end-to-end check of whatever you changed (an example script,
 or a small inline repro) — passing tests isn't the same as the feature
 actually working.
 
+### Cloudflare R2 integration test
+
+The normal suite uses moto and needs no cloud credentials. To additionally
+exercise a real R2 bucket, create an R2 S3 API token with object read/write
+access and set:
+
+```bash
+export RUBEDO_TEST_R2_ACCOUNT_ID="<Cloudflare account id>"
+export RUBEDO_TEST_R2_ACCESS_KEY_ID="<R2 access key id>"
+export RUBEDO_TEST_R2_SECRET_ACCESS_KEY="<R2 secret access key>"
+export RUBEDO_TEST_R2_BUCKET="<existing test bucket>"
+uv run pytest tests/test_r2_live.py -q
+```
+
+`RUBEDO_TEST_R2_ENDPOINT_URL` may override the default
+`https://<account-id>.r2.cloudflarestorage.com`. The test skips when any
+required variable is absent. It uses a unique `rubedo-live-tests/<uuid>/`
+prefix and removes only the objects it wrote.
+
 ## Conventions
 
 - Small, focused commits with explanatory messages over large ones.
