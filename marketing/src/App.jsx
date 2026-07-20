@@ -3,6 +3,7 @@ import { ArrowRight } from 'lucide-react'
 import OuroborosLogo from './components/OuroborosLogo'
 import CodeBlock from './components/CodeBlock'
 import dashboardRun from './assets/dashboard-run.png'
+import dashboardRunMobile from './assets/dashboard-run-mobile.png'
 import './index.css'
 
 const GITHUB_URL = 'https://github.com/dinosaurav/Rubedo'
@@ -16,20 +17,28 @@ p = pipeline(name="triage")
 @p.step
 def inbox():
     for url in open("urls.txt"):
-        yield {"url": url.strip(), "text": download(url)}
+        yield {
+            "url": url.strip(),
+            "text": download(url),
+        }
 
 @p.step(retries=3, rate_limit="30/min")
 def decide(inbox: dict) -> dict | Filtered:
-    out = ask_llm(f"Keep or drop?\\n{inbox['text'][:2000]}")
+    out = ask_llm(
+        f"Keep or drop?\\n{inbox['text'][:2000]}"
+    )
     if out["keep"] is False:
         return Filtered(out["why"])
-    return {"url": inbox["url"], "topic": out["topic"]}
+    return {
+        "url": inbox["url"],
+        "topic": out["topic"],
+    }
 
-p.run()   # second run: only new urls recompute`
+p.run()  # re-run: only new urls recompute`
 
-const REUSE_PROOF = `# first run          created=8  reused=0
-# second run         created=0  reused=8     # nothing recomputed
-# edit one file...   created=2  reused=6     # only that file's lanes re-run`
+const REUSE_PROOF = `# first run     created=8  reused=0
+# second run    created=0  reused=8
+# edit one file created=2  reused=6`
 
 const START_CODE = `import os
 from rubedo import pipeline
@@ -41,20 +50,26 @@ def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
         if os.path.isfile(path):
-            yield {"path": name, "text": open(path).read()}
+            text = open(path).read()
+            yield {"path": name, "text": text}
 
 @p.step
 def count_lines(scan: dict):
-    return {"line_count": len(scan["text"].splitlines())}
+    n = len(scan["text"].splitlines())
+    return {"line_count": n}
 
-print(p.plan())   # dry-run: what would run, and why
+print(p.plan())
 summary = p.run()
-print(f"created={summary.created_count} reused={summary.reused_count}")`
+print(summary.created_count, summary.reused_count)`
 
-const RETRY_CODE = `@p.step(retries=3, retry_on=(TimeoutError, ConnectionError),
-        retry_backoff=2, rate_limit="30/min",
-        stale_after="24h",
-        assertions=[check_price_positive])
+const RETRY_CODE = `@p.step(
+    retries=3,
+    retry_on=(TimeoutError, ConnectionError),
+    retry_backoff=2,
+    rate_limit="30/min",
+    stale_after="24h",
+    assertions=[check_price_positive],
+)
 def enrich(row: dict): ...`
 
 const COMPARISON = [
@@ -226,8 +241,8 @@ function App() {
           {COMPARISON.map((row) => (
             <div className="compare-row" role="row" key={row.tool}>
               <div role="cell" className="compare-tool">{row.tool}</div>
-              <div role="cell">{row.job}</div>
-              <div role="cell">{row.angle}</div>
+              <div role="cell" className="compare-job" data-label="Job">{row.job}</div>
+              <div role="cell" className="compare-angle" data-label="Rubedo">{row.angle}</div>
             </div>
           ))}
         </div>
@@ -290,13 +305,16 @@ function App() {
           live runs, DAGs, lineage, every lane. No account, no cloud.
         </p>
         <figure className="dashboard-shot">
-          <img
-            src={dashboardRun}
-            alt="Rubedo dashboard run detail: pipeline DAG with every step reused, status cards showing 22 reused and 0 created, and a per-lane coordinates table."
-            width={1280}
-            height={800}
-            loading="lazy"
-          />
+          <picture>
+            <source media="(max-width: 860px)" srcSet={dashboardRunMobile} />
+            <img
+              src={dashboardRun}
+              alt="Rubedo dashboard run detail: pipeline DAG with every step reused, status cards showing 22 reused and 0 created, and a per-lane coordinates table."
+              width={1280}
+              height={800}
+              loading="lazy"
+            />
+          </picture>
           <figcaption>
             Second run of <code>examples/count_lines</code> — created 0, reused 22, in 0.1s.
           </figcaption>
