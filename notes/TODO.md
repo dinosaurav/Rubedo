@@ -268,6 +268,12 @@ factory-executor pipeline serializes; the dask example runs a step on a
 `LocalCluster` and fully reuses on a second run against the plain local
 store — no item-7 machinery involved.
 
+**Implemented 2026-07-20:** callable factories, per-step/per-segment pool
+lifecycle, duck-typed shutdown, JSON definition markers, thread-address
+parity, mixed/deep/retry tests, and the optional Dask `LocalCluster`
+example. The example was live-run twice from a warm repository; its
+temporary Home produced Created 17 then Reused 17 both times.
+
 ## 13. Pass-by-reference payloads (workers talk to the store directly)  **[depends on items 7 + 8; respecced 2026-07-18 — scope shrank to spilled values]**
 
 > **2026-07-18 premise update:** inline Arrow outputs changed the
