@@ -599,7 +599,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
             final_run.status = "completed_with_failures"  # type: ignore
 
         final_kind = str(final_run.kind)
-        final_status = final_run.status  # type: ignore
+        final_status = str(final_run.status)
         final_run.finished_at = utcnow_iso()  # type: ignore
         final_run.summary_json = json.dumps(full_summary)  # type: ignore
         _emit(
@@ -607,7 +607,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
             ctx,
             "info",
             "run_completed" if final_status != "failed" else "run_failed",
-            message=f"Run finished with status {final_run.status}",  # type: ignore
+            message=f"Run finished with status {final_status}",
         )
         session.commit()
 
