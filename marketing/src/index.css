@@ -316,7 +316,6 @@ a:hover { color: var(--accent-hover); }
 .why-item code,
 .beat code,
 .faq-item code,
-.perf-body code,
 .try-note code,
 figcaption code {
   font-family: var(--font-mono);
@@ -405,24 +404,13 @@ figcaption code {
 }
 
 /* ---------- Capability ---------- */
-.capability-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  margin-bottom: 2.5rem;
-}
-.capability-grid .pre-block {
-  margin: 0;
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-md);
-  line-height: 1.6;
-}
 .capability-beats {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  border-top: 1px solid var(--border-color);
-  padding-top: 2rem;
+  border-top: 1px solid var(--border-strong);
+  padding-top: 1.75rem;
+  margin-top: 0.25rem;
 }
 .beat h3 {
   font-size: 1.05rem;
@@ -435,6 +423,7 @@ figcaption code {
   line-height: 1.55;
   max-width: 680px;
 }
+.beat p strong { color: var(--text-primary); font-weight: 700; }
 .beat .pre-block {
   margin: 0 0 0.85rem;
   border: 1px solid var(--border-strong);
@@ -466,21 +455,6 @@ figcaption code {
   border-top: 1px solid var(--border-color);
   background: var(--bg-sidebar);
 }
-
-/* ---------- Performance note ---------- */
-.perf-note {
-  padding-top: 2.75rem;
-  padding-bottom: 2.75rem;
-}
-.perf-note .section-label { margin-bottom: 0.75rem; }
-.perf-body {
-  font-size: 1.02rem;
-  color: var(--text-secondary);
-  line-height: 1.65;
-  max-width: 720px;
-  margin: 0;
-}
-.perf-body strong { color: var(--text-primary); font-weight: 700; }
 
 /* ---------- FAQ ---------- */
 .faq-list {
@@ -546,7 +520,6 @@ figcaption code {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
-  .capability-grid { grid-template-columns: 1fr; }
   .compare-row {
     grid-template-columns: 1fr;
     gap: 0.45rem;
@@ -680,7 +653,6 @@ figcaption code {
     min-width: 0;
   }
   .try-steps .pre-block,
-  .capability-grid .pre-block,
   .beat .pre-block {
     font-size: 0.72rem;
     padding: 0.85rem 0.75rem;
@@ -700,15 +672,7 @@ figcaption code {
     white-space: pre-wrap;
   }
 
-  /* --- Capability --- */
-  .capability-grid {
-    gap: 1.25rem;
-    margin-bottom: 1.75rem;
-    min-width: 0;
-  }
-  .capability-grid > div {
-    min-width: 0;
-  }
+  /* --- How it works beats --- */
   .capability-beats {
     gap: 1.5rem;
     padding-top: 1.5rem;
@@ -752,15 +716,7 @@ figcaption code {
     line-height: 1.45;
   }
 
-  /* --- Perf / FAQ --- */
-  .perf-note {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-  }
-  .perf-body {
-    font-size: 0.95rem;
-    max-width: none;
-  }
+  /* --- FAQ --- */
   .faq-item {
     padding: 1.15rem 0;
   }
@@ -833,7 +789,6 @@ figcaption code {
   }
   .hero-proof .pre-block,
   .try-steps .pre-block,
-  .capability-grid .pre-block,
   .beat .pre-block {
     font-size: 0.68rem;
     padding: 0.7rem 0.6rem;
