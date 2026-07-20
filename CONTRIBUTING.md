@@ -42,6 +42,26 @@ uv run pytest tests/test_r2_live.py -q
 required variable is absent. It uses a unique `rubedo-live-tests/<uuid>/`
 prefix and removes only the objects it wrote.
 
+### Postgres ledger tests
+
+The normal suite remains self-contained and skips the live Postgres module.
+To exercise the ledger on Postgres locally, use a dedicated test database:
+
+```bash
+docker run --rm -d --name rubedo-pg-test \
+  -e POSTGRES_USER=rubedo \
+  -e POSTGRES_PASSWORD=rubedo \
+  -e POSTGRES_DB=rubedo_test \
+  -p 5432:5432 postgres:16
+
+export RUBEDO_TEST_PG_URL='postgresql+psycopg://rubedo:rubedo@localhost:5432/rubedo_test'
+uv run pytest tests/test_postgres_ledger.py -q
+docker stop rubedo-pg-test
+```
+
+The fixture drops and recreates Rubedo's tables between tests. Never point
+`RUBEDO_TEST_PG_URL` at a database containing data you need.
+
 ## Conventions
 
 - Small, focused commits with explanatory messages over large ones.

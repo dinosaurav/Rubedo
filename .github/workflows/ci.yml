@@ -46,3 +46,36 @@ jobs:
           cd web
           npx playwright install --with-deps chromium
           npx playwright test
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rubedo
+          POSTGRES_PASSWORD: rubedo
+          POSTGRES_DB: rubedo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Postgres ledger tests
+        env:
+          RUBEDO_TEST_PG_URL: postgresql+psycopg://rubedo:rubedo@localhost:5432/rubedo_test
+        run: uv run pytest tests/test_postgres_ledger.py -q

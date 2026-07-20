@@ -187,6 +187,13 @@ item 7b.
 
 ## 7b. Postgres ledger test coverage  **[follows item 7]**
 
+**Implemented 2026-07-20; Postgres + full CI green:** psycopg 3 dev driver,
+env-gated real-Postgres fixture, Postgres 16 CI service job, concurrent
+native-upsert coverage for IHU claim/fulfill and lineage edges,
+immutability guards, and query/selection smoke. The stale “retry-once”
+wording below is realized by stronger atomic `ON CONFLICT` statements;
+there is no deleted-materialization collision path to resurrect.
+
 The suite stays SQLite-only through item 7 (owner call, 2026-07-11);
 this item pays that debt. Env-gated live tests: a pytest fixture keyed
 on `RUBEDO_TEST_PG_URL` that cleanly skips when unset (suite stays green

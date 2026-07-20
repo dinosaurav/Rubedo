@@ -236,8 +236,8 @@ directly and, at most, point at this file in general terms.
   and the ledger keeps them separate rather than conflating them.
 - **(2.6) Ledger tables are append-only, enforced by ORM guards; the only
   legal updates anywhere are the projection columns (`Run` lifecycle) and
-  the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id`,
-  `claimed_at`).** The `Materialization` model is **deleted** — no
+  the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id`).**
+  The `Materialization` model is **deleted** — no
   `is_live` projection, no `refreshed_at`, no lifecycle log. The
   `InputHashUsage` table is the one intentionally mutable ledger table:
   claim/fulfill/tombstone/demote are in-place updates, not append-only

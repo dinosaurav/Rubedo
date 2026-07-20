@@ -92,6 +92,7 @@ dev = [
     "tree-sitter-python>=0.25.0",
     "uvicorn",
     "mkdocstrings[python]>=1.0.6",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [tool.mypy]
