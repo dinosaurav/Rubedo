@@ -1,11 +1,14 @@
 """Paper scout — sample a rate-limited API enrichment before full rollout.
 
     discover ─▶ fetch_work ─▶ reading_list
-    (search)      (12/min)       (aggregate)
+    (search)      (12/min)    └▶ assess v1 ─┐
+                                      v2 ──┴▶ run diff
 
 This keyless example queries OpenAlex for recent research, fetches full metadata
 for a deterministic two-paper pilot, then runs the complete six-paper batch.
-The full run reuses the pilot's fetches instead of calling OpenAlex again.
+The full run reuses the pilot's fetches instead of calling OpenAlex again. It
+then trials an access-aware shortlist policy against a citations-only baseline,
+prints the cohort-aware diff, and rolls out the accepted policy.
 
 Run from the repository root:
 
@@ -28,7 +31,7 @@ import urllib.request
 
 from pydantic import BaseModel, Field
 
-from rubedo import RunScope, pipeline
+from rubedo import Home, RunScope, pipeline, step
 
 OPENALEX = "https://api.openalex.org"
 
@@ -48,7 +51,11 @@ class ScoutParams(BaseModel):
     limit: int = Field(default=6, ge=1, le=20)
 
 
-p = pipeline(name="paper-scout", params_model=ScoutParams)
+p = pipeline(
+    name="paper-scout",
+    params_model=ScoutParams,
+    home=Home.default(),
+)
 
 
 @p.step(check_cache=False)
@@ -110,6 +117,42 @@ def reading_list(fetch_work: dict) -> str:
             f"{access})\n  {authors}\n  {work['url']}"
         )
     return "\n".join(lines)
+
+
+@step(name="assess", version="1")
+def assess_v1(fetch_work: dict) -> dict:
+    """Baseline policy: only established landmark papers enter the shortlist."""
+    return {
+        "openalex_id": fetch_work["openalex_id"],
+        "title": fetch_work["title"],
+        "decision": "read" if fetch_work["citations"] >= 700 else "skip",
+        "policy": "citations-only",
+    }
+
+
+@step(name="assess", version="2")
+def assess_v2(fetch_work: dict) -> dict:
+    """Candidate policy: give accessible emerging work a fairer chance."""
+    citations = fetch_work["citations"]
+    should_read = citations >= 200 or (
+        fetch_work["open_access"] and citations >= 100
+    )
+    return {
+        "openalex_id": fetch_work["openalex_id"],
+        "title": fetch_work["title"],
+        "decision": "read" if should_read else "skip",
+        "policy": "access-aware",
+    }
+
+
+def _assessment_pipeline(assessment):
+    """Use the same pipeline identity so fetched metadata remains reusable."""
+    return pipeline(
+        name="paper-scout",
+        steps=[discover, fetch_work, assessment],
+        params_model=ScoutParams,
+        home=p.home,
+    )
 
 
 def main():
@@ -179,6 +222,43 @@ def main():
     print("\n--- Reading list ---")
     outputs = full.output_for("reading_list")
     print(next(iter(outputs.values()), "(empty)"))
+
+    print("\n--- Shortlist policy A/B ---")
+    policy_v1 = _assessment_pipeline(assess_v1)
+    policy_baseline = policy_v1.run(params=params, workers=4)
+    if policy_baseline.failed_count or policy_baseline.blocked_count:
+        raise RuntimeError(f"policy baseline failed: {policy_baseline.failures()}")
+
+    policy_v2 = _assessment_pipeline(assess_v2)
+    policy_scope = RunScope.sample_n(
+        anchor=assess_v2,
+        cells=policy_baseline.cells("assess"),
+        n=min(sample_size, len(policy_baseline.cells("assess"))),
+        seed=f"paper-scout-policy:{params['query']}",
+        origin={"from_run": policy_baseline.run_id},
+    )
+    policy_trial = policy_v2.run(
+        params=params,
+        scope=policy_scope,
+        targets=[assess_v2],
+        workers=4,
+    )
+    if policy_trial.failed_count or policy_trial.blocked_count:
+        raise RuntimeError(f"policy trial failed: {policy_trial.failures()}")
+
+    comparison = policy_baseline.diff(policy_trial, step="assess")
+    print(comparison)
+
+    print("\nRolling out policy v2; sampled assessments will be cache hits…")
+    policy_full = policy_v2.run(params=params, workers=4)
+    if policy_full.failed_count or policy_full.blocked_count:
+        raise RuntimeError(f"policy rollout failed: {policy_full.failures()}")
+
+    recent = p.home.runs(pipeline="paper-scout", limit=5)
+    print(
+        "recent runs: "
+        + ", ".join(f"{item.kind}/{item.status}" for item in recent)
+    )
 
 
 if __name__ == "__main__":

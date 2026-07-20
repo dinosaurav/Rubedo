@@ -340,3 +340,27 @@ class RunSummary(BaseModel):
             if cell.status in ("created", "filtered", "reused")
             and cell.output_address
         }
+
+    def diff(
+        self,
+        other,
+        *,
+        step: str,
+        lanes: Optional[Collection[str]] = None,
+        home=None,
+    ):
+        """Compare this run to ``other`` at ``step`` (read-only).
+
+        Uses the Home bound by ``Pipeline.run`` by default. ``other`` accepts
+        the same run refs as ``Home.diff`` (id str, ``RunSummary``,
+        ``RunListItem``).
+        """
+        from .diff import diff_runs
+
+        return diff_runs(
+            self._bound_home(home),
+            step=step,
+            before=self,
+            after=other,
+            lanes=lanes,
+        )

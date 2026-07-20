@@ -81,9 +81,18 @@ A user-triggered execution attempt over some scope. Full batch runs use
 invalidations, and GC passes are other kinds. `home.current()` and
 retention's "latest snapshot" always mean the latest terminal
 `process` run — partial trials never redefine authoritative membership.
+`home.runs(...)` lists history (including partials); `home.diff(...)`
+compares one step across two explicit runs read-only (cohort-aware when
+`after` is a partial at the requested anchor step — see
+`docs/concepts/run-diff.md`).
 
 **Attempt/event:**
 Something that happened during execution, successful or not.
+
+**Output identity:**
+Content hash of a step's committed output value (`output_identity` in
+the Arrow lane store). Run-to-run diff treats equal identities as
+`unchanged` even when step version / output address differs.
 
 **Coordinate (lane key):**
 The engine's dataflow key: within a run it matches a step's output to its

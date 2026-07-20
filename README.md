@@ -217,6 +217,24 @@ p.run()  # full run reuses those classify addresses
 
 Scope and targets never enter output addresses. Partial runs do not displace `home.current()` (latest full `process` run) or steal retention protection from it. See [partial runs](docs/concepts/partial-runs.md).
 
+### Run history and run-to-run diff
+
+After a baseline full run and a version-bumped `RunScope` trial, compare
+at the anchor (cohort-aware by default) then roll out:
+
+```python
+baseline = p.run()
+# …bump step version, sample a cohort…
+trial = p.run(scope=scope, targets=["classify"])
+diff = home.diff(step="classify", before=baseline, after=trial)
+print(diff)  # unchanged / changed / added / removed / failed
+p.run()      # full rollout reuses the trial's addresses
+```
+
+`home.runs(pipeline=..., kind=..., status=..., limit=...)` lists history
+(newest first; effective status; includes partials). See
+[run history & diff](docs/concepts/run-diff.md).
+
 `trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
 
 ```python

@@ -31,7 +31,7 @@ that the second run recomputes only what actually changed.
 | [`expand_feed`](expand_feed/) | local files (self-contained) | expand | the expand shape (inferred from a generator step) — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
 | [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple source-shaped `@p.step` roots, an N-way `join_on=` join, a generator expand, and a `group_key` reduce |
 | [`pdf_digest`](pdf_digest/) | a PDF + a vision & a text LLM | map root → expand → LLM → reduce → 2× LLM | a **source-less `map` root** (the PDF path is a param), a cheap vision LLM on figure pages, and a picture-aware vs text-only summary comparison |
-| [`paper_scout`](paper_scout/) | OpenAlex (keyless) | discover → sampled rate-limited fetch → aggregate | `RunScope.sample_n`, `targets=`, a cautious `12/min` API budget, and sample → inspect → full rollout reuse |
+| [`paper_scout`](paper_scout/) | OpenAlex (keyless) | sampled rate-limited fetch → aggregate → policy A/B | `RunScope.sample_n`, `targets=`, `home.runs`, `RunSummary.diff`, a cautious `12/min` API budget, and sample → compare → rollout reuse |
 
 ## Keys
 

@@ -33,6 +33,12 @@ home.select("step:scan path:a.txt", resolve_output=True)
 deserializing spilled payloads. Pipeline/step identity always comes from
 the run ledger, not from shared Arrow row metadata.
 
+`home.runs(...)` lists historical runs (newest first; filters for
+pipeline / kind / effective status). `home.diff(step=..., before=...,
+after=...)` compares one step across two runs — cohort-aware when
+`after` is a scoped partial at that step. See
+[`../concepts/run-diff.md`](../concepts/run-diff.md).
+
 ## `p.plan()`: the dry-run
 
 ```python

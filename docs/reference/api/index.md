@@ -12,8 +12,8 @@ These pages are generated from the docstrings in `src/rubedo/`, so the
 signatures cannot drift from the source.
 
 - [Steps](step.md) — `@step`, `StepSpec`, and the `Filtered` verdict
-- [Pipelines](pipeline.md) — `pipeline()`, `Pipeline`, and the run/plan
-  result objects
+- [Pipelines](pipeline.md) — `pipeline()`, `Pipeline`, `Home`, run/plan
+  result objects, and run-to-run `RunDiff`
 - [Selection, trace & invalidation](selection.md) — querying the store
   and surgically invalidating it
 - [GC & storage](gc.md) — retention garbage collection and disk-usage

@@ -100,6 +100,8 @@ nav:
     - Shapes: concepts/shapes.md
     - Sources: concepts/sources.md
     - Code Changes & Versioning: concepts/versioning.md
+    - Partial Runs & Sampling: concepts/partial-runs.md
+    - Run History & Diff: concepts/run-diff.md
   - Guides:
     - Execution Policies: guides/execution-policies.md
     - Search & Invalidation: guides/search-and-invalidation.md

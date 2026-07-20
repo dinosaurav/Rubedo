@@ -90,8 +90,17 @@ semantics are unchanged but apply only to requested cells.
 restrictions. The returned `RunPlan` carries `kind`, `scope`, `targets`,
 and `scope_counts` when applicable.
 
-## What this is not
+## Comparing a trial to the baseline
 
-Run-to-run / step-version **diff** is a separate follow-up. This feature
-is the execution primitive that makes "sample → compare → full rollout"
-safe; comparison reads the recorded cohort from `selection_json`.
+After a scoped trial, compare at the anchor with
+[`home.diff`](run-diff.md) — the default coordinate universe is the
+exact cohort in `selection_json`, so unsampled baseline lanes are not
+reported as removed:
+
+```python
+diff = home.diff(step="classify", before=baseline, after=trial)
+print(diff)
+```
+
+See [run history & diff](run-diff.md) for outcomes, `Home.runs`, and
+full-vs-full union defaults.
