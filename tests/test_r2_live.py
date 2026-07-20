@@ -30,7 +30,8 @@ class _R2Credentials:
     endpoint_url: str
 
 
-def _r2_credentials() -> _R2Credentials:
+@pytest.fixture
+def r2_credentials() -> _R2Credentials:
     names = {
         "account_id": "RUBEDO_TEST_R2_ACCOUNT_ID",
         "access_key_id": "RUBEDO_TEST_R2_ACCESS_KEY_ID",
@@ -40,10 +41,7 @@ def _r2_credentials() -> _R2Credentials:
     values = {field: os.environ.get(env) for field, env in names.items()}
     missing = [env for field, env in names.items() if not values[field]]
     if missing:
-        pytest.skip(
-            "live R2 test requires " + ", ".join(missing),
-            allow_module_level=True,
-        )
+        pytest.skip("live R2 test requires " + ", ".join(missing))
     account_id = str(values["account_id"])
     endpoint = os.environ.get(
         "RUBEDO_TEST_R2_ENDPOINT_URL",
@@ -58,29 +56,29 @@ def _r2_credentials() -> _R2Credentials:
     )
 
 
-CREDS = _r2_credentials()
-
-
-def _client():
+def _client(creds: _R2Credentials):
     return boto3.client(
         "s3",
-        endpoint_url=CREDS.endpoint_url,
-        aws_access_key_id=CREDS.access_key_id,
-        aws_secret_access_key=CREDS.secret_access_key,
+        endpoint_url=creds.endpoint_url,
+        aws_access_key_id=creds.access_key_id,
+        aws_secret_access_key=creds.secret_access_key,
         region_name="auto",
         config=Config(signature_version="s3v4"),
     )
 
 
-def test_cloudflare_r2_object_store_and_pipeline_reuse(tmp_path):
+def test_cloudflare_r2_object_store_and_pipeline_reuse(
+    tmp_path, r2_credentials: _R2Credentials
+):
     """Exercise real R2 conditional puts, reads, LIST, streams, and reuse."""
+    creds = r2_credentials
     prefix = f"rubedo-live-tests/{uuid.uuid4().hex}/"
     store = S3Store(
-        bucket=CREDS.bucket,
+        bucket=creds.bucket,
         prefix=prefix,
-        endpoint_url=CREDS.endpoint_url,
+        endpoint_url=creds.endpoint_url,
         region_name="auto",
-        client_factory=_client,
+        client_factory=lambda: _client(creds),
     )
     written: set[str] = set()
 
