@@ -177,7 +177,9 @@ function App() {
             <h3>Ad-hoc caches go stale silently.</h3>
             <p>
               A pickle file or <code>functools.cache</code> cannot tell when an upstream
-              step&apos;s code changed. Yesterday&apos;s results mix with today&apos;s — no warning.
+              step&apos;s code changed — and if anything survives at all, the rules are
+              whoever wrote the tempfile. Rubedo persists every output to disk, with
+              clear, configurable retention.
             </p>
           </div>
           <div className="why-item">
