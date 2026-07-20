@@ -14,6 +14,7 @@ from .home import Home
 from .models import Filtered, RunSummary
 from .selection import Selection
 from .queries import Cell
+from .scope import RunScope
 from .invalidation import invalidate
 from .runner import RunPlan
 from .progress import TerminalProgress
@@ -29,6 +30,7 @@ __all__ = [
     "RunSummary",
     "Cell",
     "Selection",
+    "RunScope",
     "step",
     "pipeline",
     "Pipeline",

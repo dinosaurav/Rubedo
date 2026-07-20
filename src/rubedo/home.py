@@ -204,7 +204,10 @@ class Home:
         step: Optional[str] = None,
         resolve_output: bool = False,
     ) -> list["Cell"]:
-        """Read the latest run's live cells for each pipeline."""
+        """Read the latest full process run's live cells for each pipeline.
+
+        Partial / declaration / invalidate / gc runs never define current.
+        """
         from .queries import get_current_cells
 
         with self.session() as session:

@@ -40,6 +40,9 @@ class _RunContext:
     totals: Dict[str, int]
     by_step: Dict[str, Dict[str, int]]
     coord_step_mats: Dict[tuple, Any] = field(default_factory=dict)
+    # Partial-run scope tracking (anchor coordinates that produced a decision).
+    scope_reached: set = field(default_factory=set)
+    scope_counts: Optional[Dict[str, Any]] = None
 
     def count(self, step_name: str, outcome: str):
         """Record an outcome count for the run and a specific step."""
@@ -582,6 +585,8 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         "total": ctx.totals,
         "by_step": ctx.by_step,
     }
+    if ctx.scope_counts is not None:
+        full_summary.update(ctx.scope_counts)
 
     with ctx.home.session() as session:
         final_run = session.query(Run).filter_by(id=ctx.run_id).first()
@@ -606,10 +611,14 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
 
     return RunSummary(
         run_id=ctx.run_id,
+        kind=str(final_run.kind),
         status=final_status,
         created_count=ctx.totals["created"],
         reused_count=ctx.totals["reused"],
         failed_count=ctx.totals["failed"],
         blocked_count=ctx.totals["blocked"],
         filtered_count=ctx.totals["filtered"],
+        scope_requested=ctx.scope_counts.get("scope_requested") if ctx.scope_counts else None,
+        scope_reached=ctx.scope_counts.get("scope_reached") if ctx.scope_counts else None,
+        scope_missing=ctx.scope_counts.get("scope_missing") if ctx.scope_counts else None,
     ).bind_home(ctx.home)

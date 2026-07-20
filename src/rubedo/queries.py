@@ -214,12 +214,21 @@ def get_current_cells(
     step: Optional[str] = None,
     resolve_output: bool = False,
 ) -> list[Cell]:
-    """Return each pipeline's latest run's live created/reused/filtered cells."""
+    """Return each pipeline's latest *full* run's live created/reused/filtered cells.
+
+    "Current" is the latest terminal ``kind='process'`` run — never a
+    declaration, invalidate, gc, or partial trial. Partial runs remain
+    queryable by run id and do not displace the authoritative membership.
+    """
+    # Preserve the existing "latest terminal run" semantics for failures;
+    # only partial/non-process invocations are non-authoritative.
+    process_filter = (Run.kind == "process") & Run.status.isnot(None)
     latest_started = (
         session.query(
             Run.pipeline_id.label("pid"),
             func.max(Run.started_at).label("mx"),
         )
+        .filter(process_filter)
         .group_by(Run.pipeline_id)
         .subquery()
     )
@@ -230,6 +239,7 @@ def get_current_cells(
             (Run.pipeline_id == latest_started.c.pid)
             & (Run.started_at == latest_started.c.mx),
         )
+        .filter(process_filter)
         .subquery()
     )
     latest_ids_subq = (

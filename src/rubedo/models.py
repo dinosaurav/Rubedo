@@ -273,12 +273,17 @@ class RunSummary(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     run_id: str
+    kind: str = "process"
     status: str
     created_count: int = 0
     reused_count: int = 0
     failed_count: int = 0
     blocked_count: int = 0
     filtered_count: int = 0
+    # Partial-run scope tallies (None on full process runs).
+    scope_requested: Optional[int] = None
+    scope_reached: Optional[int] = None
+    scope_missing: Optional[int] = None
     _home: Any = PrivateAttr(default=None)
 
     def bind_home(self, home) -> "RunSummary":
