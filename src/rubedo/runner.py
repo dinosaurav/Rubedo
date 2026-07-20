@@ -626,6 +626,11 @@ def run_pipeline(
                     # flush after takeover; missing rows fail the normal
                     # liveness+content reuse gate and recompute next run.
                     pass
+                finally:
+                    # A fenced cloud run deliberately cannot persist its
+                    # buffers. Never let those ghost rows leak into a retry on
+                    # the same interned Home.
+                    home.lanes.clear_run_buffers()
                 with home.session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                     if err_run:

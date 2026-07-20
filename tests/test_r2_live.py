@@ -7,6 +7,7 @@ removes those objects in ``finally``.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -14,6 +15,7 @@ import boto3
 import pytest
 from botocore.config import Config
 
+from rubedo.cloud_lane_store import CloudLaneStore, PipelineLeaseError
 from rubedo.hashing import hash_bytes
 from rubedo.home import Home
 from rubedo.pipeline import pipeline
@@ -104,6 +106,18 @@ def test_cloudflare_r2_object_store_and_pipeline_reuse(
         assert {obj.key for obj in store.inventory()} == {content_hash}
 
         home = Home.ephemeral(tmp_path / "home", store=store)
+        first_lanes = CloudLaneStore(
+            str(tmp_path / "lease-one"),
+            store,
+            lease_ttl_seconds=1,
+            lease_renew_seconds=0.05,
+        )
+        second_lanes = CloudLaneStore(str(tmp_path / "lease-two"), store)
+        with first_lanes.writer_lease("r2-lease-probe", "run-one"):
+            time.sleep(0.12)  # force a real If-Match renewal against R2
+            with pytest.raises(PipelineLeaseError, match="active writer"):
+                with second_lanes.writer_lease("r2-lease-probe", "run-two"):
+                    pass
 
         @step
         def root():

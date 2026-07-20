@@ -146,6 +146,31 @@ def test_lost_writer_lease_fences_commits_and_flushes(tmp_path, monkeypatch):
 
 
 @mock_aws
+def test_fenced_run_discards_buffers(tmp_path):
+    client = boto3.client("s3", region_name="us-east-1")
+    client.create_bucket(Bucket=BUCKET)
+    store = _store(client)
+    lanes = CloudLaneStore(
+        str(tmp_path / "lanes"),
+        store,
+        lease_renew_seconds=0.02,
+    )
+    home = Home.ephemeral(tmp_path / "home", store=store, lanes=lanes)
+
+    @step
+    def root():
+        lanes._put_conditional = lambda *a, **kw: None  # type: ignore[method-assign]
+        time.sleep(0.05)
+        return {"value": 1}
+
+    with pytest.raises(PipelineLeaseError, match="was lost"):
+        pipeline(name="fenced", steps=[root], home=home).run(workers=1)
+
+    assert lanes._run_buffers == {}
+    assert lanes._arrow_batch_buffers == {}
+
+
+@mock_aws
 def test_second_home_reuses_cloud_lane_segments(tmp_path):
     client = boto3.client("s3", region_name="us-east-1")
     client.create_bucket(Bucket=BUCKET)
