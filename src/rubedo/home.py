@@ -17,8 +17,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from .db import Database
+from .cloud_lane_store import CloudLaneStore
 from .lane_store import LaneStore
-from .store import LocalStore, ObjectStore, open_store
+from .store import LocalStore, ObjectStore, S3Store, open_store
 
 PathLike = Union[str, os.PathLike]
 
@@ -74,6 +75,7 @@ class Home:
         db_poolclass: Any = None,
         store: Optional[ObjectStore] = None,
         store_url: Optional[str] = None,
+        lanes: Optional[LaneStore] = None,
         fresh: bool = False,
     ):
         resolved = _resolve_path(path)
@@ -87,6 +89,7 @@ class Home:
                 db_poolclass=db_poolclass,
                 store=store,
                 store_url=store_url,
+                lanes=lanes,
             )
             return obj
         with _registry_lock:
@@ -101,6 +104,7 @@ class Home:
                         db_poolclass,
                         store,
                         store_url,
+                        lanes,
                     )
                 ):
                     # Already interned — conflicting hooks are a hard error
@@ -120,6 +124,7 @@ class Home:
                 db_poolclass=db_poolclass,
                 store=store,
                 store_url=store_url,
+                lanes=lanes,
             )
             _registry[resolved] = obj
             return obj
@@ -138,6 +143,7 @@ class Home:
         db_poolclass: Any = None,
         store: Optional[ObjectStore] = None,
         store_url: Optional[str] = None,
+        lanes: Optional[LaneStore] = None,
     ) -> None:
         self.path = path
         os.makedirs(self.path, exist_ok=True)
@@ -169,7 +175,12 @@ class Home:
                     poolclass=db_poolclass,
                 )
         self.store = _resolve_store(path=self.path, store=store, store_url=store_url)
-        self.lanes = LaneStore(self.path)
+        if lanes is not None:
+            self.lanes = lanes
+        elif isinstance(self.store, S3Store):
+            self.lanes = CloudLaneStore(self.path, self.store)
+        else:
+            self.lanes = LaneStore(self.path)
 
     @classmethod
     def default(cls) -> "Home":
@@ -190,6 +201,7 @@ class Home:
         db_poolclass=None,
         store=None,
         store_url=None,
+        lanes=None,
     ) -> "Home":
         """Unshared Home — not interned. For tests and short-lived roots."""
         return cls(
@@ -200,6 +212,7 @@ class Home:
             db_poolclass=db_poolclass,
             store=store,
             store_url=store_url,
+            lanes=lanes,
             fresh=True,
         )
 

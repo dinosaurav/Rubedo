@@ -34,6 +34,7 @@ dance).
 """
 
 import os
+import contextlib
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -192,6 +193,18 @@ class LaneStore:
         self._disk_table_cache.clear()
         self._address_index_cache.clear()
         self._fulfilled_cache = None
+
+    def writer_lease(self, pipeline_id: str, run_id: str):
+        """Context manager guarding one pipeline writer.
+
+        Local files keep their existing behavior; cloud stores override this
+        with a durable lease.
+        """
+        return contextlib.nullcontext()
+
+    def compact_pipeline(self, pipeline_id: str) -> None:
+        """Compact cloud segments at run end. Local single-file stores no-op."""
+        return None
 
     def append_arrow_batch(
         self,
@@ -466,21 +479,10 @@ class LaneStore:
             return batches[0]
         return pa.concat_tables(batches, promote_options="default")
 
-    def _combined_table(self, pipeline_id: str, step_name: str):
-        """Concatenate on-disk history + arrow batch buffer + dict buffer,
-        or None if all empty.  If the output column types are compatible
-        (e.g. structs with different fields — schema evolution),
-        ``pa.concat_tables`` with ``promote_options='default'`` unions the
-        struct fields and fills nulls.  If the types are genuinely
-        incompatible (struct vs string, int vs string), all are converted
-        to ``string`` before concatenation."""
+    def _concat_compatible_tables(self, tables: List["pa.Table"]):
+        """Concat tables, falling back to a JSON/string output column."""
         import json
 
-        disk = self._read_disk_table(pipeline_id, step_name)
-        buf = self._buffer_table(pipeline_id, step_name)
-        arrow = self._arrow_batch_table(pipeline_id, step_name)
-
-        tables = [t for t in (disk, arrow, buf) if t is not None]
         if not tables:
             return None
         if len(tables) == 1:
@@ -514,6 +516,21 @@ class LaneStore:
 
         tables = [_to_string_table(t) for t in tables]
         return pa.concat_tables(tables, promote_options="default")
+
+    def _combined_table(self, pipeline_id: str, step_name: str):
+        """Concatenate on-disk history + arrow batch buffer + dict buffer,
+        or None if all empty.  If the output column types are compatible
+        (e.g. structs with different fields — schema evolution),
+        ``pa.concat_tables`` with ``promote_options='default'`` unions the
+        struct fields and fills nulls.  If the types are genuinely
+        incompatible (struct vs string, int vs string), all are converted
+        to ``string`` before concatenation."""
+        disk = self._read_disk_table(pipeline_id, step_name)
+        buf = self._buffer_table(pipeline_id, step_name)
+        arrow = self._arrow_batch_table(pipeline_id, step_name)
+        return self._concat_compatible_tables(
+            [t for t in (disk, arrow, buf) if t is not None]
+        )
 
     def _rows_for_lane(
         self,

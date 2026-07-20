@@ -275,7 +275,10 @@ def plan(
         else set()
     )
 
-    with home.session() as session:
+    # Cloud lane stores use a durable per-pipeline writer lease. Local lane
+    # stores return a no-op context manager. Acquire before the Run row so
+    # contention fails without leaving an orphaned run.
+    with home.lanes.writer_lease(ctx.pipeline_id, ctx.run_id), home.session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
             lanes = None
@@ -597,6 +600,10 @@ def run_pipeline(
                         )
                         session.commit()
 
+                # Cloud flushes are immutable segments. Compact while the
+                # writer lease is still held, before recording terminal state.
+                home.lanes.flush_all()
+                home.lanes.compact_pipeline(ctx.pipeline_id)
                 summary = _finish_run(ctx)
                 _post_run_retention(session, pipeline, ctx, summary)
                 return summary
@@ -606,6 +613,12 @@ def run_pipeline(
                 # wrote completed segments; this catches the current segment's
                 # successfully committed lanes.
                 home.lanes.flush_all()
+                try:
+                    home.lanes.compact_pipeline(ctx.pipeline_id)
+                except Exception:
+                    # Segments are already durable; preserve the original
+                    # execution error and compact on a later successful run.
+                    pass
                 with home.session() as err_session:
                     err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
                     if err_run:
