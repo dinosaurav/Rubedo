@@ -136,6 +136,12 @@ def _run_segment(
     in_flight: Dict[concurrent.futures.Future, StepSpec] = {}
     scope_lanes = frozenset(scope.lanes) if scope is not None else None
     scope_anchor = scope.anchor if scope is not None else None
+    if scope_anchor is not None:
+        from .scope import coordinate_preserving_scope_steps
+
+        scoped_steps = coordinate_preserving_scope_steps(pipeline, scope_anchor)
+    else:
+        scoped_steps = set()
 
     def dispatch(step: StepSpec, decision: StepDecision) -> None:
         # Two layers, on purpose: the thread pool orchestrates the retry
@@ -172,7 +178,7 @@ def _run_segment(
 
     def plan_cells(step: StepSpec, lanes: Optional[List[str]]) -> None:
         """Plan a step (whole, or one lane's cell) and act on the decisions."""
-        if scope_anchor is not None and step.name == scope_anchor:
+        if step.name in scoped_steps:
             assert scope_lanes is not None
             if lanes is None:
                 lanes = sorted(scope_lanes)

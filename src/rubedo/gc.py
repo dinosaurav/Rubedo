@@ -125,10 +125,18 @@ def _anchor_addresses(session: Session) -> Set[str]:
 
 
 def _terminal_runs(session: Session, pipeline_id: str, limit: Optional[int] = None) -> List[Run]:
-    """A pipeline's terminal runs (status set), newest first."""
+    """A pipeline's terminal execution runs, newest first.
+
+    Declaration/invalidation/GC bookkeeping has no output membership and must
+    not consume a retention slot. Full and partial executions both do.
+    """
     q = (
         session.query(Run)
-        .filter(Run.pipeline_id == pipeline_id, Run.status.isnot(None))
+        .filter(
+            Run.pipeline_id == pipeline_id,
+            Run.kind.in_(["process", "partial"]),
+            Run.status.isnot(None),
+        )
         .order_by(Run.started_at.desc(), Run.id.desc())
     )
     if limit is not None:
@@ -325,8 +333,9 @@ def _budget_demote_addresses(
     if total_bytes - reclaimed_now <= max_bytes:
         return set()
 
-    # Protected: referenced by any pipeline's latest *full process* run
-    # (partial trials must not displace this under a global budget).
+    # Protect both the latest execution (so a fresh partial remains reusable)
+    # and the latest full process (so that partial cannot displace the
+    # authoritative snapshot under a global budget).
     protected: Set[str] = set()
     for pipeline_id in {
         str(r.pipeline_id)
@@ -335,9 +344,13 @@ def _budget_demote_addresses(
         .distinct()
         .all()
     }:
-        latest = _latest_full_process_run(session, pipeline_id)
-        if latest is not None:
-            protected |= _addresses_for_runs(session, [str(latest.id)])
+        latest_execution = _terminal_runs(session, pipeline_id, limit=1)
+        latest_full = _latest_full_process_run(session, pipeline_id)
+        protected |= _addresses_for_runs(
+            session,
+            [str(run.id) for run in latest_execution]
+            + ([str(latest_full.id)] if latest_full is not None else []),
+        )
 
     # Most recent referencing run per live address (oldest first).
     ref_run_at: Dict[str, str] = {}

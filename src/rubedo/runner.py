@@ -38,6 +38,7 @@ from .scope import (
     RunScope,
     ScopeCounts,
     StepRef,
+    coordinate_preserving_scope_steps,
     invocation_selection_json,
     normalize_partial_invocation,
 )
@@ -268,12 +269,17 @@ def plan(
         frozenset(inv.scope.lanes) if inv.scope is not None else None
     )
     scope_anchor = inv.scope.anchor if inv.scope is not None else None
+    scoped_steps = (
+        coordinate_preserving_scope_steps(pipeline, scope_anchor)
+        if scope_anchor is not None
+        else set()
+    )
 
     with home.session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
             lanes = None
-            if scope_anchor is not None and step.name == scope_anchor:
+            if step.name in scoped_steps:
                 assert scope_lanes is not None
                 lanes = sorted(scope_lanes)
             decisions = _plan_step(

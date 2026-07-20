@@ -95,6 +95,14 @@ def get_run_summary(session: Session, run_id: str) -> Optional[RunDetailOut]:
     d["blocked_count"] = summary.get("blocked", 0)
     d["filtered_count"] = summary.get("filtered", 0)
     d["by_step"] = summary.get("by_step")
+    d["scope_requested"] = summary.get("scope_requested")
+    d["scope_reached"] = summary.get("scope_reached")
+    d["scope_missing"] = summary.get("scope_missing")
+    if run.selection_json:
+        try:
+            d["selection"] = json.loads(str(run.selection_json))
+        except Exception:
+            pass
     if run.definition_json:
         try:
             d["definition"] = json.loads(str(run.definition_json))

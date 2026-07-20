@@ -285,6 +285,36 @@ def descendants_of(pipeline: PipelineSpec, step_name: str) -> set[str]:
     return out
 
 
+def coordinate_preserving_scope_steps(
+    pipeline: PipelineSpec, anchor: str
+) -> set[str]:
+    """Map-shaped descendants that retain the anchor's coordinate namespace.
+
+    Broad scheduling plans each step from every parent coordinate. Restricting
+    only the anchor would therefore make an aligned multi-parent map see a
+    sampled parent beside an unsampled sibling and report disjoint lanes.
+    Carry the cohort through map-shaped descendants until a join/expand/
+    aggregate/fold mints or collapses coordinates; after that boundary the
+    produced coordinates themselves delimit downstream work.
+    """
+    children: dict[str, list[StepSpec]] = {s.name: [] for s in pipeline.steps}
+    for step in pipeline.steps:
+        for dep in step.depends_on:
+            children.setdefault(dep, []).append(step)
+
+    scoped = {anchor}
+    stack = [anchor]
+    while stack:
+        parent = stack.pop()
+        for child in children.get(parent, []):
+            if child.in_shape != "one" or child.out_shape != "one":
+                continue
+            if child.name not in scoped:
+                scoped.add(child.name)
+                stack.append(child.name)
+    return scoped
+
+
 def target_ancestor_closure(
     pipeline: PipelineSpec, targets: Sequence[str]
 ) -> set[str]:

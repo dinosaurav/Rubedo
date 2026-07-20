@@ -27,6 +27,10 @@ class RunDetailOut(RunListItem):
     # DAG snapshot recorded at run start, and per-step outcome counts
     definition: Optional[Dict[str, Any]] = None
     by_step: Optional[Dict[str, Dict[str, int]]] = None
+    selection: Optional[Dict[str, Any]] = None
+    scope_requested: Optional[int] = None
+    scope_reached: Optional[int] = None
+    scope_missing: Optional[int] = None
 
 
 class RunCoordinateStatusOut(BaseModel):

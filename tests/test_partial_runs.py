@@ -12,8 +12,9 @@ import os
 import pytest
 
 from rubedo import RunScope, pipeline, step
-from rubedo.gc import _retention_demote_addresses, retention_policies
+from rubedo.gc import gc, _retention_demote_addresses, retention_policies
 from rubedo.models import Run, RunCoordinateStatus
+from rubedo.queries import get_run_summary
 from rubedo.scope import sample_fraction_coordinates, sample_n_coordinates
 from conftest import isolated_test_env, make_home
 
@@ -325,6 +326,13 @@ def test_exact_cohort_persisted_in_selection_json():
     assert payload["targets"] == ["enrich"]
     assert payload["origin"]["strategy"] == "sample_n"
     assert payload["origin"]["seed"] == "persist-me"
+    with TEST_HOME.session() as session:
+        detail = get_run_summary(session, trial.run_id)
+    assert detail is not None
+    assert detail.selection == payload
+    assert detail.scope_requested == 2
+    assert detail.scope_reached == 2
+    assert detail.scope_missing == 0
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +410,10 @@ def test_retention_protects_latest_full_against_partial():
         home=TEST_HOME,
     )
     scope = RunScope.explicit(anchor="upper", lanes=[coord])
-    pipe2.run(scope=scope, targets=["upper"], workers=1)
+    trial = pipe2.run(scope=scope, targets=["upper"], workers=1)
+    partial_addrs = {
+        r.output_address for r in _rcs(trial.run_id) if r.output_address
+    }
 
     with TEST_HOME.session() as session:
         policies = retention_policies(session)
@@ -410,6 +421,43 @@ def test_retention_protects_latest_full_against_partial():
             session, TEST_HOME, policies, set()
         )
     assert full_addrs.isdisjoint(demote)
+    budget = gc(delete=False, max_bytes=0, home=TEST_HOME)
+    assert full_addrs.isdisjoint(budget.demoted_addresses)
+    assert partial_addrs.isdisjoint(budget.demoted_addresses)
+
+
+def test_scope_propagates_through_multi_parent_map():
+    for i in range(3):
+        create_file(f"diamond{i}.txt", f"diamond-{i}")
+
+    @step
+    def left(scan: dict):
+        return {"path": scan["path"], "left": scan["text"]}
+
+    @step
+    def right(scan: dict):
+        return {"path": scan["path"], "right": scan["text"]}
+
+    @step
+    def combine(left: dict, right: dict):
+        return {"path": left["path"], "both": left["left"] + right["right"]}
+
+    pipe = pipeline(
+        name="partial-diamond",
+        steps=[scan, left, right, combine],
+        home=TEST_HOME,
+    )
+    baseline = pipe.run(workers=1)
+    lane = baseline.cells("scan")[0].coordinate
+    scope = RunScope.explicit(anchor=left, lanes=[lane])
+
+    trial = pipe.run(scope=scope, targets=[combine], workers=1)
+
+    assert {r.coordinate for r in _rcs(trial.run_id, step="left")} == {lane}
+    assert {r.coordinate for r in _rcs(trial.run_id, step="right")} == {
+        c.coordinate for c in baseline.cells("right")
+    }
+    assert {r.coordinate for r in _rcs(trial.run_id, step="combine")} == {lane}
 
 
 # ---------------------------------------------------------------------------
