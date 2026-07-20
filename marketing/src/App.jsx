@@ -212,9 +212,9 @@ function App() {
             </li>
           </ol>
           <p className="block-lede try-note">
-            Ingestion is a parentless generator step that yields a payload per item —
-            a folder scan, a <code>csv.DictReader</code> loop, a SQL <code>SELECT</code>.
-            Each row mints its own content-addressed lane.
+            Start with a generator that yields one item at a time — scan a folder,
+            read a CSV, run a SQL <code>SELECT</code>. Each item becomes its own
+            content-addressed lane.
           </p>
         </div>
       </section>
