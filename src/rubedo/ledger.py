@@ -590,6 +590,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
 
     with ctx.home.session() as session:
         final_run = session.query(Run).filter_by(id=ctx.run_id).first()
+        assert final_run is not None
         if ctx.totals["failed"] == 0 and ctx.totals["blocked"] == 0:
             final_run.status = "completed"  # type: ignore
         elif ctx.totals["created"] == 0 and ctx.totals["reused"] == 0 and ctx.totals["filtered"] == 0:
@@ -597,6 +598,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
         else:
             final_run.status = "completed_with_failures"  # type: ignore
 
+        final_kind = str(final_run.kind)
         final_status = final_run.status  # type: ignore
         final_run.finished_at = utcnow_iso()  # type: ignore
         final_run.summary_json = json.dumps(full_summary)  # type: ignore
@@ -611,7 +613,7 @@ def _finish_run(ctx: _RunContext) -> RunSummary:
 
     return RunSummary(
         run_id=ctx.run_id,
-        kind=str(final_run.kind),
+        kind=final_kind,
         status=final_status,
         created_count=ctx.totals["created"],
         reused_count=ctx.totals["reused"],

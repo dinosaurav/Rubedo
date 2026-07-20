@@ -300,6 +300,7 @@ def plan(
                     for (_coordinate, dep), value in coord_step_mats.items()
                 )
                 if parent_pending:
+                    assert scope_lanes is not None
                     decisions.extend(
                         StepDecision(coordinate=coordinate, action="pending")
                         for coordinate in sorted(scope_lanes - represented)
