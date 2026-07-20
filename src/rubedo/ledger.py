@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from .execution import ExecutionOutcome, _materialized_ancestors
 from .models import (
     Filtered,
-    MaterializationEdge,
     Run,
     RunCoordinateStatus,
     RunEvent,
@@ -25,6 +24,101 @@ from .models import (
 from .planning import MatRef, StepDecision, _code_drift_message
 from .spec import StepSpec
 from .util import utcnow_iso
+
+
+def _upsert_input_hash_usage(
+    session: Session,
+    *,
+    address: str,
+    run_id: str,
+    fulfilled: Optional[bool] = None,
+) -> None:
+    """Atomically claim or fulfill one address.
+
+    Claims update ``last_run_id`` while preserving an existing fulfilled
+    value. Fulfills set it explicitly. SQLite and Postgres both use native
+    ON CONFLICT so concurrent first claims cannot surface a PK IntegrityError.
+    """
+    from .models import InputHashUsage
+
+    values = {
+        "address": address,
+        "last_run_id": run_id,
+        "fulfilled": bool(fulfilled),
+    }
+    updates: Dict[str, Any] = {"last_run_id": run_id}
+    if fulfilled is not None:
+        updates["fulfilled"] = fulfilled
+
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+
+        statement = insert(InputHashUsage).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[InputHashUsage.address],
+            set_=updates,
+        )
+        session.execute(statement)
+        return
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+
+        statement = insert(InputHashUsage).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[InputHashUsage.address],
+            set_=updates,
+        )
+        session.execute(statement)
+        return
+
+    existing = session.get(InputHashUsage, address)
+    if existing is None:
+        session.add(InputHashUsage(**values))
+    else:
+        existing.last_run_id = run_id  # type: ignore[assignment]
+        if fulfilled is not None:
+            existing.fulfilled = fulfilled  # type: ignore[assignment]
+
+
+def _insert_materialization_edge(
+    session: Session, *, parent_address: str, child_address: str
+) -> None:
+    """Insert one lineage edge, ignoring a concurrent identical insert."""
+    from .models import MaterializationEdge
+
+    values = {
+        "parent_address": parent_address,
+        "child_address": child_address,
+    }
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+
+        session.execute(
+            insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
+                index_elements=[
+                    MaterializationEdge.parent_address,
+                    MaterializationEdge.child_address,
+                ]
+            )
+        )
+        return
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+
+        session.execute(
+            insert(MaterializationEdge).values(**values).on_conflict_do_nothing(
+                index_elements=[
+                    MaterializationEdge.parent_address,
+                    MaterializationEdge.child_address,
+                ]
+            )
+        )
+        return
+    exists = session.query(MaterializationEdge).filter_by(**values).first()
+    if exists is None:
+        session.add(MaterializationEdge(**values))
 
 if TYPE_CHECKING:
     from .home import Home
@@ -231,22 +325,11 @@ def _record_planned(
             # was already live) from "created" (was invalidated/missing).
             # The claim just records last_run_id for traceability.
             if d.output_address is not None:
-                from .models import InputHashUsage
-                existing_claim = (
-                    session.query(InputHashUsage)
-                    .filter_by(address=str(d.output_address))
-                    .first()
+                _upsert_input_hash_usage(
+                    session,
+                    address=str(d.output_address),
+                    run_id=ctx.run_id,
                 )
-                if existing_claim:
-                    existing_claim.last_run_id = ctx.run_id  # type: ignore[assignment]
-                else:
-                    session.add(
-                        InputHashUsage(
-                            address=str(d.output_address),
-                            last_run_id=ctx.run_id,
-                            fulfilled=False,
-                        )
-                    )
 
 
 def _identity_of(output_value: Any) -> str:
@@ -439,23 +522,12 @@ def _commit_execution_result(
             # Mark this address as fulfilled in input_hash_usages — the
             # liveness gate.  The planning phase checks fulfilled=True to
             # decide reuse.
-            from .models import InputHashUsage as _IHU
-            existing = (
-                session.query(_IHU)
-                .filter_by(address=str(decision.output_address))
-                .first()
+            _upsert_input_hash_usage(
+                session,
+                address=str(decision.output_address),
+                run_id=ctx.run_id,
+                fulfilled=True,
             )
-            if existing:
-                existing.fulfilled = True  # type: ignore[assignment]
-                existing.last_run_id = ctx.run_id  # type: ignore[assignment]
-            else:
-                session.add(
-                    _IHU(
-                        address=str(decision.output_address),
-                        last_run_id=ctx.run_id,
-                        fulfilled=True,
-                    )
-                )
             # Update the fulfilled cache so the next planning phase
             # sees this address as live without a SQLite re-query.
             ctx.home.lanes.mark_fulfilled(str(decision.output_address))
@@ -482,18 +554,11 @@ def _commit_execution_result(
             for p_mat in _materialized_ancestors(flat_parents).values():
                 p_addr = getattr(p_mat, "output_address", None) or ""
                 c_addr = str(decision.output_address)
-                edge_exists = (
-                    session.query(MaterializationEdge)
-                    .filter_by(parent_address=p_addr, child_address=c_addr)
-                    .first()
+                _insert_materialization_edge(
+                    session,
+                    parent_address=p_addr,
+                    child_address=c_addr,
                 )
-                if not edge_exists:
-                    session.add(
-                        MaterializationEdge(
-                            parent_address=p_addr,
-                            child_address=c_addr,
-                        )
-                    )
 
             if is_filtered:
                 status = "filtered"

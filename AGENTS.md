@@ -204,8 +204,8 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/models.py` — schema + **immutability guards**: ledger tables
   are append-only (ORM update/delete raises `ImmutabilityError`); the only
   mutable columns anywhere are projections (`Run` lifecycle columns)
-  and the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id`,
-  `claimed_at` — the one intentionally mutable ledger table:
+ and the `InputHashUsage` liveness columns (`fulfilled`, `last_run_id` —
+ the one intentionally mutable ledger table:
   claim/fulfill/tombstone/demote are in-place updates). The
   `Materialization` model is **deleted** — no `materializations` table, no
   `is_live`, no `uq_live_output_address` index. `MaterializationEdge` is
@@ -353,6 +353,11 @@ venv is fine. Notes below cover only non-obvious caveats.
   checklist" above** (`uv run pytest -q`, `uv run ruff check …`,
   `uv run mypy src/rubedo`, `(cd web && npx tsc -b)`,
   `(cd web && npm run build && npx playwright test)`).
+- **Postgres-sensitive changes:** touching `db.py`, `models.py`, `home.py`,
+  or ledger claim/fulfill code requires
+  `RUBEDO_TEST_PG_URL=postgresql+psycopg://... uv run pytest
+  tests/test_postgres_ledger.py -q` against a dedicated Postgres database
+  (see `CONTRIBUTING.md`).
 - **`src/rubedo/web_static/` is gitignored**, so `rubedo serve` only
   shows the dashboard UI after `(cd web && npm run build)` has populated
   it. Rebuild after web changes.

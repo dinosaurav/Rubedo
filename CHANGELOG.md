@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Postgres ledger coverage (TODO 7b):** real env-gated and CI service
+  tests cover schema creation, IHU claim/fulfill, concurrent collision
+  upserts, lineage-edge dedupe, ORM immutability, and query/selection
+  behavior. Ledger claim/fulfill and edge writes now use atomic
+  SQLite/Postgres `ON CONFLICT` statements instead of check-then-insert
+  races. Development installs include psycopg 3.
 - **S3-compatible object store (TODO 7, object plane):** `ObjectStore`
   protocol with `LocalStore` + `S3Store` (AWS S3 / R2 / B2 / MinIO via
   endpoint URL). Configure with `Home(store=...)`, `Home(store_url=...)`,
