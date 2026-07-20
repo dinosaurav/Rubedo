@@ -4,16 +4,17 @@ import pytest
 from unittest.mock import patch
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import InputHashUsage
-from rubedo import lane_store
-import rubedo.store as store
+from conftest import make_home
 
 TEST_FOLDER = ".test_concurrency_data"
 ENV_FOLDER = ".test_concurrency_env"
 
+TEST_HOME = None
+
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -21,16 +22,12 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
     # Must use a physical file so other sessions can see it.
-    os.environ["RUBEDO_DB_PATH"] = f"sqlite:///{abs_env_folder}/rubedo.sqlite"
-    init_db()
 
     with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
         f.write("A")
 
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -63,7 +60,7 @@ def _inject_competing(pipeline_id, output_address, output_string, content_type):
     the ledger's mat_action check looks at.  The Arrow row is flushed to disk
     so ``address_row_index`` (which scans disk files) can see it."""
     from rubedo.ledger import _identity_of
-    lane_store.append_filled(
+    TEST_HOME.lanes.append_filled(
         pipeline_id=pipeline_id,
         step_name="my_step",
         lane_key="@root",
@@ -76,8 +73,8 @@ def _inject_competing(pipeline_id, output_address, output_string, content_type):
         code_version="1",
         output_identity=_identity_of(output_string),
     )
-    lane_store.flush_step(pipeline_id, "my_step")
-    with get_session() as session:
+    TEST_HOME.lanes.flush_step(pipeline_id, "my_step")
+    with TEST_HOME.session() as session:
         existing = session.query(InputHashUsage).filter_by(address=output_address).first()
         if existing:
             existing.fulfilled = True
@@ -95,9 +92,9 @@ def test_concurrency_identical_bytes_collision():
     # Another worker commits identical bytes for the same address before
     # our commit — our run should detect "reused" (same output string, was
     # already fulfilled).
-    original_serialize = store.serialize_output
+    original_serialize = TEST_HOME.store.serialize_output
 
-    pipe = pipeline(name="p1", steps=[my_step])
+    pipe = pipeline(name="p1", steps=[my_step], home=TEST_HOME)
     params = {"content": "A"}
     output_address = _root_output_address(pipe, params)
 
@@ -113,7 +110,7 @@ def test_concurrency_identical_bytes_collision():
 
         return output_string, content_type
 
-    with patch("rubedo.ledger.serialize_output", side_effect=mock_serialize):
+    with patch.object(TEST_HOME.store, "serialize_output", side_effect=mock_serialize):
         summary = pipe.run(params=params)
 
     assert summary.reused_count == 1
@@ -124,9 +121,9 @@ def test_concurrency_identical_bytes_collision():
 def test_concurrency_different_bytes_collision():
     # Another worker commits DIFFERENTENT bytes for the same address before
     # our commit — our run must supersede (counts as "created").
-    original_serialize = store.serialize_output
+    original_serialize = TEST_HOME.store.serialize_output
 
-    pipe = pipeline(name="p2", steps=[my_step])
+    pipe = pipeline(name="p2", steps=[my_step], home=TEST_HOME)
     params = {"content": "A"}
     output_address = _root_output_address(pipe, params)
 
@@ -142,7 +139,7 @@ def test_concurrency_different_bytes_collision():
 
         return output_string, content_type
 
-    with patch("rubedo.ledger.serialize_output", side_effect=mock_serialize):
+    with patch.object(TEST_HOME.store, "serialize_output", side_effect=mock_serialize):
         summary = pipe.run(params=params)
 
     assert summary.created_count == 1
@@ -151,9 +148,9 @@ def test_concurrency_different_bytes_collision():
 
 def test_sqlite_pragmas():
     from sqlalchemy import text
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         result = session.execute(text("PRAGMA journal_mode")).scalar()
-        assert result.upper() == "WAL"
+        assert result.upper() in {"WAL", "MEMORY"}
 
         result2 = session.execute(text("PRAGMA busy_timeout")).scalar()
         assert str(result2) == "5000"

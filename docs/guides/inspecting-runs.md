@@ -70,12 +70,11 @@ Two extra flags ride alongside `execute`/`reuse` and show up as warnings:
 
 `pipe.plan(force=True)` reports what a `force=True` run would do (treats
 every address as a cache miss, ignoring existing materializations). To
-point at a different `.rubedo/` root, pass `home=` when constructing the
-pipeline (`pipeline(name=..., home="/other/path")`) — it applies to both
-`.plan()` and `.run()` for that pipeline. A process supports only one home
-at a time: concurrent `.run()`/`.plan()` calls targeting different homes
-raise rather than silently switching each other's storage — see
-[`../getting-started.md`](../getting-started.md).
+point at a different `.rubedo/` root, pass a `Home` when constructing the
+pipeline (`pipeline(name=..., home=Home("/other/path"))`) — it applies to
+both `.plan()` and `.run()` for that pipeline. Different `Home` instances
+are independent storage roots; concurrent runs against them in one
+process are safe — see [`../getting-started.md`](../getting-started.md).
 
 ## `trace()`: lineage from any point
 

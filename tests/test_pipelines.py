@@ -2,27 +2,26 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
-from rubedo.server import app
-from rubedo.store import init_store
+from rubedo.server import create_app
+from conftest import make_home
 
 TEST_FOLDER = ".test_pipelines_data"
 ENV_FOLDER = ".test_pipelines_env"
 
-client = TestClient(app)
+TEST_HOME = None
+
+client = None
 
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME, client
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -30,37 +29,10 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
+    client = TestClient(create_app(home=TEST_HOME))
     yield
+    client = None
 
     for d in (abs_test_folder, abs_env_folder):
         if os.path.exists(d):
@@ -88,7 +60,7 @@ def make_pipeline():
     def my_proc(scan: dict, params: MyParams):
         return {"val": params.my_val}
 
-    return pipeline(name="test-proc", steps=[scan, my_proc], params_model=MyParams)
+    return pipeline(name="test-proc", steps=[scan, my_proc], params_model=MyParams, home=TEST_HOME)
 
 
 def test_unrun_pipelines_are_invisible():

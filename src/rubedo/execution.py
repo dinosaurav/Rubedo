@@ -12,7 +12,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 
 from .hashing import hash_json, hash_bytes
@@ -29,19 +29,21 @@ from .planning import (
     ROOT_LANE,
 )
 from .spec import StepSpec
-from .store import _try_arrow, _to_arrow_table, read_output
+from .lane_store import _make_row_id, _schema
+from .store import _try_arrow, _to_arrow_table
+
+if TYPE_CHECKING:
+    from .home import Home
 
 
 def _resolve_parent_table(
-    pipeline_id: str, parent_step: str, lane_refs: Dict[str, Any]
+    memo: "_RunMemo", pipeline_id: str, parent_step: str, lane_refs: Dict[str, Any]
 ):
     """Resolve a reduce parent's output as a pa.Table — the struct column
     flattened into columns. Falls back to dict-of-lanes if the output
     column is not a struct (string fallback for spilled/mixed values)."""
-    from . import lane_store
-
     lane_keys = list(lane_refs.keys())
-    table = lane_store.output_column_as_table(pipeline_id, parent_step, lane_keys)
+    table = memo.home.lanes.output_column_as_table(pipeline_id, parent_step, lane_keys)
     if table is not None:
         return table
     # Fallback: resolve each lane to a Python dict and build a table
@@ -49,7 +51,9 @@ def _resolve_parent_table(
 
     rows = []
     for lane, ref in lane_refs.items():
-        val = read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
+        val = memo.home.store.read_output(
+            getattr(ref, "output", None), getattr(ref, "content_type", None)
+        )
         if val is not None:
             rows.append(val)
     if not rows:
@@ -90,8 +94,9 @@ class _RunMemo:
     a failed util sees the same failure.
     """
 
-    def __init__(self):
+    def __init__(self, home: "Home"):
         """Initialize the run memoizer with a per-key locking scheme."""
+        self.home = home
         self._lock = threading.Lock()
         self._values: Dict[Tuple[str, str], Tuple[str, Any]] = {}
 
@@ -185,7 +190,9 @@ def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     """
     if isinstance(ref, EphemeralRef):
         return _compute_ephemeral(ref, params, memo)
-    return read_output(getattr(ref, "output", None), getattr(ref, "content_type", None))
+    return memo.home.store.read_output(
+        getattr(ref, "output", None), getattr(ref, "content_type", None)
+    )
 
 
 def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo):
@@ -299,7 +306,7 @@ def _process_decision(
             if step.arrow_aggregate:
                 kwargs = {
                     _dep_kwarg(step, dep): _resolve_parent_table(
-                        pipeline_id, dep, decision.parent_mats[dep]
+                        memo, pipeline_id, dep, decision.parent_mats[dep]
                     )
                     for dep in step.depends_on
                 }
@@ -431,7 +438,6 @@ def _process_decision(
         import pyarrow as pa
         import pyarrow.compute as pc
         from datetime import datetime, timezone
-        from . import lane_store
 
         # One bulk conversion for hashing only
         src_pa_table, _ = _to_arrow_table(source_table)
@@ -480,7 +486,7 @@ def _process_decision(
             input_hashes = [c[3] for c in children]
             output_identities = [c[1] for c in children]  # child_hash == _identity_of(row)
             row_ids = [
-                lane_store._make_row_id(pipeline_id, step.name, lk, ts)
+                _make_row_id(pipeline_id, step.name, lk, ts)
                 for lk in lane_keys
             ]
 
@@ -497,9 +503,9 @@ def _process_decision(
                 "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
                 "run_id": pa.array([run_id] * len(children), type=pa.string()),
                 "filtered": pa.array([False] * len(children), type=pa.bool_()),
-            }, schema=lane_store._schema(pa, struct_type))
+            }, schema=_schema(pa, struct_type))
 
-            lane_store.append_arrow_batch(pipeline_id, step.name, batch_table)
+            memo.home.lanes.append_arrow_batch(pipeline_id, step.name, batch_table)
 
         # Build outcomes — no dict values, arrow_batched=True
         outcomes: List[ExecutionOutcome] = []

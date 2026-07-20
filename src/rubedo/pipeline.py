@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Ty
 
 from pydantic import BaseModel
 
+from .home import Home
 from .models import RunSummary
 from .render import describe as _describe
 from .runner import RunPlan
@@ -246,10 +247,12 @@ class Pipeline:
         params_model: Optional[Type[BaseModel]] = None,
         retention: Optional[int] = None,
         schedule: str = "broad",
-        home: Optional[str] = None,
+        home: Optional[Home] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[List[str]] = None,
     ):
+        if isinstance(home, str):
+            raise TypeError("pipeline home must be a Home instance; use Home(path)")
         if schedule not in SCHEDULES:
             raise ValueError(f"schedule must be one of {SCHEDULES}, got {schedule!r}")
         if retention is not None and (
@@ -434,7 +437,7 @@ def pipeline(
     params_model: Optional[Type[BaseModel]] = None,
     retention: Optional[int] = None,
     schedule: str = "broad",
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
     secrets: Optional[List[str]] = None,
     env: Optional[List[str]] = None,
 ) -> Pipeline:
@@ -454,8 +457,9 @@ def pipeline(
     as soon as its own inputs commit, while reduce/join (and, for now,
     expand and multi-parent maps) still synchronize on all lanes.
 
-    home, if given, points this pipeline's ledger/object store at a custom
-    root instead of the default `.rubedo`/RUBEDO_HOME for every run/plan.
+    home, if given, is a `Home` instance pointing this pipeline's
+    ledger/object store at a custom root instead of the default
+    `.rubedo`/RUBEDO_HOME for every run/plan.
 
     retention=N keeps only this pipeline's last N terminal runs' outputs
     (see `Pipeline`/`_build_spec` for the full retention semantics).

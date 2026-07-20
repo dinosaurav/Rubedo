@@ -104,7 +104,13 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   skip_cache/join/group_key consistency) — run lazily on first `.spec`/verb
   access and cached, not at construction (`.build()` is gone). `name` is
   the pipeline's sole identity (no `id=`); `schedule=`/`home=` join
-  `retention=`/`params_model=` as construction-time settings.
+  `retention=`/`params_model=` as construction-time settings. `home=` is a
+  `Home` instance (see `home.py`), not a path string.
+- `src/rubedo/home.py` — `Home`: one storage root owning `Database` +
+  `LocalStore` + `LaneStore`. Interned by absolute path so same-home
+  concurrent runs share buffers/engine; different homes are independent.
+  Injected via `pipeline(home=...)` and carried on `_RunContext` — no
+  process-global DB/store/lane-table state.
 - `src/rubedo/render.py` — `describe()` (text/Mermaid/ascii DAG rendering)
   and the ascii layout internals (`_AsciiNode`, `_ascii_layers`,
   `_ascii_positions`, `_describe_ascii`). Sits above `spec.py` and
@@ -127,8 +133,8 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
   skip_cache utils.
-- `src/rubedo/lane_store.py` — per-step Arrow IPC files under
-  `.rubedo/tables/`: append-only rows of lane metadata (row_id, lane_key,
+- `src/rubedo/lane_store.py` — `LaneStore` (per-home): per-step Arrow IPC
+  files under `$home/tables/`: append-only rows of lane metadata (row_id, lane_key,
   address, input_hash, code_version, output, output_identity, content_type,
   code_hash, ts, run_id, filtered). `output` holds the value
   itself in native Arrow type (struct for dicts, int64 for ints, string) when
@@ -142,10 +148,10 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   `content_type` distinguishes `"text"` (native string return), `"json"`
   (inline or JSON-serialized), and `"bytes"`/`"arrow-ipc:<kind>"` (spilled).
   Pure data — no tombstones, no liveness. The
-  `batch_lookup_by_address` function is the planning phase's reuse lookup
+  `batch_lookup_by_address` method is the planning phase's reuse lookup
   (SQLite `input_hash_usages` for liveness, Arrow for content).
 - `src/rubedo/ledger.py` — every DB write: per-lane statuses,
-  events, the commit path (Arrow row via `lane_store.append_filled` +
+  events, the commit path (Arrow row via `home.lanes.append_filled` +
   `input_hash_usages.fulfilled=True` + address-based `MaterializationEdge`;
   `_commit_materialization` is **deleted**), and the `input_hash_usages`
   claim (plan time, records `last_run_id` only — does NOT flip

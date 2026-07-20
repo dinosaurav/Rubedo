@@ -3,17 +3,13 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 from rubedo import step, pipeline
-from rubedo.server import app
-from rubedo.db import init_db
-import rubedo.db as db
-from rubedo.models import Base
-import uuid
-from sqlalchemy.pool import StaticPool
-from sqlalchemy import create_engine
-
-client = TestClient(app)
+from rubedo.server import create_app
+from conftest import make_home
 
 TEST_FOLDER = "test_input"
+
+TEST_HOME = None
+client = None
 
 
 @step
@@ -31,33 +27,16 @@ def count_lines(scan: dict):
     return {"text": text, "path": scan["path"]}
 
 
-test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
+def make_test_pipeline():
+    return pipeline(name="p-test", steps=[scan, count_lines], home=TEST_HOME)
 
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
+    global TEST_HOME, client
     orig_dir = os.getcwd()
     temp_dir = tempfile.mkdtemp()
     os.chdir(temp_dir)
-
-    os.makedirs(".rubedo/objects", exist_ok=True)
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    if db.engine is not None:
-        db.engine.dispose()
-
-    db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=db.engine)
-    from sqlalchemy.orm import sessionmaker
-
-    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
 
     os.makedirs("test_input", exist_ok=True)
     with open("test_input/a.txt", "w") as f:
@@ -66,12 +45,12 @@ def setup_teardown():
         f.write("one")
 
     # Run a process to populate DB
-    test_pipeline.run(workers=1)
+    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
+    client = TestClient(create_app(home=TEST_HOME))
+    make_test_pipeline().run(workers=1)
 
     yield
-
-    Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
+    client = None
     os.chdir(orig_dir)
 
 
@@ -175,7 +154,7 @@ def test_current_outputs_no_collision_across_pipelines():
     """Two pipelines sharing the same root step (so identical content-addressed
     lane coordinates) must not collide in current-outputs — each pipeline's
     rows must survive independently."""
-    other_pipeline = pipeline(name="p-test-2", steps=[scan, count_lines])
+    other_pipeline = pipeline(name="p-test-2", steps=[scan, count_lines], home=TEST_HOME)
     other_pipeline.run(workers=1)
 
     response = client.get("/api/current-outputs")

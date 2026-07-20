@@ -4,7 +4,7 @@ import sys
 from rich.console import Console
 from rich.table import Table
 
-from .db import get_session
+from .home import Home
 from .queries import get_recent_runs, get_run_summary, get_run_failures
 from .invalidation import invalidate
 from .selection import Selection
@@ -12,7 +12,8 @@ from .selection import Selection
 console = Console()
 
 def cmd_ls(args):
-    with get_session() as session:
+    home = Home.default()
+    with home.session() as session:
         runs = get_recent_runs(session, limit=args.limit)
     
     if not runs:
@@ -42,7 +43,8 @@ def cmd_ls(args):
 
 
 def cmd_show(args):
-    with get_session() as session:
+    home = Home.default()
+    with home.session() as session:
         run = get_run_summary(session, args.run_id)
         if not run:
             console.print(f"[red]Run {args.run_id} not found.[/red]")
@@ -112,7 +114,9 @@ def cmd_invalidate(args):
         console.print(f"[red]Error parsing selection:[/red] {e}")
         sys.exit(1)
         
-    result = invalidate(selection, args.reason, downstream=args.downstream)
+    result = invalidate(
+        selection, args.reason, downstream=args.downstream, home=Home.default()
+    )
     if args.downstream:
         console.print(
             f"Invalidated [bold green]{result['invalidated_count']}[/bold green] materializations "
@@ -134,7 +138,7 @@ def cmd_trace(args):
         console.print(f"[red]Error parsing selection:[/red] {e}")
         sys.exit(1)
 
-    result = trace(selection, include_superseded=args.all)
+    result = trace(selection, include_superseded=args.all, home=Home.default())
 
     if args.json:
         print(
@@ -158,7 +162,7 @@ def cmd_trace(args):
 def cmd_du(args):
     from .du import _human_bytes, storage_report
 
-    report = storage_report()
+    report = storage_report(home=Home.default())
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
@@ -246,7 +250,7 @@ def cmd_gc(args):
     from .gc import gc
 
     max_bytes = _parse_size(args.max_bytes) if args.max_bytes else None
-    report = gc(delete=args.delete, max_bytes=max_bytes)
+    report = gc(delete=args.delete, max_bytes=max_bytes, home=Home.default())
 
     if report.refused:
         console.print(f"[yellow]GC refused:[/yellow] {report.refused}")

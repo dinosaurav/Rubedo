@@ -2,24 +2,22 @@
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import RunEvent
-from rubedo import lane_store
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_code_data"
 ENV_FOLDER = ".test_code_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -27,36 +25,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -89,7 +58,7 @@ def body_v2(params):
 
 def register(fn, version, code="warn"):
     spec = step(name="work", version=version, code=code)(fn)
-    pipe = pipeline(name="cd", steps=[spec])
+    pipe = pipeline(name="cd", steps=[spec], home=TEST_HOME)
     return pipe, spec
 
 
@@ -152,7 +121,7 @@ def test_manual_version_warns_on_drift_but_reuses():
         summary = pipe.run(params=p, workers=1)
     assert (summary.created_count, summary.reused_count) == (0, 1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         drift_events = (
             session.query(RunEvent).filter_by(event_type="code_drift_detected").all()
         )
@@ -194,8 +163,8 @@ def test_code_hash_recorded_on_materialization():
     pipe, spec = register(body_v1, "v1")
     pipe.run(params={"path": path}, workers=1)
 
-    with get_session():
-        rows = lane_store.all_filled_rows()
+    with TEST_HOME.session():
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 1
         row = rows[0]
         assert row.get("code_hash") == spec.code_hash

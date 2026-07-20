@@ -10,17 +10,17 @@ import pytest
 import pyarrow as pa
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
-from rubedo import lane_store
-import rubedo.store as store
-from rubedo.store import read_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_expand_table_data"
 ENV_FOLDER = ".test_expand_table_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test = os.path.abspath(TEST_FOLDER)
     abs_env = os.path.abspath(ENV_FOLDER)
     for d in (abs_test, abs_env):
@@ -28,11 +28,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d)
 
-    store.OBJECTS_DIR = f"{abs_env}/objects"
-    store.STAGING_DIR = f"{abs_env}/staging"
-    os.environ["RUBEDO_DB_PATH"] = f"sqlite:///{abs_env}/rubedo.sqlite"
-    init_db()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test, abs_env):
@@ -41,9 +37,9 @@ def isolated_env():
 
 
 def _outputs(step_name):
-    rows = [r for r in lane_store.all_filled_rows() if r.get("step_name") == step_name]
+    rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name]
     return {
-        r.get("lane_key"): read_output(r.get("output"), r.get("content_type"))
+        r.get("lane_key"): TEST_HOME.store.read_output(r.get("output"), r.get("content_type"))
         for r in rows
     }
 
@@ -60,7 +56,7 @@ def test_root_expand_returns_pa_table():
     def process(load_data: dict):
         return {"greeting": f"hi {load_data['name']}", "doubled": load_data["score"] * 2}
 
-    pipe = pipeline(name="t1", steps=[load_data, process])
+    pipe = pipeline(name="t1", steps=[load_data, process], home=TEST_HOME)
     summary = pipe.run(workers=1)
 
     assert summary.failed_count == 0
@@ -84,7 +80,7 @@ def test_root_expand_table_rerun_reuses():
     def process(load_data: dict):
         return load_data["name"].upper()
 
-    pipe = pipeline(name="t2", steps=[load_data, process])
+    pipe = pipeline(name="t2", steps=[load_data, process], home=TEST_HOME)
     s1 = pipe.run(workers=1)
     assert s1.created_count == 4
 
@@ -112,7 +108,7 @@ def test_dependent_expand_returns_table():
     def process(expand_batch: dict):
         return {"item": expand_batch["item"], "val": expand_batch["val"]}
 
-    pipe = pipeline(name="t3", steps=[source, expand_batch, process])
+    pipe = pipeline(name="t3", steps=[source, expand_batch, process], home=TEST_HOME)
     s1 = pipe.run(workers=1)
     assert s1.failed_count == 0
     # 2 source + 3 expand children + 3 process = 8
@@ -141,7 +137,7 @@ def test_expand_table_dedup_identical_rows():
     def process(load_data: dict):
         return load_data["name"]
 
-    pipe = pipeline(name="t4", steps=[load_data, process])
+    pipe = pipeline(name="t4", steps=[load_data, process], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
     # 2 expand lanes (alice deduped) + 2 process = 4
@@ -163,13 +159,13 @@ def test_expand_table_rows_record_creating_run_id():
         yield {"name": "alice", "score": 1}
         yield {"name": "bob", "score": 2}
 
-    table_run = pipeline(name="prov-table", steps=[table_load]).run(workers=1)
-    gen_run = pipeline(name="prov-gen", steps=[gen_load]).run(workers=1)
+    table_run = pipeline(name="prov-table", steps=[table_load], home=TEST_HOME).run(workers=1)
+    gen_run = pipeline(name="prov-gen", steps=[gen_load], home=TEST_HOME).run(workers=1)
 
     def run_ids(step_name):
         return {
             r.get("run_id")
-            for r in lane_store.all_filled_rows()
+            for r in TEST_HOME.lanes.all_filled_rows()
             if r.get("step_name") == step_name
         }
 
@@ -191,7 +187,7 @@ def test_expand_polars_table():
     def greet(load_data: dict):
         return f"Hello {load_data['name']}, age {load_data['age']}"
 
-    pipe = pipeline(name="t5", steps=[load_data, greet])
+    pipe = pipeline(name="t5", steps=[load_data, greet], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4

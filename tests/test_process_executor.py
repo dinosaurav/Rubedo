@@ -3,13 +3,16 @@ import shutil
 import pytest
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
+from conftest import make_home
 
 TEST_FOLDER = ".test_process_data"
 ENV_FOLDER = ".test_process_env"
 
+TEST_HOME = None
+
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -17,20 +20,17 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
         
-    import rubedo.store
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
 
     os.environ["RUBEDO_DB_PATH"] = (
         "sqlite:///:memory:?cache=shared"
     )
-    init_db()
     
     with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
         f.write("A")
     with open(os.path.join(abs_test_folder, "b.txt"), "w") as f:
         f.write("B")
         
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
     
     for d in (abs_test_folder, abs_env_folder):
@@ -74,7 +74,7 @@ def test_process_executor_basic():
     # Register steps
     step1 = step(name="ok", executor="process")(process_ok)
 
-    pipe = pipeline(name="p1", steps=[scan, step1])
+    pipe = pipeline(name="p1", steps=[scan, step1], home=TEST_HOME)
     summary = pipe.run(workers=2)
 
     # 2 scan lanes + 2 "ok" lanes
@@ -93,7 +93,7 @@ def test_process_executor_closure_ok():
         return prefix + scan["text"]
 
     step_local = step(name="local", executor="process")(my_local_func)
-    pipe = pipeline(name="p4", steps=[scan, step_local])
+    pipe = pipeline(name="p4", steps=[scan, step_local], home=TEST_HOME)
     summary = pipe.run(workers=2)
     # 2 scan lanes + 2 "local" lanes
     assert summary.created_count == 4
@@ -103,7 +103,7 @@ def test_process_executor_retries():
     # Retries happen in the parent thread pool and submit to process pool
     step_fail = step(name="fail", executor="process", retries=2)(process_fail)
 
-    pipe = pipeline(name="p2", steps=[scan, step_fail])
+    pipe = pipeline(name="p2", steps=[scan, step_fail], home=TEST_HOME)
     summary = pipe.run(workers=2)
 
     # 2 scan lanes + 2 "fail" lanes
@@ -126,7 +126,7 @@ def process_unpicklable(scan):
 def test_process_executor_pickling_error():
     # If the process pool cannot pickle the return value, it should surface as a step failure.
     step_unpicklable = step(name="unpicklable", executor="process")(process_unpicklable)
-    pipe = pipeline(name="p3", steps=[scan, step_unpicklable])
+    pipe = pipeline(name="p3", steps=[scan, step_unpicklable], home=TEST_HOME)
 
     summary = pipe.run(workers=2)
     assert summary.failed_count == 2

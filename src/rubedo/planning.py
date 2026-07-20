@@ -5,14 +5,16 @@ access is the live-materialization lookup that answers "is this cached?".
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union, Literal
+from typing import Any, Dict, List, Optional, Tuple, Union, Literal, TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
 from .hashing import compute_output_address, hash_json
 from .spec import PipelineSpec, StepSpec
-from .store import read_output
 from .util import iso_age_seconds
+
+if TYPE_CHECKING:
+    from .home import Home
 
 
 def _identity_from_output(row: dict) -> str:
@@ -314,6 +316,7 @@ def _group_reduce_lanes(
 
 def _reduce_group_decision(
     session: Session,
+    home: "Home",
     step: StepSpec,
     group_coord: str,
     group_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]],
@@ -349,8 +352,7 @@ def _reduce_group_decision(
 
     existing_mat = None
     if pipeline_id:
-        from .lane_store import batch_lookup_by_address
-        result = batch_lookup_by_address(
+        result = home.lanes.batch_lookup_by_address(
             pipeline_id, step.name, {output_address}, session
         )
         existing_mat = result.get(output_address)
@@ -400,6 +402,7 @@ def _reduce_group_decision(
 
 def _plan_join(
     session: Session,
+    home: "Home",
     step: StepSpec,
     coord_step_mats: Dict[Tuple[str, str], Union[MatRef, EphemeralRef, Literal["blocked", "failed", "pending", "filtered"]]],
     params_hash: str,
@@ -500,8 +503,7 @@ def _plan_join(
     addrs = [out_addr for _, _, _, out_addr in combo_list]
     mats_by_addr = {}
     if addrs and pipeline_id:
-        from .lane_store import batch_lookup_by_address
-        mats_by_addr = batch_lookup_by_address(
+        mats_by_addr = home.lanes.batch_lookup_by_address(
             pipeline_id, step.name, set(addrs), session
         )
 
@@ -566,6 +568,7 @@ def _plan_step(
     accepts_params: bool,
     lanes: Optional[List[str]] = None,
     pipeline_id: str = "",
+    home: Optional["Home"] = None,
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only.
 
@@ -581,6 +584,10 @@ def _plan_step(
     but the commit path is unaffected — results still land in cache.
     """
     # check_cache=False on the step is a per-step force: skip reuse, still commit.
+    if home is None:
+        from .home import Home
+
+        home = Home.default()
     force = force or not step.check_cache
     if lanes is not None and step.in_shape != "one":
         raise ValueError(
@@ -643,7 +650,7 @@ def _plan_step(
 
         return [
             _reduce_group_decision(
-                session, step, gcoord, gmats, params_hash, force, accepts_params,
+                session, home, step, gcoord, gmats, params_hash, force, accepts_params,
                 failed_parents=failed_parents, blocked_parents=blocked_parents,
                 pipeline_id=pipeline_id,
             )
@@ -652,7 +659,7 @@ def _plan_step(
 
     if step.in_shape == "join":
         return _plan_join(
-            session, step, coord_step_mats, params_hash, force, accepts_params,
+            session, home, step, coord_step_mats, params_hash, force, accepts_params,
             pipeline_id=pipeline_id,
         )
 
@@ -800,8 +807,7 @@ def _plan_step(
     all_addrs = set(map_addrs + anchor_addrs)
     mats_by_addr = {}
     if all_addrs and pipeline_id:
-        from .lane_store import batch_lookup_by_address
-        mats_by_addr = batch_lookup_by_address(
+        mats_by_addr = home.lanes.batch_lookup_by_address(
             pipeline_id, step.name, all_addrs, session
         )
 
@@ -820,7 +826,9 @@ def _plan_step(
                 freshness = anchor.get("ts")
                 if freshness and iso_age_seconds(freshness) > step.stale_after:
                     continue
-            children_hashes = read_output(anchor.get("output"), anchor.get("content_type"))
+            children_hashes = home.store.read_output(
+                anchor.get("output"), anchor.get("content_type")
+            )
             if children_hashes:
                 identities = []
                 for child_hash in children_hashes:
@@ -835,8 +843,7 @@ def _plan_step(
 
     child_mats_by_addr = {}
     if all_child_addrs and pipeline_id:
-        from .lane_store import batch_lookup_by_address
-        child_mats_by_addr = batch_lookup_by_address(
+        child_mats_by_addr = home.lanes.batch_lookup_by_address(
             pipeline_id, step.name, set(all_child_addrs), session
         )
 

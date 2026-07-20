@@ -7,25 +7,23 @@ commit. Redistribute into the per-feature test files if they grow.
 import os
 import shutil
 import threading
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import Filtered, Selection, invalidate, pipeline, step
-from rubedo.db import init_db, get_session
-from rubedo import lane_store
 from rubedo.models import InputHashUsage, Run, RunCoordinateStatus
 from rubedo.planning import _ArrowRowRef
-from rubedo.store import init_store, read_materialization_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_tier0_data"
 ENV_FOLDER = ".test_tier0_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -33,36 +31,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -102,7 +71,7 @@ def test_disjoint_parent_lanes_raise_clear_error():
     def combine(a, b):
         return {"a": a, "b": b}
 
-    pipe = pipeline(name="dj", steps=[a, b, combine])
+    pipe = pipeline(name="dj", steps=[a, b, combine], home=TEST_HOME)
     with pytest.raises(ValueError, match="disjoint lane sets"):
         pipe.run(workers=1)
 
@@ -122,7 +91,7 @@ def test_diamond_parents_still_run():
     def both(upper, lower):
         return {"u": upper, "l": lower}
 
-    pipe = pipeline(name="dm", steps=[scan, upper, lower, both])
+    pipe = pipeline(name="dm", steps=[scan, upper, lower, both], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
     assert summary.created_count == 4  # scan + upper + lower + both
@@ -139,7 +108,7 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
     def read(scan):
         return scan["text"]
 
-    pipe = pipeline(name="inv", steps=[scan, read])
+    pipe = pipeline(name="inv", steps=[scan, read], home=TEST_HOME)
     pipe.run(workers=1)
 
     # Make the second InputHashUsage query inside _flip raise — simulates
@@ -159,12 +128,12 @@ def test_invalidate_failure_leaves_no_partial_flips(monkeypatch):
 
     monkeypatch.setattr(ORMSession, "query", flaky_query)
     with pytest.raises(RuntimeError, match="boom"):
-        invalidate(Selection(step="read"), reason="partial-failure test")
+        invalidate(Selection(step="read"), reason="partial-failure test", home=TEST_HOME)
 
     # Undo the flaky patch before assertions query InputHashUsage
     monkeypatch.undo()
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # The first flip happened before the failure; rollback must undo it
         assert session.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(False)).count() == 0
         failed_run = session.query(Run).filter_by(kind="invalidate").one()
@@ -182,16 +151,16 @@ def test_selection_ids_unique_across_runs():
     def read(scan):
         return scan["text"]
 
-    pipe = pipeline(name="uniq", steps=[scan, read])
+    pipe = pipeline(name="uniq", steps=[scan, read], home=TEST_HOME)
     pipe.run(workers=1)
     pipe.run(workers=1)  # reuse: a second status row per materialization
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # Scoped to "read" (not scan too): the point under test is
         # uniqueness across the two runs' status rows, not the raw count.
         from rubedo.selection import get_selection_addresses
         addrs = get_selection_addresses(
-            session, Selection(coordinate_glob="*", step="read")
+            session, Selection(coordinate_glob="*", step="read"), home=TEST_HOME
         )
     assert len(addrs) == len(set(addrs)) == 2
 
@@ -213,23 +182,25 @@ def test_invalidate_scoped_to_pipeline():
     def read_v2(scan):
         return scan["text"]
 
-    pipeline(name="p1", steps=[scan, read_v1]).run(workers=1)
-    pipeline(name="p2", steps=[scan, read_v2]).run(workers=1)
+    pipeline(name="p1", steps=[scan, read_v1], home=TEST_HOME).run(workers=1)
+    pipeline(name="p2", steps=[scan, read_v2], home=TEST_HOME).run(workers=1)
 
     # Scoped to step="read" too (not just pipeline): each pipeline now has
     # two steps (scan + read), so pipeline-only scoping would catch both.
     res = invalidate(
         Selection.parse("pipeline:p2 step:read"), reason="scope test"
+    ,
+        home=TEST_HOME,
     )
     assert res["invalidated_count"] == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         dead_addrs = {
             str(u.address) for u in session.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(False)).all()
         }
         assert len(dead_addrs) == 1
-        dead_row = lane_store.address_row_index().get(next(iter(dead_addrs)))
+        dead_row = TEST_HOME.lanes.address_row_index().get(next(iter(dead_addrs)))
         assert dead_row is not None
         assert dead_row.get("pipeline_id") == "p2"
 
@@ -255,7 +226,7 @@ def test_join_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="skip_cache parent"):
-        pipeline(name="jz", steps=[left, right, j]).spec
+        pipeline(name="jz", steps=[left, right, j], home=TEST_HOME).spec
 
 
 def test_group_key_rejects_skip_cache_parent():
@@ -272,7 +243,7 @@ def test_group_key_rejects_skip_cache_parent():
         return {}
 
     with pytest.raises(ValueError, match="materialized parents"):
-        pipeline(name="gz", steps=[src, u, r]).spec
+        pipeline(name="gz", steps=[src, u, r], home=TEST_HOME).spec
 
 
 # --- B6: expand may yield bytes payloads ------------------------------------
@@ -299,7 +270,7 @@ def test_expand_yields_bytes_and_reuses():
             assert isinstance(chunks, bytes)
             return len(chunks)
 
-        return pipeline(name="bx", steps=[read, chunks, size])
+        return pipeline(name="bx", steps=[read, chunks, size], home=TEST_HOME)
 
     params = {"path": path}
     s1 = make_pipe().run(params=params, workers=1)
@@ -307,10 +278,10 @@ def test_expand_yields_bytes_and_reuses():
     # read (1) + two bytes children + two size outputs; the anchor is not a lane
     assert s1.created_count == 5
 
-    with get_session() as session:
-        addr_index = lane_store.address_row_index()
+    with TEST_HOME.session() as session:
+        addr_index = TEST_HOME.lanes.address_row_index()
         sizes = {
-            read_materialization_output(_ArrowRowRef(row))
+            TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
             for r in session.query(RunCoordinateStatus)
             .filter_by(step_name="size", status="created")
             .all()
@@ -335,7 +306,7 @@ def test_failed_plus_filtered_run_is_completed_with_failures():
             raise RuntimeError("boom")
         return Filtered(reason="not wanted")
 
-    pipe = pipeline(name="st", steps=[scan, gate])
+    pipe = pipeline(name="st", steps=[scan, gate], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 1
     assert summary.filtered_count == 1
@@ -367,7 +338,7 @@ def test_ephemeral_coords_compute_in_parallel():
     def out(util):
         return util
 
-    pipe = pipeline(name="par", steps=[scan, read, util, out])
+    pipe = pipeline(name="par", steps=[scan, read, util, out], home=TEST_HOME)
     summary = pipe.run()
     assert summary.failed_count == 0
     assert summary.created_count == 6  # 2 scan + 2 read + 2 out

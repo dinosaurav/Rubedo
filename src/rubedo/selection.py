@@ -1,7 +1,7 @@
 """
 Selection language and querying logic for invalidation and UI previews.
 """
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import fnmatch
@@ -10,7 +10,9 @@ from .models import (
     RunCoordinateStatus,
     InputHashUsage,
 )
-from . import lane_store
+
+if TYPE_CHECKING:
+    from .home import Home
 
 
 def _resolve_dotted(d: Dict[str, Any], path: str) -> Any:
@@ -94,11 +96,17 @@ def _arrow_rows_matching(
     step_name: Optional[str],
     code_version: Optional[str],
     output_address: Optional[str],
+    *,
+    home: Optional["Home"] = None,
 ) -> List[Dict[str, Any]]:
     """Arrow lane_store rows matching the given filters.  Each row dict
     carries ``address``, ``code_version``, ``pipeline_id``,
     ``step_name``, ``content_hash``, ``filtered``, etc."""
-    rows = lane_store.all_filled_rows()
+    if home is None:
+        from .home import Home
+
+        home = Home.default()
+    rows = home.lanes.all_filled_rows()
     out = []
     for row in rows:
         if pipeline_id and row.get("pipeline_id") != pipeline_id:
@@ -114,7 +122,7 @@ def _arrow_rows_matching(
 
 
 def get_selection_addresses(
-    session: Session, selection: Selection
+    session: Session, selection: Selection, *, home: Optional["Home"] = None
 ) -> List[str]:
     """Output addresses matching the given selection criteria.
 
@@ -131,6 +139,7 @@ def get_selection_addresses(
         selection.step,
         selection.code_version,
         selection.output_address,
+        home=home,
     )
     if not arrow_rows:
         return []

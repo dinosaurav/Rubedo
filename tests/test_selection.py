@@ -1,46 +1,24 @@
 import os
 import shutil
 import pytest
-import uuid
 
 from rubedo import step, pipeline, Selection
-from rubedo.db import get_session, init_db
-import rubedo.db as db
-from rubedo.models import Base
 from rubedo.invalidation import invalidate
-from sqlalchemy.pool import StaticPool
-from sqlalchemy import create_engine
+from conftest import make_home
 
 
 TEST_FOLDER = ".test_selection_data"
 
+TEST_HOME = None
+
 @pytest.fixture(autouse=True)
 def setup_teardown():
+    global TEST_HOME
     os.getcwd()
     
     if os.path.exists(TEST_FOLDER):
         shutil.rmtree(TEST_FOLDER)
     os.makedirs(TEST_FOLDER, exist_ok=True)
-
-    os.makedirs(".rubedo/objects", exist_ok=True)
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    if db.engine is not None:
-        db.engine.dispose()
-
-    db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=db.engine)
-    from sqlalchemy.orm import sessionmaker
-
-    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
 
     with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("a")
@@ -49,11 +27,10 @@ def setup_teardown():
     with open(os.path.join(TEST_FOLDER, "c.txt"), "w") as f:
         f.write("c")
 
+    TEST_HOME = make_home(".test_home_env")
     yield
 
     # Teardown
-    Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
     if os.path.exists(TEST_FOLDER):
         shutil.rmtree(TEST_FOLDER)
 
@@ -72,7 +49,7 @@ def test_selection_version_range():
     @step(name="dummy", version="1.0.0", depends_on=["scan"])
     def step_v1(scan): return scan["text"]
 
-    p1 = pipeline(name="p-test", steps=[scan, step_v1])
+    p1 = pipeline(name="p-test", steps=[scan, step_v1], home=TEST_HOME)
     p1.run(workers=1)
 
     # 2. Run with version 2.1.0 on a modified file
@@ -82,7 +59,7 @@ def test_selection_version_range():
     @step(name="dummy", version="2.1.0", depends_on=["scan"])
     def step_v2(scan): return scan["text"]
 
-    p2 = pipeline(name="p-test", steps=[scan, step_v2])
+    p2 = pipeline(name="p-test", steps=[scan, step_v2], home=TEST_HOME)
     p2.run(workers=1)
 
     # 3. Run with unparseable version on another file
@@ -92,7 +69,7 @@ def test_selection_version_range():
     @step(name="dummy", version="legacy-v1", depends_on=["scan"])
     def step_legacy(scan): return scan["text"]
 
-    p3 = pipeline(name="p-test", steps=[scan, step_legacy])
+    p3 = pipeline(name="p-test", steps=[scan, step_legacy], home=TEST_HOME)
     p3.run(workers=1)
 
     # We now have materializations with versions: 1.0.0, 2.1.0, legacy-v1
@@ -100,7 +77,7 @@ def test_selection_version_range():
     # the version:<2.0 selection below).
     # Let's invalidate version:<2.0
     sel = Selection.parse("version:<2.0")
-    res = invalidate(sel, "invalidate old")
+    res = invalidate(sel, "invalidate old", home=TEST_HOME)
 
     # It should invalidate the 1.0.0 materializations (which are for a.txt, and the old b.txt and c.txt)
     # Wait, the first run created 3 materializations for a, b, c.
@@ -113,7 +90,7 @@ def test_selection_version_range():
     # All invalidated addresses should have fulfilled=False in IHU
     from rubedo.models import InputHashUsage
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         for addr in res["addresses"]:
             usage = session.query(InputHashUsage).filter_by(address=addr).first()
             assert usage is not None

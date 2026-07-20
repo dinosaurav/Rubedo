@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func
 
-from .db import get_session, init_db
+from .home import Home
 from .models import (
     Run,
     RunEvent,
@@ -21,7 +21,6 @@ from .models import (
     RunCoordinateStatus,
     InputHashUsage,
 )
-from . import lane_store
 from .selection import Selection
 from .invalidation import invalidate
 from .schemas import (
@@ -38,12 +37,18 @@ from .schemas import (
 )
 
 
-def _search_output_fields(pipeline_id: str, step_name: str, query: str) -> List[str]:
+def _request_home(request: Request) -> Home:
+    return request.app.state.home
+
+
+def _search_output_fields(
+    home: Home, pipeline_id: str, step_name: str, query: str
+) -> List[str]:
     """Addresses where any output dict field value contains ``query`` as a
     substring. Searches the struct output column directly."""
     q_lower = query.lower()
     matches: List[str] = []
-    for row in lane_store.all_filled_rows():
+    for row in home.lanes.all_filled_rows():
         if row.get("pipeline_id") != pipeline_id or row.get("step_name") != step_name:
             continue
         output = row.get("output")
@@ -70,11 +75,20 @@ def _search_output_fields(pipeline_id: str, step_name: str, query: str) -> List[
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    if not hasattr(app.state, "home"):
+        app.state.home = Home.default()
     yield
 
 
 app = FastAPI(title="Rubedo", lifespan=lifespan)
+
+
+def create_app(home: Optional[Home] = None) -> FastAPI:
+    app.state.home = home or Home.default()
+    return app
+
+
+app = create_app()
 
 app.add_middleware(
     CORSMiddleware,
@@ -94,18 +108,20 @@ def _to_dict(obj):
 
 
 @app.get("/api/runs", response_model=List[RunListItem])
-def get_runs():
+def get_runs(request: Request):
     """List all pipeline runs, ordered by most recent."""
     from .queries import get_recent_runs
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         return get_recent_runs(session)
 
 
 @app.get("/api/runs/{run_id}", response_model=RunDetailOut)
-def get_run(run_id: str):
+def get_run(run_id: str, request: Request):
     """Get detailed information for a specific run."""
     from .queries import get_run_summary
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         run_detail = get_run_summary(session, run_id)
         if not run_detail:
             raise HTTPException(404, "Run not found")
@@ -113,11 +129,13 @@ def get_run(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/stream")
-async def stream_run(run_id: str):
+async def stream_run(run_id: str, request: Request):
     """Stream live progress of a run via Server-Sent Events (SSE)."""
+    home = _request_home(request)
+
     def event_generator():
         while True:
-            with get_session() as session:
+            with home.session() as session:
                 run = session.query(Run).filter_by(id=run_id).first()
                 if not run:
                     yield "event: error\ndata: Run not found\n\n"
@@ -162,17 +180,19 @@ async def stream_run(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])
-def get_run_coordinates(run_id: str):
+def get_run_coordinates(run_id: str, request: Request):
     """Get the status of every coordinate in a specific run."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=run_id).all()
         return [_to_dict(c) for c in coords]
 
 
 @app.get("/api/runs/{run_id}/events", response_model=List[RunEventOut])
-def get_run_events(run_id: str):
+def get_run_events(run_id: str, request: Request):
     """Get the event log for a specific run."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         events = (
             session.query(RunEvent).filter_by(run_id=run_id).order_by(RunEvent.id).all()
         )
@@ -181,14 +201,16 @@ def get_run_events(run_id: str):
 
 @app.get("/api/materializations", response_model=List[MaterializationOut])
 def get_materializations(
+    request: Request,
     response: Response,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
     """List materializations with pagination."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         # Build the list from Arrow rows + IHU liveness, not Materialization.
-        all_rows = lane_store.all_filled_rows()
+        all_rows = home.lanes.all_filled_rows()
         # Deduplicate by address (latest ts wins), sorted newest first
         by_addr: Dict[str, dict] = {}
         for row in all_rows:
@@ -228,14 +250,15 @@ def get_materializations(
 
 
 @app.get("/api/current-outputs", response_model=List[CurrentOutputOut])
-def get_current_outputs():
+def get_current_outputs(request: Request):
     """The current outputs: each pipeline's *latest run's* live lanes.
 
     "Current" is the latest run's lanes — nothing more. A coordinate that
     vanished from a source simply isn't in the latest run, so it isn't current;
     there is no cross-run "removed" bookkeeping.
     """
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         # The latest run per pipeline (by start time).
         latest_started = (
             session.query(
@@ -276,7 +299,7 @@ def get_current_outputs():
 
         results = []
         # Build an address→row index from Arrow for metadata lookups
-        arrow_idx = lane_store.address_row_index()
+        arrow_idx = home.lanes.address_row_index()
         fulfilled_addrs = {
             str(u.address) for u in session.query(InputHashUsage)
             .filter(InputHashUsage.fulfilled.is_(True))
@@ -316,9 +339,12 @@ def get_current_outputs():
 
 
 @app.get("/api/runs/{run_id}/search")
-def search_run(run_id: str, query: str = Query(..., min_length=1)):
+def search_run(
+    run_id: str, request: Request, query: str = Query(..., min_length=1)
+):
     """Search for a value in a run and return the full lineage trace."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         # 1. Find matching addresses for this run
         matching_addrs = set()
 
@@ -348,7 +374,7 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
             if key in seen_steps:
                 continue
             seen_steps.add(key)
-            for addr in _search_output_fields(r.pipeline_id, r.step_name, query):
+            for addr in _search_output_fields(home, r.pipeline_id, r.step_name, query):
                 if addr in run_addrs:
                     matching_addrs.add(addr)
 
@@ -388,7 +414,7 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
                     queue.append(c)
 
         # 4. Fetch details for the trace (RCS + Arrow)
-        arrow_idx = lane_store.address_row_index()
+        arrow_idx = home.lanes.address_row_index()
         rcs_rows = (
             session.query(RunCoordinateStatus)
             .filter(
@@ -416,9 +442,16 @@ def search_run(run_id: str, query: str = Query(..., min_length=1)):
 
 
 @app.get("/api/runs/{run_id}/steps/{step_name}/outputs")
-def get_step_outputs(run_id: str, step_name: str, limit: int = Query(50), offset: int = Query(0)):
+def get_step_outputs(
+    run_id: str,
+    step_name: str,
+    request: Request,
+    limit: int = Query(50),
+    offset: int = Query(0),
+):
     """Get all outputs for a specific step in a run."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         base_query = session.query(RunCoordinateStatus).filter_by(run_id=run_id, step_name=step_name)
         total = base_query.count()
         rows = base_query.order_by(RunCoordinateStatus.id).limit(limit).offset(offset).all()
@@ -442,31 +475,31 @@ def _is_fulfilled(session, output_address: str, step_name: Optional[str] = None,
     return bool(row and row[0])
 
 
-def _resolve_arrow_row(output_address: str) -> Optional[Dict[str, Any]]:
+def _resolve_arrow_row(home: Home, output_address: str) -> Optional[Dict[str, Any]]:
     """Resolve an output_address to its Arrow lane_store row (latest by ts).
     Returns None if no Arrow row exists for this address."""
-    return lane_store.address_row_index().get(output_address)
+    return home.lanes.address_row_index().get(output_address)
 
 
-def _resolve_object_path(arrow_row: Dict[str, Any]) -> Optional[str]:
+def _resolve_object_path(home: Home, arrow_row: Dict[str, Any]) -> Optional[str]:
     """If the output is a spilled ref string, return the object store path.
     Returns None for inline values (no on-disk file)."""
     output = arrow_row.get("output", "")
     if isinstance(output, str) and output.startswith("objects:"):
-        from .store import _get_object_path
-        return _get_object_path(output[len("objects:"):])
+        return home.store.object_path(output[len("objects:"):])
     return None
 
 
 @app.get("/api/objects/{output_address}", response_model=ObjectMetadataOut)
-def get_object_metadata(output_address: str):
+def get_object_metadata(output_address: str, request: Request):
     """Get metadata and a preview for a materialized object."""
-    arrow_row = _resolve_arrow_row(output_address)
+    home = _request_home(request)
+    arrow_row = _resolve_arrow_row(home, output_address)
     if not arrow_row:
         raise HTTPException(404, "Object not found")
 
     output = arrow_row.get("output")
-    obj_path = _resolve_object_path(arrow_row)
+    obj_path = _resolve_object_path(home, arrow_row)
 
     # For inline values (native Arrow types or JSON strings), preview directly
     if obj_path is None:
@@ -516,7 +549,7 @@ def get_object_metadata(output_address: str):
             except UnicodeDecodeError:
                 pass
 
-    with get_session() as session:
+    with home.session() as session:
         is_live = _is_fulfilled(session, output_address)
         invalidated_at = None
         invalidation_reason = None
@@ -554,16 +587,17 @@ def get_object_metadata(output_address: str):
 
 
 @app.get("/api/objects/{output_address}/download")
-def download_object(output_address: str):
+def download_object(output_address: str, request: Request):
     """Download the raw bytes of a materialized object."""
     from fastapi.responses import Response
 
-    arrow_row = _resolve_arrow_row(output_address)
+    home = _request_home(request)
+    arrow_row = _resolve_arrow_row(home, output_address)
     if not arrow_row:
         raise HTTPException(404, "Object not found")
 
     output = arrow_row.get("output")
-    obj_path = _resolve_object_path(arrow_row)
+    obj_path = _resolve_object_path(home, arrow_row)
 
     if obj_path is not None:
         if not os.path.exists(obj_path):
@@ -603,9 +637,10 @@ async def preview_selection(request: Request):
     sel = _selection_from_payload(data)
     from .selection import get_selection_addresses
 
-    with get_session() as session:
-        addrs = get_selection_addresses(session, sel)
-        arrow_idx = lane_store.address_row_index()
+    home = _request_home(request)
+    with home.session() as session:
+        addrs = get_selection_addresses(session, sel, home=home)
+        arrow_idx = home.lanes.address_row_index()
         items = []
         for addr in addrs:
             row = arrow_idx.get(addr)
@@ -636,7 +671,7 @@ async def invalidate_selection(request: Request):
     reason = request.query_params.get("reason", "UI Invalidation")
 
     sel = _selection_from_payload(data)
-    result = invalidate(sel, reason)
+    result = invalidate(sel, reason, home=_request_home(request))
 
     return {
         "run_id": result["run_id"],
@@ -650,9 +685,10 @@ async def invalidate_selection(request: Request):
 
 
 @app.get("/api/pipelines", response_model=List[PipelineOut])
-def get_pipelines_api():
+def get_pipelines_api(request: Request):
     """Ledger-derived: a pipeline appears here once declared or run."""
-    with get_session() as session:
+    home = _request_home(request)
+    with home.session() as session:
         latest_subq = (
             session.query(
                 Run.pipeline_id,

@@ -4,24 +4,23 @@ import json
 import os
 import shutil
 import time
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus, RunEvent
 from rubedo.spec import parse_rate_limit
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_policies_data"
 ENV_FOLDER = ".test_policies_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -29,36 +28,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -84,13 +54,13 @@ def test_retries_until_success():
             raise TimeoutError("transient")
         return "ok"
 
-    pipe = pipeline(name="p", steps=[flaky])
+    pipe = pipeline(name="p", steps=[flaky], home=TEST_HOME)
     summary = pipe.run(params={"path": path}, workers=1)
 
     assert calls["n"] == 3
     assert (summary.created_count, summary.failed_count) == (1, 0)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         attempt_events = (
             session.query(RunEvent).filter_by(event_type="step_attempt_failed").all()
         )
@@ -111,11 +81,11 @@ def test_retries_exhausted_records_failure():
     def doomed(params):
         raise TimeoutError("always")
 
-    pipe = pipeline(name="p", steps=[doomed])
+    pipe = pipeline(name="p", steps=[doomed], home=TEST_HOME)
     summary = pipe.run(params={"path": path}, workers=1)
 
     assert summary.failed_count == 1
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         assert (
             session.query(RunEvent)
             .filter_by(event_type="step_attempt_failed")
@@ -136,7 +106,7 @@ def test_retry_on_filters_exception_types():
         calls["n"] += 1
         raise ValueError("deterministic bug — retrying just multiplies cost")
 
-    pipe = pipeline(name="p", steps=[buggy])
+    pipe = pipeline(name="p", steps=[buggy], home=TEST_HOME)
     summary = pipe.run(params={"path": path}, workers=1)
 
     assert calls["n"] == 1, "non-matching exception must not be retried"
@@ -160,7 +130,7 @@ def test_rate_limit_paces_execution():
     def polite(scan):
         return "done"
 
-    pipe = pipeline(name="p", steps=[scan, polite])
+    pipe = pipeline(name="p", steps=[scan, polite], home=TEST_HOME)
 
     start = time.monotonic()
     summary = pipe.run(workers=4)
@@ -207,15 +177,14 @@ def test_duration_parsing():
 def backdate_materializations(iso_timestamp):
     """Backdates the Arrow lane_store ts column, which is what the
     planning staleness check reads."""
-    from rubedo import lane_store
     from datetime import datetime
 
     # Backdate the Arrow rows' ts column in every step file
     dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
-    for row in lane_store.all_filled_rows():
+    for row in TEST_HOME.lanes.all_filled_rows():
         pipe = row.get("pipeline_id", "")
         step = row.get("step_name", "")
-        table = lane_store._combined_table(pipe, step)
+        table = TEST_HOME.lanes._combined_table(pipe, step)
         if table is None or table.num_rows == 0:
             continue
         import pyarrow as pa
@@ -223,7 +192,7 @@ def backdate_materializations(iso_timestamp):
         ts_idx = table.column_names.index("ts")
         new_ts = pa.array([dt] * table.num_rows, type=pa.timestamp("us", tz="UTC"))
         table = table.set_column(ts_idx, "ts", new_ts)
-        path = lane_store._get_step_file(pipe, step)
+        path = TEST_HOME.lanes._get_step_file(pipe, step)
         import os
 
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -231,8 +200,8 @@ def backdate_materializations(iso_timestamp):
             writer.write_table(table)
 
     # Invalidate the read cache — the Arrow files changed on disk.
-    lane_store.clear_read_caches()
-    lane_store.clear_run_buffers()
+    TEST_HOME.lanes.clear_read_caches()
+    TEST_HOME.lanes.clear_run_buffers()
 
 
 def test_fresh_output_is_reused():
@@ -242,7 +211,7 @@ def test_fresh_output_is_reused():
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape], home=TEST_HOME)
     params = {"path": path}
     pipe.run(params=params, workers=1)
     summary = pipe.run(params=params, workers=1)
@@ -256,7 +225,7 @@ def test_expired_deterministic_output_is_refreshed():
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape], home=TEST_HOME)
     params = {"path": path}
     pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
@@ -280,7 +249,7 @@ def test_expired_nondeterministic_output_is_superseded():
     def scrape(params):
         return {"attempt": next(counter)}
 
-    pipe = pipeline(name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape], home=TEST_HOME)
     params = {"path": path}
     pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")
@@ -288,14 +257,12 @@ def test_expired_nondeterministic_output_is_superseded():
     summary = pipe.run(params=params, workers=1)
     assert summary.created_count == 1
 
-    from rubedo import lane_store
     from rubedo.models import InputHashUsage
-    from rubedo.db import get_session
 
     # Two Arrow rows (two generations), one IHU fulfilled (the new one)
-    rows = lane_store.all_filled_rows()
+    rows = TEST_HOME.lanes.all_filled_rows()
     assert len(rows) == 2
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         fulfilled = session.query(InputHashUsage).filter(InputHashUsage.fulfilled.is_(True)).count()
         assert fulfilled == 1
 
@@ -307,7 +274,7 @@ def test_staleness_visible_in_plan():
     def scrape(params):
         return open(params["path"]).read()
 
-    pipe = pipeline(name="p", steps=[scrape])
+    pipe = pipeline(name="p", steps=[scrape], home=TEST_HOME)
     params = {"path": path}
     pipe.run(params=params, workers=1)
     backdate_materializations("2020-01-01T00:00:00Z")

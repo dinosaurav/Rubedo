@@ -8,22 +8,21 @@ downstream steps exactly like a scanned one.
 
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db
-from rubedo.store import init_store
+from conftest import make_home
 
 TEST_FOLDER = ".test_headless_root_data"
 ENV_FOLDER = ".test_headless_root_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -31,36 +30,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -73,7 +43,7 @@ def test_param_fed_root_runs_once_then_reuses():
     def head(params):
         return {"seen": params["n"]}
 
-    pipe = pipeline(name="headless", steps=[head])
+    pipe = pipeline(name="headless", steps=[head], home=TEST_HOME)
 
     s1 = pipe.run(params={"n": 7})
     assert (s1.created_count, s1.reused_count) == (1, 0)
@@ -89,7 +59,7 @@ def test_changed_params_recompute_and_old_params_still_cached():
     def head(params):
         return {"seen": params["n"]}
 
-    pipe = pipeline(name="headless", steps=[head])
+    pipe = pipeline(name="headless", steps=[head], home=TEST_HOME)
 
     assert pipe.run(params={"n": 1}).created_count == 1
     # A different param value is a distinct address -> a new generation.
@@ -106,7 +76,7 @@ def test_root_with_no_params_is_a_constant():
         calls["n"] += 1
         return 42
 
-    pipe = pipeline(name="const", steps=[head])
+    pipe = pipeline(name="const", steps=[head], home=TEST_HOME)
 
     s1 = pipe.run()
     assert (s1.created_count, s1.reused_count) == (1, 0)
@@ -127,7 +97,7 @@ def test_root_lane_feeds_downstream_map():
     def double(head):
         return head["base"] * 2
 
-    pipe = pipeline(name="chain", steps=[head, double])
+    pipe = pipeline(name="chain", steps=[head, double], home=TEST_HOME)
 
     s = pipe.run(params={"base": 21})
     assert s.created_count == 2
@@ -144,7 +114,7 @@ def test_headless_map_root_and_expand_root_coexist():
     def config():
         return {"scale": 10}
 
-    pipe = pipeline(name="mixed", steps=[rows, config])
+    pipe = pipeline(name="mixed", steps=[rows, config], home=TEST_HOME)
 
     s = pipe.run()
     # two expand children + one @root config lane
@@ -159,6 +129,6 @@ def test_bare_pipeline_with_no_source_and_no_root_is_rejected():
         return ghost
 
     # Validation (at least one root) runs lazily on first verb/`.spec`
-    # access, not at pipeline() construction time.
+    # access, not at pipeline(home=TEST_HOME) construction time.
     with pytest.raises(ValueError):
-        pipeline(name="empty", steps=[leaf]).spec
+        pipeline(name="empty", steps=[leaf], home=TEST_HOME).spec

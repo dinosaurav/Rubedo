@@ -10,6 +10,7 @@ from .spec import (
     StepSpec,
 )
 from .pipeline import Pipeline, pipeline
+from .home import Home
 from .models import Filtered, RunSummary
 from .selection import Selection
 from .invalidation import invalidate
@@ -23,6 +24,7 @@ __all__ = [
     "TraceNode",
     "TraceResult",
     "Filtered",
+    "Home",
     "RunSummary",
     "Selection",
     "step",

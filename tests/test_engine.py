@@ -2,20 +2,16 @@ import os
 import tempfile
 import pytest
 from rubedo import step, pipeline
-from rubedo.db import get_session, init_db
-import rubedo.db as db
 from rubedo.models import (
-    Base,
     Run,
     RunCoordinateStatus,
     InputHashUsage,
 )
-from rubedo import lane_store
 from rubedo.selection import Selection
 from rubedo.invalidation import invalidate
-import uuid
-from sqlalchemy.pool import StaticPool
-from sqlalchemy import create_engine
+from conftest import make_home
+
+TEST_HOME = None
 
 
 # Folder recipe: a root expand step that walks "test_input" and yields each
@@ -38,7 +34,8 @@ def count_lines(scan: dict) -> dict:
     return {"text": text, "line_count": len(lines), "empty": len(text) == 0}
 
 
-test_pipeline = pipeline(name="p-test", steps=[scan, count_lines])
+def make_test_pipeline():
+    return pipeline(name="p-test", steps=[scan, count_lines], home=TEST_HOME)
 
 
 def _coord_for_path(session, run_id, step_name, filename):
@@ -52,7 +49,7 @@ def _coord_for_path(session, run_id, step_name, filename):
         .filter(RunCoordinateStatus.output_address.isnot(None))
         .all()
     )
-    addr_index = lane_store.address_row_index()
+    addr_index = TEST_HOME.lanes.address_row_index()
     for rc in rows:
         row = addr_index.get(str(rc.output_address))
         if row is None:
@@ -65,29 +62,10 @@ def _coord_for_path(session, run_id, step_name, filename):
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
+    global TEST_HOME
     orig_dir = os.getcwd()
     temp_dir = tempfile.mkdtemp()
     os.chdir(temp_dir)
-
-    os.makedirs(".rubedo/objects", exist_ok=True)
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    if db.engine is not None:
-        db.engine.dispose()
-
-    db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=db.engine)
-    from sqlalchemy.orm import sessionmaker
-
-    db.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db.engine)
 
     # Create input dir
     os.makedirs("test_input", exist_ok=True)
@@ -96,19 +74,18 @@ def setup_teardown():
     with open("test_input/b.txt", "w") as f:
         f.write("one")
 
+    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
     yield
 
     # Teardown
-    Base.metadata.drop_all(db.engine)
-    db.engine.dispose()
     os.chdir(orig_dir)
 
 
 def test_first_run_creates_all():
-    res = test_pipeline.run(workers=1)
+    res = make_test_pipeline().run(workers=1)
     assert res.run_id is not None
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         run_row = session.query(Run).filter_by(id=res.run_id).first()
         assert run_row.status == "completed"
 
@@ -117,14 +94,14 @@ def test_first_run_creates_all():
         for c in coords:
             assert c.status == "created"
 
-        assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
+        assert len(TEST_HOME.lanes.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
 
 def test_second_run_reuses_all():
-    test_pipeline.run(workers=1)
-    res2 = test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
+    res2 = make_test_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = session.query(RunCoordinateStatus).filter_by(run_id=res2.run_id).all()
         assert len(coords) == 4
         for c in coords:
@@ -132,14 +109,14 @@ def test_second_run_reuses_all():
 
 
 def test_edit_one_file_recreates_one():
-    test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
 
     with open("test_input/a.txt", "w") as f:
         f.write("one\ntwo\nthree")
 
-    res2 = test_pipeline.run(workers=1)
+    res2 = make_test_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = {
             c.coordinate: c
             for c in session.query(RunCoordinateStatus)
@@ -153,17 +130,17 @@ def test_edit_one_file_recreates_one():
 
 
 def test_change_code_version_recreates_all():
-    test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
 
     @step(name="count-lines", version="v2")
     def count_lines_v2(scan: dict) -> dict:
         return {"ok": True}
 
-    p_v2 = pipeline(name="p-test", steps=[scan, count_lines_v2])
+    p_v2 = pipeline(name="p-test", steps=[scan, count_lines_v2], home=TEST_HOME)
 
     res2 = p_v2.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = (
             session.query(RunCoordinateStatus)
             .filter_by(run_id=res2.run_id, step_name="count-lines")
@@ -182,10 +159,10 @@ def test_failure_creates_no_materialization():
             raise Exception("Failure in a.txt")
         return {"ok": True}
 
-    p_fail = pipeline(name="p-fail", steps=[scan, failing_processor])
+    p_fail = pipeline(name="p-fail", steps=[scan, failing_processor], home=TEST_HOME)
     res = p_fail.run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         coords = {
             c.coordinate: c
             for c in session.query(RunCoordinateStatus)
@@ -200,20 +177,20 @@ def test_failure_creates_no_materialization():
         # Ensure no materialization was created for a.txt (only b.txt's
         # count-lines output — the 2 scan lanes always materialize)
         count_lines_rows = [
-            r for r in lane_store.all_filled_rows() if r.get("step_name") == "count-lines"
+            r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "count-lines"
         ]
         assert len(count_lines_rows) == 1
 
 
 def test_select_by_coordinate_glob():
-    test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
 
     sel = Selection(source_id="scan", coordinate_glob="row-*")
     from rubedo.selection import get_selection_addresses
 
-    with get_session() as session:
-        addrs = get_selection_addresses(session, sel)
-        idx = lane_store.address_row_index()
+    with TEST_HOME.session() as session:
+        addrs = get_selection_addresses(session, sel, home=TEST_HOME)
+        idx = TEST_HOME.lanes.address_row_index()
         rows = [idx[a] for a in addrs if a in idx]
         # every live materialization's latest coordinate matches row-* —
         # both scan's own lanes and count-lines' (which shares its
@@ -223,16 +200,16 @@ def test_select_by_coordinate_glob():
 
 
 def test_invalidate_selected():
-    res1 = test_pipeline.run(workers=1)
+    res1 = make_test_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
     sel = Selection(coordinate_glob=b_coord, step="count-lines")
-    res = invalidate(sel, "test invalidation")
+    res = invalidate(sel, "test invalidation", home=TEST_HOME)
 
     assert res["invalidated_count"] == 1
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         # Check materialization is invalidated (by address via IHU)
         from rubedo.models import InputHashUsage
 
@@ -243,15 +220,15 @@ def test_invalidate_selected():
 
 
 def test_invalidated_result_not_reused():
-    res1 = test_pipeline.run(workers=1)
+    res1 = make_test_pipeline().run(workers=1)
 
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
     sel = Selection(coordinate_glob=b_coord, step="count-lines")
-    invalidate(sel, "test")
+    invalidate(sel, "test", home=TEST_HOME)
 
-    res2 = test_pipeline.run(workers=1)
-    with get_session() as session:
+    res2 = make_test_pipeline().run(workers=1)
+    with TEST_HOME.session() as session:
         coords = {
             c.coordinate: c
             for c in session.query(RunCoordinateStatus)
@@ -267,22 +244,22 @@ def test_invalidated_result_not_reused():
 
 def test_logical_deletion():
     # 1. First run, create files
-    res1 = test_pipeline.run(workers=1)
+    res1 = make_test_pipeline().run(workers=1)
     assert res1.created_count == 4  # 2 files x (scan lane + count-lines lane)
     assert res1.reused_count == 0
 
-    assert len(lane_store.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
+    assert len(TEST_HOME.lanes.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
     # 2. Delete one file
     os.remove("test_input/a.txt")
 
     # 3. Second run: a.txt simply isn't scanned — there is no "removed"
     #    bookkeeping. "Current" is just the latest run's lanes.
-    res2 = test_pipeline.run(workers=1)
+    res2 = make_test_pipeline().run(workers=1)
     assert res2.created_count == 0
     assert res2.reused_count == 2  # only b.txt's scan + count-lines lanes
 
-    with db.get_session() as session:
+    with TEST_HOME.session() as session:
         # This run touched only b.txt — no status row for the vanished a.txt.
         run_coords = (
             session.query(RunCoordinateStatus)
@@ -293,7 +270,7 @@ def test_logical_deletion():
         assert run_coords[0].status == "reused"
 
         # a.txt's materialization is untouched and still live — a re-add reuses it.
-        rows = lane_store.all_filled_rows()
+        rows = TEST_HOME.lanes.all_filled_rows()
         assert len(rows) == 6  # 4 original lanes + old anchor + new anchor (b.txt only)
         assert (
             session.query(InputHashUsage)
@@ -307,15 +284,15 @@ def test_restore_deleted_reuses_cache():
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
-    test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
     os.remove("test_input/a.txt")
-    test_pipeline.run(workers=1)
+    make_test_pipeline().run(workers=1)
 
     # Restore file with exact same content
     with open("test_input/a.txt", "w") as f:
         f.write("a")
 
     # Third run should REUSE, not create
-    res3 = test_pipeline.run(workers=1)
+    res3 = make_test_pipeline().run(workers=1)
     assert res3.created_count == 0
     assert res3.reused_count == 4  # a.txt and b.txt, scan + count-lines each

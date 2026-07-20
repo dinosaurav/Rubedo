@@ -1,24 +1,22 @@
 import os
 import shutil
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 
 from rubedo import step, pipeline
-from rubedo.db import init_db, get_session
 from rubedo.models import RunCoordinateStatus, RunEvent, InputHashUsage
-from rubedo import lane_store
 from rubedo.planning import _ArrowRowRef
-from rubedo.store import init_store, read_materialization_output
+from conftest import make_home
 
 TEST_FOLDER = ".test_groupkey_data"
 ENV_FOLDER = ".test_groupkey_env"
 
+TEST_HOME = None
+
 
 @pytest.fixture(autouse=True)
 def isolated_env():
+    global TEST_HOME
     abs_test_folder = os.path.abspath(TEST_FOLDER)
     abs_env_folder = os.path.abspath(ENV_FOLDER)
     for d in (abs_test_folder, abs_env_folder):
@@ -26,36 +24,7 @@ def isolated_env():
             shutil.rmtree(d)
         os.makedirs(d, exist_ok=True)
 
-    import rubedo.store
-
-    rubedo.store.OBJECTS_DIR = f"{abs_env_folder}/store/objects"
-    rubedo.store.STAGING_DIR = f"{abs_env_folder}/store/staging"
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-    init_db()
-
-    import rubedo.db
-
-    if rubedo.db.engine is not None:
-        rubedo.db.engine.dispose()
-
-    from rubedo.models import Base
-    from sqlalchemy.orm import sessionmaker
-
-    rubedo.db.engine = create_engine(
-        os.environ["RUBEDO_DB_PATH"],
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=rubedo.db.engine)
-    rubedo.db.SessionLocal = sessionmaker(
-        autocommit=False, autoflush=False, bind=rubedo.db.engine
-    )
-
-    init_store()
-
+    TEST_HOME = make_home(ENV_FOLDER)
     yield
 
     for d in (abs_test_folder, abs_env_folder):
@@ -80,7 +49,7 @@ def scan():
 def assert_run(pipe):
     summary = pipe.run(workers=1)
     if summary.failed_count > 0:
-        with get_session() as session:
+        with TEST_HOME.session() as session:
             for e in (
                 session.query(RunEvent)
                 .filter_by(run_id=summary.run_id, level="error")
@@ -93,7 +62,7 @@ def assert_run(pipe):
 def _outputs(step_name):
     """coordinate -> output value, for a step's live materializations."""
     result = {}
-    with get_session() as session:
+    with TEST_HOME.session() as session:
         statuses = (
             session.query(RunCoordinateStatus)
             .filter_by(step_name=step_name)
@@ -102,11 +71,11 @@ def _outputs(step_name):
         )
         for st in statuses:
             if st.output_address:
-                row = lane_store.address_row_index().get(str(st.output_address))
+                row = TEST_HOME.lanes.address_row_index().get(str(st.output_address))
                 if row:
                     usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
                     if usage and usage.fulfilled:
-                        result[st.coordinate] = read_materialization_output(_ArrowRowRef(row))
+                        result[st.coordinate] = TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
     return result
 
 
@@ -123,7 +92,7 @@ def test_group_key_partitions_by_indexed_field():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup], home=TEST_HOME)
     assert_run(pipe)
 
     outs = _outputs("rollup")
@@ -144,7 +113,7 @@ def test_group_key_none_is_one_all_group():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup], home=TEST_HOME)
     assert_run(pipe)
     outs = _outputs("rollup")
     assert set(outs) == {"@all"}
@@ -162,7 +131,7 @@ def test_group_key_multivalue_joins_multiple_groups():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup], home=TEST_HOME)
     assert_run(pipe)
     outs = _outputs("rollup")
     assert set(outs) == {"tech", "ai"}
@@ -186,7 +155,7 @@ def test_group_key_reduce_after_expand():
     def rollup(articles):
         return {"n": len(articles)}
 
-    pipe = pipeline(name="g", steps=[scan, read, articles, rollup])
+    pipe = pipeline(name="g", steps=[scan, read, articles, rollup], home=TEST_HOME)
     assert_run(pipe)
     outs = _outputs("rollup")
     # reduce gathers the minted expand lanes and groups them
@@ -206,7 +175,7 @@ def test_group_key_missing_field_raises():
     def rollup(classify):
         return {"n": len(classify)}
 
-    pipe = pipeline(name="g", steps=[scan, classify, rollup])
+    pipe = pipeline(name="g", steps=[scan, classify, rollup], home=TEST_HOME)
     with pytest.raises(ValueError, match="no value"):
         pipe.run(workers=1)
 

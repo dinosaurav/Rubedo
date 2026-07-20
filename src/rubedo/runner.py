@@ -13,7 +13,6 @@ actually commits).
 """
 
 import json
-import os
 import threading
 import traceback
 import uuid
@@ -21,9 +20,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 import contextlib
 
-from .db import get_session, init_db
 from .execution import _RunMemo
 from .hashing import hash_json
+from .home import Home
 from .ledger import _emit_event, _finish_run, _RunContext
 from .models import RUN_HEARTBEAT_INTERVAL_SECONDS, Run, RunSummary
 from .planning import (
@@ -36,93 +35,11 @@ from .planning import (
 )
 from .scheduler import SCHEDULES, _partition_segments, _run_segment, _scanned_for
 from .spec import PipelineSpec, definition
-from .store import init_store
 from .util import utcnow_iso
 
 
-def _init_home(home: str):
-    """Point the DB and object store at a custom root for this call.
-
-    An explicit home always wins over RUBEDO_DB_PATH/RUBEDO_HOME env vars
-    (same precedence as passing db_path directly to init_db) — it's only
-    applied when the caller actually passes home=, so the no-arg default
-    path is untouched.
-    """
-    init_db(db_path=os.path.join(home, "rubedo.sqlite"))
-    init_store(home=home)
-    from . import lane_store
-    lane_store.init_tables(home=home)
-
-
-# --- one-home-per-process guard (TODO 34, buildable slice) -----------------
-#
-# _init_home repoints module-global DB/object-store/lane-table state, so two
-# concurrent runs in one process targeting *different* homes would silently
-# switch each other's backing store mid-run. This guard makes that a loud
-# error instead of silent corruption: it tracks the process's single active
-# effective home (None = the ambient default — no home= passed) plus a count
-# of runs currently using it. A run/plan/declaration requesting a different
-# home while the count is nonzero is rejected. Same-home concurrency (including
-# several concurrent default-home runs) passes straight through untouched.
-#
-# This is deliberately *not* a per-run context object — see TODO 34's
-# end-state note for why that's a separate, larger decision.
-_home_guard_lock = threading.Lock()
-_active_home: Optional[str] = None
-_active_home_runs = 0
-
-
-def _home_label(home: Optional[str]) -> str:
-    """Human-readable name for an effective home, including the no-home
-    default, for the guard's error message."""
-    return repr(home) if home is not None else "the default (.rubedo/RUBEDO_HOME)"
-
-
-def _home_conflict_message(home: Optional[str]) -> str:
-    # Caller holds _home_guard_lock, so _active_home/_active_home_runs are
-    # stable for the duration of building this message.
-    return (
-        "rubedo supports only one home per process at a time: "
-        f"{_active_home_runs} run(s) targeting home={_home_label(_active_home)} "
-        f"are still in flight in this process, so a call targeting "
-        f"home={_home_label(home)} cannot start. Finish the in-flight run(s) "
-        f"first, or run each home in a separate process."
-    )
-
-
-def _check_home_guard(home: Optional[str]) -> None:
-    """Raise if `home` conflicts with an in-flight run's home in this
-    process, without registering as an active run. For plan()/
-    declare_pipeline(), which call _init_home for a single quick session and
-    don't hold the run-scoped guard below."""
-    with _home_guard_lock:
-        if _active_home_runs > 0 and home != _active_home:
-            raise RuntimeError(_home_conflict_message(home))
-
-
-def _enter_home_guard(home: Optional[str]) -> None:
-    """Register a run as active for `home` (None = the ambient default),
-    raising first if it conflicts with a different home already in flight in
-    this process. Always pair with _exit_home_guard in a finally."""
-    global _active_home, _active_home_runs
-    with _home_guard_lock:
-        if _active_home_runs > 0 and home != _active_home:
-            raise RuntimeError(_home_conflict_message(home))
-        if _active_home_runs == 0:
-            _active_home = home
-        _active_home_runs += 1
-
-
-def _exit_home_guard() -> None:
-    """Release a run registered by _enter_home_guard. Always called from a
-    finally, including on failed runs, so the guard never wedges."""
-    global _active_home_runs
-    with _home_guard_lock:
-        _active_home_runs = max(0, _active_home_runs - 1)
-
-
 @contextlib.contextmanager
-def _run_heartbeat(run_id: str):
+def _run_heartbeat(run_id: str, home: Home):
     """Bump the run's last_heartbeat_at every RUN_HEARTBEAT_INTERVAL_SECONDS
     from a daemon thread, for as long as the run is executing.
 
@@ -136,7 +53,7 @@ def _run_heartbeat(run_id: str):
     def beat():
         while not stop.wait(RUN_HEARTBEAT_INTERVAL_SECONDS):
             try:
-                with get_session() as session:
+                with home.session() as session:
                     hb_run = session.query(Run).filter_by(id=run_id).first()
                     if hb_run is None:
                         return
@@ -197,7 +114,7 @@ def _post_run_retention(
             if summary.status == "failed":
                 return
             report = auto_prune(
-                session, pipeline.name, ctx.run_id, pipeline.retention
+                session, pipeline.name, ctx.run_id, pipeline.retention, home=ctx.home
             )
             if report is None:
                 _emit_event(
@@ -232,7 +149,7 @@ def _post_run_retention(
             return
 
         # Unconfigured: warn once (cheaply) if the store is getting large.
-        if cheap_store_bytes() > DEFAULT_WARN_THRESHOLD_BYTES:
+        if cheap_store_bytes(home=ctx.home) > DEFAULT_WARN_THRESHOLD_BYTES:
             msg = (
                 f"Object store exceeds "
                 f"{DEFAULT_WARN_THRESHOLD_BYTES // (1024 * 1024)} MiB and "
@@ -290,7 +207,7 @@ def plan(
     *,
     params: Optional[dict] = None,
     force: bool = False,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
 ) -> RunPlan:
     """Dry-run: what would run() do, and why — without writing anything.
 
@@ -302,14 +219,12 @@ def plan(
     "execute" for @root if it isn't (first run) or the step has
     check_cache=False.
 
-    home, if given, points the ledger/object store at a custom root instead
-    of the default `.rubedo`/RUBEDO_HOME.
+    home, if given, is the storage root for this plan. When omitted, the
+    default `.rubedo`/RUBEDO_HOME home is used.
     """
     from .planning import _code_drift_message
 
-    _check_home_guard(home)
-    if home is not None:
-        _init_home(home)
+    home = home or Home.default()
 
     pipeline, params = _resolve_invocation(pipeline, params)
     topo_steps = topological_sort(pipeline)
@@ -319,7 +234,7 @@ def plan(
     plan_warnings: List[str] = []
     coord_step_mats: Dict[tuple, Any] = {}
 
-    with get_session() as session:
+    with home.session() as session:
         for step in topo_steps:
             accepts_params = _step_accepts_params(step)
             decisions = _plan_step(
@@ -331,6 +246,7 @@ def plan(
                 force,
                 accepts_params,
                 pipeline_id=pipeline.name,
+                home=home,
             )
             drifted = sum(1 for d in decisions if d.code_drift)
             if drifted:
@@ -368,7 +284,7 @@ def run(
     params: Optional[dict] = None,
     workers: Optional[int] = None,
     force: bool = False,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
     schedule: str = "broad",
@@ -376,8 +292,8 @@ def run(
     """Run a pipeline — the single entry point.
 
     Params are validated against the pipeline's params_model whenever
-    one is declared. home, if given, points the ledger/object store at a
-    custom root instead of the default `.rubedo`/RUBEDO_HOME.
+    one is declared. home, if given, is the storage root for this run;
+    otherwise the default `.rubedo`/RUBEDO_HOME home is used.
 
     schedule picks the execution order (never the results — cache identity
     is order-independent): "broad" (default) completes each step across all
@@ -401,7 +317,7 @@ def run(
 
 def declare_pipeline(
     pipeline: PipelineSpec,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
 ) -> str:
     """Write a pipeline's definition snapshot to the ledger without running.
 
@@ -410,20 +326,13 @@ def declare_pipeline(
     visible in the dashboard and CLI before any execution. Returns the
     declaration run ID.
     """
-    _check_home_guard(home)
-    if home is not None:
-        _init_home(home)
-
-    init_db()
-    init_store()
-    from . import lane_store
-    lane_store.init_tables()
+    home = home or Home.default()
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     now = utcnow_iso()
     source_id = _run_source_id(pipeline)
 
-    with get_session() as session:
+    with home.session() as session:
         session.add(
             Run(
                 id=run_id,
@@ -452,7 +361,7 @@ def run_pipeline(
     workers: Optional[int] = None,
     force: bool = False,
     params: Optional[dict] = None,
-    home: Optional[str] = None,
+    home: Optional[Home] = None,
     progress: bool = False,
     progress_cb: Optional[Callable[[str, str, str], None]] = None,
     schedule: str = "broad",
@@ -465,7 +374,7 @@ def run_pipeline(
         workers (Optional[int]): Number of parallel workers to use.
         force (bool): If True, forces re-execution of cached outputs.
         params (Optional[dict]): Run-level parameters.
-        home (Optional[str]): Custom ledger/object-store root, overriding
+        home (Optional[Home]): Custom ledger/object-store root, overriding
             the default `.rubedo`/RUBEDO_HOME for this run.
         schedule (str): "broad" (default) stages step by step; "deep"
             pipelines lanes through consecutive 1:1 steps. Order only —
@@ -479,114 +388,97 @@ def run_pipeline(
             f"schedule must be one of {SCHEDULES}, got {schedule!r}"
         )
 
-    # Guard entry/exit brackets the whole run body — home= repoints
-    # module-global DB/store/lane-table state below, so the guard must be
-    # held for as long as that state is in use, not just for _init_home
-    # itself. _exit_home_guard runs in the finally so a failed run still
-    # releases it.
-    _enter_home_guard(home)
-    try:
-        if home is not None:
-            _init_home(home)
+    home = home or Home.default()
 
-        from .progress import TerminalProgress
+    from .progress import TerminalProgress
 
-        topo_steps = topological_sort(pipeline)
-        ctx = _RunContext(
-            run_id=f"run_{uuid.uuid4().hex[:12]}",
-            pipeline_id=pipeline.name,
-            source_id=_run_source_id(pipeline),
-            totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
-            by_step={
-                s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
-                for s in topo_steps
-                if not s.skip_cache
-            },
-        )
+    topo_steps = topological_sort(pipeline)
+    ctx = _RunContext(
+        run_id=f"run_{uuid.uuid4().hex[:12]}",
+        pipeline_id=pipeline.name,
+        source_id=_run_source_id(pipeline),
+        home=home,
+        totals={"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0},
+        by_step={
+            s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
+            for s in topo_steps
+            if not s.skip_cache
+        },
+    )
 
-        with get_session() as session:
-            now = utcnow_iso()
-            session.add(
-                Run(
-                    id=ctx.run_id,
-                    kind="process",
-                    pipeline_id=ctx.pipeline_id,
-                    source_id=ctx.source_id,
-                    params_json=json.dumps(params or {}, sort_keys=True),
-                    definition_json=json.dumps(definition(pipeline)),
-                    started_at=now,
-                    last_heartbeat_at=now,
-                )
-            )
-            _emit_event(
-                session,
-                ctx.run_id,
-                "info",
-                "run_started",
+    with home.session() as session:
+        now = utcnow_iso()
+        session.add(
+            Run(
+                id=ctx.run_id,
+                kind="process",
                 pipeline_id=ctx.pipeline_id,
-                message=f"Starting run {ctx.run_id}",
+                source_id=ctx.source_id,
+                params_json=json.dumps(params or {}, sort_keys=True),
+                definition_json=json.dumps(definition(pipeline)),
+                started_at=now,
+                last_heartbeat_at=now,
             )
-            session.commit()
+        )
+        _emit_event(
+            session,
+            ctx.run_id,
+            "info",
+            "run_started",
+            pipeline_id=ctx.pipeline_id,
+            message=f"Starting run {ctx.run_id}",
+        )
+        session.commit()
 
-            progress_cm = TerminalProgress() if progress else contextlib.nullcontext()
-            with progress_cm as prog, _run_heartbeat(ctx.run_id):
-                if prog is not None:
-                    progress_cb = prog.update
+        progress_cm = TerminalProgress() if progress else contextlib.nullcontext()
+        with progress_cm as prog, _run_heartbeat(ctx.run_id, home):
+            if prog is not None:
+                progress_cb = prog.update
 
-                # Clear read caches at run start — they may hold stale data
-                # from a previous run with a different DB/home.  The cache
-                # is rebuilt on first lookup (one address-column scan per
-                # step, amortized across all lookups in this run).
-                from . import lane_store
-                lane_store.clear_read_caches()
+            # Clear read caches at run start; this home's cache is rebuilt on
+            # first lookup and is independent of other Home instances.
+            home.lanes.clear_read_caches()
 
-                try:
-                    params_hash = hash_json(params or {})
-                    memo = _RunMemo()
+            try:
+                params_hash = hash_json(params or {})
+                memo = _RunMemo(home)
 
-                    for seg_steps in _partition_segments(topo_steps, schedule):
-                        _run_segment(
-                            session,
-                            ctx,
-                            seg_steps,
-                            pipeline,
-                            params,
-                            params_hash,
-                            force,
-                            workers,
-                            memo,
-                            progress_cb,
+                for seg_steps in _partition_segments(topo_steps, schedule):
+                    _run_segment(
+                        session,
+                        ctx,
+                        seg_steps,
+                        pipeline,
+                        params,
+                        params_hash,
+                        force,
+                        workers,
+                        memo,
+                        progress_cb,
+                    )
+
+                summary = _finish_run(ctx)
+                _post_run_retention(session, pipeline, ctx, summary)
+                return summary
+
+            except Exception as e:
+                # Flush whatever completed to disk — per-segment flush already
+                # wrote completed segments; this catches the current segment's
+                # successfully committed lanes.
+                home.lanes.flush_all()
+                with home.session() as err_session:
+                    err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
+                    if err_run:
+                        err_run.status = "failed"  # type: ignore
+                        err_run.error_message = traceback.format_exc()  # type: ignore
+                        err_run.finished_at = utcnow_iso()  # type: ignore
+                        _emit_event(
+                            err_session,
+                            ctx.run_id,
+                            "error",
+                            "run_failed",
+                            pipeline_id=ctx.pipeline_id,
+                            message=str(e),
                         )
-
-                    summary = _finish_run(ctx)
-                    _post_run_retention(session, pipeline, ctx, summary)
-                    return summary
-
-                except Exception as e:
-                    # Flush whatever completed to disk — per-segment flush
-                    # already wrote completed segments; this catches the
-                    # current segment's successfully committed lanes (a
-                    # catastrophic failure mid-commit leaves the Arrow row
-                    # but IHU not fulfilled, so next run recomputes — the
-                    # stale row is harmless history).  No reason to discard
-                    # successful work.
-                    from . import lane_store
-                    lane_store.flush_all()
-                    with get_session() as err_session:
-                        err_run = err_session.query(Run).filter_by(id=ctx.run_id).first()
-                        if err_run:
-                            err_run.status = "failed"  # type: ignore
-                            err_run.error_message = traceback.format_exc()  # type: ignore
-                            err_run.finished_at = utcnow_iso()  # type: ignore
-                            _emit_event(
-                                err_session,
-                                ctx.run_id,
-                                "error",
-                                "run_failed",
-                                pipeline_id=ctx.pipeline_id,
-                                message=str(e),
-                            )
-                            err_session.commit()
-                    raise
-    finally:
-        _exit_home_guard()
+                        err_session.commit()
+                raise
