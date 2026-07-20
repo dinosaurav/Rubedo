@@ -48,54 +48,65 @@ string is payload data, consistent by construction. A moto-tested
 example pinning "re-run reuses with zero GetObject calls" is Parked.
 Full original spec in `notes/TODO-obsolete.md`.
 
-## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-18; all planes settled]**
+## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-20 against Home; planes settled]**
 
 Distinct from the retired item 6 (input data) — this is the *internal*
 storage that backs every run. This — **not** the execution backend — is
 the real prerequisite for genuine multi-machine/cloud execution
 (item 8): a distributed deployment can't share a purely local SQLite
 file + objects dir. Post-Arrow-rewrite there are **three planes**, not
-two:
+two — and post-item-34 they all hang off one injected `Home`:
 
-1. **Ledger DB** (`src/rubedo/db.py`) → Postgres via URL.
-2. **Object store** (`src/rubedo/store.py`, spilled values + payloads)
-   → S3/GCS behind a protocol.
-3. **Lane store** (`src/rubedo/lane_store.py`, Arrow IPC files under
-   `tables/<pipeline>/<step>.arrow`) — **new since the original spec.**
-   This is now the content plane: reuse reads it, so a shared
-   deployment must share it. The original spec predates its existence.
+1. **Ledger DB** (`Home.db` / `Database` in `src/rubedo/db.py`) →
+   Postgres via URL.
+2. **Object store** (`Home.store` / `LocalStore` in `src/rubedo/store.py`)
+   → S3/GCS behind a protocol (`S3Store`).
+3. **Lane store** (`Home.lanes` / `LaneStore` in `src/rubedo/lane_store.py`,
+   Arrow IPC under `tables/<pipeline>/<step>.arrow` locally) — the
+   content plane: reuse reads it, so a shared deployment must share it.
 
-**Settled decisions (owner design session 2026-07-11, re-verified
-against current code 2026-07-18 — do not re-litigate):**
+**Settled decisions (owner design session 2026-07-11; re-verified
+2026-07-18; composition root updated 2026-07-20 after item 34 — do not
+re-litigate the planes, only the attach point):**
 
+- **`Home` is the composition root.** Item 34 killed process-global
+  DB/store/lane-table state; every call site already goes through
+  `home.session()` / `home.store.*` / `home.lanes.*`. Cloud backends
+  plug into those three attributes — do **not** reintroduce a
+  process-global store instance or a parallel `store=` on
+  `run()`/`plan()`. Concurrent different homes in one process stay
+  correct by construction.
 - **`ObjectStore` protocol** (exists / read / write / delete, write
-  carrying conditional-put semantics) with `LocalStore` + `S3Store`
-  implementations; `store.py`'s module functions become thin delegates to
-  a process-global store instance, so every call site (ledger, planning,
-  execution, du, server) stays untouched. GCS rides the same protocol
-  later. `client_factory=` pattern for endpoints/tests (fsspec was
-  rejected: a heavyweight layer for four methods).
+  carrying conditional-put semantics) with `LocalStore` (already a
+  class on `Home.store`) + `S3Store` implementations. Extract the
+  protocol from what `LocalStore` already exposes; swap
+  `Home.store = S3Store(...)` (or construct via URL — below). GCS rides
+  the same protocol later. `client_factory=` pattern for
+  endpoints/tests (fsspec was rejected: a heavyweight layer for four
+  methods).
 - **Staging is a local concept.** `LocalStore` keeps the staging dir +
   fsync + atomic `os.replace`; `S3Store` uploads directly with a
   conditional put (`If-None-Match: "*"`; GCS `ifGenerationMatch=0`) —
   a bucket upload is already atomic, so no staging keys exist and
   `cleanup_staged` is a cloud no-op.
-- **Config = two URLs, no new concepts.** `RUBEDO_DB_PATH` already takes
-  a URL (fix the mangling first — `db.py:38` wraps any non-`sqlite:///`
-  string in `sqlite:///`, so a `postgresql://` URL silently becomes a
-  SQLite file path; anything containing `://` must pass through
-  verbatim, and the makedirs/`_ensure_gitignore` logic must skip URL
-  targets — the module docstring currently overpromises here). Add
-  `RUBEDO_STORE_URL` (`s3://bucket/prefix`) + a `store=`
-  param on `run()`/`plan()` with the same explicit-param-over-env
-  precedence `home=` has. `home=` itself stays local-only. WAL/
-  `busy_timeout` pragmas stay SQLite-only (already conditional).
+- **Config = URLs on `Home`, no new concepts.** `Database` already
+  passes anything containing `://` through verbatim (postgres URLs are
+  fine; bare paths still get `sqlite:///`). Add `RUBEDO_STORE_URL`
+  (`s3://bucket/prefix`) read by `Home.default()` / `Home(...)`, plus
+  explicit construction hooks — e.g. `Home(path=..., db_url=...,
+  store_url=...)` or `Home(..., store=S3Store(...), lanes=...)` —
+  with the same explicit-arg-over-env precedence `path`/`db_url` already
+  have. A filesystem `path` stays meaningful for local mode (and as a
+  local scratch if anything still needs one); cloud mode may omit a
+  usable local objects/tables tree when both ledger and store are URLs.
+  WAL / `busy_timeout` pragmas stay SQLite-only (already conditional).
 - **Tests: SQLite + moto only for now** (owner call). `S3Store` is
   moto-tested in the always-run suite; real-Postgres correctness is
   deferred to **item 7b**.
 
-**Lane-store plane (ratified by owner 2026-07-18):** cloud mode writes
-each buffered flush as its own immutable object
+**Lane-store plane (ratified by owner 2026-07-18; attach point =
+`Home.lanes`, 2026-07-20):** cloud mode writes each buffered flush as
+its own immutable object
 (`tables/<pipeline>/<step>/<flush-uuid>.arrow`) — object stores don't
 append, but the lane store is already append-only batches flushed at
 segment boundaries, so flush-per-object maps 1:1. The reader lists the
@@ -115,37 +126,43 @@ lease per pipeline** via a conditional-put marker object (the cloud
 analog of the local run heartbeat) — needed for concurrent
 same-pipeline runs regardless, and it makes compaction race-free
 (the sole writer compacts its own prefixes). Local layout stays the
-single append file — zero change for the normal case.
+single append file on `Home.lanes` — zero change for the normal case.
+Implementation shape: either a `CloudLaneStore` swapped onto
+`Home.lanes`, or a backend behind the existing `LaneStore` API — same
+method surface the engine already calls.
 
-**Trap (part of the spec, re-derived 2026-07-18):** **(1) The old
-dialect trap is gone — don't chase it.** The original spec's
-`sqlite_where` partial-index warning died with the `materializations`
-table; `models.py` has **no** dialect-conditional DDL today (verified).
-The dialect-sensitive machinery is now the IHU claim/fulfill UPDATE
-lifecycle, the retry-once IntegrityError commit-collision path, and the
-ORM immutability listeners — 7b covers them on real Postgres. **(2) 412
-is success** — a conditional put failing with PreconditionFailed means
-the object already exists: map it to the same idempotent early-return
-the local exists-check takes, never an error. **(3) Missing reads
-return None** — absent objects must read as `None` (du counts them as
-missing); `S3Store.read` must map `NoSuchKey` to `None`, never raise.
-**(4) Path stragglers** — `gc.py` imports `_get_object_path` directly,
-and the server download endpoints build local paths; grep for direct
-`objects/` path construction and move every call site behind the
-protocol before calling it done. **(5) The lane store's read cache**
-(`drop_table_cache` and friends, see `benchmarks/README.md`) assumes
-local-file mtimes; the cloud reader needs its own invalidation story
-(list-prefix etag set is the natural key).
+**Trap (part of the spec, re-derived 2026-07-18; path notes updated
+2026-07-20):** **(1) The old dialect trap is gone — don't chase it.**
+The original spec's `sqlite_where` partial-index warning died with the
+`materializations` table; `models.py` has **no** dialect-conditional
+DDL today (verified). The dialect-sensitive machinery is now the IHU
+claim/fulfill UPDATE lifecycle, the retry-once IntegrityError
+commit-collision path, and the ORM immutability listeners — 7b covers
+them on real Postgres. **(2) 412 is success** — a conditional put
+failing with PreconditionFailed means the object already exists: map
+it to the same idempotent early-return the local exists-check takes,
+never an error. **(3) Missing reads return None** — absent objects
+must read as `None` (du counts them as missing); `S3Store.read` must
+map `NoSuchKey` to `None`, never raise. **(4) Protocol boundary** —
+call sites already go through `home.store` / `home.lanes` (item 34);
+grep for any remaining assumptions that `Home.store` is specifically
+a `LocalStore` (direct `objects_dir` / filesystem path construction in
+gc, server download endpoints, `cheap_store_bytes`) and route them
+through the protocol before calling it done. **(5) The lane store's
+read cache** (`drop_table_cache` and friends, see
+`benchmarks/README.md`) assumes local-file mtimes; the cloud reader
+needs its own invalidation story (list-prefix etag set is the natural
+key).
 
-Acceptance: `examples/count_lines` run twice with `RUBEDO_STORE_URL`
-pointed at a moto/MinIO bucket → identical Created/Reused counts,
-statuses, addresses, and lifecycle rows to the local run; a second
-process against the same bucket + Postgres DB fully reuses the first's
-outputs (the multi-machine story, simulated locally); a Postgres
-`RUBEDO_DB_PATH` engine-creates cleanly (live behavior verified
-manually until 7b); `rubedo du` against the cloud store makes zero
-per-object API calls; the server payload/download endpoints stream from
-the bucket.
+Acceptance: `examples/count_lines` run twice with a `Home` whose
+`store_url`/`RUBEDO_STORE_URL` points at a moto/MinIO bucket →
+identical Created/Reused counts, statuses, addresses, and lifecycle
+rows to the local run; a second process against the same bucket +
+Postgres DB fully reuses the first's outputs (the multi-machine story,
+simulated locally); a Postgres `db_url`/`RUBEDO_DB_PATH` engine-creates
+cleanly (live behavior verified manually until 7b); `rubedo du` against
+the cloud store makes zero per-object API calls; the server
+payload/download endpoints stream from the bucket via `app.state.home`.
 
 ## 7b. Postgres ledger test coverage  **[follows item 7]**
 
@@ -153,13 +170,14 @@ The suite stays SQLite-only through item 7 (owner call, 2026-07-11);
 this item pays that debt. Env-gated live tests: a pytest fixture keyed
 on `RUBEDO_TEST_PG_URL` that cleanly skips when unset (suite stays green
 offline, no docker requirement for local dev), plus a CI job with a
-postgres service container so the gap is covered on every push. Cover
-exactly the dialect-sensitive machinery: the IHU claim/fulfill lifecycle
-under concurrent runs; the IntegrityError retry-once commit-collision
-path; ORM immutability guards raising on update/delete; a
-`queries.py`/selection smoke pass.
+postgres service container so the gap is covered on every push. Construct
+the fixture's `Home` with `db_url=RUBEDO_TEST_PG_URL` (not a parallel
+global engine). Cover exactly the dialect-sensitive machinery: the IHU
+claim/fulfill lifecycle under concurrent runs; the IntegrityError
+retry-once commit-collision path; ORM immutability guards raising on
+update/delete; a `queries.py`/selection smoke pass.
 Also add the verification note to `AGENTS.md`: touching
-`db.py`/`models.py` ⇒ run the PG suite (`docker run postgres` +
+`db.py`/`models.py`/`home.py` ⇒ run the PG suite (`docker run postgres` +
 `RUBEDO_TEST_PG_URL=...`).
 Acceptance: full suite green both with and without `RUBEDO_TEST_PG_URL`
 set; the CI postgres job green on real Postgres.
@@ -191,10 +209,10 @@ the same shape `dask.distributed` and a thin `ray` wrapper expose.
 - **Item-7 dependency softened — buildable now.** Workers never touch the
   ledger or the store: parent payloads are resolved in the main process,
   only `fn` + args ship to the pool, results return over the wire, and
-  staging/commit stay in the main thread. v1 is correct against the local
-  SQLite + objects dir; item 7 is the *throughput* story (workers reading
-  a shared store instead of routing payloads through the scheduler) and
-  stays a later optimization, not a prerequisite — see item 13.
+  staging/commit stay in the main thread. v1 is correct against a local
+  `Home`; item 7 is the *throughput* story (workers reading a shared
+  cloud `Home.store` instead of routing payloads through the scheduler)
+  and stays a later optimization, not a prerequisite — see item 13.
 - **Testing: fake pool in the suite, live dask as an example.** The
   always-run suite proves the seam with a trivial in-repo `.submit()`
   fake (statuses/addresses identical to `"thread"`); a self-contained
@@ -252,8 +270,11 @@ do not re-litigate):**
   shim GETs and deserializes spilled inputs, calls `fn`, and for a
   spill-worthy result serializes + hashes + conditional-PUTs it,
   returning only `(ref, content_type, size_bytes, …)`. The pool contract
-  stays plain `.submit()` — item 8's seam untouched; store config
-  travels via the picklable `client_factory` pattern.
+  stays plain `.submit()` — item 8's seam untouched; `store_config` is a
+  picklable projection of `Home.store` (the `client_factory` pattern from
+  item 7), never a process-global handle and never the live `Home` object
+  (engines/sessions aren't pickle-safe; loky workers must rebuild a client
+  from config).
 - **Ledger commit stays main-thread**, from the returned metadata, via a
   commit variant that skips byte staging (the object is already in the
   store) but runs the full commit machinery unchanged. Crash-safety
@@ -409,6 +430,13 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
   (intern-by-abspath; tests in `tests/test_home_concurrency.py`).
   `_RunContext` / `_RunMemo` / `RunSummary` carry the home; planning,
   ledger, gc/du/trace/invalidate, CLI, and `create_app(home=)` follow.
+- **2026-07-20 — item 7 (+ 7b / 8 / 13 attach-point) respecced against
+  Home:** cloud backends plug into `Home.db` / `Home.store` /
+  `Home.lanes` — no process-global store instance, no `store=` on
+  `run()`/`plan()`. Config stays URL-shaped (`RUBEDO_STORE_URL` +
+  `Home(..., store_url=|store=)`). Item 13's worker `store_config` is a
+  picklable projection of `Home.store`, never the live Home. Planes and
+  compaction/lease decisions unchanged.
 - **2026-07-18 — item 33 shipped (the address salt):**
   compute_output_address gained a required `pipeline` parameter,
   appended as the always-last labeled segment; five planning.py call
