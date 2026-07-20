@@ -1,13 +1,11 @@
 """Fold: deterministic, cached collective accumulation."""
 
-import os
-import shutil
 
 import pytest
 
 from rubedo import pipeline, step
 from rubedo.hashing import hash_json
-from conftest import make_home
+from conftest import isolated_test_env
 
 
 ENV_FOLDER = ".test_fold_env"
@@ -18,15 +16,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    if os.path.exists(abs_env_folder):
-        shutil.rmtree(abs_env_folder)
-    os.makedirs(abs_env_folder, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-    shutil.rmtree(abs_env_folder, ignore_errors=True)
-
+    with isolated_test_env("fold", with_data=False) as env:
+        TEST_HOME = env.home
+        yield
 
 def test_fold_accumulates_lanes_in_coordinate_order_and_reuses():
     calls = []

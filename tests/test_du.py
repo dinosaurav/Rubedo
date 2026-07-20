@@ -1,15 +1,13 @@
 """rubedo du: ledger-derived storage report + reclaimable dry-run audit."""
 
 import os
-import shutil
-import uuid
 
 import pytest
 
 from rubedo import Selection, invalidate, step, pipeline
 from rubedo.du import storage_report
 from rubedo.models import InputHashUsage
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_du_data"
 ENV_FOLDER = ".test_du_env"
@@ -20,25 +18,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("du") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -170,20 +152,9 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     assert len(hashes) == 1  # ...sharing one object
 
     def coordinate_for_path(path_value):
-        from rubedo.planning import _ArrowRowRef
-
-        with TEST_HOME.session() as session:
-            for r in [row for row in TEST_HOME.lanes.all_filled_rows() if row.get("step_name") == "scan" and row.get("lane_key") != "@root"]:
-                if TEST_HOME.store.read_materialization_output(_ArrowRowRef(r)).get("path") == path_value:
-                    from rubedo.models import RunCoordinateStatus
-
-                    rc = (
-                        session.query(RunCoordinateStatus)
-                        .filter_by(step_name="scan", output_address=r.get("address"))
-                        .first()
-                    )
-                    return rc.coordinate
-        return None
+        cells = TEST_HOME.select(f"step:scan path:{path_value}", resolve_output=True)
+        assert cells, f"no lane for path={path_value}"
+        return cells[0].coordinate
 
     coord_a = coordinate_for_path("a.txt")
     res = invalidate(

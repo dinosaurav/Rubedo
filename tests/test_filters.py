@@ -2,13 +2,12 @@
 
 import json
 import os
-import shutil
 
 import pytest
 
 from rubedo import Filtered, step, pipeline
 from rubedo.models import InputHashUsage, RunCoordinateStatus
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_filters_data"
 ENV_FOLDER = ".test_filters_env"
@@ -19,20 +18,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("filters") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -84,22 +72,11 @@ def coord_for_path(run_id, filename):
     `path` output field — coordinates are row-<hash>, not the filename.
     A dependent 1:1 map step (screen, summarize) shares its ancestor's
     coordinate all the way down the chain."""
-    with TEST_HOME.session() as session:
-        rows = (
-            session.query(RunCoordinateStatus)
-            .filter(RunCoordinateStatus.run_id == run_id, RunCoordinateStatus.step_name == "scan")
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-            .all()
-        )
-        addr_index = TEST_HOME.lanes.address_row_index()
-        for rc in rows:
-            row = addr_index.get(str(rc.output_address))
-            if row is None:
-                continue
-            output = row.get("output")
-            if isinstance(output, dict) and output.get("path") == filename:
-                return rc.coordinate
-    return None
+    cells = TEST_HOME.select(
+        f"step:scan path:{filename}", run_id=run_id, resolve_output=True
+    )
+    assert cells, f"no lane for path={filename}"
+    return cells[0].coordinate
 
 
 def test_filtered_coordinate_skips_downstream():

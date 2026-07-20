@@ -4,13 +4,11 @@ An expand step can return a pa.Table, polars DataFrame, or pandas
 DataFrame instead of yielding.  Each row becomes a content-addressed
 lane — the table IS the fan-out, no Python loop.
 """
-import os
-import shutil
 import pytest
 import pyarrow as pa
 
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_expand_table_data"
 ENV_FOLDER = ".test_expand_table_env"
@@ -21,20 +19,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test = os.path.abspath(TEST_FOLDER)
-    abs_env = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test, abs_env):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test, abs_env):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("expand_table") as env:
+        TEST_HOME = env.home
+        yield
 
 def _outputs(step_name):
     rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name]

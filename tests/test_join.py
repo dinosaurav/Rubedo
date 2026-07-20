@@ -1,12 +1,11 @@
 import csv
 import os
-import shutil
 
 import pytest
 
 from rubedo import step, pipeline
-from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent, InputHashUsage
-from conftest import make_home
+from rubedo.models import MaterializationEdge, RunCoordinateStatus, RunEvent
+from conftest import isolated_test_env
 
 DATA = ".test_join_data"
 ENV = ".test_join_env"
@@ -17,19 +16,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    dirs = [os.path.abspath(d) for d in (DATA, ENV)]
-    for d in dirs:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV)
-    yield
-
-    for d in dirs:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("join") as env:
+        TEST_HOME = env.home
+        yield
 
 def write_csv(name, text):
     with open(os.path.join(DATA, name), "w") as f:
@@ -64,24 +53,11 @@ def assert_run(pipe, **kw):
 
 
 def _outputs(step_name):
-    from rubedo.planning import _ArrowRowRef
-
-    result = {}
-    idx = TEST_HOME.lanes.address_row_index()
-    with TEST_HOME.session() as session:
-        for st in (
-            session.query(RunCoordinateStatus)
-            .filter_by(step_name=step_name)
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-            .all()
-        ):
-            row = idx.get(str(st.output_address))
-            if not row:
-                continue
-            usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
-            if usage and usage.fulfilled:
-                result[st.coordinate] = TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-    return result
+    return {
+        cell.coordinate: cell.output
+        for cell in TEST_HOME.select(f"step:{step_name}", resolve_output=True)
+        if cell.output_address
+    }
 
 
 def test_two_way_equijoin():

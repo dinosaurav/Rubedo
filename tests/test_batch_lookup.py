@@ -5,12 +5,10 @@ for content) that replaces the single-step SQLite Materialization query.
 These tests set up both sides and verify the batch lookup returns the
 correct row dicts."""
 
-import os
-import shutil
 from datetime import datetime, timezone, timedelta
 
 import pytest
-from conftest import make_home
+from conftest import isolated_test_env
 from rubedo.models import InputHashUsage, Run
 from rubedo.util import utcnow_iso
 
@@ -18,18 +16,12 @@ from rubedo.util import utcnow_iso
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_env = os.path.abspath(".test_batch_lookup_env")
-    if os.path.exists(abs_env):
-        shutil.rmtree(abs_env)
-    os.makedirs(abs_env, exist_ok=True)
-    TEST_HOME = make_home(abs_env)
-    TEST_HOME.lanes.clear_read_caches()
-    yield
-    TEST_HOME.lanes.clear_run_buffers()
-    TEST_HOME = None
-    if os.path.exists(abs_env):
-        shutil.rmtree(abs_env)
-
+    with isolated_test_env("batch_lookup", with_data=False) as env:
+        TEST_HOME = env.home
+        TEST_HOME.lanes.clear_read_caches()
+        yield
+        TEST_HOME.lanes.clear_run_buffers()
+        TEST_HOME = None
 
 PIPE = "batch-pipe"
 STEP = "extract"

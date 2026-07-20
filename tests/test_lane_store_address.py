@@ -1,12 +1,10 @@
 """By-address reuse semantics for the Home-owned lane store."""
 
-import os
-import shutil
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import make_home
+from conftest import isolated_test_env
 from rubedo import pipeline, step
 
 ENV_FOLDER = ".test_lane_addr_env"
@@ -24,17 +22,12 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_env = os.path.abspath(ENV_FOLDER)
-    if os.path.exists(abs_env):
-        shutil.rmtree(abs_env)
-    os.makedirs(abs_env, exist_ok=True)
-    TEST_HOME = make_home(abs_env)
-    yield
-    TEST_HOME.lanes.clear_run_buffers()
-    TEST_HOME = None
-    if os.path.exists(abs_env):
-        shutil.rmtree(abs_env)
-
+    with isolated_test_env("lane_addr", with_data=False) as env:
+        TEST_HOME = env.home
+        TEST_HOME.lanes.clear_read_caches()
+        yield
+        TEST_HOME.lanes.clear_run_buffers()
+        TEST_HOME = None
 
 def _ts(minutes_ago: float = 0):
     return datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)

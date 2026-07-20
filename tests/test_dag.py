@@ -1,12 +1,12 @@
 import pytest
 import os
-import shutil
 from rubedo import step, pipeline
-from rubedo.planning import topological_sort, _ArrowRowRef
+from rubedo.planning import topological_sort
 from rubedo.models import RunCoordinateStatus, MaterializationEdge, InputHashUsage
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_dag_data"
+ENV_FOLDER = ".test_dag_env"
 
 TEST_HOME = None
 
@@ -14,28 +14,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME
-    # Setup
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    if os.path.exists(abs_test_folder):
-        shutil.rmtree(abs_test_folder)
-    os.makedirs(abs_test_folder, exist_ok=True)
-
-    DB_FOLDER = os.path.abspath(".test_dag_env")
-    if os.path.exists(DB_FOLDER):
-        shutil.rmtree(DB_FOLDER)
-    os.makedirs(DB_FOLDER, exist_ok=True)
-
-    if os.path.exists(TEST_FOLDER):
-        shutil.rmtree(TEST_FOLDER)
-    os.makedirs(TEST_FOLDER, exist_ok=True)
-
-    TEST_HOME = make_home(DB_FOLDER)
-    yield
-
-    # Teardown
-    if os.path.exists(TEST_FOLDER):
-        shutil.rmtree(TEST_FOLDER)
-
+    with isolated_test_env("dag") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     path = os.path.join(TEST_FOLDER, name)
@@ -57,13 +38,9 @@ def coordinate_for_path(step_name, path_value):
     """The migrated coordinate is a content hash (row-<hash>), not the
     literal filename. Recover it by scanning that step's live
     materializations for the one whose payload carries this path."""
-    idx = TEST_HOME.lanes.address_row_index()
-    with TEST_HOME.session() as session:
-        for rc in session.query(RunCoordinateStatus).filter_by(step_name=step_name).all():
-            row = idx.get(str(rc.output_address)) if rc.output_address else None
-            if row is not None and TEST_HOME.store.read_materialization_output(_ArrowRowRef(row)).get("path") == path_value:
-                return rc.coordinate
-    return None
+    cells = TEST_HOME.select(f"step:{step_name} path:{path_value}", resolve_output=True)
+    assert cells, f"no lane for path={path_value}"
+    return cells[0].coordinate
 
 
 def test_topological_sort():
@@ -98,7 +75,7 @@ def test_linear_dag():
     create_file("f1.txt", "hello")
     create_file("f2.txt", "world")
 
-    pipe.run(workers=1)
+    summary = pipe.run(workers=1)
 
     with TEST_HOME.session() as session:
         # Check coordinates created
@@ -113,27 +90,15 @@ def test_linear_dag():
         coord_f1 = coordinate_for_path("scan", "f1.txt")
         assert coord_f1 is not None
 
-        rc_read = (
-            session.query(RunCoordinateStatus)
-            .filter_by(coordinate=coord_f1, step_name="read")
-            .first()
-        )
-        idx = TEST_HOME.lanes.address_row_index()
-        read_row = idx.get(str(rc_read.output_address)) if rc_read and rc_read.output_address else None
-        assert read_row is not None
-
-        rc_upper = (
-            session.query(RunCoordinateStatus)
-            .filter_by(coordinate=coord_f1, step_name="upper")
-            .first()
-        )
-        upper_row = idx.get(str(rc_upper.output_address)) if rc_upper and rc_upper.output_address else None
-        assert upper_row is not None
+        read_cell = next(c for c in summary.cells("read") if c.coordinate == coord_f1)
+        upper_cell = next(c for c in summary.cells("upper") if c.coordinate == coord_f1)
+        assert read_cell.output_address is not None
+        assert upper_cell.output_address is not None
 
         # Check edges
         edge = (
             session.query(MaterializationEdge)
-            .filter_by(parent_address=str(rc_read.output_address), child_address=str(rc_upper.output_address))
+            .filter_by(parent_address=read_cell.output_address, child_address=upper_cell.output_address)
             .first()
         )
         assert edge is not None

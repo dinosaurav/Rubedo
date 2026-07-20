@@ -1,5 +1,4 @@
 import os
-import tempfile
 import pytest
 from rubedo import step, pipeline
 from rubedo.models import (
@@ -9,19 +8,20 @@ from rubedo.models import (
 )
 from rubedo.selection import Selection
 from rubedo.invalidation import invalidate
-from conftest import make_home
+from conftest import isolated_test_env
 
+TEST_FOLDER = ".test_engine_data"
 TEST_HOME = None
 
 
-# Folder recipe: a root expand step that walks "test_input" and yields each
+# Folder recipe: a root expand step that walks TEST_FOLDER and yields each
 # file's content. The `path` field in the output lets tests find "the lane
 # for a.txt" without the coordinate being that literal string (coordinates
 # are content-addressed: row-<hash>).
 @step(check_cache=False)
 def scan():
-    for name in sorted(os.listdir("test_input")):
-        path = os.path.join("test_input", name)
+    for name in sorted(os.listdir(TEST_FOLDER)):
+        path = os.path.join(TEST_FOLDER, name)
         if os.path.isfile(path):
             yield {"path": name, "text": open(path, encoding="utf-8").read()}
 
@@ -38,37 +38,28 @@ def make_test_pipeline():
     return pipeline(name="p-test", steps=[scan, count_lines], home=TEST_HOME)
 
 
-def _coord_for_path(session, run_id, step_name, filename):
+def _coord_for_path(run_id, filename):
     """The coordinate a given run minted for `filename`, found via the
     `scan` step's `path` output field — coordinates are row-<hash>, not
     the filename itself, and a dependent 1:1 map step shares its parent's
     coordinate, so this resolves either "scan" or "count-lines" lanes."""
-    cells = TEST_HOME.select(f"step:scan path:{filename}", run_id=run_id)
-    if cells:
-        return cells[0].coordinate
-    return None
+    cells = TEST_HOME.select(
+        f"step:scan path:{filename}", run_id=run_id, resolve_output=True
+    )
+    assert cells, f"no lane for path={filename}"
+    return cells[0].coordinate
 
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME
-    orig_dir = os.getcwd()
-    temp_dir = tempfile.mkdtemp()
-    os.chdir(temp_dir)
-
-    # Create input dir
-    os.makedirs("test_input", exist_ok=True)
-    with open("test_input/a.txt", "w") as f:
-        f.write("one\ntwo")
-    with open("test_input/b.txt", "w") as f:
-        f.write("one")
-
-    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
-    yield
-
-    # Teardown
-    os.chdir(orig_dir)
-
+    with isolated_test_env("engine") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write('one\ntwo')
+        with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
+            f.write('one')
+        yield
 
 def test_first_run_creates_all():
     res = make_test_pipeline().run(workers=1)
@@ -100,7 +91,7 @@ def test_second_run_reuses_all():
 def test_edit_one_file_recreates_one():
     make_test_pipeline().run(workers=1)
 
-    with open("test_input/a.txt", "w") as f:
+    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("one\ntwo\nthree")
 
     res2 = make_test_pipeline().run(workers=1)
@@ -112,8 +103,8 @@ def test_edit_one_file_recreates_one():
             .filter_by(run_id=res2.run_id, step_name="count-lines")
             .all()
         }
-        a_coord = _coord_for_path(session, res2.run_id, "count-lines", "a.txt")
-        b_coord = _coord_for_path(session, res2.run_id, "count-lines", "b.txt")
+        a_coord = _coord_for_path(res2.run_id, "a.txt")
+        b_coord = _coord_for_path(res2.run_id, "b.txt")
         assert coords[a_coord].status == "created"
         assert coords[b_coord].status == "reused"
 
@@ -158,8 +149,8 @@ def test_failure_creates_no_materialization():
             .filter_by(run_id=res.run_id, step_name="count-lines")
             .all()
         }
-        a_coord = _coord_for_path(session, res.run_id, "count-lines", "a.txt")
-        b_coord = _coord_for_path(session, res.run_id, "count-lines", "b.txt")
+        a_coord = _coord_for_path(res.run_id, "a.txt")
+        b_coord = _coord_for_path(res.run_id, "b.txt")
         assert coords[a_coord].status == "failed"
         assert coords[b_coord].status == "created"
 
@@ -188,7 +179,7 @@ def test_invalidate_selected():
     res1 = make_test_pipeline().run(workers=1)
 
     with TEST_HOME.session() as session:
-        b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
+        b_coord = _coord_for_path(res1.run_id, "b.txt")
     sel = Selection(coordinate_glob=b_coord, step="count-lines")
     res = invalidate(sel, "test invalidation", home=TEST_HOME)
 
@@ -208,7 +199,7 @@ def test_invalidated_result_not_reused():
     res1 = make_test_pipeline().run(workers=1)
 
     with TEST_HOME.session() as session:
-        b_coord = _coord_for_path(session, res1.run_id, "count-lines", "b.txt")
+        b_coord = _coord_for_path(res1.run_id, "b.txt")
     sel = Selection(coordinate_glob=b_coord, step="count-lines")
     invalidate(sel, "test", home=TEST_HOME)
 
@@ -220,7 +211,7 @@ def test_invalidated_result_not_reused():
             .filter_by(run_id=res2.run_id, step_name="count-lines")
             .all()
         }
-        a_coord = _coord_for_path(session, res2.run_id, "count-lines", "a.txt")
+        a_coord = _coord_for_path(res2.run_id, "a.txt")
         assert coords[a_coord].status == "reused"
         assert (
             coords[b_coord].status == "created"
@@ -236,7 +227,7 @@ def test_logical_deletion():
     assert len(TEST_HOME.lanes.all_filled_rows()) == 5  # 4 lanes + 1 root-anchor
 
     # 2. Delete one file
-    os.remove("test_input/a.txt")
+    os.remove(os.path.join(TEST_FOLDER, "a.txt"))
 
     # 3. Second run: a.txt simply isn't scanned — there is no "removed"
     #    bookkeeping. "Current" is just the latest run's lanes.
@@ -266,15 +257,15 @@ def test_logical_deletion():
 
 
 def test_restore_deleted_reuses_cache():
-    with open("test_input/a.txt", "w") as f:
+    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("a")
 
     make_test_pipeline().run(workers=1)
-    os.remove("test_input/a.txt")
+    os.remove(os.path.join(TEST_FOLDER, "a.txt"))
     make_test_pipeline().run(workers=1)
 
     # Restore file with exact same content
-    with open("test_input/a.txt", "w") as f:
+    with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
         f.write("a")
 
     # Third run should REUSE, not create

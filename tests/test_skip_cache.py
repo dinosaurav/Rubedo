@@ -1,11 +1,10 @@
 """skip_cache: inline utils fused into their consumers' cache identity."""
 
 import os
-import shutil
 
 import pytest
 
-from conftest import make_home
+from conftest import isolated_test_env
 from rubedo import pipeline, step
 from rubedo.models import MaterializationEdge, RunCoordinateStatus
 
@@ -18,20 +17,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("skipcache") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -76,17 +64,15 @@ def test_util_never_materialized_or_recorded():
     assert calls == ["parse"]
 
     with TEST_HOME.session() as session:
-        from rubedo.planning import _ArrowRowRef
-
         step_names = {r.get("step_name") for r in TEST_HOME.lanes.all_filled_rows()}
         assert step_names == {"scan", "read", "report"}
         rc_steps = {c.step_name for c in session.query(RunCoordinateStatus).all()}
         assert rc_steps == {"scan", "read", "report"}
 
         # Value flowed through the util correctly
-        TEST_HOME.lanes.address_row_index()
+        (report_cell,) = summary.cells("report", resolve_output=True)
         report_row = next(r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "report")
-        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(report_row)) == "report: hello"
+        assert report_cell.output == "report: hello"
 
         # Lineage skips through: report's parent is read (not scan, and not
         # the fused-away parse util)
@@ -224,11 +210,8 @@ def test_chained_utils():
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
 
-    with TEST_HOME.session():
-        from rubedo.planning import _ArrowRowRef
-
-        out_row = next(r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == "out")
-        assert TEST_HOME.store.read_materialization_output(_ArrowRowRef(out_row)) == "hello"
+    (out_cell,) = summary.cells("out", resolve_output=True)
+    assert out_cell.output == "hello"
 
 
 def test_plan_omits_utils():

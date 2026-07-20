@@ -1,7 +1,6 @@
 """/api/pipelines is ledger-derived: a pipeline exists once it has run."""
 
 import os
-import shutil
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +8,7 @@ from pydantic import BaseModel
 
 from rubedo import step, pipeline
 from rubedo.server import create_app
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_pipelines_data"
 ENV_FOLDER = ".test_pipelines_env"
@@ -22,22 +21,11 @@ client = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME, client
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    client = TestClient(create_app(home=TEST_HOME))
-    yield
-    client = None
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("pipelines") as env:
+        TEST_HOME = env.home
+        client = TestClient(create_app(home=TEST_HOME))
+        yield
+        client = None
 
 class MyParams(BaseModel):
     my_val: int = 7

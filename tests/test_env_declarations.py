@@ -6,14 +6,12 @@ in-memory shared-cache SQLite with StaticPool.
 """
 
 import os
-import shutil
-import uuid
 
 import pytest
 
 from rubedo import pipeline, step
 from rubedo.spec import definition
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_envdecl_data"
 ENV_FOLDER = ".test_envdecl_env"
@@ -24,25 +22,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    os.environ["RUBEDO_DB_PATH"] = (
-        f"sqlite:///file:testdb_{uuid.uuid4().hex}?mode=memory&cache=shared&uri=true"
-    )
-
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("envdecl") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:

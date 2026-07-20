@@ -1,12 +1,10 @@
 import os
-import shutil
 
 import pytest
 
 from rubedo import step, pipeline
-from rubedo.models import RunCoordinateStatus, RunEvent, InputHashUsage
-from rubedo.planning import _ArrowRowRef
-from conftest import make_home
+from rubedo.models import RunEvent
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_groupkey_data"
 ENV_FOLDER = ".test_groupkey_env"
@@ -17,20 +15,9 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("groupkey") as env:
+        TEST_HOME = env.home
+        yield
 
 def create_file(name, content):
     with open(os.path.join(TEST_FOLDER, name), "w") as f:
@@ -61,22 +48,11 @@ def assert_run(pipe):
 
 def _outputs(step_name):
     """coordinate -> output value, for a step's live materializations."""
-    result = {}
-    with TEST_HOME.session() as session:
-        statuses = (
-            session.query(RunCoordinateStatus)
-            .filter_by(step_name=step_name)
-            .filter(RunCoordinateStatus.output_address.isnot(None))
-            .all()
-        )
-        for st in statuses:
-            if st.output_address:
-                row = TEST_HOME.lanes.address_row_index().get(str(st.output_address))
-                if row:
-                    usage = session.query(InputHashUsage).filter_by(address=str(st.output_address)).first()
-                    if usage and usage.fulfilled:
-                        result[st.coordinate] = TEST_HOME.store.read_materialization_output(_ArrowRowRef(row))
-    return result
+    return {
+        cell.coordinate: cell.output
+        for cell in TEST_HOME.select(f"step:{step_name}", resolve_output=True)
+        if cell.output_address
+    }
 
 
 def test_group_key_partitions_by_indexed_field():

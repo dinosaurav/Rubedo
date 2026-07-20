@@ -1,11 +1,10 @@
 import os
-import shutil
 import pytest
 from unittest.mock import patch
 
 from rubedo import step, pipeline
 from rubedo.models import InputHashUsage
-from conftest import make_home
+from conftest import isolated_test_env
 
 TEST_FOLDER = ".test_concurrency_data"
 ENV_FOLDER = ".test_concurrency_env"
@@ -15,25 +14,11 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    abs_test_folder = os.path.abspath(TEST_FOLDER)
-    abs_env_folder = os.path.abspath(ENV_FOLDER)
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d, exist_ok=True)
-
-    # Must use a physical file so other sessions can see it.
-
-    with open(os.path.join(abs_test_folder, "a.txt"), "w") as f:
-        f.write("A")
-
-    TEST_HOME = make_home(ENV_FOLDER)
-    yield
-
-    for d in (abs_test_folder, abs_env_folder):
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
+    with isolated_test_env("concurrency") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write("A")
+        yield
 
 # A headless map root fed one file's content via params — content, not
 # path, is what these tests race on, and

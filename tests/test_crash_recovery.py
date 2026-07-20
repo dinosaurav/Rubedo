@@ -1,11 +1,10 @@
 import os
-import tempfile
 import pytest
 from unittest.mock import patch
 from rubedo import step, pipeline
-from conftest import make_home
+from conftest import isolated_test_env
 
-TEST_FOLDER = "input"
+TEST_FOLDER = ".test_crash_recovery_data"
 
 TEST_HOME = None
 
@@ -13,22 +12,13 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def setup_teardown():
     global TEST_HOME
-    orig_dir = os.getcwd()
-    temp_dir = tempfile.mkdtemp()
-    os.chdir(temp_dir)
-
-    # Create some dummy files
-    input_dir = os.path.join(temp_dir, "input")
-    os.makedirs(input_dir, exist_ok=True)
-    with open(os.path.join(input_dir, "a.txt"), "w") as f:
-        f.write("hello")
-    with open(os.path.join(input_dir, "b.txt"), "w") as f:
-        f.write("world")
-
-    TEST_HOME = make_home(os.path.join(temp_dir, ".rubedo"))
-    yield input_dir
-    os.chdir(orig_dir)
-
+    with isolated_test_env("crash_recovery") as env:
+        TEST_HOME = env.home
+        with open(os.path.join(TEST_FOLDER, "a.txt"), "w") as f:
+            f.write('hello')
+        with open(os.path.join(TEST_FOLDER, "b.txt"), "w") as f:
+            f.write('world')
+        yield
 
 @step
 def scan():
