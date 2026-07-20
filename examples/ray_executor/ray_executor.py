@@ -1,8 +1,9 @@
 """Bring your own Future-shaped pool with a local Ray cluster.
 
-Optional dependency (Rubedo never imports Ray):
+Ray is in the repo's ``dev`` dependency group (Rubedo never imports it),
+so a normal ``uv sync`` is enough:
 
-    uv run --with ray python examples/ray_executor/ray_executor.py
+    uv run python examples/ray_executor/ray_executor.py
 
 The first run executes ``square`` on Ray workers. The second run fully
 reuses the plain local Rubedo cache and does not need another cluster —
