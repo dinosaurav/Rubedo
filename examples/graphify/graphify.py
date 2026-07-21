@@ -133,7 +133,7 @@ def extract_semantic_nodes(src_files: str):
 
     return {"file_id": file_id, "summary": summary}
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def build_networkx_graph(extract_code_nodes: dict, extract_semantic_nodes: dict):
     """Fan-in all the nodes and edges, merging semantic summaries into the Graph."""
     G = nx.DiGraph()

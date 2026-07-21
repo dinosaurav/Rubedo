@@ -74,7 +74,7 @@ function countsLine(counts?: Record<string, number>): { label: string; color: st
 
 function policyBadges(s: StepDef): string[] {
   const badges: string[] = [];
-  if (s.in_shape === 'aggregate') badges.push('reduce');
+  if (s.in_shape === 'aggregate') badges.push('aggregate');
   if (s.skip_cache) badges.push('util');
   if (s.retries) badges.push(`retries ${s.retries}`);
   if (s.rate_limit) badges.push(s.rate_limit);

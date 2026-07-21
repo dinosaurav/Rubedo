@@ -73,7 +73,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   never stored. The four conceptual shapes: `map`
   (`in_shape="one", out_shape="one"`, 1:1, default) / **`aggregate`**
   (`in_shape="aggregate", out_shape="one"` — N:1 fan-in over a parent's
-  surviving lanes; was called "reduce"; `group_key` partitions into one
+  surviving lanes; `group_key` partitions into one
   output per field value read from the parent's output dict, else a single
   `"@all"`) / `expand` (`in_shape="one", out_shape="many"` — 1:N; the fn
   yields payloads, minting content-addressed `row-<hash>` child lanes; **no
@@ -148,7 +148,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
   `lane_store.find_latest_filled_by_address` (content retrieval) via
   `batch_lookup_by_address`. Per shape: aggregate → one decision per group
-  (`_group_reduce_lanes`, reads `group_key` field from the parent's
+  (`_group_aggregate_lanes`, reads `group_key` field from the parent's
   output dict); expand → one execute decision per parent lane,
   reused without re-running the fn via a parent-addressed cache anchor;
   join → one decision per matched tuple (`_plan_join`, reads `join_on`
@@ -262,7 +262,7 @@ its dependency declaration. Tests use this terse form throughout: no
 `name=`/`version=`/`shape=`/`depends_on=` unless the kwarg is the test's
 subject (version bumps, drift, validation errors), the name genuinely
 differs from the function's, or the shape can't be inferred — a plain
-`@all` aggregate keeps `shape="reduce"` (alias) or `in_shape="aggregate"`,
+`@all` aggregate keeps `in_shape="aggregate"`,
 and aggregate/join steps keep an
 explicit `depends_on=` (parent counts validate at decoration time, before
 build-time inference runs):

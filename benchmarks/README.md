@@ -94,7 +94,7 @@ The built-in quartet covers the skip_cache question:
 
 Note the shape being tested: `skip_cache` is rejected by spec
 validation on `expand` (its lanes are the cache anchors) and on
-`reduce` — so "a big expand I never want to cache" is expressed as the
+`aggregate` — so "a big expand I never want to cache" is expressed as the
 expand's downstream util map being `skip_cache`.
 
 ### Writing your own shape scenario

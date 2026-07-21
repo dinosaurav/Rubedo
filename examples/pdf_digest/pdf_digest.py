@@ -1,7 +1,7 @@
 """PDF digest — a source-less pipeline whose head is a plain map step.
 
     load_pdf ─▶ split_chunks ─▶ caption ─▶ rejoin ─▶ summary_visual
-    (map root)   (expand)       (vision    (reduce,   (text LLM)
+    (map root)   (expand)       (vision    (aggregate,   (text LLM)
      params=pdf                  LLM on     ordered) ─▶ summary_textonly
                                  images)               (text LLM)
 
@@ -17,7 +17,7 @@ From there it is a normal DAG:
   - `caption` (map) sends *only the image chunks* to a cheap vision LLM; text
     chunks pass straight through. Each caption is cached by the chunk's
     content, so a second run captions nothing and makes zero vision calls.
-  - `rejoin` (reduce) sorts the chunks back into reading order and rebuilds
+  - `rejoin` (aggregate) sorts the chunks back into reading order and rebuilds
     two documents: one where figures are replaced by their captions
     (picture-aware), and one that drops the figures entirely (text-only).
   - `summary_visual` / `summary_textonly` (map, text LLM) summarize each —
@@ -164,7 +164,7 @@ def caption(split_chunks: dict, params: PdfParams) -> dict:
     return {"index": chunk["index"], "kind": "image", "content": caption_text}
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def rejoin(caption: dict) -> dict:
     """Fan the captioned chunks back into reading order and build two docs:
     picture-aware (figures -> captions) and text-only (figures dropped)."""

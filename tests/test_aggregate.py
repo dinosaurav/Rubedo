@@ -12,15 +12,15 @@ from rubedo.models import (
     RunEvent,
 )
 
-TEST_FOLDER = ".test_reduce_data"
-ENV_FOLDER = ".test_reduce_env"
+TEST_FOLDER = ".test_aggregate_data"
+ENV_FOLDER = ".test_aggregate_env"
 
 TEST_HOME = None
 
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    with isolated_test_env("reduce") as env:
+    with isolated_test_env("aggregate") as env:
         TEST_HOME = env.home
         yield
 
@@ -72,7 +72,7 @@ def _latest_live_row(session, step_name):
     return max(live_rows, key=lambda r: r.get("ts"))
 
 
-def test_reduce_basic_and_lineage():
+def test_aggregate_basic_and_lineage():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
     create_file("c.txt", "30")
@@ -81,14 +81,14 @@ def test_reduce_basic_and_lineage():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce1", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg1", steps=[scan, parse, sum_values], home=TEST_HOME)
     summary = assert_run(pipe)
 
-    assert summary.created_count == 7  # 3 scan + 3 parse + 1 reduce
+    assert summary.created_count == 7  # 3 scan + 3 parse + 1 aggregate
 
     with TEST_HOME.session() as session:
         sum_row = _latest_live_row(session, "sum")
@@ -98,7 +98,7 @@ def test_reduce_basic_and_lineage():
         edges = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         assert len(edges) == 3
 
-def test_reduce_caching():
+def test_aggregate_caching():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
@@ -106,15 +106,15 @@ def test_reduce_caching():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce2", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg2", steps=[scan, parse, sum_values], home=TEST_HOME)
 
     # Run 1: Create
     s1 = assert_run(pipe)
-    assert s1.created_count == 5  # 2 scan + 2 parse + 1 reduce
+    assert s1.created_count == 5  # 2 scan + 2 parse + 1 aggregate
 
     # Run 2: Reused
     s2 = assert_run(pipe)
@@ -123,7 +123,7 @@ def test_reduce_caching():
 
     # Change one file -> a new content-addressed lane for a.txt (scan +
     # parse created for it), b.txt's lane is untouched (reused), and the
-    # reduce recomputes because its input membership changed.
+    # aggregate recomputes because its input membership changed.
     create_file("a.txt", "15")
     s3 = assert_run(pipe)
     assert s3.reused_count == 2  # scan(b), parse(b)
@@ -135,7 +135,7 @@ def test_reduce_caching():
     assert s4.reused_count == 4  # scan(a), parse(a), scan(b), parse(b)
     assert s4.created_count == 3  # scan(c), parse(c), sum
 
-def test_reduce_filtered_lane():
+def test_aggregate_filtered_lane():
     create_file("a.txt", "keep:10")
     create_file("b.txt", "drop:20")
 
@@ -146,7 +146,7 @@ def test_reduce_filtered_lane():
             return Filtered("dropped")
         return int(text.split(":")[1])
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         # a.txt (10) is always present; b.txt (20) only when un-filtered.
         # Coordinates are content-addressed (row-<hash>), not "a.txt"/
@@ -156,7 +156,7 @@ def test_reduce_filtered_lane():
             assert 20 in parse.values()
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce3", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg3", steps=[scan, parse, sum_values], home=TEST_HOME)
     assert_run(pipe)
 
     with TEST_HOME.session() as session:
@@ -177,7 +177,7 @@ def test_reduce_filtered_lane():
         edges2 = session.query(MaterializationEdge).filter_by(child_address=sum_row["address"]).all()
         assert len(edges2) == 2
 
-def test_reduce_failed_parent_lane():
+def test_aggregate_failed_parent_lane():
     create_file("a.txt", "10")
     create_file("b.txt", "fail")
 
@@ -188,11 +188,11 @@ def test_reduce_failed_parent_lane():
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", depends_on=["parse"], shape="reduce", on_failed="block")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate", on_failed="block")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce4", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg4", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
@@ -205,7 +205,7 @@ def test_reduce_failed_parent_lane():
         meta = json.loads(status.metadata_json)
         assert f"parse:{coord_b}" in meta["failed_parents"]
 
-def test_reduce_failed_parent_lane_use_passed():
+def test_aggregate_failed_parent_lane_use_passed():
     create_file("a.txt", "10")
     create_file("b.txt", "fail")
     create_file("c.txt", "20")
@@ -217,11 +217,11 @@ def test_reduce_failed_parent_lane_use_passed():
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce4_use_passed", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg4_use_passed", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 1
@@ -235,14 +235,14 @@ def test_reduce_failed_parent_lane_use_passed():
         meta = json.loads(status.metadata_json)
         assert f"parse:{coord_b}" in meta["failed_parents"]
 
-def test_reduce_downstream_map():
+def test_aggregate_downstream_map():
     create_file("a.txt", "10")
 
     @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -250,7 +250,7 @@ def test_reduce_downstream_map():
     def format_val(sum):
         return f"Total: {sum}"
 
-    pipe = pipeline(name="reduce5", steps=[scan, parse, sum_values, format_val], home=TEST_HOME)
+    pipe = pipeline(name="agg5", steps=[scan, parse, sum_values, format_val], home=TEST_HOME)
     s1 = assert_run(pipe)
 
     assert s1.created_count == 4  # scan + parse + sum + format
@@ -260,22 +260,22 @@ def test_reduce_downstream_map():
         assert status.coordinate == "@all"
         assert status.status == "created"
 
-def test_reduce_plan():
+def test_aggregate_plan():
     create_file("a.txt", "10")
 
     @step
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce6", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg6", steps=[scan, parse, sum_values], home=TEST_HOME)
 
     p1 = pipe.plan()
     # scan (a root expand) always plans as "execute"; everything downstream
-    # of it — including the reduce — is unknowable without running the
+    # of it — including the aggregate — is unknowable without running the
     # generator, so it plans "pending".
     sum_items = [i for i in p1.items if i.step_name == "sum"]
     assert any(i.action == "pending" for i in sum_items)
@@ -291,26 +291,26 @@ def test_reduce_plan():
 
 def test_registration_errors():
     with pytest.raises(ValueError, match="skip_cache is meaningless with in_shape='aggregate'"):
-        @step(name="sum", depends_on=["x"], shape="reduce", skip_cache=True)
+        @step(name="sum", depends_on=["x"], in_shape="aggregate", skip_cache=True)
         def sum_v1(x):
             pass
 
-    with pytest.raises(ValueError, match=r"shape must be one of \['expand', 'join', 'map', 'reduce'\]"):
+    with pytest.raises(ValueError, match=r"shape must be one of \['expand', 'join', 'map'\]"):
         @step(name="sum", shape="banana")
         def sum_v2(x):
             pass
 
-    # A parentless reduce (no params, no depends_on) can't be caught at
+    # A parentless aggregate (no params, no depends_on) can't be caught at
     # decoration time — the parent-count check moved to build time so that
-    # a reduce omitting depends_on= can get its parent from signature
+    # an aggregate omitting depends_on= can get its parent from signature
     # inference. It raises when the pipeline is built:
-    @step(name="sum", shape="reduce")
+    @step(name="sum", in_shape="aggregate")
     def sum_v3():
         pass
     with pytest.raises(ValueError, match="requires at least one parent"):
         pipeline(name="pe", steps=[sum_v3], home=TEST_HOME).spec
 
-def test_reduce_all_filtered():
+def test_aggregate_all_filtered():
     create_file("a.txt", "10")
     create_file("b.txt", "20")
 
@@ -319,11 +319,11 @@ def test_reduce_all_filtered():
         from rubedo import Filtered
         return Filtered("reason")
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
-    pipe = pipeline(name="reduce_empty", steps=[scan, parse, sum_values], home=TEST_HOME)
+    pipe = pipeline(name="agg_empty", steps=[scan, parse, sum_values], home=TEST_HOME)
     s1 = pipe.run(workers=1)
 
     assert s1.failed_count == 0

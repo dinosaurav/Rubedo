@@ -171,7 +171,7 @@ def test_sampled_aggregate_address_differs_from_full():
     def parse(scan: dict):
         return {"path": scan["path"], "n": 1}
 
-    @step(name="total", depends_on=["parse"], shape="reduce")
+    @step(name="total", depends_on=["parse"], in_shape="aggregate")
     def total(parse: dict):
         return {"sum": sum(v["n"] for v in parse.values())}
 
@@ -472,7 +472,7 @@ def test_invalid_anchors_and_targets():
     def parse(scan: dict):
         return scan
 
-    @step(name="sum", depends_on=["parse"], shape="reduce")
+    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
     def sum_step(parse: dict):
         return {"n": len(parse)}
 

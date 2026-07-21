@@ -159,7 +159,7 @@ def normalize(row: dict) -> dict:
 
 A `skip_cache` step must have a consumer — the constructor rejects one with
 no downstream step, since its output would never be computed or stored at
-all. It also can't be a `reduce` (a reduction's whole point is to be
+all. It also can't be an `aggregate` (a reduction's whole point is to be
 materialized), an `expand` (nothing to anchor an ungrounded fan-out
 against), or a `join` parent (a join needs its sides' output fields
 committed to match on), and none of `stale_after` or the retry/

@@ -389,7 +389,7 @@ def run(
     is order-independent): "broad" (default) completes each step across all
     lanes before the next one starts; "deep" lets each lane race ahead
     through consecutive 1:1 steps as soon as its own inputs commit, while
-    reduce/join (and, for now, expand and multi-parent maps) still
+    aggregate/join (and, for now, expand and multi-parent maps) still
     synchronize on all lanes.
 
     ``scope`` / ``targets`` select a partial run (``kind='partial'``). Scope

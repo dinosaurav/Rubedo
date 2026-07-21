@@ -178,7 +178,7 @@ New Run ID recorded for invalidation: run_a1b2c3d4e5f6
 
 !!! warning "Preview first"
     `--downstream` can invalidate far more than the seed count suggests,
-    especially through a `reduce` or `join` (one bad lane contaminates the
+    especially through an `aggregate` or `join` (one bad lane contaminates the
     whole fan-in output and everything after it). Run
     `rubedo trace "<same selection>"` first and read its counts before
     adding `--downstream`.

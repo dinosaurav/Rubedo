@@ -75,7 +75,7 @@ def tag(classify: dict):
     }
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def merge(enrich: dict, tag: dict):
     return {
         "enriched": sorted(v["title"] for v in enrich.values()),
@@ -83,7 +83,7 @@ def merge(enrich: dict, tag: dict):
     }
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def report(merge: dict):
     data = merge["@all"]
     return {

@@ -58,7 +58,7 @@ def count_lines(read_lines: dict):
     }
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 

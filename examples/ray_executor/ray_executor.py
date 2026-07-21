@@ -336,7 +336,7 @@ def digest(phrases: dict) -> dict:
     }
 
 
-@step(shape="reduce", depends_on=["digest"])
+@step(in_shape="aggregate", depends_on=["digest"])
 def report(digest: dict) -> str:
     rows = sorted(
         digest.values(),
@@ -408,7 +408,7 @@ def factor(targets: dict) -> dict:
     }
 
 
-@step(shape="reduce", depends_on=["factor"])
+@step(in_shape="aggregate", depends_on=["factor"])
 def shor_report(factor: dict) -> str:
     rows = sorted(factor.values(), key=lambda row: (row["bits"], row["n"]))
     lines = [

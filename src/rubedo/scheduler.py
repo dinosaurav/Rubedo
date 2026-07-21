@@ -13,7 +13,7 @@ schedule="broad" (the default) each step is its own segment, so the
 executor degenerates to plan-all -> execute-all -> commit-each — the classic
 staged loop. Under schedule="deep", consecutive deep-eligible steps share a
 segment and each lane advances through them the moment its own inputs
-commit; reduce/join/dependent-expand and multi-parent maps stay singleton
+commit; aggregate/join/dependent-expand and multi-parent maps stay singleton
 barrier segments. Root expands are deep-eligible — independent sources run
 concurrently within the same segment.
 """

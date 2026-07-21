@@ -1,6 +1,6 @@
 """Readability stats for public-domain books — real download + CPU parallelism.
 
-    books.csv ─▶ fetch ─▶ clean ─▶ analyze ─▶ report (reduce)
+    books.csv ─▶ fetch ─▶ clean ─▶ analyze ─▶ report (aggregate)
                  (HTTP)   (skip_   (process    (rank)
                           cache)    executor)
 
@@ -80,7 +80,7 @@ def analyze(clean: dict) -> dict:
     }
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def report(analyze: dict) -> str:
     """Rank books by lexical diversity."""
     rows = sorted(analyze.values(), key=lambda s: s["lexical_diversity"], reverse=True)

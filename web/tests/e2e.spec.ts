@@ -34,7 +34,7 @@ def read(scan: str):
     text = open(scan).read()
     return {"lines": text.splitlines(), "name": os.path.basename(scan)}
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def total(read: dict):
     return sum(v["lines"].__len__() for v in read.values())
 

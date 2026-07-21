@@ -1,6 +1,6 @@
 """executor="thread" vs executor="process" on real CPU-bound work, timed.
 
-    dictionary (8 chunks) ─▶ analyze ─▶ combine (reduce)
+    dictionary (8 chunks) ─▶ analyze ─▶ combine (aggregate)
                              (CPU-bound)  (merge + report)
 
 Downloads a real English word list (~370k words, dwyl/english-words on
@@ -8,7 +8,7 @@ GitHub — public, no key) and splits it into 8 chunks, one per lane. Each
 chunk gets a genuinely CPU-bound feature-extraction pass over every word:
 an anagram signature, a 26-letter frequency vector, and a rotation-invariant
 canonical form (the lexicographically smallest of all 26 Caesar shifts of
-the signature). The reduce step merges every chunk's partial groups and
+the signature). The aggregate step merges every chunk's partial groups and
 reports the largest anagram group, the largest rotation-invariant group,
 and the dictionary's most common letter.
 
@@ -178,7 +178,7 @@ def build_pipeline(executor: str):
     p.step(
         name=f"combine_{executor}",
         depends_on=[f"analyze_{executor}"],
-        shape="reduce",
+        in_shape="aggregate",
     )(combine_chunks)
 
     return p

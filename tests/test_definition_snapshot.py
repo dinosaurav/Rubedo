@@ -2,7 +2,7 @@
 
 The JSON snapshot below is `definition()`'s exact output for a pipeline
 exercising a representative slice of step policies (expand root, retries,
-rate_limit, stale_after, a reduce with group_key, pipeline-level retention).
+rate_limit, stale_after, an aggregate with group_key, pipeline-level retention).
 History and the dashboard read definition_json, so any change to this
 snapshot would be a silent data format change, not just an API change.
 
@@ -66,7 +66,7 @@ PINNED_DEFINITION_JSON = """\
       "in_shape": "aggregate",
       "name": "rollup",
       "out_shape": "one",
-      "source": "@step(\\n        name=\\"rollup\\", version=\\"1\\", shape=\\"reduce\\", depends_on=[\\"enrich\\"],\\n        group_key=\\"path\\",\\n    )\\n    def rollup(enrich):\\n        return enrich",
+      "source": "@step(\\n        name=\\"rollup\\", version=\\"1\\", in_shape=\\"aggregate\\", depends_on=[\\"enrich\\"],\\n        group_key=\\"path\\",\\n    )\\n    def rollup(enrich):\\n        return enrich",
       "version": "1",
       "workers": 4
     }
@@ -93,7 +93,7 @@ def _build_snapshot_spec():
         return scan
 
     @step(
-        name="rollup", version="1", shape="reduce", depends_on=["enrich"],
+        name="rollup", version="1", in_shape="aggregate", depends_on=["enrich"],
         group_key="path",
     )
     def rollup(enrich):

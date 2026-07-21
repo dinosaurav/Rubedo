@@ -157,7 +157,6 @@ def _get_source(fn: Callable) -> Optional[str]:
 # stored on StepSpec — step() translates it to the pair and discards it.
 _SHAPE_MAP: Dict[str, Tuple[str, str]] = {
     "map":    ("one",       "one"),
-    "reduce": ("aggregate", "one"),
     "expand": ("one",       "many"),
     "join":   ("join",      "many"),
 }
@@ -208,8 +207,6 @@ def step(
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
     on_failed: Literal["use_passed", "block"] = "use_passed",
-    # deprecated alias — translated to arrow_aggregate
-    arrow_reduce: bool = False,
 ):
     """Declare a step. Works bare (`@step`) or called (`@step()`,
     `@step(version="2")`, ...) — both mint the same StepSpec.
@@ -233,9 +230,13 @@ def step(
     | `shape=` | `in_shape` | `out_shape` | meaning |
     | -------- | ---------- | ----------- | ------- |
     | `map`    | `one`      | `one`       | 1:1 (default) |
-    | `reduce` | `aggregate`| `one`       | N:1 batch fan-in (all lanes as a dict) |
     | `expand` | `one`      | `many`      | 1:N fan-out (yields content-addressed lanes) |
     | `join`   | `join`     | `many`      | N-way equijoin (mints pair lanes) |
+
+    Aggregate (`in_shape="aggregate"`, `out_shape="one"`) and fold
+    (`in_shape="fold"`, `out_shape="one"`) have no `shape=` shortcut —
+    pass `in_shape=` directly (or let `group_key=` / `fold_init=` imply
+    them).
 
     - A generator function defaults to `out_shape="many"` (`in_shape`
       stays `"one"`) — it's a fan-out by construction. An explicit
@@ -245,8 +246,8 @@ def step(
     - `join_on=` explicitly sets `in_shape="join"`, `out_shape="many"`
       (not just inference — a conflicting `out_shape=` raises).
       `group_key=` sets `in_shape="aggregate"`. A plain `@all` aggregate
-      (no `group_key`) still needs an explicit `in_shape="aggregate"` or
-      `shape="reduce"` — nothing else implies it.
+      (no `group_key`) still needs an explicit `in_shape="aggregate"` —
+      nothing else implies it.
     - `depends_on` (when omitted entirely) is inferred at pipeline-build
       time (`_build_spec`, once every sibling step's name is known, not
       here): every parameter of the decorated function other than
@@ -531,9 +532,7 @@ def step(
             raise ValueError(
                 f"Step '{step_name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
             )
-        # arrow_aggregate only on aggregate (arrow_reduce is a deprecated alias)
-        effective_arrow_aggregate = arrow_aggregate or arrow_reduce
-        if effective_arrow_aggregate and resolved_in != "aggregate":
+        if arrow_aggregate and resolved_in != "aggregate":
             raise ValueError(
                 f"Step '{step_name}': arrow_aggregate=True requires in_shape='aggregate' "
                 f"(got in_shape={resolved_in!r})"
@@ -606,7 +605,7 @@ def step(
             executor=executor,
             group_key=group_key,
             join_on=join_on,
-            arrow_aggregate=effective_arrow_aggregate,
+            arrow_aggregate=arrow_aggregate,
             fold_init=fold_init,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,

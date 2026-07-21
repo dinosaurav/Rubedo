@@ -1,6 +1,6 @@
 """Hacker News digest — a real fan-out/fan-in pipeline over two live APIs.
 
-    top_story ─▶ screen ─▶ classify ─▶ digest (reduce)
+    top_story ─▶ screen ─▶ classify ─▶ digest (aggregate)
     (source)     (fetch+    (LLM)        (LLM)
                   filter)
 
@@ -131,7 +131,7 @@ def classify(screen: dict) -> dict:
     }
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def digest(classify: dict) -> str:
     """Fan in every classified story and let the LLM write the editor's note."""
     stories = sorted(classify.values(), key=lambda s: s["score"], reverse=True)

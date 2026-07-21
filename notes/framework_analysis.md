@@ -2,21 +2,21 @@
 
 **Date**: 2026-07-05
 **Author**: Claude Opus 4.8
-**Revision note**: Updated from the original 2026-07-04 analysis (Gemini 3.1 Pro) to reflect the shipped **producer model** — content-addressed lanes, `expand` (fan-out), `group_key` reduce, multi-source pipelines, and N-way `join`.
+**Revision note**: Updated from the original 2026-07-04 analysis (Gemini 3.1 Pro) to reflect the shipped **producer model** — content-addressed lanes, `expand` (fan-out), `group_key` aggregate, multi-source pipelines, and N-way `join`.
 
 ## What This Project Does
 This project is a **local-first batch processing engine** designed specifically for **Python tasks** that are non-idempotent, expensive, or flaky—such as LLM calls, web scraping, or heavy API integrations.
 
 It brings a "dbt-style state" to Python, meaning it treats data pipelines as DAGs over collections (files, CSV rows) and leverages **content-addressed caching** and an **append-only ledger**. Instead of re-running the entire pipeline, it surgically computes only what has changed based on cryptographic hashes of the inputs, code, and parameters.
 
-Pipelines are not just 1:1 chains: steps can fan in (`reduce`, with per-group `group_key`), fan out (`expand` — one feed into a lane per article, cached so a scrape runs once), and **join** across multiple sources on an indexed key — a relational vocabulary applied to arbitrary Python objects, all with the same per-lane content-addressed caching.
+Pipelines are not just 1:1 chains: steps can fan in (`aggregate`, with per-group `group_key`), fan out (`expand` — one feed into a lane per article, cached so a scrape runs once), and **join** across multiple sources on an indexed key — a relational vocabulary applied to arbitrary Python objects, all with the same per-lane content-addressed caching.
 
 ### Core Principles & Unique Edges
 1. **Granular, Content-Addressed Caching**: Caches at the coordinate level (e.g., a specific row in a CSV or a specific file). If you edit one row, only the downstream tasks for *that specific row* are recomputed.
 2. **Immutable Ledger & Surgical Invalidation**: Outputs are immutable bytes in an object store. A SQLite ledger tracks the lifecycle (created, reused, superseded, invalidated). You can invalidate outputs based on the *content* they generated (e.g., `invalidate(company:acme)`), not just by timestamp.
 3. **Resilience for the Real World**: Built-in policies for `retry_on`, `rate_limit`, and `stale_after` (TTL). This makes it perfect for wrangling rate-limited or flaky LLM APIs.
 4. **Zero-Magic, Zero-Daemon Architecture**: There is no central server to deploy or daemon to run. The pipeline is just a Python object, executed locally, with state stored in a local `.rubedo` directory.
-5. **Relational Shapes over Arbitrary Python**: Beyond 1:1 `map` steps, the engine offers `reduce`/`group_key` (fan-in), `expand` (1:N fan-out — e.g. a feed into a lane per article, cached so a scrape runs once), and N-way `join` (equijoin across sources on a shared output field). This is a relational vocabulary usually reserved for SQL engines, here applied to arbitrary Python objects and unstructured data — with per-lane content-addressed caching underneath every shape.
+5. **Relational Shapes over Arbitrary Python**: Beyond 1:1 `map` steps, the engine offers `aggregate`/`group_key` (fan-in), `expand` (1:N fan-out — e.g. a feed into a lane per article, cached so a scrape runs once), and N-way `join` (equijoin across sources on a shared output field). This is a relational vocabulary usually reserved for SQL engines, here applied to arbitrary Python objects and unstructured data — with per-lane content-addressed caching underneath every shape.
 
 ## Competitor Landscape
 
@@ -44,7 +44,7 @@ Pipelines are not just 1:1 chains: steps can fan in (`reduce`, with per-group `g
 
 **Strengths:**
 - **Unmatched for iterative local development** with LLMs or scrapers (never pay for the same LLM API call twice).
-- **Relational + fan-out over unstructured data**: N-way `join`, per-group `reduce`, and feed/scrape fan-out (`expand`) with per-lane caching — a combination SQL engines and Python DAG tools rarely offer together.
+- **Relational + fan-out over unstructured data**: N-way `join`, per-group `aggregate`, and feed/scrape fan-out (`expand`) with per-lane caching — a combination SQL engines and Python DAG tools rarely offer together.
 - **Incredible auditability** via the append-only ledger and materialization lineage.
 - **Zero-friction setup** (just run the Python script).
 - **Surgical invalidation** (re-run a specific bad generation without tossing the baby out with the bathwater).

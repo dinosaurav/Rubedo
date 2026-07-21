@@ -139,7 +139,7 @@ A step can **decline an item** by returning `Filtered(reason=...)`: downstream s
 
 By default a step is `map` — 1:1 per lane. Four more shapes cover fan-in, fan-out, and joins:
 
-- **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` (or the `shape="reduce"` alias) receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
+- **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`fold`** (N:1) — like `aggregate`, but receives an accumulator (initialized to `fold_init`) and one parent value at a time for incremental processing. Supports `group_key`.
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
 - **`join`** — an N-way equijoin across multiple `expand` roots, matched on a field of their parent outputs, minting one lane per matched tuple:

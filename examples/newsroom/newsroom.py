@@ -1,8 +1,8 @@
-"""Every producer shape in one pipeline: multi-source join → expand → reduce.
+"""Every producer shape in one pipeline: multi-source join → expand → aggregate.
 
     feeds.csv ──────▶ feed ──────┐
                                  ├─▶ feed_meta ──▶ articles ──▶ digest
-    publishers.csv ─▶ publisher ─┘   (join on       (expand      (reduce,
+    publishers.csv ─▶ publisher ─┘   (join on       (expand      (aggregate,
                                       publisher)     per article) group_key=region)
 
 Two sources meet, fan out, and fold back:
@@ -11,7 +11,7 @@ Two sources meet, fan out, and fold back:
             publisher's region        → pair lanes  `feed|publisher`
   2. EXPAND each feed into a lane per article ("scraping" it; cached so a
             re-run re-scrapes nothing) → minted lanes `feed|publisher/<art>`
-  3. REDUCE the articles grouped by region with group_key="region"
+  3. AGGREGATE the articles grouped by region with group_key="region"
                                       → one digest lane per region
 
 Everything is self-contained: it writes two small CSVs to your temp dir and

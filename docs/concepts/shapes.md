@@ -10,9 +10,9 @@ knowing on its own. See [`../development/producer-model.md`](../development/prod
 for the design behind the taxonomy.
 
 The five conceptual shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
-`aggregate` (`aggregate`/`one` — was "reduce"), `fold` (`fold`/`one`), `expand` (`one`/`many`),
+`aggregate` (`aggregate`/`one`), `fold` (`fold`/`one`), `expand` (`one`/`many`),
 `join` (`join`/`many`). The legacy `shape=` kwarg is kept as an alias:
-`shape="map"`/`shape="reduce"`/`shape="expand"`/`shape="join"` each translate
+`shape="map"`/`shape="expand"`/`shape="join"` each translate
 to the corresponding pair and are never stored on the spec.
 
 Most of the time you don't pass `shape=` (or `in_shape=`/`out_shape=`) at
@@ -95,7 +95,7 @@ def total_lines(count_lines: dict):
 
 (A plain `@all` aggregate is the one shape that's always explicit: nothing
 in the code implies it. The parent comes from the parameter name, like
-any other step. `shape="reduce"` is the alias and still works.)
+any other step. Pass `in_shape="aggregate"` explicitly.)
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of a field, read from the parent output struct

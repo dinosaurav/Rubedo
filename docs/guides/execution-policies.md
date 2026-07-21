@@ -183,7 +183,7 @@ the other one already computed.
   land sooner — useful when one slow lane (a large scrape, a big file)
   would otherwise stall the whole stage under `"broad"`.
 
-`reduce`, `join`, `expand`, and any multi-parent `map` step always
+`aggregate`, `join`, `expand`, and any multi-parent `map` step always
 synchronize on their full set of parent lanes in either mode — fan-in and
 fan-out are barriers by construction, not something scheduling can pipeline
 around.
@@ -213,7 +213,7 @@ changes too, and the step decides fresh.
 `skip_cache=True` steps cannot return `Filtered` — filtering is a cacheable
 decision, so a filter step must be materialized.
 
-A `reduce` or `join` step unconditionally drops a filtered parent lane and
+A `aggregate` or `join` step unconditionally drops a filtered parent lane and
 proceeds with the survivors — unlike a failed or blocked parent, a filtered
 one never triggers `on_failed="block"` (see
 [`../concepts/shapes.md`](../concepts/shapes.md)); a decline is not a

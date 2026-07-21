@@ -30,7 +30,7 @@ def _count_lines_shaped():
     def count_lines(read_lines):
         return {}
 
-    @p.step(depends_on=["count_lines"], shape="reduce")
+    @p.step(depends_on=["count_lines"], in_shape="aggregate")
     def total_lines(count_lines):
         return 0
 

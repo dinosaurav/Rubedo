@@ -247,7 +247,7 @@ def make_pipeline():
     def enrich(extract: dict):
         return {"path": extract["path"], "score": extract["words"] * 2 + extract["chars"]}
 
-    @step(depends_on=["enrich"], shape="reduce")
+    @step(depends_on=["enrich"], in_shape="aggregate")
     def summarize(enrich: dict):
         return {"total": sum(v["score"] for v in enrich.values()), "lanes": len(enrich)}
 

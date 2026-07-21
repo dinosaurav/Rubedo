@@ -42,7 +42,7 @@ def square(numbers: dict):
     return {"number": number, "square": number * number}
 
 
-@step(shape="reduce", depends_on=["square"])
+@step(in_shape="aggregate", depends_on=["square"])
 def total(square: dict):
     return sum(row["square"] for row in square.values())
 

@@ -53,7 +53,7 @@ def make_pipeline():
     def summarize(extract):
         return {"company": extract["company"], "double": extract["amount"] * 2}
 
-    @step(depends_on=["summarize"], shape="reduce")
+    @step(depends_on=["summarize"], in_shape="aggregate")
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 

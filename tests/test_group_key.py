@@ -85,7 +85,7 @@ def test_group_key_none_is_one_all_group():
     def classify(scan):
         return {"category": scan["text"].strip()}
 
-    @step(depends_on=["classify"], shape="reduce")
+    @step(depends_on=["classify"], in_shape="aggregate")
     def rollup(classify):
         return {"n": len(classify)}
 
@@ -156,8 +156,8 @@ def test_group_key_missing_field_raises():
         pipe.run(workers=1)
 
 
-def test_group_key_infers_reduce_shape_but_an_explicit_conflict_still_raises():
-    # group_key= alone (no shape=) infers shape="reduce" (TODO 22) — no
+def test_group_key_infers_aggregate_shape_but_an_explicit_conflict_still_raises():
+    # group_key= alone (no shape=) infers in_shape="aggregate" (TODO 22) — no
     # error. An explicit, conflicting shape still raises.
     inferred = step(name="ok", version="1", depends_on=["x"], group_key="category")(
         lambda x: None

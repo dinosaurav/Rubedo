@@ -21,18 +21,18 @@ that the second run recomputes only what actually changed.
 
 | Example | Service(s) | Shape | Shows off |
 |---|---|---|---|
-| [`count_lines`](count_lines/) | local files | map → reduce | the basics: `params_model`, a reduce step |
-| [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM reduce | a source-shaped `@p.step` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
-| [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, reduce |
-| [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → reduce | two chained APIs, `stale_after` TTL |
-| [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → reduce | `skip_cache` inline util + `executor="process"` CPU parallelism |
-| [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → reduce | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
-| [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → reduce | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
-| [`dask_executor`](dask_executor/) | local Dask cluster (optional install) | expand → map → reduce | a zero-argument external executor factory; Dask runs step bodies and Rubedo fully reuses the second run |
+| [`count_lines`](count_lines/) | local files | map → aggregate | the basics: `params_model`, an aggregate step |
+| [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM aggregate | a source-shaped `@p.step` root, `Filtered`, `index=`, caching non-idempotent LLM calls |
+| [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, aggregate |
+| [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → aggregate | two chained APIs, `stale_after` TTL |
+| [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → aggregate | `skip_cache` inline util + `executor="process"` CPU parallelism |
+| [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → aggregate | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
+| [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → aggregate | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
+| [`dask_executor`](dask_executor/) | local Dask cluster (optional install) | expand → map → aggregate | a zero-argument external executor factory; Dask runs step bodies and Rubedo fully reuses the second run |
 | [`ray_executor`](ray_executor/) | Project Gutenberg + local Ray (`ray` in the dev group) | books→chapters→3×Ray; Shor ladder on Ray | real chapter stylometry **and** classical Shor simulation (modexp+IQFT); `RUBEDO_RAY_ONLY=books\|shor\|all` |
 | [`expand_feed`](expand_feed/) | local files (self-contained) | expand | the expand shape (inferred from a generator step) — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
-| [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → reduce | every producer shape at once: multiple source-shaped `@p.step` roots, an N-way `join_on=` join, a generator expand, and a `group_key` reduce |
-| [`pdf_digest`](pdf_digest/) | a PDF + a vision & a text LLM | map root → expand → LLM → reduce → 2× LLM | a **source-less `map` root** (the PDF path is a param), a cheap vision LLM on figure pages, and a picture-aware vs text-only summary comparison |
+| [`newsroom`](newsroom/) | local CSVs (self-contained) | join → expand → aggregate | every producer shape at once: multiple source-shaped `@p.step` roots, an N-way `join_on=` join, a generator expand, and a `group_key` aggregate |
+| [`pdf_digest`](pdf_digest/) | a PDF + a vision & a text LLM | map root → expand → LLM → aggregate → 2× LLM | a **source-less `map` root** (the PDF path is a param), a cheap vision LLM on figure pages, and a picture-aware vs text-only summary comparison |
 | [`paper_scout`](paper_scout/) | OpenAlex (keyless) | sampled rate-limited fetch → aggregate → policy A/B | `RunScope.sample_n`, `targets=`, `home.runs`, `RunSummary.diff`, a cautious `12/min` API budget, and sample → compare → rollout reuse |
 
 ## Keys

@@ -276,7 +276,7 @@ step Arrow files (the §11/§12 "zips not joins" idea):
 |---|---|
 | `map` chain | zip on `lane_key` — same keys, same order. Trivial. |
 | `join` | pair `lane_key` is `a\|b\|c` — split on `\|`, look up each component in its parent's file. Self-describing. |
-| `reduce` | group via the `group_key` rule (from the step spec, already in planning). Needs code, no extra metadata. |
+| `aggregate` | group via the `group_key` rule (from the step spec, already in planning). Needs code, no extra metadata. |
 | `filter` | `RunCoordinateStatus.status == "filtered"` distinguishes filtered from absent — already present. No extra metadata. |
 | **`expand`** | **broken without persisted parentage** — expanded child `lane_key` is the child's own content hash, not the parent's. Parent→child alignment is impossible without persisting the parent `lane_key`(s) each expanded child came from. |
 

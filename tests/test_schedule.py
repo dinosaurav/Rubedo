@@ -324,7 +324,7 @@ def test_deep_reduce_barrier_receives_all_lanes():
     def dbl(parse):
         return parse * 2
 
-    @step(depends_on=["dbl"], shape="reduce")
+    @step(depends_on=["dbl"], in_shape="aggregate")
     def total(dbl):
         return {"n": len(dbl), "total": sum(dbl.values())}
 

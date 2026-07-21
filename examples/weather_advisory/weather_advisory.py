@@ -1,6 +1,6 @@
 """Weather advisory over two chained Open-Meteo APIs — no API key required.
 
-    cities.csv ─▶ geocode ─▶ forecast ─▶ advice ─▶ briefing (reduce)
+    cities.csv ─▶ geocode ─▶ forecast ─▶ advice ─▶ briefing (aggregate)
                   (lookup)   (stale 3h)  (index)
 
 Real APIs, both public and keyless:
@@ -92,7 +92,7 @@ def advice(forecast: dict) -> dict:
     return {**forecast, "outlook": outlook, "tip": tip}
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def briefing(advice: dict) -> str:
     """Fan every city's advice into one morning briefing."""
     rows = sorted(advice.values(), key=lambda a: a["tmax"], reverse=True)

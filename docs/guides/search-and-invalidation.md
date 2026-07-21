@@ -31,7 +31,7 @@ Search is purely operational:
 - It's incompatible with `skip_cache=True` — nothing is stored to search, so
   a `skip_cache` output isn't selectable by content.
 
-`group_key` (on a `reduce` step) and `join_on` (on a `join` step) both read
+`group_key` (on a `aggregate` step) and `join_on` (on a `join` step) both read
 fields of the parent output at *plan* time to decide which lanes belong
 together — see [`../concepts/shapes.md`](../concepts/shapes.md).
 
@@ -128,8 +128,8 @@ would show you as `seed` + `downstream` for the same query.
 
 !!! warning "Preview before you widen — `trace` is the blast-radius report"
     `downstream=True` can invalidate a lot more than the seed count
-    suggests, especially through a `reduce` or `join`: fan-in is honest,
-    not surgical — **one bad lane inside a reduce's group or a join's match
+    suggests, especially through an `aggregate` or `join`: fan-in is honest,
+    not surgical — **one bad lane inside an aggregate's group or a join's match
     set contaminates the whole fan-in output**, so the fan-in
     materialization and everything derived from *it* also flip, even
     though only one of its many inputs was actually wrong. Always run
@@ -188,7 +188,7 @@ Running `rubedo trace "<query>"` with the *same query* you're about to pass
 to `rubedo invalidate --downstream` is the standard way to preview exactly
 what a widened invalidation would flip — the header's `downstream` count is
 the number of materializations `--downstream` would add on top of your
-seed matches, and it carries the same reduce/join fan-in honesty described
+seed matches, and it carries the same aggregate/join fan-in honesty described
 above: a small seed set can still report a large downstream count if it
 feeds a fan-in step.
 

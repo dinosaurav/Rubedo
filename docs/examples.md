@@ -102,7 +102,7 @@ against its parent, so a re-run of the "scrape" step re-expands nothing.
 — every producer shape at once. Two source-shaped `@p.step` CSV roots (`feeds`,
 `publishers`) meet in an N-way `shape="join"` on the publisher name (minting `feed|publisher`
 pair lanes), each feed then `shape="expand"`s into a lane per article, and a
-final `shape="reduce"` (`in_shape="aggregate"`) step with
+final `in_shape="aggregate"` step with
 `group_key="region"` folds the articles into
 one digest per region. Entirely self-contained — no network calls.
 

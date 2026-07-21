@@ -10,7 +10,7 @@ vocabulary first; the sequencing section at the bottom traces what was built.
 
 Today the DAG is **coordinate-preserving**: every coordinate (lane key) is
 minted by the `Source` at scan time, and steps are only `map` (1:1) or
-`aggregate` (N:1 — was "reduce"). This privileges two things — `Source` (the sole
+`aggregate` (N:1). This privileges two things — `Source` (the sole
 coordinate-creator) and a source-only removal census (the sole
 change-detector) — and it blocks everything data-dependent: `expand` (fetch
 an RSS feed, *then* yield a lane per article) and `join` (both need
@@ -19,7 +19,7 @@ coordinate creation, and join needs two independent roots).
 The generalization: **stop privileging `Source`. There are only producers
 that emit keyed items; a `Source` is the producer that emits from no input.**
 Coordinate creation moves into the core. `Source`, `map`, `filter`, `expand`,
-`aggregate` (was "reduce"), `join` all become instances of one primitive.
+`aggregate`, `join` all become instances of one primitive.
 
 ## The producer
 
@@ -224,7 +224,7 @@ demand.
 of their *value* needs values at plan time, but planning only reads content
 hashes. So `group_key` must either group by coordinate / a field of the
 parent output, or
-reduce-planning must read parent values (tolerable, since reduce is already a
+aggregate-planning must read parent values (tolerable, since aggregate is already a
 barrier). Decision deferred to that increment — and it is why `expand`, not
 `group_key`, is the cleaner next step.
 
@@ -290,12 +290,12 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    silent orphaning. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
 3. **`group_key` aggregate** — ✅ **DONE**. `@step(in_shape="aggregate",
-   group_key="field")` (alias `shape="reduce"`) partitions the aggregation's parent lanes by a named
+   group_key="field")` partitions the aggregation's parent lanes by a named
    field of the parent output, emitting one output per
    group (coordinate = the group value); `group_key=None` is the old single
    `@all`. Grouping reads `MaterializationIndexEntry` rows at plan time — no
-   value reads, plan stays value-free (`_group_reduce_lanes`,
-   `_reduce_group_decision`). A lane with several values for the field joins
+   value reads, plan stays value-free (`_group_aggregate_lanes`,
+   `_aggregate_group_decision`). A lane with several values for the field joins
    each group (list-valued field); a lane with none raises (the field must
    be present in the parent output). Also fixed aggregate to gather lanes from `coord_step_mats` rather
    than only source coordinates, so an aggregate now folds in **minted/expanded

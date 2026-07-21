@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 def _resolve_parent_table(
     memo: "_RunMemo", pipeline_id: str, parent_step: str, lane_refs: Dict[str, Any]
 ):
-    """Resolve a reduce parent's output as a pa.Table — the struct column
+    """Resolve an aggregate parent's output as a pa.Table — the struct column
     flattened into columns. Falls back to dict-of-lanes if the output
     column is not a struct (string fallback for spilled/mixed values)."""
     lane_keys = list(lane_refs.keys())

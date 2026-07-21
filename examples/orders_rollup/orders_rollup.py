@@ -1,6 +1,6 @@
 """Roll up orders straight from a SQL table with a bare @p.step recipe.
 
-    orders table ─▶ classify ─▶ rollup (reduce)
+    orders table ─▶ classify ─▶ rollup (aggregate)
                     (index)
 
 This one is self-contained: it creates a small SQLite "orders" database in your
@@ -70,7 +70,7 @@ def classify(orders: dict):
     return {"customer": row["customer"], "amount": amount, "tier": tier}
 
 
-@p.step(shape="reduce")
+@p.step(in_shape="aggregate")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
     totals: dict[str, tuple[int, float]] = {}

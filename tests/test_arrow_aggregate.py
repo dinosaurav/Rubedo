@@ -1,7 +1,7 @@
-"""Tests for arrow_reduce — reduce steps that receive a pa.Table instead
+"""Tests for arrow_aggregate — aggregate steps that receive a pa.Table instead
 of a dict-of-lanes.
 
-@step(shape="reduce", arrow_reduce=True) gets the parent's output struct
+@step(in_shape="aggregate", arrow_aggregate=True) gets the parent's output struct
 column as a pa.Table (fields → columns). Vectorized Arrow operations
 replace per-lane Python dict iteration.
 """
@@ -12,8 +12,8 @@ import pyarrow.compute as pc
 from rubedo import step, pipeline
 from conftest import isolated_test_env
 
-TEST_FOLDER = ".test_arrow_reduce_data"
-ENV_FOLDER = ".test_arrow_reduce_env"
+TEST_FOLDER = ".test_arrow_aggregate_data"
+ENV_FOLDER = ".test_arrow_aggregate_env"
 
 TEST_HOME = None
 
@@ -21,7 +21,7 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    with isolated_test_env("arrow_reduce") as env:
+    with isolated_test_env("arrow_aggregate") as env:
         TEST_HOME = env.home
         yield
 
@@ -33,7 +33,7 @@ def _outputs(step_name):
     }
 
 
-def test_arrow_reduce_gets_table():
+def test_arrow_aggregate_gets_table():
     @step(shape="expand")
     def load_data():
         return pa.table({
@@ -45,7 +45,7 @@ def test_arrow_reduce_gets_table():
     def enrich(load_data: dict):
         return {"name": load_data["name"], "doubled": load_data["score"] * 2}
 
-    @step(depends_on=["enrich"], shape="reduce", arrow_reduce=True)
+    @step(depends_on=["enrich"], in_shape="aggregate", arrow_aggregate=True)
     def total(enrich):
         assert hasattr(enrich, "column_names"), f"expected pa.Table, got {type(enrich)}"
         assert "doubled" in enrich.column_names
@@ -60,7 +60,7 @@ def test_arrow_reduce_gets_table():
     assert list(outs.values())[0]["total"] == 1200  # (100+200+300)*2
 
 
-def test_arrow_reduce_with_group_key():
+def test_arrow_aggregate_with_group_key():
     @step(shape="expand")
     def load_data():
         return pa.table({
@@ -68,7 +68,7 @@ def test_arrow_reduce_with_group_key():
             "amount": [10, 20, 30, 40],
         })
 
-    @step(depends_on=["load_data"], shape="reduce", group_key="category", arrow_reduce=True)
+    @step(depends_on=["load_data"], in_shape="aggregate", group_key="category", arrow_aggregate=True)
     def subtotal(load_data):
         return {"category": load_data["category"][0].as_py(), "sum": int(pc.sum(load_data["amount"]).as_py())}
 
@@ -83,7 +83,7 @@ def test_arrow_reduce_with_group_key():
     assert by_cat["biz"] == 70
 
 
-def test_arrow_reduce_rerun_reuses():
+def test_arrow_aggregate_rerun_reuses():
     @step(shape="expand")
     def load_data():
         return pa.table({
@@ -94,7 +94,7 @@ def test_arrow_reduce_rerun_reuses():
     def double(load_data: dict):
         return {"x": load_data["x"], "y": load_data["x"] * 10}
 
-    @step(depends_on=["double"], shape="reduce", arrow_reduce=True)
+    @step(depends_on=["double"], in_shape="aggregate", arrow_aggregate=True)
     def total(double):
         return {"sum": int(pc.sum(double["y"]).as_py())}
 
@@ -109,14 +109,14 @@ def test_arrow_reduce_rerun_reuses():
     assert s2.reused_count > 0    # double + total + children
 
 
-def test_non_arrow_reduce_still_gets_dict():
-    """A reduce without arrow_reduce=True still gets the dict-of-lanes."""
+def test_non_arrow_aggregate_still_gets_dict():
+    """An aggregate without arrow_aggregate=True still gets the dict-of-lanes."""
     @step
     def source():
         yield {"x": 1}
         yield {"x": 2}
 
-    @step(depends_on=["source"], shape="reduce")
+    @step(depends_on=["source"], in_shape="aggregate")
     def total(source):
         assert isinstance(source, dict), f"expected dict, got {type(source)}"
         return {"sum": sum(v["x"] for v in source.values())}

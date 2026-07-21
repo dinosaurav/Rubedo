@@ -4,7 +4,7 @@ Three inferences, all resolving to the same explicit StepSpec the API
 already builds — the engine, planner, and ledger never know inference
 existed:
   - a generator function defaults to shape="expand"
-  - join_on=/group_key= default shape to "join"/"reduce"
+  - join_on=/group_key= default in_shape to "join"/"aggregate"
   - an omitted depends_on= is inferred from fn's parameter names once every
     sibling step is known (`pipeline.py::_build_spec`), each non-`params`
     parameter naming a registered step (signature order); *args/**kwargs
@@ -210,17 +210,17 @@ def test_depends_on_dict_alias_on_join():
     assert values == [{"oid": 1, "name": "Acme"}]
 
 
-def test_depends_on_dict_alias_on_reduce():
+def test_depends_on_dict_alias_on_aggregate():
     @step(shape="expand")
     def scan():
         yield {"v": 1}
         yield {"v": 2}
 
-    @step(depends_on={"raw": "scan"}, shape="reduce")
+    @step(depends_on={"raw": "scan"}, in_shape="aggregate")
     def total(raw):
         return {"sum": sum(v["v"] for v in raw.values())}
 
-    p = pipeline(name="reduce-alias", steps=[scan, total], home=TEST_HOME)
+    p = pipeline(name="agg-alias", steps=[scan, total], home=TEST_HOME)
     assert p.spec.steps[-1].depends_on == ["scan"]
     assert p.spec.steps[-1].depends_on_aliases == {"scan": "raw"}
 

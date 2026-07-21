@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the public constructor knob (replaces private `_fresh=`).
 
 ### Changed
+- **Breaking:** drop the `shape="reduce"` and `arrow_reduce=` aliases.
+  Write `in_shape="aggregate"` (or let `group_key=` imply it) and
+  `arrow_aggregate=True`. The true sequential accumulator remains
+  `in_shape="fold"`.
 - **Breaking:** `pipeline(home=...)` takes a `Home` instance, not a path
   string (`TypeError` otherwise). `Home` owns the ledger (`Database`),
   object store (`ObjectStore` — local or S3-compatible), and lane tables

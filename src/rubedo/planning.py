@@ -284,10 +284,10 @@ def _code_drift_message(step: StepSpec, drifted: int) -> str:
     )
 
 
-def _group_reduce_lanes(
+def _group_aggregate_lanes(
     session: Session, step: StepSpec, parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]]
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """Partition a reduce's parent lanes into groups by a field.
+    """Partition an aggregate's parent lanes into groups by a field.
 
     Reads each lane's ``group_key`` field from the parent's output (a
     dict from a native Arrow struct column) directly.  A lane with
@@ -305,7 +305,7 @@ def _group_reduce_lanes(
         values = _field_values_from_ref(ref, gk)
         if not values:
             raise ValueError(
-                f"reduce step '{step.name}': group_key '{step.group_key}' "
+                f"aggregate step '{step.name}': group_key '{step.group_key}' "
                 f"has no value for lane '{coord}' (parent '{dep}'). "
                 f"The field must exist in the parent's output dict."
             )
@@ -314,7 +314,7 @@ def _group_reduce_lanes(
     return groups
 
 
-def _reduce_group_decision(
+def _aggregate_group_decision(
     session: Session,
     home: "Home",
     step: StepSpec,
@@ -327,7 +327,7 @@ def _reduce_group_decision(
     blocked_parents: Optional[List[str]] = None,
     pipeline_id: str = "",
 ) -> StepDecision:
-    """Reuse/execute decision for one reduce group (or the sole '@all')."""
+    """Reuse/execute decision for one aggregate group (or the sole '@all')."""
     hash_data = {}
     for dep, coords_dict in sorted(group_mats.items()):
         hash_data[dep] = {
@@ -335,7 +335,7 @@ def _reduce_group_decision(
         }
     # A real group folds its key into identity, so two groups with coincidentally
     # identical members still get distinct addresses; '@all' keeps the plain
-    # shape so existing (ungrouped) reduce caches stay valid.
+    # shape so existing (ungrouped) aggregate caches stay valid.
     if step.group_key is None:
         input_hash = hash_json(hash_data)
     else:
@@ -601,7 +601,7 @@ def _plan_step(
         pending = False
 
         # Gather every surviving parent lane from coord_step_mats (not just
-        # source coordinates), so a reduce also folds in minted/expanded lanes.
+        # source coordinates), so an aggregate also folds in minted/expanded lanes.
         for (coord, d), ref in coord_step_mats.items():
             if d not in parent_mats:
                 continue
@@ -646,10 +646,10 @@ def _plan_step(
         if step.group_key is None:
             groups = {"@all": parent_mats}
         else:
-            groups = _group_reduce_lanes(session, step, parent_mats)
+            groups = _group_aggregate_lanes(session, step, parent_mats)
 
         return [
-            _reduce_group_decision(
+            _aggregate_group_decision(
                 session, home, step, gcoord, gmats, params_hash, force, accepts_params,
                 failed_parents=failed_parents, blocked_parents=blocked_parents,
                 pipeline_id=pipeline_id,
