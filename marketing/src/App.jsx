@@ -105,6 +105,10 @@ const FAQ = [
     a: 'No. It is a library: pip install, import, run. State lives in a local .rubedo/ directory. rubedo serve is an optional read-only local dashboard.',
   },
   {
+    q: 'Can my team share the cache?',
+    a: 'Yes. Point the store at an S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2, MinIO) via store_url or RUBEDO_STORE_URL — outputs and Arrow lane history land there as immutable objects, and a second machine against the same bucket and ledger reuses the first’s work. For multi-machine setups the ledger moves to Postgres. Local stays the default; still no daemon.',
+  },
+  {
     q: 'How stable is the API?',
     a: 'Pre-1.0. The API is unstable and there are no migrations — schema changes mean deleting .rubedo/ and re-running. The core model (content-addressed lanes, shapes, ledger) is designed and built; polish is ongoing.',
   },
@@ -279,6 +283,25 @@ function App() {
               </p>
             </div>
             <div className="beat">
+              <h3>Local by default, shared when you need it</h3>
+              <p>
+                State lives in <code>.rubedo/</code> until you say otherwise. Point the
+                store at an S3-compatible bucket (S3, R2, B2, MinIO) and the ledger at
+                Postgres, and a second machine reuses the first&apos;s outputs — the
+                run-it-twice payoff, across machines.
+              </p>
+            </div>
+            <div className="beat">
+              <h3>Bring your own cluster</h3>
+              <p>
+                <code>executor=</code> takes <code>&quot;thread&quot;</code>,{' '}
+                <code>&quot;process&quot;</code>, or a factory returning any Future-shaped
+                pool — Dask and Ray examples included. Against a cloud store, workers
+                fetch inputs and put results by reference; the coordinator never relays
+                the bytes. Executor choice never changes cache identity.
+              </p>
+            </div>
+            <div className="beat">
               <h3>A columnar data plane</h3>
               <p>
                 Outputs live in per-step, append-only <strong>Arrow IPC</strong> files, so
@@ -343,7 +366,7 @@ function App() {
           <h2>
             Reduce. <span className="hero-accent">Reuse.</span> Rubedo.
           </h2>
-          <p>A data-science loop for batches. Local today. MIT licensed.</p>
+          <p>A data-science loop for batches. Local by default, shared via your bucket. MIT licensed.</p>
           <div className="hero-cta">
             <a className="btn btn-primary" href={DOCS_URL}>
               Read the docs <ArrowRight size={16} />
