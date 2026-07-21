@@ -1,7 +1,4 @@
-"""Public-domain books + simulated Shor's algorithm on a local Ray cluster.
-
-Book pipeline
--------------
+"""Public-domain books on a local Ray cluster.
 
     books.csv ─▶ fetch ─▶ clean ─▶ chapters ─▶ lexicon ─▶ style ─▶ phrases
                  (HTTP)   (skip_   (expand)    (Ray)      (Ray)    (Ray)
@@ -9,23 +6,17 @@ Book pipeline
                                     └─▶ digest (aggregate, group_key=book)
                                           └─▶ report (aggregate)
 
-Shor pipeline
--------------
-
-    targets ─▶ factor (Ray) ─▶ shor_report
-
-``factor`` runs a **classical simulation** of Shor's period-finding
-(modular exponentiation over a ``Q ≈ N²`` register + IQFT via NumPy FFT +
-continued fractions). That cost is ``O(N²)``, so only small semiprimes are
-in reach — roughly **12-bit in a few seconds**, **13-bit in ~15s**, and
-**14-bit is memory-bound** (~1 GiB+ for the IQFT) on a laptop. A real
-quantum device would scale as ``poly(log N)``.
+Downloads real Project Gutenberg texts, splits each book into chapters,
+then runs three CPU-bound Ray map steps per chapter (lexicon, stylometry,
+PMI collocations). A grouped aggregate rolls chapters back into one digest
+per book; the final reduce prints a ranked report.
 
 Ray is in the repo's ``dev`` dependency group (Rubedo never imports it):
 
     uv run python examples/ray_executor/ray_executor.py
 
-    RUBEDO_RAY_ONLY=books|shor|all   # default all
+Optional knobs:
+
     RUBEDO_RAY_CPUS=4
     RUBEDO_RAY_TTR_WINDOW=250
     RUBEDO_RAY_TTR_STRIDE=10
@@ -36,22 +27,11 @@ import csv
 import math
 import os
 import re
-import sys
 import tempfile
 import time
 from collections import Counter
 
 from rubedo import Home, pipeline, step
-
-# Runnable as ``python examples/ray_executor/ray_executor.py`` (cwd on
-# sys.path) *or* imported as ``examples.ray_executor.ray_executor``.
-try:
-    from examples.ray_executor.shor import shor_factor
-except ModuleNotFoundError:  # script execution from repo root
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from shor import shor_factor  # type: ignore
-
-
 
 
 _ray_started = False
@@ -368,84 +348,7 @@ def report(digest: dict) -> str:
     return "\n".join(lines)
 
 
-# Fixed semiprimes so the Shor ladder is reproducible across runs.
-SHOR_LADDER = [
-    {"label": "classic-15", "n": 15},          # 3×5, 4-bit
-    {"label": "classic-35", "n": 35},          # 5×7, 6-bit
-    {"label": "classic-91", "n": 91},          # 7×13, 7-bit
-    {"label": "bits-8", "n": 143},             # 11×13
-    {"label": "bits-9", "n": 299},             # 13×23
-    {"label": "bits-10", "n": 667},            # 23×29
-    {"label": "bits-11", "n": 1591},           # 37×43
-    {"label": "bits-12", "n": 3127},           # 53×59
-    {"label": "bits-13", "n": 8051},           # 83×97  (~15s classically)
-]
-
-
-@step
-def targets():
-    """One lane per semiprime challenge."""
-    for row in SHOR_LADDER:
-        yield dict(row)
-
-
-@step(executor=make_ray_pool)
-def factor(targets: dict) -> dict:
-    """Ray: classical simulation of Shor's algorithm on one N."""
-    result = shor_factor(targets["n"], max_attempts=8, seed=targets["n"])
-    return {
-        "label": targets["label"],
-        "n": result.n,
-        "bits": result.n.bit_length(),
-        "ok": result.ok,
-        "factors": list(result.factors) if result.factors else None,
-        "attempts": result.attempts,
-        "period": result.period,
-        "base": result.base,
-        "register_size": result.register_size,
-        "elapsed_s": round(result.elapsed_s, 3),
-        "detail": result.detail,
-    }
-
-
-@step(in_shape="aggregate", depends_on=["factor"])
-def shor_report(factor: dict) -> str:
-    rows = sorted(factor.values(), key=lambda row: (row["bits"], row["n"]))
-    lines = [
-        "Simulated Shor's algorithm (modexp + IQFT + continued fractions)",
-        "Cost is O(N²) classically — a quantum device would be poly(log N).",
-        "",
-        f"{'label':<12} {'N':>8} {'bits':>4} {'Q':>12} {'time':>7}  result",
-    ]
-    minute_bits = None
-    for row in rows:
-        factors = (
-            f"{row['factors'][0]} × {row['factors'][1]}"
-            if row["factors"]
-            else row["detail"]
-        )
-        lines.append(
-            f"{row['label']:<12} {row['n']:>8} {row['bits']:>4} "
-            f"{row['register_size']:>12,} {row['elapsed_s']:>6.2f}s  "
-            f"{'ok' if row['ok'] else 'fail'} {factors}"
-        )
-        if row["ok"] and row["elapsed_s"] <= 60:
-            minute_bits = row["bits"]
-    lines.extend(
-        [
-            "",
-            f"Largest size that finished in ≤60s on this box: "
-            f"{minute_bits}-bit"
-            if minute_bits
-            else "No successful factorization within 60s.",
-            "Rule of thumb: 12-bit ≈ seconds, 13-bit ≈ 15s, "
-            "14-bit ≈ memory-bound for the IQFT state vector.",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _run_books(home) -> None:
+def main() -> None:
     with open(BOOKS_CSV, newline="") as handle:
         book_count = sum(1 for _ in csv.DictReader(handle))
     print(
@@ -453,87 +356,45 @@ def _run_books(home) -> None:
         f"3 Ray hops, {RAY_CPUS} CPUs, "
         f"TTR window={max(TTR_WINDOW, 50)}/stride={max(TTR_STRIDE, 1)}"
     )
-    pipe = pipeline(
-        name="ray_executor_books",
-        steps=[
-            books,
-            fetch,
-            clean,
-            chapters,
-            lexicon,
-            style,
-            phrases,
-            digest,
-            report,
-        ],
-        home=home,
-    )
-    print(pipe.describe())
-    print()
-    t0 = time.perf_counter()
-    first = pipe.run(workers=RAY_CPUS)
-    t1 = time.perf_counter()
-    second = pipe.run(workers=RAY_CPUS)
-    t2 = time.perf_counter()
-    print(
-        f"First:  Created {first.created_count}, "
-        f"Reused {first.reused_count}  ({t1 - t0:.1f}s)"
-    )
-    print(
-        f"Second: Created {second.created_count}, "
-        f"Reused {second.reused_count}  ({t2 - t1:.1f}s)"
-    )
-    print()
-    print(first.output_for("report").get("@all", ""))
-    assert first.created_count > book_count * 5
-    assert second.created_count == 0
-    assert second.reused_count == first.created_count
-
-
-def _run_shor(home) -> None:
-    print(
-        f"Ray Shor workload: {len(SHOR_LADDER)} semiprimes, {RAY_CPUS} CPUs"
-    )
-    pipe = pipeline(
-        name="ray_executor_shor",
-        steps=[targets, factor, shor_report],
-        home=home,
-    )
-    print(pipe.describe())
-    print()
-    t0 = time.perf_counter()
-    first = pipe.run(workers=RAY_CPUS)
-    t1 = time.perf_counter()
-    second = pipe.run(workers=RAY_CPUS)
-    t2 = time.perf_counter()
-    print(
-        f"First:  Created {first.created_count}, "
-        f"Reused {first.reused_count}  ({t1 - t0:.1f}s)"
-    )
-    print(
-        f"Second: Created {second.created_count}, "
-        f"Reused {second.reused_count}  ({t2 - t1:.1f}s)"
-    )
-    print()
-    print(first.output_for("shor_report").get("@all", ""))
-    assert first.created_count == 2 * len(SHOR_LADDER) + 1
-    assert second.created_count == 0
-    assert second.reused_count == first.created_count
-
-
-def main() -> None:
-    only = os.environ.get("RUBEDO_RAY_ONLY", "all").lower()
     try:
         with tempfile.TemporaryDirectory(prefix="rubedo-ray-") as root:
-            home = Home.ephemeral(root)
-            if only in {"all", "books"}:
-                _run_books(home)
-                if only == "all":
-                    print()
-                    print("=" * 60)
-                    print()
-            if only in {"all", "shor"}:
-                _run_shor(home)
+            pipe = pipeline(
+                name="ray_executor",
+                steps=[
+                    books,
+                    fetch,
+                    clean,
+                    chapters,
+                    lexicon,
+                    style,
+                    phrases,
+                    digest,
+                    report,
+                ],
+                home=Home.ephemeral(root),
+            )
+            print(pipe.describe())
+            print()
+
+            t0 = time.perf_counter()
+            first = pipe.run(workers=RAY_CPUS)
+            t1 = time.perf_counter()
+            second = pipe.run(workers=RAY_CPUS)
+            t2 = time.perf_counter()
+
+            print(
+                f"First:  Created {first.created_count}, "
+                f"Reused {first.reused_count}  ({t1 - t0:.1f}s)"
+            )
+            print(
+                f"Second: Created {second.created_count}, "
+                f"Reused {second.reused_count}  ({t2 - t1:.1f}s)"
+            )
+            print()
+            print(first.output_for("report").get("@all", ""))
+            assert first.created_count > book_count * 5
+            assert second.created_count == 0
+            assert second.reused_count == first.created_count
     finally:
         if _ray_started:
             import ray
