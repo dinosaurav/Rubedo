@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the public constructor knob (replaces private `_fresh=`).
 
 ### Changed
+- Docs reorganized by reader intent: Concepts keeps only the stable model
+  pages; Cloud Storage moved to Guides; the Partial Runs and Run Diff
+  pages merged into one "Trials: sample, diff, roll out" guide;
+  Development split into a top-level Contributing entry and a Design
+  Notes section that now also publishes `notes/arrow-storage.md`.
+  `notes/` archives closed material under `notes/archive/`
+  (`TODO-obsolete.md`, `lookup-performance.md`), drops the stale
+  `framework_analysis.md`, and the Pages deploy now serves the canonical
+  `notes/llms.txt` at `/llms.txt`.
 - **Breaking:** drop the `shape="reduce"` and `arrow_reduce=` aliases.
   Write `in_shape="aggregate"` (or let `group_key=` imply it) and
   `arrow_aggregate=True`. The true sequential accumulator remains

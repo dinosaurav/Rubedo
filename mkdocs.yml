@@ -99,15 +99,14 @@ nav:
     - The Model: concepts/model.md
     - Shapes: concepts/shapes.md
     - Sources: concepts/sources.md
-    - Cloud Storage: concepts/cloud-storage.md
     - Code Changes & Versioning: concepts/versioning.md
-    - Partial Runs & Sampling: concepts/partial-runs.md
-    - Run History & Diff: concepts/run-diff.md
   - Guides:
     - Execution Policies: guides/execution-policies.md
     - Search & Invalidation: guides/search-and-invalidation.md
     - Inspecting Runs: guides/inspecting-runs.md
+    - Trials — Sample, Diff, Roll Out: guides/trials.md
     - Retention & GC: guides/retention.md
+    - Cloud Storage & Sharing: guides/cloud-storage.md
   - API Reference:
     - reference/api/index.md
     - Steps: reference/api/step.md
@@ -116,8 +115,9 @@ nav:
     - GC & Storage: reference/api/gc.md
   - CLI: reference/cli.md
   - Changelog: changelog.md
-  - Development:
-    - Contributing: development/contributing.md
+  - Contributing: development/contributing.md
+  - Design Notes:
     - Invariants: development/invariants.md
     - Producer Model: development/producer-model.md
-    - Retention: development/retention.md
+    - Arrow Storage: development/arrow-storage.md
+    - Retention Design: development/retention.md

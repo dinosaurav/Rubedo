@@ -44,14 +44,17 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 - **[Execution policies](guides/execution-policies.md)** — retries, rate limits, assertions, process pools, scheduling.
 - **[Search & invalidation](guides/search-and-invalidation.md)** — index outputs by content, invalidate surgically.
 - **[Inspecting runs](guides/inspecting-runs.md)** — `p.plan()`, `trace()`, `rubedo du`, the dashboard.
+- **[Trials: sample, diff, roll out](guides/trials.md)** — `RunScope` cohorts, partial runs, run-to-run diff.
 - **[Retention & GC](guides/retention.md)** — keep-windows, `rubedo gc`, bytes-never-facts.
+- **[Cloud storage & sharing](guides/cloud-storage.md)** — S3-compatible buckets, the shared lane store, Postgres.
 
 ## Reference
 
 - **[API Reference](reference/api/index.md)** — every public function and class.
 - **[CLI](reference/cli.md)** — every subcommand and flag.
 - **[Changelog](changelog.md)** — every released version, kept in [Keep a Changelog](https://keepachangelog.com/) form.
-- **Development** — [contributing](development/contributing.md), plus the canonical design notes published verbatim from the repo: the [invariants](development/invariants.md), the [producer model](development/producer-model.md), and the [retention model](development/retention.md).
+- **[Contributing](development/contributing.md)** — setup, verification checklist, conventions.
+- **Design notes** — the canonical engine-design docs published verbatim from the repo: the [invariants](development/invariants.md), the [producer model](development/producer-model.md), the [Arrow storage design](development/arrow-storage.md), and the [retention design](development/retention.md).
 
 ## Project status
 

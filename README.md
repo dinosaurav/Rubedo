@@ -235,7 +235,7 @@ trial = p.run(scope=scope, targets=["classify"])  # kind='partial'
 p.run()  # full run reuses those classify addresses
 ```
 
-Scope and targets never enter output addresses. Partial runs do not displace `home.current()` (latest full `process` run) or steal retention protection from it. See [partial runs](docs/concepts/partial-runs.md).
+Scope and targets never enter output addresses. Partial runs do not displace `home.current()` (latest full `process` run) or steal retention protection from it. See [trials: sample, diff, roll out](docs/guides/trials.md).
 
 ### Run history and run-to-run diff
 
@@ -253,7 +253,7 @@ p.run()      # full rollout reuses the trial's addresses
 
 `home.runs(pipeline=..., kind=..., status=..., limit=...)` lists history
 (newest first; effective status; includes partials). See
-[run history & diff](docs/concepts/run-diff.md).
+[trials: sample, diff, roll out](docs/guides/trials.md).
 
 `trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
 
@@ -322,7 +322,7 @@ Spilled outputs land under `objects/…`, and lane history is written as immutab
 
 When steps run in a process pool or an external pool against a cloud store, spilled payloads travel **by reference**: workers receive `objects:<hash>` refs, fetch their inputs from the bucket directly, and put results straight back — the coordinator never relays the bytes (`p.run(payload_refs=False)` forces hub routing if you need it).
 
-Two honest caveats: destructive `rubedo gc --delete` currently refuses cloud stores (dry-run reporting works fine), and the cloud planes are the newest part of the engine. [docs/concepts/cloud-storage.md](docs/concepts/cloud-storage.md) has the full setup, including R2 endpoint configuration.
+Two honest caveats: destructive `rubedo gc --delete` currently refuses cloud stores (dry-run reporting works fine), and the cloud planes are the newest part of the engine. [docs/guides/cloud-storage.md](docs/guides/cloud-storage.md) has the full setup, including R2 endpoint configuration.
 
 ## Examples
 

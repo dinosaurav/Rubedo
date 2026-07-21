@@ -84,7 +84,7 @@ retention's "latest snapshot" always mean the latest terminal
 `home.runs(...)` lists history (including partials); `home.diff(...)`
 compares one step across two explicit runs read-only (cohort-aware when
 `after` is a partial at the requested anchor step — see
-`docs/concepts/run-diff.md`).
+`docs/guides/trials.md`).
 
 **Attempt/event:**
 Something that happened during execution, successful or not.

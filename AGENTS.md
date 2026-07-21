@@ -33,7 +33,7 @@ accurate and load-bearing; keep them updated when behavior changes.
   `join` — is designed and built; see `notes/producer-model.md`.
 - **TODO conventions**: items keep their historical numbers (gaps are
   shipped/retired items — archived verbatim, with the full Done
-  changelog, in `notes/TODO-obsolete.md`); an open item's spec is
+  changelog, in `notes/archive/TODO-obsolete.md`); an open item's spec is
   buildable as written unless tagged **[needs owner decision]** (settled
   problem, unratified fix — propose, don't build) or carrying a **⚠️
   respec** banner (re-verify pointers against current code first). Most

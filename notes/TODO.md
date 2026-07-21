@@ -7,7 +7,7 @@ and acceptance criteria. Read `CLAUDE.md` first for conventions and
 
 Items keep their historical numbers for stable cross-references. The
 pre-restructure TODO (with the full Done changelog and every shipped
-item's spec) is archived verbatim at `notes/TODO-obsolete.md` — gaps in
+item's spec) is archived verbatim at `notes/archive/TODO-obsolete.md` — gaps in
 the numbering below are shipped or retired items, documented there. New
 items continue from **35**. Items tagged **[needs owner decision]** have
 a settled problem statement and a recommended spec but an unratified
@@ -47,7 +47,7 @@ content-addressed lanes. The old trap list (etag quote-stripping, LIST
 pagination) dissolved with the classes — in recipe form the raw etag
 string is payload data, consistent by construction. A moto-tested
 example pinning "re-run reuses with zero GetObject calls" is Parked.
-Full original spec in `notes/TODO-obsolete.md`.
+Full original spec in `notes/archive/TODO-obsolete.md`.
 
 ## 7. Configurable cloud ledger + object store (Postgres / S3-GCS)  **[respecced 2026-07-20 against Home; planes settled]**
 
@@ -234,7 +234,7 @@ from the start so item 13 does not require redesign.
   **zero-arg factory returning a pool-like** (`.submit(fn, *args, **kwargs)`
   → Future with `.result()`). The engine never imports dask or ray; no
   `rubedo[dask]` extra exists; the zero-daemon positioning
-  (`notes/framework_analysis.md`) survives because Rubedo itself never
+  (the README's "library, not a platform") survives because Rubedo itself never
   requires a cluster — a user who has one hands over a factory. The
   original add-vs-replace-`"process"` question dissolves: `"process"`
   (loky) stays, and no third *named* value is ever added. Documented
@@ -420,7 +420,7 @@ ledger row and the re-run heals.
 
 ## Done
 
-The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
+The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
 - **2026-07-21 — retired control plane + human overrides from Parked:**
@@ -444,7 +444,7 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
   observed coordinates; `lanes=` freezes explicitly. Value changes:
   nested dict dotted paths; top-level unified text diff; lists/scalars
   keep old/new. Public types: `RunDiff` / `CellDiff` / `ValueChange`.
-  Docs: `docs/concepts/run-diff.md`. No schema change; no CLI/UI yet.
+  Docs: `docs/guides/trials.md`. No schema change; no CLI/UI yet.
 - **2026-07-20 — partial execution / sampling MVP shipped:** public
   frozen `RunScope` (exact lanes at a map anchor) with
   `explicit` / `from_cells` / `sample_n` / `sample_fraction` helpers;
@@ -455,7 +455,7 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
   `in_shape='one'`/`out_shape='one'` (reject root/aggregate/fold/join/
   expand/`skip_cache`). `home.current()` and retention protect the
   latest full `kind='process'` run so partial trials cannot displace
-  it. Docs: `docs/concepts/partial-runs.md`. Run-to-run diff: see Done
+  it. Docs: `docs/guides/trials.md`. Run-to-run diff: see Done
   entry above.
 - **2026-07-20 — reverse ETL descoped (owner design session):** no sink
   shape, terminal-only rule, export verb, delivery ledger, or connector
@@ -578,6 +578,6 @@ The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
   `tests/test_fold.py`. Item 28 is fully shipped (Phase 1 landed
   2026-07-17 as `in_shape`/`out_shape` + `aggregate` rename).
 - **2026-07-18 — TODO restructure:** old TODO archived verbatim to
-  `notes/TODO-obsolete.md`; items 26 (retired) and 27/28 (shipped —
+  `notes/archive/TODO-obsolete.md`; items 26 (retired) and 27/28 (shipped —
   27 minus the `spills=` valve, now Parked) dropped from the live list;
   items 29–34 added from the re-verified codebase review.

@@ -1,0 +1,1 @@
+--8<-- "notes/arrow-storage.md"

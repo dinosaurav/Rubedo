@@ -42,6 +42,7 @@ jobs:
         run: |
           rm -rf dist
           npm run build:all
+          cp ../notes/llms.txt dist/llms.txt
 
       - uses: actions/configure-pages@v5
 

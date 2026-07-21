@@ -37,7 +37,7 @@ the run ledger, not from shared Arrow row metadata.
 pipeline / kind / effective status). `home.diff(step=..., before=...,
 after=...)` compares one step across two runs — cohort-aware when
 `after` is a scoped partial at that step. See
-[`../concepts/run-diff.md`](../concepts/run-diff.md).
+[trials: sample, diff, roll out](trials.md).
 
 ## `p.plan()`: the dry-run
 
