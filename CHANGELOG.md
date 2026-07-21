@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-21
+
 ### Added
 - **Pass-by-reference spilled payloads (TODO 13):** when the object store
   is remote and a step uses `"process"` or a factory executor, spilled
