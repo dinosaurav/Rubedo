@@ -40,7 +40,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step
+@p.step(check_cache=False)   # a source watching external state: rescan every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -58,7 +58,7 @@ summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
-Nothing is spelled out that the code already says: `scan` is a parentless generator, so it's an `expand`-shaped source; `count_lines`'s parameter names the `scan` step, so that's its dependency; names default to the function names and `version` to `"0"`.
+Nothing is spelled out that the code already says: `scan` is a parentless generator, so it's an `expand`-shaped source; `count_lines`'s parameter names the `scan` step, so that's its dependency; names default to the function names and `version` to `"0"`. The one explicit knob is `check_cache=False`: sources are cached like any step by default, so one that watches external state (a folder, a CSV, a table) must declare that it re-enumerates every run — that's what lets the edit below get noticed.
 
 Run it twice and watch the point of the whole project:
 
@@ -75,7 +75,7 @@ Prefer steps defined away from the pipeline that uses them? `pipeline(steps=[...
 ```python
 from rubedo import step, pipeline
 
-@step
+@step(check_cache=False)
 def scan(): ...
 
 @step

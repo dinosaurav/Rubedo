@@ -14,7 +14,7 @@ const HERO_CODE = `from rubedo import pipeline, Filtered
 
 p = pipeline(name="triage")
 
-@p.step
+@p.step(check_cache=False)  # rescan every run
 def inbox():
     for url in open("urls.txt"):
         yield {
@@ -45,7 +45,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step
+@p.step(check_cache=False)  # rescan the folder every run
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
