@@ -19,7 +19,7 @@ If you've ever processed a thousand rows through an LLM and then needed to fix t
 - **Orchestrators are the wrong tool.** Airflow/Prefect/Dagster schedule and monitor services; they don't give you row-level, content-addressed incrementality inside a local script. dbt does — but only for SQL.
 - **Make/Snakemake track files.** Rubedo tracks *content*, at row granularity, with a queryable history of every run.
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite control plane + Arrow IPC lane store + content-addressed object store), created on first run and gitignored automatically.
+Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite control plane + Arrow IPC lane store + content-addressed object store), created on first run and gitignored automatically — and each of those planes can be pointed at a shared Postgres database or an S3-compatible bucket when one machine stops being enough (see [sharing state](#local-by-default-shared-when-you-need-it)).
 
 > **Note:** `.rubedo/` resolves **relative to the current working directory** — pipelines, the CLI, and the server must all run from the same directory (typically your project root) to see the same state. Running from somewhere else silently creates a fresh, empty store there. To run from anywhere, pin the location with the `RUBEDO_HOME` (or `RUBEDO_DB_PATH`) environment variable.
 
@@ -29,7 +29,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 pip install rubedo           # or: pip install "rubedo[server]"
 ```
 
-Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for the web dashboard. To hack on Rubedo itself (or run the bundled examples), clone the repo and `uv sync`.
+Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for the web dashboard; the `s3` extra (`pip install "rubedo[s3]"`) adds the S3-compatible cloud store backend. To hack on Rubedo itself (or run the bundled examples), clone the repo and `uv sync`.
 
 ## Quickstart
 
@@ -127,7 +127,9 @@ def enrich(row: dict): ...
 - **`assertions`** run against the output value before it commits; if any raise, the step fails and bad data never propagates downstream.
 - **`executor="process"` or `executor=<factory>`** switches a step from the
   default thread path to a `loky` process pool or any Future-shaped external
-  pool returned by a zero-argument factory. Executor choice never changes
+  pool returned by a zero-argument factory — [`examples/dask_executor`](examples/dask_executor/)
+  and [`examples/ray_executor`](examples/ray_executor/) run real step bodies on
+  Dask and Ray with full second-run reuse. Executor choice never changes
   cache identity.
 - **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `aggregate`/`join` always synchronize on all lanes either way.
 
@@ -171,6 +173,8 @@ def enrich(order, customer):        # one lane per matched pair
 
 Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
 
+When a join or union has no interesting body, declare it without one: `p.join(name="pair", join_on={...})` assembles a nested struct from the matched parents, and `p.union(name="all", depends_on=[...])` merges lane sets deduped by content hash — zero per-lane Python calls, cached like any step.
+
 A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `p.run(params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
 
 ```python
@@ -205,6 +209,19 @@ Two independent axes on `@step`:
 ## Inspecting runs
 
 `p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
+
+Everything a run wrote is queryable through **`Home`** — the handle to one storage root (the `.rubedo/` directory, or wherever `RUBEDO_HOME` points). A `Cell` is one (run, step, lane) outcome with its status and resolved output value:
+
+```python
+from rubedo import Home
+
+home = Home.default()
+home.current()                              # the latest full run's cells
+home.select("step:enrich company:acme")     # same query language as the CLI and UI
+home.runs(pipeline="triage", limit=10)      # run history, newest first
+```
+
+`RunSummary.cells` gives the same view for the run you just executed, so tests and scripts never hand-roll coordinate lookups.
 
 ### Partial runs and sampling
 
@@ -255,6 +272,7 @@ The **CLI** browses and invalidates against the local ledger:
 rubedo ls                          # recent runs
 rubedo show <run_id> --failed      # what broke, per lane (--json for scripts)
 rubedo invalidate "step:enrich company:acme" --reason "bad prompt"
+rubedo check                       # lint declared pipeline(secrets=/env=) against the environment
 ```
 
 ## Retention and garbage collection
@@ -289,6 +307,23 @@ The built UI is served from the package — no separate dev server needed. To ha
 
 Running, recomputing, and invalidation always happen from library code or the CLI; the UI never mutates state.
 
+## Local by default, shared when you need it
+
+All state hangs off a `Home` — one storage root owning three planes: the **ledger** (SQLite by default), the content-addressed **object store**, and the Arrow **lane tables**. The default home is the local `.rubedo/` directory and nothing else exists until you point at it; every knob below is optional.
+
+To share the cache beyond one machine, move the data planes into an S3-compatible bucket — AWS S3, Cloudflare R2, Backblaze B2, and MinIO all use the same backend; the provider is configuration, not an engine concept:
+
+```python
+home = Home(".rubedo", store_url="s3://my-bucket/rubedo")   # or RUBEDO_STORE_URL
+p = pipeline(name="scrape", home=home)
+```
+
+Spilled outputs land under `objects/…`, and lane history is written as immutable Arrow segments under `tables/…`, guarded by a renewable single-writer lease per pipeline (read-only `.plan()` never takes the lease) with threshold compaction keeping segment chains short. A second home against the same bucket and ledger reuses the first's outputs — the run-it-twice payoff, across machines. For truly multi-machine setups the ledger itself moves to a shared database via `db_url=` (any SQLAlchemy URL; Postgres is what the test suite covers).
+
+When steps run in a process pool or an external pool against a cloud store, spilled payloads travel **by reference**: workers receive `objects:<hash>` refs, fetch their inputs from the bucket directly, and put results straight back — the coordinator never relays the bytes (`p.run(payload_refs=False)` forces hub routing if you need it).
+
+Two honest caveats: destructive `rubedo gc --delete` currently refuses cloud stores (dry-run reporting works fine), and the cloud planes are the newest part of the engine. [docs/concepts/cloud-storage.md](docs/concepts/cloud-storage.md) has the full setup, including R2 endpoint configuration.
+
 ## Examples
 
 Every example in [`examples/`](examples/) is a self-contained folder that talks to **real** services (Hacker News, GitHub, Open-Meteo, Project Gutenberg, an LLM via OpenRouter) using only the standard library:
@@ -301,7 +336,7 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 ## Design
 
-The control plane is **append-only SQLite** (enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
+The control plane is an **append-only SQL ledger** (SQLite by default, Postgres for shared deployments — immutability enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
 
 ## Performance
 
