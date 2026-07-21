@@ -31,9 +31,12 @@ Rubedo is that the second run recomputes only what actually changed.
 | [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → aggregate | `skip_cache` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → aggregate | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown) | dwyl/english-words (GitHub) | map → aggregate | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare elapsed time |
+| [`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor) | local Dask cluster (optional install) | expand → map → aggregate | a zero-argument external `executor=` factory; Dask runs the step bodies and Rubedo fully reuses the second run |
+| [`ray_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/ray_executor) | Project Gutenberg + local Ray (`ray` in the dev group) | fetch → chapters → 3× Ray → group digest → aggregate | real books split into chapters; lexicon / stylometry / PMI collocations on Ray; second run fully reuses |
 | [`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed) | local files (self-contained) | expand | `shape="expand"` (`out_shape="many"`) — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
 | [`newsroom`](https://github.com/dinosaurav/Rubedo/tree/main/examples/newsroom) | local CSVs (self-contained) | join → expand → aggregate | every producer shape at once: multiple source-shaped `@p.step` roots, N-way `shape="join"`, `shape="expand"`, and a `group_key` aggregate |
 | [`pdf_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/pdf_digest) | a PDF + a vision & a text LLM | map root → expand → LLM → aggregate → 2× LLM | a source-less `map` root (the PDF path is a param, no `Source`), a cheap vision LLM on figure pages, and a picture-aware vs. text-only summary comparison |
+| [`paper_scout`](https://github.com/dinosaurav/Rubedo/tree/main/examples/paper_scout) | OpenAlex (keyless) | sampled rate-limited fetch → aggregate → policy A/B | `RunScope.sample_n`, `targets=`, `home.runs`, `RunSummary.diff`, a cautious `12/min` API budget, and sample → compare → rollout reuse |
 
 ## Detail, by example
 
@@ -91,6 +94,25 @@ Python (the GIL); processes do. Pass `--force` to re-pay the full cost and
 see the difference — a cached second run reuses everything almost
 instantly regardless of executor.
 
+**[`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor)**
+— a zero-argument factory (`executor=make_dask_pool`) hands a step's
+execution to a local Dask `LocalCluster`/`Client.get_executor()`, the
+Future-shaped pool `executor=` accepts (see [Execution Policies: bring your
+own pool](guides/execution-policies.md#bring-your-own-pool)). Rubedo never
+imports Dask itself — the factory owns that — and shuts the cluster down
+after the run. The second run reuses every lane from the local cache
+without touching Dask again. Optional dependency: `uv run --with
+"dask[distributed]" python examples/dask_executor/dask_executor.py`.
+
+**[`ray_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/ray_executor)**
+— downloads real Project Gutenberg books, splits each into chapters
+(`expand`), then runs three CPU-bound analyses per chapter (lexicon,
+stylometry, PMI collocations) on a local Ray cluster via the same
+external-executor-factory mechanism as `dask_executor`. A `group_key="book"`
+aggregate rolls chapters back into one digest per book, and a final
+aggregate prints a ranked report. `ray` is in the repo's `dev` dependency
+group, so `uv run python examples/ray_executor/ray_executor.py` just works.
+
 **[`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed)**
 — `tech.json → fetch → articles (expand) → headline (map)`: `shape="expand"`
 (`out_shape="many"`) is the 1:N shape, where a step yields a payload per
@@ -115,6 +137,21 @@ picture-aware and a text-only document, and two more LLM steps summarize
 each — a side-by-side of what the pictures were worth. Needs
 `OPENROUTER_API_KEY`; PyMuPDF (`pymupdf`) is already in the dev dependency
 group.
+
+**[`paper_scout`](https://github.com/dinosaurav/Rubedo/tree/main/examples/paper_scout)**
+— the trial-before-rollout example: `discover` queries OpenAlex for recent
+papers on a topic, `fetch_work` fetches full metadata under a `12/min`
+rate limit, and `reading_list` (aggregate) compiles the batch. Before
+paying for the full fetch, it samples a deterministic two-paper pilot with
+`RunScope.sample_n` and runs only that cohort (`targets=[fetch_work]`); the
+full rollout then reuses the pilot's fetches instead of re-hitting OpenAlex.
+It then trials an access-aware shortlist policy (a second `assess` step
+version) against a citations-only baseline on another sampled cohort, prints
+the cohort-aware `diff`, and rolls out the accepted policy — `home.runs(...)`
+lists the resulting mix of full and partial runs at the end. Keyless;
+`OPENALEX_EMAIL` is optional and identifies requests to OpenAlex's polite
+pool. See [Trials: sample, diff, roll out](guides/trials.md) for the
+underlying API.
 
 ## Keys
 
