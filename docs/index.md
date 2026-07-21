@@ -12,7 +12,7 @@ from rubedo import pipeline
 
 p = pipeline(name="summarize")
 
-@p.step
+@p.step(check_cache=False)   # re-read the CSV every run
 def leads():
     with open("leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -35,7 +35,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 ## Understand the model
 
 - **[The model](concepts/model.md)** — lanes, addresses, the ledger, and the promises it keeps.
-- **[Shapes](concepts/shapes.md)** — `map`, `aggregate`, `expand`, `join`.
+- **[Shapes](concepts/shapes.md)** — `map`, `aggregate`, `fold`, `expand`, `join`.
 - **[Sources](concepts/sources.md)** — folders, CSV rows, SQL tables, multi-source pipelines.
 - **[Code changes & versioning](concepts/versioning.md)** — what an edit means to the cache.
 

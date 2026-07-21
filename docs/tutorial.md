@@ -45,7 +45,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
 
 
-@step
+@step(check_cache=False)
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -83,6 +83,10 @@ There's no `folder=` kwarg — ingestion is just a step. `scan` is a
 parentless step that walks `./input` and `yield`s each file's own content
 (not just its path — the yielded payload is what gets hashed into the
 lane's identity), and each yield mints its own content-addressed lane.
+`check_cache=False` makes `scan` re-list the folder on every `p.run()`
+instead of trusting a cached enumeration — the folder is external state
+that can change between runs (an edit, a new file), and only a fresh scan
+notices that (see [Concepts: sources](concepts/sources.md)).
 `classify` is an ordinary dependent `map` step. Its `rating` output field
 is queryable by content later, not just by which file produced it — the
 output struct's fields are searchable directly.
@@ -149,10 +153,14 @@ Plan for 'reviews' over scan: 1 execute, 1 pending
 created=0 reused=7 filtered=1
 ```
 
-`p.plan()` prints the exact same coarse shape as the first run — an `expand`
-root always plans as `execute` (it never caches its own enumeration to
-preview against) and everything downstream stays `pending`, even
-immediately after a completed run. This is deliberate: `p.plan()` is a pure
+`p.plan()` prints the exact same coarse shape as the first run — a
+`check_cache=False` `expand` root always plans as `execute` (it never
+caches its own enumeration to preview against, by design: that's what lets
+it notice a folder edit) and everything downstream stays `pending`, even
+immediately after a completed run. (A root *without* `check_cache=False`
+is anchor-cached like any `expand` and would instead plan every lane as
+`reuse` here — see [Concepts: sources](concepts/sources.md).) This is
+deliberate: `p.plan()` is a pure
 dry-run and can't reach into a hypothetical future execution to say what an
 unexecuted generator would yield. `p.run()`'s summary is where the real
 story shows: `created=0 reused=7` — every lane, including the filtered
@@ -275,7 +283,7 @@ print(result)
 ```
 
 ```text
-{'run_id': 'run_997f9495c519', 'invalidated_count': 2, 'seed_count': 2, 'downstream_count': 0, 'materialization_ids': [11, 13]}
+{'run_id': 'run_ab4f8e76c803', 'invalidated_count': 2, 'seed_count': 2, 'downstream_count': 0, 'addresses': ['07ced3b0180fd64ce423a9b3d79e438f5fa7c525e66090ce9886093f708bf926', '7ded8265983de02cb923a7bc68d5c812e1a94978a9c73512d7fc17dada6cb64b']}
 ```
 
 !!! note "Why `version:v2` is in the query"
@@ -289,9 +297,11 @@ print(result)
     `version:v2` selects only the current generation — a good habit any time
     a step has been bumped more than once.
 
-Invalidation is a logical tombstone: `is_live` flips off, a
-`materialization_lifecycle` row records why, and nothing is deleted. The
-next `p.run()` sees those two lanes have no live output and recomputes them:
+Invalidation is a logical tombstone: it flips `input_hash_usages.fulfilled`
+to `False` for the two matched addresses, and nothing is deleted — the
+Arrow lane-store rows stay as history. The
+next `p.run()` sees those two lanes have no live (fulfilled) output and
+recomputes them:
 
 ```bash
 uv run python pipeline.py
@@ -315,8 +325,8 @@ after (to confirm what actually moved): run `trace()` with the same
 
 ## Where to go next
 
-- [Concepts: shapes](concepts/shapes.md) — `aggregate`, `expand`, and `join`,
-  the three shapes beyond the `map` step used here.
+- [Concepts: shapes](concepts/shapes.md) — `aggregate`, `fold`, `expand`, and
+  `join`, the four shapes beyond the `map` step used here.
 - [Concepts: sources](concepts/sources.md) — the ingestion recipes: folder,
   CSV, SQL table, cloud object storage.
 - [Guide: search and invalidation](guides/search-and-invalidation.md) — the

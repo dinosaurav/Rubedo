@@ -22,7 +22,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step
+@p.step(check_cache=False)   # rescan the folder every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -49,6 +49,13 @@ dependency is inferred too (see [Shapes](concepts/shapes.md)). `p.describe()` re
 anything runs; `p.plan()` is a read-only dry-run of what `p.run()` would do to
 every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
 `p.run()` actually executes it and returns a `RunSummary`.
+
+`check_cache=False` matters here: by default a root generator's fan-out is
+cached against its own identity like any `expand` (see
+[Shapes](concepts/shapes.md#expand-1n-fan-out)), so it wouldn't notice a
+folder edit on its own — `check_cache=False` re-runs `scan` every `p.run()`
+so it always sees the folder's current contents (see
+[Sources](concepts/sources.md)).
 
 With four input files, that quickstart prints:
 
@@ -147,7 +154,7 @@ and both forms compose freely:
 ```python
 from rubedo import step, pipeline
 
-@step
+@step(check_cache=False)
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -176,7 +183,7 @@ uses itself.
   invalidating a selection.
 - [Concepts: the model](concepts/model.md) — lanes, coordinates, addresses,
   and the vocabulary the rest of the docs assume.
-- [Concepts: shapes](concepts/shapes.md) — `map`, `aggregate`, `expand`, `join`.
+- [Concepts: shapes](concepts/shapes.md) — `map`, `aggregate`, `fold`, `expand`, `join`.
 - [Concepts: sources](concepts/sources.md) — the folder, CSV, SQL table, and
   cloud storage ingestion recipes.
 - [Concepts: versioning](concepts/versioning.md) — `version` vs. `code`, and
