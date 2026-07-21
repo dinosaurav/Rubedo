@@ -371,34 +371,6 @@ ledger row and the re-run heals.
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
 
-- **Cloud control plane** — the product outside `src/rubedo/`: hosted
-  runs against shared Postgres + S3/R2 Homes, a deploy/build service that
-  packages user pipelines, a scheduler/trigger layer, a secrets vault,
-  shared team cache, and dashboard *write* surfaces. Rubedo-the-library
-  stays a zero-daemon local engine; the control plane is a separate
-  service boundary that *uses* the engine (items 7/8/13 are the
-  prerequisites). Engine-side declarations already shipped as item 21
-  (`pipeline(secrets=, env=)` + `rubedo check`) — the vault and runners
-  honor those names; the library still never fetches secrets itself.
-  Spine ratified 2026-07-13; full design in
-  `notes/private/cloud-control-plane.md` (gitignored, owner-local).
-  Remaining design sessions before building: vault build-vs-buy,
-  build-sandbox isolation, tenant-scale ceiling.
-
-- **Human-in-the-loop overrides** — accept or correct individual lane
-  outputs after a run (the LLM-refinement case: most rows are fine, a
-  few need a human edit, and you do not want to invalidate the whole
-  step). Natural fit with generations: an override is a **new** live
-  generation whose provenance is `human` instead of a step execution —
-  append-only and liveness stay intact; downstream steps see the
-  corrected value on the next run the same way they would see a
-  recomputed one. This is the dashboard's first *write* surface and
-  touches the commit path + IHU liveness lifecycle
-  (`notes/invariants.md`), so it is **DANGEROUS** — full design session
-  required (authn of who overrode, audit trail, interaction with
-  `force=` / version bumps / GC, whether overrides are pipeline-scoped
-  or home-scoped). Do not sketch in code. (2026-07-13; still parked.)
-
 - **Bucketed aggregation / `allocate`** (batching lanes into ~N-sized
   groups — owner re-raised 2026-07-18 as an "allocate" shape). The naive
   "first 50 to finish" is nondeterministic and breaks order-independent
@@ -451,6 +423,8 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-21 — retired control plane + human overrides from Parked:**
+  product-layer ideas, not engine work; dropped rather than deferred.
 - **2026-07-21 — retired did-you-mean (#25) and parked cost-tracking:**
   neither is load-bearing for the engine; dropped rather than deferred.
 - **2026-07-21 — pass-by-ref spilled payloads (TODO 13) shipped:** see
