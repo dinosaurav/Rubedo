@@ -22,8 +22,11 @@ before being written down. Item 35 is the post-Home read-surface gap
 (2026-07-20).
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) is shipped. Remaining Parked items are engine-shaped
-only (allocate, streaming expand, etc.) — design session before building.
+(7 → 7b → 8 → 13) is shipped. Item 36 (persist the invalidation
+`reason`) is the sole open item — **[needs owner decision]**, do not
+build until the owner schedules it. Remaining Parked items are
+engine-shaped only (allocate, streaming expand, etc.) — design session
+before building.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -366,6 +369,49 @@ submissions); a credential-less pool warns once and completes correctly
 by value; an aggregate over N spilled parents fetches all N worker-side;
 `expand` pipelines are untouched; a worker killed mid-PUT leaves no
 ledger row and the re-run heals.
+
+──────────────────────────────────────────────────────────────────────
+
+## 36. Persist the invalidation `reason`  **[needs owner decision — added 2026-07-21 at owner request; do not build until scheduled]**
+
+**Problem.** `invalidate(selection, reason)` and `rubedo invalidate
+--reason` (required, `cli.py` ~353) accept a reason string that is never
+written anywhere. `invalidation.py` already creates a `kind="invalidate"`
+`Run` row (persisting `selection_json`, and `downstream` in
+`params_json`) plus `run_started`/completion `RunEvent`s — but `reason`
+is dropped on the floor. The 2026-07-21 docs sweep found docs claiming it
+was stored on the (deleted) lifecycle row;
+`docs/guides/search-and-invalidation.md` now honestly says "not currently
+persisted." The server UI path passes a reason too (`server.py` ~614),
+and `schemas.py` `invalidation_reason` is a hardcoded projection
+(`"invalidated"`), not the user's string. A required argument the ledger
+forgets is the worst of both worlds.
+
+**Recommended fix (smallest honest one).** Carry `reason` in the
+invalidate Run's `params_json` (next to `downstream`) and echo it in the
+`run_started` event message; surface it in `rubedo show <run_id>` and the
+run-detail API. `InputHashUsage.last_run_id` already points each tombstone
+at the invalidate run, so the server's `invalidation_reason` projection
+can join through it and return the real string per address. No schema
+change; append-only preserved.
+
+**Alternatives the owner may prefer instead:** (a) a dedicated
+`event_type="invalidated"` `RunEvent` per flipped address with the reason
+in `data` — heavier (one event per address) but gives per-lane
+attribution without a join; (b) make `reason` optional and keep not
+persisting it — removes the lie by removing the requirement, but gives up
+the audit value the docs tell users to invest in.
+
+**Trap:** do not add a reason column to `InputHashUsage` — its only
+intentionally mutable columns are `fulfilled`/`last_run_id`
+(`notes/invariants.md`); everything else in the ledger is append-only and
+guarded. The Run-row route needs no new mutability at all.
+
+Acceptance: after `rubedo invalidate "step:x" --reason "bad prompt"`, the
+reason is readable back from the ledger via the invalidate run (CLI
+`rubedo show` and the run-detail API return it), and the "not currently
+persisted" sentence in `docs/guides/search-and-invalidation.md` is
+updated to say where it lives.
 
 ──────────────────────────────────────────────────────────────────────
 
