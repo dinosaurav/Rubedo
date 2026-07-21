@@ -382,6 +382,7 @@ class Pipeline:
         progress_cb: Optional[Callable[[str, str, str], None]] = None,
         scope: Optional[RunScope] = None,
         targets: Optional[Sequence[StepRef]] = None,
+        payload_refs: bool = True,
     ) -> RunSummary:
         """Run this pipeline — the single entry point.
 
@@ -394,6 +395,10 @@ class Pipeline:
         ``scope`` / ``targets`` select a partial run over a frozen lane
         cohort and/or a target-bounded subgraph. Neither enters cache
         identity — sampled map outputs remain reusable by a later full run.
+
+        ``payload_refs=False`` forces coordinator hub routing for spilled
+        blobs even when the store is remote and the step uses a process
+        or factory executor.
         """
         return _run_pipeline(
             self.spec,
@@ -406,6 +411,7 @@ class Pipeline:
             schedule=self.schedule,
             scope=scope,
             targets=targets,
+            payload_refs=payload_refs,
         )
 
     def plan(

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pass-by-reference spilled payloads (TODO 13):** when the object store
+  is remote and a step uses `"process"` or a factory executor, spilled
+  parents are shipped as `objects:<hash>` refs. Workers rebuild an
+  `S3Store` from picklable `store_config`, fetch inputs, run assertions,
+  and PUT spill-worthy results. `run(payload_refs=False)` forces hub
+  routing; a failed worker probe warns once and degrades by value.
+  Inline-only pipelines never engage the shim.
 - **Bring-your-own execution pools (TODO 8):** `executor=` accepts a
   zero-argument factory returning any Future-shaped pool alongside
   `"thread"` and `"process"`. Factories are called once per step segment,

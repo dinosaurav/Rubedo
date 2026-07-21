@@ -17,6 +17,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .hashing import hash_json, hash_bytes
 from .models import Filtered
+from .payload_refs import (
+    PayloadRefsState,
+    SpilledResult,
+    StoreRef,
+    _ref_call,
+    parent_as_ref_or_value,
+)
 from .planning import (
     EphemeralRef,
     MatRef,
@@ -94,12 +101,20 @@ class _RunMemo:
     a failed util sees the same failure.
     """
 
-    def __init__(self, home: "Home"):
+    def __init__(self, home: "Home", refs_state: Optional[PayloadRefsState] = None):
         """Initialize the run memoizer with a per-key locking scheme."""
         self.home = home
+        self.refs_state = refs_state or PayloadRefsState(enabled=False)
         self._lock = threading.Lock()
         self._values: Dict[Tuple[str, str], Tuple[str, Any]] = {}
+        self._refs_warn: Optional[Callable[[str], None]] = None
 
+    def set_refs_warning_sink(self, sink: Callable[[str], None]) -> None:
+        self._refs_warn = sink
+
+    def _emit_refs_warning(self, message: str) -> None:
+        if self._refs_warn is not None:
+            self._refs_warn(message)
     def compute(self, key: Tuple[str, str], producer: Callable[[], Any]) -> Any:
         """
         Compute or retrieve a memoized value for the given key.
@@ -296,24 +311,38 @@ def _process_decision(
         if step.declarative:
             return _declarative_result(decision)
 
+        refs_state = memo.refs_state
+        use_refs = (
+            pool is not None
+            and refs_state.pool_allows_refs(step, pool)
+            and refs_state.ensure_probe(pool, emit_warning=memo._emit_refs_warning)
+        )
+
+        def bind_parent(ref):
+            if use_refs:
+                return parent_as_ref_or_value(ref, params, memo)
+            return _resolve_parent_value(ref, params, memo)
+
         # Dependent steps get parent outputs by parameter name; either kind
         # may declare `params`. A root step (map or expand) reads no
         # payload — it mints its own lane(s) from its params/generator.
         args: List[Any] = []
         if not step.depends_on:
-            kwargs = {}
+            kwargs: Dict[str, Any] = {}
         elif step.in_shape == "aggregate":
             if step.arrow_aggregate:
+                # Arrow aggregate path stays coordinator-side (table build).
                 kwargs = {
                     _dep_kwarg(step, dep): _resolve_parent_table(
                         memo, pipeline_id, dep, decision.parent_mats[dep]
                     )
                     for dep in step.depends_on
                 }
+                use_refs = False
             else:
                 kwargs = {
                     _dep_kwarg(step, dep): {
-                        lane: _resolve_parent_value(ref, params, memo)
+                        lane: bind_parent(ref)
                         for lane, ref in decision.parent_mats[dep].items()
                     }
                     for dep in step.depends_on
@@ -329,8 +358,36 @@ def _process_decision(
             dep = step.depends_on[0]
             accumulator = copy.deepcopy(step.fold_init)
             for lane, ref in sorted(decision.parent_mats[dep].items()):
-                value = _resolve_parent_value(ref, params, memo)
-                if accepts_params:
+                value = bind_parent(ref)
+                if use_refs and isinstance(value, StoreRef):
+                    assert pool is not None
+                    refs_state.shim_submissions += 1
+                    submit_kw = {}
+                    if accepts_params:
+                        submit_kw["params"] = _build_step_params(step, params)
+                    accumulator = pool.submit(
+                        _ref_call,
+                        refs_state.store_config,
+                        refs_state.client_factory,
+                        step.fn,
+                        tuple(step.assertions or ()),
+                        step.output_model,
+                        run_id,
+                        decision.coordinate,
+                        accumulator,
+                        value,
+                        **submit_kw,
+                    ).result()
+                    if isinstance(accumulator, SpilledResult):
+                        # Fold accumulator must stay a live value between
+                        # lanes — spilled mid-fold is not supported; fall
+                        # back would require re-fetch. Treat as error.
+                        raise RuntimeError(
+                            f"fold step {step.name!r} spilled an intermediate "
+                            "accumulator under payload refs; use inline "
+                            "accumulators or payload_refs=False"
+                        )
+                elif accepts_params:
                     if pool is not None:
                         accumulator = pool.submit(
                             step.fn, accumulator, value,
@@ -348,14 +405,36 @@ def _process_decision(
             return accumulator
         else:
             kwargs = {
-                _dep_kwarg(step, dep): _resolve_parent_value(
-                    decision.parent_mats[dep], params, memo
-                )
+                _dep_kwarg(step, dep): bind_parent(decision.parent_mats[dep])
                 for dep in step.depends_on
             }
         if accepts_params:
             kwargs["params"] = _build_step_params(step, params)
-            
+
+        # Expand stays by-value (TODO 13): never shim generator/table fan-out.
+        if step.out_shape == "many" and step.in_shape == "one":
+            use_refs = False
+
+        ships_ref = any(
+            isinstance(v, StoreRef)
+            or (isinstance(v, dict) and any(isinstance(x, StoreRef) for x in v.values()))
+            for v in kwargs.values()
+            if v is not kwargs.get("params")
+        )
+        if pool is not None and use_refs and ships_ref:
+            refs_state.shim_submissions += 1
+            return pool.submit(
+                _ref_call,
+                refs_state.store_config,
+                refs_state.client_factory,
+                step.fn,
+                tuple(step.assertions or ()),
+                step.output_model,
+                run_id,
+                decision.coordinate,
+                *args,
+                **kwargs,
+            ).result()
         if pool is not None:
             return pool.submit(step.fn, *args, **kwargs).result()
         return step.fn(*args, **kwargs)
@@ -568,7 +647,9 @@ def _process_decision(
                         return _expand_outcomes(
                             decision, values, attempt, attempt_errors
                         )
-                _validate_output(step, result)
+                # SpilledResult was validated + spilled worker-side.
+                if not isinstance(result, SpilledResult):
+                    _validate_output(step, result)
                 return [
                     ExecutionOutcome(
                         decision,

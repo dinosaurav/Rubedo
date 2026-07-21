@@ -283,6 +283,15 @@ temporary Home produced Created 17 then Reused 17 both times.
 
 ## 13. Pass-by-reference payloads (workers talk to the store directly)  **[depends on items 7 + 8; respecced 2026-07-18 — scope shrank to spilled values]**
 
+**Implemented 2026-07-21:** `payload_refs` (default True) on `Pipeline.run` /
+`run_pipeline`; remote stores advertise picklable `store_config`; process /
+factory pools probe once then ship spilled parents as `StoreRef`s through
+`_ref_call` (worker GET + assertions + optional worker spill →
+`SpilledResult`). Commit skips byte staging for pre-spilled results.
+`payload_refs=False` and local stores keep hub routing. Moto + fake-pool
+tests cover inline-only (zero shim), spill parity, probe degradation, and
+aggregate fan-in.
+
 > **2026-07-18 premise update:** inline Arrow outputs changed the
 > economics this spec assumed. Most outputs never touch the object
 > store — they travel inside the `MatRef` the runner already holds, so
@@ -436,6 +445,8 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-21 — pass-by-ref spilled payloads (TODO 13) shipped:** see
+  item 13 header; moto + fake-pool suite green.
 - **2026-07-20 — run history + run-to-run diff shipped:** `Home.runs(...)`
   lists historical runs (newest first; filters `pipeline` / `kind` /
   effective `status` / `limit`; includes partials; reuses

@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 import contextlib
 
 from .execution import _RunMemo
+from .payload_refs import PayloadRefsState
 from .hashing import hash_json
 from .home import Home
 from .ledger import _emit_event, _finish_run, _RunContext
@@ -378,6 +379,7 @@ def run(
     schedule: str = "broad",
     scope: Optional[RunScope] = None,
     targets: Optional[Sequence[StepRef]] = None,
+    payload_refs: bool = True,
 ) -> RunSummary:
     """Run a pipeline — the single entry point.
 
@@ -395,6 +397,10 @@ def run(
     ``scope`` / ``targets`` select a partial run (``kind='partial'``). Scope
     never enters cache identity; sampled map outputs remain reusable by a
     later full ``kind='process'`` run.
+
+    ``payload_refs`` (default True) lets process/factory workers fetch and
+    spill remote-store blobs directly. Set False to force coordinator hub
+    routing for the whole run.
     """
     pipeline, params = _resolve_invocation(pipeline, params)
     return run_pipeline(
@@ -408,6 +414,7 @@ def run(
         schedule=schedule,
         scope=scope,
         targets=targets,
+        payload_refs=payload_refs,
     )
 
 
@@ -463,6 +470,7 @@ def run_pipeline(
     schedule: str = "broad",
     scope: Optional[RunScope] = None,
     targets: Optional[Sequence[StepRef]] = None,
+    payload_refs: bool = True,
 ) -> RunSummary:
     """
     Execute a pipeline by resolving the DAG, evaluating each coordinate, and committing results.
@@ -481,6 +489,8 @@ def run_pipeline(
         targets (Optional[Sequence]): Restrict execution to the ancestor
             closure of these steps. Scope and targets never enter cache
             identity; either one makes this a ``kind='partial'`` run.
+        payload_refs (bool): When True (default), process/factory workers
+            may fetch/spill remote objects directly. False forces hub routing.
 
     Returns:
         RunSummary: A summary of the executed run.
@@ -559,7 +569,23 @@ def run_pipeline(
 
             try:
                 params_hash = hash_json(params or {})
-                memo = _RunMemo(home)
+                refs_state = PayloadRefsState.from_home(
+                    home, payload_refs=payload_refs
+                )
+                memo = _RunMemo(home, refs_state=refs_state)
+
+                def _refs_warn(message: str) -> None:
+                    _emit_event(
+                        session,
+                        ctx.run_id,
+                        "warning",
+                        "payload_refs_degraded",
+                        pipeline_id=ctx.pipeline_id,
+                        message=message,
+                    )
+                    session.commit()
+
+                memo.set_refs_warning_sink(_refs_warn)
 
                 for seg_steps in _partition_segments(topo_steps, schedule):
                     home.lanes.check_writer_lease(ctx.pipeline_id)

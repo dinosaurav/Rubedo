@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 from .execution import ExecutionOutcome, _materialized_ancestors
+from .payload_refs import SpilledResult
 from .models import (
     Filtered,
     Run,
@@ -483,9 +484,22 @@ def _commit_execution_result(
                         output_identity=identity,
                     )
             else:
-                output_string, content_type = ctx.home.store.serialize_output(
-                    ctx.run_id, decision.coordinate, result
-                )
+                if isinstance(result, SpilledResult):
+                    # Worker already conditional-PUT the object. Skip byte
+                    # staging; still run the full commit machinery.
+                    output_string = result.output
+                    content_type = result.content_type
+                    content_hash = output_string[len("objects:") :]
+                    reported = ctx.home.store.size_of(content_hash)
+                    if reported is not None and reported != result.size_bytes:
+                        raise RuntimeError(
+                            f"spilled size mismatch for {content_hash}: "
+                            f"worker={result.size_bytes} store={reported}"
+                        )
+                else:
+                    output_string, content_type = ctx.home.store.serialize_output(
+                        ctx.run_id, decision.coordinate, result
+                    )
                 identity = _identity_of(output_string)
 
                 # Determine mat_action: if the address was already fulfilled

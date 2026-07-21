@@ -296,6 +296,42 @@ def _deserialize_bytes(raw_data: bytes, content_type: Optional[str]) -> Any:
 class _SerializeMixin:
     """Shared spill/read helpers that call protocol ``write`` / ``read``."""
 
+    def prepare_output(self, result: Any) -> Tuple[bool, Any, str, Optional[bytes]]:
+        """Decide inline vs spill without writing.
+
+        Returns ``(inline, value, content_type, raw_data)``:
+        - inline True → ``value`` is the Arrow column value; ``raw_data`` is None
+        - inline False → ``raw_data`` is the bytes to spill; ``value`` is None
+        """
+        value = _coerce(result)
+
+        if isinstance(value, bytes):
+            return False, None, "bytes", value
+
+        if _try_arrow(value):
+            table, kind = _to_arrow_table(value)
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, table.schema) as writer:
+                writer.write_table(table)
+            raw_data = sink.getvalue().to_pybytes()
+            return False, None, f"arrow-ipc:{kind}", raw_data
+
+        try:
+            raw_data = json.dumps(
+                value, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError) as e:
+            raise TypeError(
+                f"Cannot serialize value of type {type(value).__name__}: {e}"
+            ) from e
+
+        if len(raw_data) > SPILL_THRESHOLD:
+            return False, None, "json", raw_data
+
+        if isinstance(value, str):
+            return True, value, "text", None
+        return True, value, "json", None
+
     def serialize_output(
         self, run_id: str, coordinate: str, result: Any
     ) -> Tuple[Any, str]:
@@ -316,35 +352,11 @@ class _SerializeMixin:
         - **Type-based**: Arrow-compatible (DataFrame / pa.Table) → always spill
         - **Size-based**: JSON-serialized form > ``SPILL_THRESHOLD`` → spill
         """
-        value = _coerce(result)
-
-        if isinstance(value, bytes):
-            return self._spill(run_id, coordinate, value, "bytes"), "bytes"
-
-        if _try_arrow(value):
-            table, kind = _to_arrow_table(value)
-            sink = pa.BufferOutputStream()
-            with pa.ipc.new_stream(sink, table.schema) as writer:
-                writer.write_table(table)
-            raw_data = sink.getvalue().to_pybytes()
-            content_type = f"arrow-ipc:{kind}"
-            return self._spill(run_id, coordinate, raw_data, content_type), content_type
-
-        try:
-            raw_data = json.dumps(
-                value, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        except (TypeError, ValueError) as e:
-            raise TypeError(
-                f"Cannot serialize value of type {type(value).__name__}: {e}"
-            ) from e
-
-        if len(raw_data) > SPILL_THRESHOLD:
-            return self._spill(run_id, coordinate, raw_data, "json"), "json"
-
-        if isinstance(value, str):
-            return value, "text"
-        return value, "json"
+        inline, value, content_type, raw_data = self.prepare_output(result)
+        if inline:
+            return value, content_type
+        assert raw_data is not None
+        return self._spill(run_id, coordinate, raw_data, content_type), content_type
 
     def _spill(
         self, run_id: str, coordinate: str, raw_data: bytes, content_type: str
@@ -635,6 +647,26 @@ class S3Store(_SerializeMixin):
             endpoint_url=endpoint_url,
             region_name=region_name,
         )
+
+    @classmethod
+    def from_config(
+        cls,
+        config: S3StoreConfig,
+        *,
+        client_factory: Optional[Callable[[], Any]] = None,
+    ) -> "S3Store":
+        """Rebuild an ``S3Store`` from picklable worker-safe config."""
+        return cls(
+            bucket=config.bucket,
+            prefix=config.prefix,
+            endpoint_url=config.endpoint_url,
+            region_name=config.region_name,
+            client_factory=client_factory,
+        )
+
+    @property
+    def client_factory(self) -> Optional[Callable[[], Any]]:
+        return self._client_factory
 
     @property
     def capabilities(self) -> StoreCapabilities:

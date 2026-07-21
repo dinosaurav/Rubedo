@@ -143,8 +143,13 @@ The per-step `workers` value still bounds the number of in-flight lane
 submissions from Rubedo. It does not resize the external cluster. Retries,
 rate limits, assertions, parent-value resolution, and ledger writes remain
 coordinator-side; only the step function and arguments cross into the pool.
-Consequently, spilled values currently route through the coordinator too
-(direct worker/store references are a later optimization).
+When the Home's object store is remote (S3/R2/…) and the step uses
+`"process"` or a factory pool, **spilled** parent values are passed by
+ref: workers rebuild a store from picklable `store_config`, GET inputs
+themselves, and PUT spill-worthy results so the coordinator never hubs
+those bytes. Inline values still travel by value. Escape hatch:
+`run(payload_refs=False)`. A one-shot worker probe degrades to hub
+routing (with a warning) if the pool cannot reach the store.
 
 Factories appear in recorded definitions as
 `"external:<module>.<qualname>"`, but executor choice never changes cache
