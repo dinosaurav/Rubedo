@@ -22,17 +22,17 @@ before being written down. Item 35 is the post-Home read-surface gap
 (2026-07-20).
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) stays demand-gated — 8 is independently buildable if a
-cluster user shows up first.
+(7 → 7b → 8 → 13) is shipped. Open work is Parked only (control plane,
+human overrides, etc.) — design session required before building.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 25. Did-you-mean suggestions  **[DEFERRED — owner 2026-07-14: queued, do not build until asked]**
+## 25. Did-you-mean suggestions  **[RETIRED 2026-07-21 — not worth the surface]**
 
-`difflib.get_close_matches` on the loud errors: item 22's unmatched
-parameter names, unknown `depends_on`/`join_on` step names, unknown
-`Selection` fields, CLI step/pipeline arguments. Small, self-contained;
-waits for the owner's go.
+Was: `difflib.get_close_matches` on loud errors (unmatched parameter
+names, unknown `depends_on`/`join_on` / `Selection` fields, CLI args).
+Owner call: nice-to-have DX, not load-bearing. Dropped rather than left
+deferred.
 
 ## 6. Cloud object storage sources  **[RETIRED 2026-07-18 — shipped as a recipe]**
 
@@ -371,15 +371,33 @@ ledger row and the re-run heals.
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
 
-- **Cloud control plane** — hosted execution, deploy/build service,
-  scheduler, secrets vault, shared team cache, dashboard write surfaces.
+- **Cloud control plane** — the product outside `src/rubedo/`: hosted
+  runs against shared Postgres + S3/R2 Homes, a deploy/build service that
+  packages user pipelines, a scheduler/trigger layer, a secrets vault,
+  shared team cache, and dashboard *write* surfaces. Rubedo-the-library
+  stays a zero-daemon local engine; the control plane is a separate
+  service boundary that *uses* the engine (items 7/8/13 are the
+  prerequisites). Engine-side declarations already shipped as item 21
+  (`pipeline(secrets=, env=)` + `rubedo check`) — the vault and runners
+  honor those names; the library still never fetches secrets itself.
   Spine ratified 2026-07-13; full design in
-  `notes/private/cloud-control-plane.md` (gitignored, owner-local —
-  services live *outside* `src/rubedo/`). Gated on items 7, 8, 13; the
-  engine-side slice (item 21, `pipeline(secrets=, env=)` + `rubedo check`)
-  shipped 2026-07-14. Remaining sessions before building: vault
-  build-vs-buy, build-sandbox isolation tech, tenant-scale ceiling — see
-  the doc's open-questions section.
+  `notes/private/cloud-control-plane.md` (gitignored, owner-local).
+  Remaining design sessions before building: vault build-vs-buy,
+  build-sandbox isolation, tenant-scale ceiling.
+
+- **Human-in-the-loop overrides** — accept or correct individual lane
+  outputs after a run (the LLM-refinement case: most rows are fine, a
+  few need a human edit, and you do not want to invalidate the whole
+  step). Natural fit with generations: an override is a **new** live
+  generation whose provenance is `human` instead of a step execution —
+  append-only and liveness stay intact; downstream steps see the
+  corrected value on the next run the same way they would see a
+  recomputed one. This is the dashboard's first *write* surface and
+  touches the commit path + IHU liveness lifecycle
+  (`notes/invariants.md`), so it is **DANGEROUS** — full design session
+  required (authn of who overrode, audit trail, interaction with
+  `force=` / version bumps / GC, whether overrides are pipeline-scoped
+  or home-scoped). Do not sketch in code. (2026-07-13; still parked.)
 
 - **Bucketed aggregation / `allocate`** (batching lanes into ~N-sized
   groups — owner re-raised 2026-07-18 as an "allocate" shape). The naive
@@ -423,18 +441,6 @@ ledger row and the re-run heals.
   strictly last, after every child — an early anchor + a mid-expansion
   crash reads as a complete, reusable expansion on the next run. Unrelated
   to item 14/scan; parked on demand, not on design doubt.
-- **Per-lane cost tracking / $-saved.** Steps that call paid APIs
-  record cost per lane; run summary reports "reused $N of prior work."
-  The product's value prop as a number, printed every run. Rides the
-  existing ledger (2026-07-13).
-- **Human-in-the-loop overrides** — accept/correct individual lane
-  outputs (LLM refinement always needs a human pass on some rows).
-  Natural fit: an override is a new generation with provenance
-  `human` instead of a step run, so append-only survives — but this
-  touches the commit path and the liveness lifecycle
-  (`notes/invariants.md`), and would be the
-  dashboard's first write surface (**DANGEROUS** — full design
-  session required, do not sketch in code) (2026-07-13).
 - **Failure triage view.** Blocked/failed lanes already accumulate in
   the ledger; a first-class "these 14 rows failed, retry just these"
   surface (CLI + dashboard) turns an engine fact into a refinement
@@ -445,6 +451,8 @@ ledger row and the re-run heals.
 The full pre-restructure changelog lives in `notes/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-07-21 — retired did-you-mean (#25) and parked cost-tracking:**
+  neither is load-bearing for the engine; dropped rather than deferred.
 - **2026-07-21 — pass-by-ref spilled payloads (TODO 13) shipped:** see
   item 13 header; moto + fake-pool suite green.
 - **2026-07-20 — run history + run-to-run diff shipped:** `Home.runs(...)`
