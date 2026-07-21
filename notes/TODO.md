@@ -22,8 +22,8 @@ before being written down. Item 35 is the post-Home read-surface gap
 (2026-07-20).
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) is shipped. Open work is Parked only (control plane,
-human overrides, etc.) — design session required before building.
+(7 → 7b → 8 → 13) is shipped. Remaining Parked items are engine-shaped
+only (allocate, streaming expand, etc.) — design session before building.
 
 ──────────────────────────────────────────────────────────────────────
 
