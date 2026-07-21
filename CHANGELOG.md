@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the public constructor knob (replaces private `_fresh=`).
 
 ### Changed
+- Docs swept for staleness against the 0.3.0 storage rewrite: dropped
+  lingering references to the deleted `Materialization` model / `is_live`
+  / `materialization_lifecycle` (search-and-invalidation, retention,
+  tutorial guides now describe `input_hash_usages.fulfilled` instead);
+  added `check_cache=False` to the getting-started/tutorial folder-scan
+  snippets (missing it meant the documented "edit a file, only that lane
+  recomputes" walkthrough no longer matched actual behavior, since root
+  `expand` steps are anchor-cached by default since 0.3.0); added `fold`
+  to every shape-count mention, `dask_executor`/`ray_executor`/
+  `paper_scout` to `docs/examples.md`, and dropped the last `index=`/
+  `reduce` mentions from `examples/README.md`.
 - Docs reorganized by reader intent: Concepts keeps only the stable model
   pages; Cloud Storage moved to Guides; the Partial Runs and Run Diff
   pages merged into one "Trials: sample, diff, roll out" guide;

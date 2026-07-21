@@ -170,7 +170,7 @@ detail lives in [`../development/invariants.md`](../development/invariants.md)):
 
 ## Where to go next
 
-- [shapes.md](shapes.md) — the four ways a step turns lanes into lanes.
+- [shapes.md](shapes.md) — the five ways a step turns lanes into lanes.
 - [sources.md](sources.md) — where lanes come from.
 - [versioning.md](versioning.md) — how code changes interact with all of the
   above.

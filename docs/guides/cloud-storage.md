@@ -56,6 +56,16 @@ The ledger is a separate plane. A local `Home` still uses SQLite even when
 its object/lane planes are in a bucket. Multi-machine execution also needs
 a shared SQLAlchemy database URL (Postgres coverage is TODO 7b).
 
+## Pass-by-reference execution
+
+When a step runs under `executor="process"` or a factory pool (see
+[Execution Policies](execution-policies.md#bring-your-own-pool)) against a
+cloud store, spilled parent values travel **by reference**: workers rebuild
+a store client from picklable `store_config`, GET their own inputs, and PUT
+spill-worthy results directly — the coordinator process never relays those
+bytes. Inline values still travel by value regardless. `run(payload_refs=False)`
+forces the old hub-routed behavior if a worker can't reach the store itself.
+
 ## Retention safety
 
 Storage reporting and GC dry-runs work against cloud inventory without one

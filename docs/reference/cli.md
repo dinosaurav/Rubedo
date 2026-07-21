@@ -154,7 +154,7 @@ rubedo invalidate <selection> --reason REASON [--downstream]
 | Flag | Meaning |
 |---|---|
 | `selection` (positional, required) | Selection query string, e.g. `"step:extract company:acme"` |
-| `--reason REASON` | **Required.** Why — recorded on the lifecycle row |
+| `--reason REASON` | **Required.** Why — documents intent for whoever runs the command or reads it back from shell history; not currently persisted to the ledger |
 | `--downstream` | Also invalidate the full downstream closure over recorded lineage (see the [warning on blast radius](../guides/search-and-invalidation.md#widening-the-blast-radius-downstreamtrue)) — preview it first with `rubedo trace` |
 
 **Example:**

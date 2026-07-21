@@ -56,20 +56,23 @@ Selection.parse("step:extract company:acme live:true")      # query string
 
 `Selection.parse()` splits the query on whitespace into `key:value` terms
 (quote values containing spaces: `company:"acme corp"`). Some prefixes are
-**reserved** — they map to engine facts, read straight off the
-`Materialization` row — and everything else is treated as a match against
-an output field:
+**reserved** — they map to engine facts, read from the Arrow lane-store
+row (`step_name`, `pipeline_id`, `code_version`, `address`) plus the
+`input_hash_usages` liveness table and the `RunCoordinateStatus` ledger
+table — and everything else is treated as a match against an output field.
+There is no `Materialization` SQL row anymore (see
+[`../development/arrow-storage.md`](../development/arrow-storage.md)):
 
 | Term | Matches | Notes |
 |---|---|---|
-| `source:<id>` | `Materialization`'s source, via a `RunCoordinateStatus` join | |
-| `coord:<glob>` / `coordinate:<glob>` | the lane's coordinate, glob-matched | `fnmatch`-style: `coord:*.txt`; matched against the *latest* recorded coordinate for that materialization |
-| `step:<name>` | `Materialization.step_name` | exact match |
-| `pipeline:<id>` | `Materialization.pipeline_id` | exact match |
-| `version:<v>` | `Materialization.code_version` | exact match, e.g. `version:1.0.0` |
-| `version:<range>` | `Materialization.code_version` | when the value starts with `<`, `>`, `=`, or `!`, parsed as a [PEP 440](https://peps.python.org/pep-0440/) specifier via `packaging.SpecifierSet` — `version:<2.0`, `version:>=1.5,<2.0` |
-| `address:<hash>` | `Materialization.output_address` | exact match |
-| `live:true` / `live:false` | `Materialization.is_live` | `live:false` selects invalidated/superseded/pruned generations |
+| `source:<id>` | `RunCoordinateStatus.source_id` for lanes at that output address | |
+| `coord:<glob>` / `coordinate:<glob>` | the lane's coordinate, glob-matched | `fnmatch`-style: `coord:*.txt`; matched against the *latest* recorded coordinate for that output address |
+| `step:<name>` | the Arrow lane row's step name | exact match |
+| `pipeline:<id>` | the Arrow lane row's pipeline name | exact match |
+| `version:<v>` | the Arrow lane row's `code_version` | exact match, e.g. `version:1.0.0` |
+| `version:<range>` | the Arrow lane row's `code_version` | when the value starts with `<`, `>`, `=`, or `!`, parsed as a [PEP 440](https://peps.python.org/pep-0440/) specifier via `packaging.SpecifierSet` — `version:<2.0`, `version:>=1.5,<2.0` |
+| `address:<hash>` | the output address itself | exact match |
+| `live:true` / `live:false` | `input_hash_usages.fulfilled` for that address | `live:false` selects invalidated/superseded/pruned generations |
 | anything else, `field:value` | a field of the step's output struct | scanned directly from the Arrow `output` struct column; every other term in the query must also match (AND) |
 
 A query can combine any number of terms; all of them must match. Reserved
@@ -98,16 +101,17 @@ invalidate(Selection(index={"company": "acme"}), reason="bad prompt")
 rubedo invalidate "step:enrich company:acme" --reason "bad prompt"
 ```
 
-`invalidate()` flips every matched materialization's `is_live` to `False`
-and writes a paired `invalidated` lifecycle row — it **never deletes**
-anything. The materialization row, its lineage edges, and its index entries
-all survive; only its eligibility as "the current answer" changes. The next
-`p.run()` sees no live materialization at that address and recomputes it —
+`invalidate()` flips every matched address's `input_hash_usages.fulfilled`
+to `False` — it **never deletes**
+anything. The Arrow lane-store row, its lineage edges, and its searchable
+fields all survive; only its eligibility as "the current answer" changes. The next
+`p.run()` sees no live (fulfilled) output at that address and recomputes it —
 recovery from an invalidation is never more than re-running the pipeline.
 
-`reason` is required and is stored on the lifecycle row — it's what shows
-up later in `trace --all` or a lifecycle audit, so make it useful ("bad
-prompt," "source data was wrong," not "oops").
+`reason` is required — make it useful ("bad prompt," "source data was
+wrong," not "oops") so whoever runs the command (or reads it back later in
+shell history / a script) knows why. It is not currently persisted to the
+ledger itself.
 
 ## Widening the blast radius: `downstream=True`
 
@@ -142,7 +146,8 @@ would show you as `seed` + `downstream` for the same query.
 Upstream is never touched by `invalidate()` (with or without
 `downstream=True`) — invalidating a `report` step's output never
 invalidates the `extract` step that fed it, and it never deletes the bytes
-of anything: `is_live=False` is a liveness flag, not a delete. If a pruned
+of anything: `input_hash_usages.fulfilled=False` is a liveness flag, not a
+delete. If a pruned
 or invalidated lane's *input* reappears unchanged in a later run, the
 lane's old address is recomputed and, if it lands on identical bytes, the
 generation is simply restored.

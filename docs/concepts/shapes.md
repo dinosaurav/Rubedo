@@ -1,8 +1,8 @@
 # Shapes
 
 A step's `in_shape`/`out_shape` decide how many output lanes it produces
-from its input lanes. There are four conceptual shapes: `map` (1:1),
-`aggregate` (N:1), `expand` (1:N), and
+from its input lanes. There are five conceptual shapes: `map` (1:1),
+`aggregate` (N:1), `fold` (N:1, sequential), `expand` (1:N), and
 `join` (N-way, minting pair lanes). Every shape is a special case of the same
 underlying idea — a producer that takes some input lanes and emits some
 output lanes — but each has a distinct planning and caching story worth
@@ -125,6 +125,13 @@ document" reassembly (the `expand` → `aggregate` round trip in
 `examples/pdf_digest`, see [`../examples.md`](../examples.md), is exactly
 that: split a PDF into chunks, process each independently, fold back into a
 whole document).
+
+An aggregate step can also request its fan-in as a single Arrow table
+instead of a `{coordinate: value}` dict — `@p.step(in_shape="aggregate",
+arrow_aggregate=True)` hands the function a `pa.Table` built from the
+parent's surviving lanes, skipping the Python-dict round trip. It requires
+`in_shape="aggregate"` (an `arrow_aggregate=True` map or expand step raises
+at build time).
 
 ## `fold` — N:1 (sequential fan-in with accumulator)
 

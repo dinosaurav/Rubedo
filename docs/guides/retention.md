@@ -79,11 +79,10 @@ budget.
 Every prune — auto or manual — runs the same two phases, driven entirely by
 the ledger:
 
-1. **Demote.** Every live materialization of the pipeline that falls
-   outside the keep-set gets `is_live=False`, each flip paired with a
-   `pruned` lifecycle row in the same transaction (the same append-only
-   bookkeeping `invalidate()` uses — a commit-time pairing guard enforces
-   it; see [`../development/invariants.md`](../development/invariants.md)).
+1. **Demote.** Every live (fulfilled) output address of the pipeline that
+   falls outside the keep-set gets `input_hash_usages.fulfilled=False` —
+   the same mechanism `invalidate()` uses (see
+   [`../development/invariants.md`](../development/invariants.md)).
 2. **Sweep.** A physical object's bytes are deleted only when **every**
    materialization referencing that content hash — across *all* pipelines,
    *all* steps, all history — is now non-live. Because the store dedupes

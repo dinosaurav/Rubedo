@@ -133,7 +133,7 @@ def enrich(row: dict): ...
 helper you factor out purely to keep another step's code readable, not
 because its output deserves its own row in the ledger. A `skip_cache` step:
 
-- **Is never materialized or recorded.** No `Materialization` row, no
+- **Is never materialized or recorded.** No Arrow lane-store row, no
   lineage edge, nothing to `trace()` or search.
 - **Fuses its identity into its consumers' cache keys instead.** A
   consumer's `input_hash` is computed from the util's `(step, version,
