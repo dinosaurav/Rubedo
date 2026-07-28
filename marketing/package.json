@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:all": "vite build && cd .. && uv run mkdocs build",
+    "build": "vite build && vite build --ssr src/entry-server.jsx --outDir dist/.ssr && node scripts/prerender.mjs",
+    "build:all": "npm run build && cd .. && uv run mkdocs build",
     "lint": "oxlint",
     "preview": "vite preview"
   },

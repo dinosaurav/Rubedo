@@ -28,6 +28,17 @@ npm run build       # vite build only — the landing page
 npm run build:all   # vite build + `uv run mkdocs build` from the repo root
 ```
 
+`npm run build` does three things: a normal client build, an SSR build of
+`src/entry-server.jsx` into a throwaway `dist/.ssr/`, then
+`scripts/prerender.mjs` renders `<App />` to static markup with
+`react-dom/server` and injects it into `dist/index.html`'s
+`<div id="root">`, deleting `dist/.ssr/` once done. This is what makes the
+served HTML contain the actual landing-page content instead of an empty
+shell — crawlers and agents that don't execute JS (many AI bots, `curl`,
+etc.) would otherwise see nothing. The page has no client-side state, so
+`main.jsx` hydrates over the prerendered markup with `hydrateRoot` rather
+than mounting fresh.
+
 The MkDocs documentation site (built from [`../docs/`](../docs/) via
 [`../mkdocs.yml`](../mkdocs.yml)) builds **separately** and outputs into
 `dist/docs/` (`site_dir: marketing/dist/docs` in `mkdocs.yml`), so the two
