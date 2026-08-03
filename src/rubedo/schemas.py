@@ -141,3 +141,53 @@ class ObjectMetadataOut(BaseModel):
     invalidation_reason: Optional[str] = None
     output_content_hash: str
     content_type: Optional[str] = None
+
+
+class RunViewScopeOut(BaseModel):
+    kind: str
+    expand_step: Optional[str] = None
+
+
+class RunViewStepOut(BaseModel):
+    name: str
+    shape: str
+    depends_on: List[str] = []
+    scope: RunViewScopeOut
+    source_scope: RunViewScopeOut
+    group_key: Optional[str] = None
+    version: Optional[str] = None
+
+
+class RunViewCellOut(BaseModel):
+    coordinate: str
+    step_name: str
+    status: str
+    output_address: Optional[str] = None
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+    preview: Optional[Any] = None
+    created_at: Optional[str] = None
+
+
+class RunViewChildBlockOut(BaseModel):
+    expand_step: str
+    rows: List["RunViewGroupOut"] = []
+
+
+class RunViewGroupOut(BaseModel):
+    coordinate: str
+    cells: Dict[str, RunViewCellOut] = {}
+    children: List[RunViewChildBlockOut] = []
+    summary: Dict[str, RunViewCellOut] = {}
+
+
+RunViewChildBlockOut.model_rebuild()
+
+
+class RunViewOut(BaseModel):
+    """Cardinality-aware grouped projection of one run."""
+    steps: List[RunViewStepOut]
+    params: Dict[str, Any] = {}
+    groups: List[RunViewGroupOut] = []
+    run_summary: Dict[str, RunViewCellOut] = {}
+    totals: Dict[str, int] = {}

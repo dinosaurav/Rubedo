@@ -34,6 +34,7 @@ from .schemas import (
     SelectionInvalidateResponse,
     PipelineOut,
     ObjectMetadataOut,
+    RunViewOut,
 )
 
 
@@ -177,6 +178,18 @@ async def stream_run(run_id: str, request: Request):
             time.sleep(0.3)
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/runs/{run_id}/view", response_model=RunViewOut)
+def get_run_view(run_id: str, request: Request):
+    """Grouped, cardinality-aware projection of one run (read-only)."""
+    from .run_view import build_run_view
+
+    home = _request_home(request)
+    view = build_run_view(home, run_id)
+    if view is None:
+        raise HTTPException(404, "Run not found")
+    return view
 
 
 @app.get("/api/runs/{run_id}/coordinates", response_model=List[RunCoordinateStatusOut])

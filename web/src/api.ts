@@ -37,6 +37,11 @@ export async function fetchRunCoordinates(id: string) {
   return res.json();
 }
 
+export async function fetchRunView(id: string) {
+  const res = await fetchJson(`${API_URL}/runs/${id}/view`);
+  return res.json();
+}
+
 export async function fetchRunEvents(id: string) {
   const res = await fetchJson(`${API_URL}/runs/${id}/events`);
   return res.json();
