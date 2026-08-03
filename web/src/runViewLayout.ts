@@ -1,14 +1,11 @@
 /**
- * Pure layout helpers for the grouped Run View — mirrors the reference
- * ai-table-v2 layout.ts idioms against Rubedo's definition-derived scopes.
+ * Pure layout helpers for the grouped Run View.
  */
 import type { RunViewScope, RunViewStep } from './runViewTypes';
 
 export function scopeEq(a: RunViewScope, b: RunViewScope): boolean {
   return a.kind === b.kind && a.expand_step === b.expand_step;
 }
-
-export const PARENT_SCOPE: RunViewScope = { kind: 'parent', expand_step: null };
 
 export function childScope(expandStep: string): RunViewScope {
   return { kind: 'child', expand_step: expandStep };
@@ -17,27 +14,20 @@ export function childScope(expandStep: string): RunViewScope {
 /** Steps whose cells render on a row at ``ownScope`` (not aggregates). */
 export function ownCellSteps(steps: RunViewStep[], ownScope: RunViewScope): RunViewStep[] {
   return steps.filter(
-    (s) => s.shape !== 'aggregate' && scopeEq(s.scope, ownScope),
+    (s) =>
+      s.shape !== 'aggregate' &&
+      !(s.shape === 'expand' && s.scope.kind === 'child') &&
+      scopeEq(s.scope, ownScope),
   );
 }
 
-/** Nested expand/join blocks that open under this scope. */
+/** Nested expand blocks that open under this scope (never joins). */
 export function ownExpandSteps(steps: RunViewStep[], ownScope: RunViewScope): RunViewStep[] {
   return steps.filter(
     (s) =>
-      (s.shape === 'expand' || s.shape === 'join') &&
-      !(s.scope.kind === 'parent') &&
+      s.shape === 'expand' &&
+      s.scope.kind === 'child' &&
       scopeEq(s.source_scope, ownScope),
-  );
-}
-
-/** Summary-strip aggregates attached at this nesting level's expand. */
-export function ownSummarySteps(
-  steps: RunViewStep[],
-  expandStep: string | null,
-): RunViewStep[] {
-  return steps.filter(
-    (s) => s.shape === 'aggregate' && s.scope.expand_step === expandStep,
   );
 }
 
@@ -50,4 +40,8 @@ export function formatPreview(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+export function stepsByName(steps: RunViewStep[]): Map<string, RunViewStep> {
+  return new Map(steps.map((s) => [s.name, s]));
 }

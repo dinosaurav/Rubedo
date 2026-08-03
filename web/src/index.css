@@ -392,6 +392,43 @@ tr:hover td { background-color: rgba(255, 0, 51, 0.035); }
   gap: 0.75rem;
 }
 
+.rv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.rv-section:first-of-type { border-top: none; padding-top: 0; }
+
+.rv-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.rv-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.rv-section-kind {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.rv-summary-coord {
+  margin-left: 0.25rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .rv-params-band {
   display: flex;
   align-items: center;

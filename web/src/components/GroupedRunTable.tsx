@@ -2,11 +2,11 @@ import { Fragment, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchObject } from '../api';
 import {
-  PARENT_SCOPE,
   childScope,
   formatPreview,
   ownCellSteps,
   ownExpandSteps,
+  stepsByName,
 } from '../runViewLayout';
 import type {
   RunView,
@@ -14,6 +14,7 @@ import type {
   RunViewChildBlock,
   RunViewGroup,
   RunViewScope,
+  RunViewSection,
   RunViewStep,
 } from '../runViewTypes';
 import { coordStatusClass } from '../format';
@@ -22,16 +23,20 @@ interface Props {
   view: RunView;
 }
 
-function headerSteps(steps: RunViewStep[], ownScope: RunViewScope): RunViewStep[] {
+function headerSteps(
+  steps: RunViewStep[],
+  ownScope: RunViewScope,
+  columnNames?: string[],
+): RunViewStep[] {
+  if (columnNames && columnNames.length > 0) {
+    const byName = stepsByName(steps);
+    return columnNames.map((n) => byName.get(n)).filter((s): s is RunViewStep => !!s);
+  }
   return ownCellSteps(steps, ownScope);
 }
 
 function hasNested(steps: RunViewStep[], ownScope: RunViewScope, group: RunViewGroup): boolean {
-  return (
-    ownExpandSteps(steps, ownScope).length > 0 ||
-    Object.keys(group.summary).length > 0 ||
-    group.children.length > 0
-  );
+  return ownExpandSteps(steps, ownScope).length > 0 || group.children.length > 0 || group.summary.length > 0;
 }
 
 function CellTd({
@@ -114,8 +119,16 @@ function CellTd({
   );
 }
 
-function HeaderRow({ steps, ownScope }: { steps: RunViewStep[]; ownScope: RunViewScope }) {
-  const cols = headerSteps(steps, ownScope);
+function HeaderRow({
+  steps,
+  ownScope,
+  columnNames,
+}: {
+  steps: RunViewStep[];
+  ownScope: RunViewScope;
+  columnNames?: string[];
+}) {
+  const cols = headerSteps(steps, ownScope, columnNames);
   return (
     <thead>
       <tr>
@@ -135,12 +148,14 @@ function DataRow({
   steps,
   ownScope,
   group,
+  columnNames,
 }: {
   steps: RunViewStep[];
   ownScope: RunViewScope;
   group: RunViewGroup;
+  columnNames?: string[];
 }) {
-  const cols = headerSteps(steps, ownScope);
+  const cols = headerSteps(steps, ownScope, columnNames);
   return (
     <tr className="rv-band-row">
       <td className="rv-lane-col">
@@ -157,21 +172,25 @@ function SummaryStrip({
   summary,
   label,
 }: {
-  summary: Record<string, RunViewCell>;
+  summary: RunViewCell[];
   label?: string;
 }) {
-  const entries = Object.entries(summary);
-  if (entries.length === 0) return null;
+  if (summary.length === 0) return null;
   return (
     <div className="rv-summary-strip">
       <span className="rv-summary-label">{label ?? 'Σ summary'}</span>
-      {entries.map(([name, cell]) => (
+      {summary.map((cell) => (
         <span
-          key={name}
+          key={`${cell.step_name}:${cell.coordinate}`}
           className={`rv-summary-chip status-${cell.status}`}
           title={cell.error_message ?? undefined}
         >
-          <span className="rv-summary-chip-name">{name}</span>
+          <span className="rv-summary-chip-name">
+            {cell.step_name}
+            {cell.coordinate && cell.coordinate !== '@all' ? (
+              <span className="rv-summary-coord">[{cell.coordinate}]</span>
+            ) : null}
+          </span>
           <span className={`badge badge-${coordStatusClass(cell.status)}`}>{cell.status}</span>
           <span className="rv-summary-chip-value">{formatPreview(cell.preview)}</span>
           {cell.output_address && (
@@ -204,11 +223,12 @@ function Detail({
         const rows = block?.rows ?? [];
         const childOwn = childScope(expand.name);
         const childCols = headerSteps(steps, childOwn);
+        const childColNames = childCols.map((c) => c.name);
         return (
           <div className="rv-child-block" key={expand.name}>
             <div className="rv-child-block-label">{expand.name}</div>
             <table className="rv-child-table">
-              <HeaderRow steps={steps} ownScope={childOwn} />
+              <HeaderRow steps={steps} ownScope={childOwn} columnNames={childColNames} />
               <tbody>
                 {rows.length === 0 && (
                   <tr>
@@ -220,7 +240,12 @@ function Detail({
                 )}
                 {rows.map((row) => (
                   <Fragment key={row.coordinate}>
-                    <DataRow steps={steps} ownScope={childOwn} group={row} />
+                    <DataRow
+                      steps={steps}
+                      ownScope={childOwn}
+                      group={row}
+                      columnNames={childColNames}
+                    />
                     {hasNested(steps, childOwn, row) && (
                       <tr className="rv-detail-row">
                         <td className="rv-lane-col" />
@@ -264,8 +289,80 @@ function ParamsBand({ params }: { params: Record<string, unknown> }) {
   );
 }
 
+function SectionTable({
+  steps,
+  section,
+}: {
+  steps: RunViewStep[];
+  section: RunViewSection;
+}) {
+  const cols = headerSteps(steps, section.row_scope, section.column_steps);
+  return (
+    <div className={`rv-section kind-${section.kind}`}>
+      <div className="rv-section-header">
+        <h3 className="rv-section-title">{section.title}</h3>
+        <span className="rv-section-kind">{section.kind}</span>
+      </div>
+      <div className="rv-table-scroll">
+        <table className="rv-parent-table">
+          <HeaderRow
+            steps={steps}
+            ownScope={section.row_scope}
+            columnNames={section.column_steps}
+          />
+          <tbody>
+            {section.groups.length === 0 && (
+              <tr>
+                <td className="rv-lane-col" />
+                <td className="rv-cell rv-empty-note" colSpan={Math.max(cols.length, 1)}>
+                  No lanes in this section.
+                </td>
+              </tr>
+            )}
+            {section.groups.map((g) => (
+              <Fragment key={g.coordinate}>
+                <DataRow
+                  steps={steps}
+                  ownScope={section.row_scope}
+                  group={g}
+                  columnNames={section.column_steps}
+                />
+                {hasNested(steps, section.row_scope, g) && (
+                  <tr className="rv-detail-row">
+                    <td className="rv-lane-col" />
+                    <td colSpan={Math.max(cols.length, 1)}>
+                      <Detail steps={steps} ownScope={section.row_scope} group={g} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <SummaryStrip summary={section.summary} label={`Σ ${section.title}`} />
+    </div>
+  );
+}
+
 export default function GroupedRunTable({ view }: Props) {
-  const parentCols = headerSteps(view.steps, PARENT_SCOPE);
+  const sections =
+    view.sections?.length > 0
+      ? view.sections
+      : view.groups?.length
+        ? [
+            {
+              id: 'main',
+              kind: 'branch',
+              title: 'lanes',
+              column_steps: [],
+              row_scope: { kind: 'branch', expand_step: null },
+              groups: view.groups,
+              summary: [],
+            } satisfies RunViewSection,
+          ]
+        : [];
+
   return (
     <div className="rv-root">
       <ParamsBand params={view.params} />
@@ -282,36 +379,11 @@ export default function GroupedRunTable({ view }: Props) {
         })}
       </div>
 
-      <div className="rv-table-scroll">
-        <table className="rv-parent-table">
-          <HeaderRow steps={view.steps} ownScope={PARENT_SCOPE} />
-          <tbody>
-            {view.groups.length === 0 && (
-              <tr>
-                <td className="rv-lane-col" />
-                <td className="rv-cell rv-empty-note" colSpan={Math.max(parentCols.length, 1)}>
-                  No lanes in this run.
-                </td>
-              </tr>
-            )}
-            {view.groups.map((g) => (
-              <Fragment key={g.coordinate}>
-                <DataRow steps={view.steps} ownScope={PARENT_SCOPE} group={g} />
-                {hasNested(view.steps, PARENT_SCOPE, g) && (
-                  <tr className="rv-detail-row">
-                    <td className="rv-lane-col" />
-                    <td colSpan={Math.max(parentCols.length, 1)}>
-                      <Detail steps={view.steps} ownScope={PARENT_SCOPE} group={g} />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {sections.map((section) => (
+        <SectionTable key={section.id} steps={view.steps} section={section} />
+      ))}
 
-      <SummaryStrip summary={view.run_summary} label="Σ run summary" />
+      <SummaryStrip summary={view.run_summary ?? []} label="Σ run summary" />
     </div>
   );
 }

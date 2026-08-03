@@ -1,17 +1,20 @@
 """Grouped Run View projection.
 
 Turns a historical run's definition snapshot + coordinate statuses +
-materialization edges into a cardinality-aware tree: parent band →
-indented expand child blocks (recursive) → per-group / run-level
-summary strips for aggregates.
+materialization edges into a cardinality-aware forest:
+
+- **Branch section** — one table per root lineage (parallel roots do not
+  share a band).
+- **Join section** — one table per join step (pair lanes), with nested
+  expand child blocks underneath.
+- **Summary strips** — aggregates render once per group lane (list of
+  cells), attached to the section that owns the folded expand/join —
+  never collapsed by step name.
 
 Design choice (see HANDOFF): **definition-first, edges for expand
-lineage**. ``Run.definition_json`` already records ``depends_on`` and
-``in_shape``/``out_shape`` for every historical run — enough to derive
-step scope (parent / child(expand) / summary(expand)). Expand children
-are content-addressed ``row-<hash>`` lanes with no parent in the
-coordinate string, so parent→child nesting uses ``MaterializationEdge``
-(written at create time; reuse keeps the creating run's edges).
+lineage**. ``Run.definition_json`` records ``depends_on`` /
+``in_shape``/``out_shape``; expand children are content-addressed
+``row-<hash>`` lanes, so parent→child nesting uses ``MaterializationEdge``.
 
 The pure entry point is :func:`project_run_view`. I/O lives in
 :func:`build_run_view`.
@@ -37,27 +40,37 @@ PREVIEW_CHARS = 160
 
 @dataclass(frozen=True)
 class Scope:
-    """Where a step's cells live in the grouped table.
+    """Where a step's cells live.
 
     ``kind``:
-      - ``parent``: one cell per root lane (fan-out depth 0)
-      - ``child``: one cell per child lane of ``expand_step``
-      - ``summary``: one cell per aggregate group, attached to the
-        group owned by ``expand_step`` (``None`` = run-level strip)
+      - ``branch``: root lineage band; ``expand_step`` is the root step name
+      - ``join``: join-pair band; ``expand_step`` is the join step name
+      - ``child``: fan-out lanes of ``expand_step`` (a non-root expand)
+      - ``summary``: aggregate cells for the named expand (or ``None`` =
+        section/run-level fold over a branch)
     """
 
-    kind: str  # parent | child | summary
+    kind: str
     expand_step: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {"kind": self.kind, "expand_step": self.expand_step}
 
 
-PARENT_SCOPE = Scope("parent", None)
-
-
 def scope_eq(a: Scope, b: Scope) -> bool:
     return a.kind == b.kind and a.expand_step == b.expand_step
+
+
+def branch_scope(root: str) -> Scope:
+    return Scope("branch", root)
+
+
+def join_scope(join_step: str) -> Scope:
+    return Scope("join", join_step)
+
+
+def child_scope(expand_step: str) -> Scope:
+    return Scope("child", expand_step)
 
 
 @dataclass(frozen=True)
@@ -120,7 +133,6 @@ def topological_steps(definition: Mapping[str, Any]) -> List[Dict[str, Any]]:
             if indeg[m] == 0:
                 ready.append(m)
                 ready.sort(key=position.__getitem__)
-    # Cycles (shouldn't happen in a recorded definition) — append leftovers.
     for n in names:
         if n not in out:
             out.append(n)
@@ -130,12 +142,9 @@ def topological_steps(definition: Mapping[str, Any]) -> List[Dict[str, Any]]:
 def derive_step_metas(definition: Mapping[str, Any]) -> List[StepMeta]:
     """Derive shape + scope for every step from the definition DAG.
 
-    Root expands are special: their children *are* the parent-band rows, so
-    the expand step itself is scoped ``parent`` (displayed on the parent
-    band). A non-root expand is scoped ``child(self)`` and nests a child
-    block under its ``source_scope``. Aggregates over a child scope become
-    ``summary(that expand)``; aggregates over parent-scope maps become
-    run-level ``summary(None)``.
+    Each root owns a ``branch(root)`` scope so parallel sources never share
+    a band. Joins open a top-level ``join(self)`` scope (their own table).
+    Non-root expands nest under whatever scope drives them.
     """
     ordered = topological_steps(definition)
     scopes: Dict[str, Scope] = {}
@@ -146,31 +155,44 @@ def derive_step_metas(definition: Mapping[str, Any]) -> List[StepMeta]:
         shape = step_shape(entry)
         deps = tuple(entry.get("depends_on") or [])
         dep_scopes = [scopes[d] for d in deps if d in scopes]
-        child_ids = {s.expand_step for s in dep_scopes if s.kind == "child" and s.expand_step}
-        source_expand = next(iter(sorted(child_ids))) if child_ids else None
-        driven = Scope("child", source_expand) if source_expand else PARENT_SCOPE
 
-        if shape == "expand":
-            if not deps:
-                # Root source: lanes form the parent band.
-                scope = PARENT_SCOPE
-                source_scope = PARENT_SCOPE
-            else:
-                scope = Scope("child", name)
-                source_scope = driven
+        if shape == "expand" and not deps:
+            scope = branch_scope(name)
+            source_scope = scope
+        elif shape == "join":
+            scope = join_scope(name)
+            source_scope = scope
+        elif shape == "expand":
+            parent_scope = dep_scopes[0] if dep_scopes else branch_scope(name)
+            scope = child_scope(name)
+            source_scope = parent_scope
         elif shape == "aggregate":
-            if source_expand is not None:
-                scope = Scope("summary", source_expand)
+            child_ids = sorted(
+                {
+                    s.expand_step
+                    for s in dep_scopes
+                    if s.kind == "child" and s.expand_step
+                }
+            )
+            if child_ids:
+                scope = Scope("summary", child_ids[0])
             else:
                 scope = Scope("summary", None)
-            source_scope = driven
-        elif shape == "join":
-            # New pair lanes — treat like a non-root expand for nesting.
-            scope = Scope("child", name)
-            source_scope = driven
+            source_scope = dep_scopes[0] if dep_scopes else Scope("summary", None)
+        elif not deps:
+            # Map / constant root.
+            scope = branch_scope(name)
+            source_scope = scope
         else:
-            scope = driven
-            source_scope = driven
+            join_scopes = [s for s in dep_scopes if s.kind == "join"]
+            child_scopes = [s for s in dep_scopes if s.kind == "child"]
+            if join_scopes:
+                scope = join_scopes[0]
+            elif child_scopes:
+                scope = child_scopes[0]
+            else:
+                scope = dep_scopes[0]
+            source_scope = scope
 
         scopes[name] = scope
         metas.append(
@@ -214,14 +236,14 @@ class GroupNode:
     coordinate: str
     cells: Dict[str, CellView] = field(default_factory=dict)
     children: List["ChildBlock"] = field(default_factory=list)
-    summary: Dict[str, CellView] = field(default_factory=dict)
+    summary: List[CellView] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "coordinate": self.coordinate,
             "cells": {k: v.to_dict() for k, v in self.cells.items()},
             "children": [c.to_dict() for c in self.children],
-            "summary": {k: v.to_dict() for k, v in self.summary.items()},
+            "summary": [c.to_dict() for c in self.summary],
         }
 
 
@@ -238,19 +260,47 @@ class ChildBlock:
 
 
 @dataclass
+class Section:
+    """One top-level table: a root branch or a join."""
+
+    id: str
+    kind: str  # branch | join
+    title: str
+    column_steps: List[str]
+    row_scope: Scope
+    groups: List[GroupNode] = field(default_factory=list)
+    summary: List[CellView] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "title": self.title,
+            "column_steps": list(self.column_steps),
+            "row_scope": self.row_scope.to_dict(),
+            "groups": [g.to_dict() for g in self.groups],
+            "summary": [c.to_dict() for c in self.summary],
+        }
+
+
+@dataclass
 class RunView:
     steps: List[StepMeta]
     params: Dict[str, Any]
-    groups: List[GroupNode]
-    run_summary: Dict[str, CellView]
+    sections: List[Section]
+    run_summary: List[CellView]
     totals: Dict[str, int]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "steps": [s.to_dict() for s in self.steps],
             "params": self.params,
-            "groups": [g.to_dict() for g in self.groups],
-            "run_summary": {k: v.to_dict() for k, v in self.run_summary.items()},
+            "sections": [s.to_dict() for s in self.sections],
+            # Convenience: first section's groups (single-root pipelines).
+            "groups": (
+                [g.to_dict() for g in self.sections[0].groups] if self.sections else []
+            ),
+            "run_summary": [c.to_dict() for c in self.run_summary],
             "totals": dict(self.totals),
         }
 
@@ -290,7 +340,6 @@ def _cell(rec: CoordRecord) -> CellView:
 def _index_coords(
     coords: Sequence[CoordRecord],
 ) -> Dict[Tuple[str, str], CoordRecord]:
-    """(step_name, coordinate) → latest record (last write wins)."""
     out: Dict[Tuple[str, str], CoordRecord] = {}
     for c in coords:
         out[(c.step_name, c.coordinate)] = c
@@ -304,9 +353,7 @@ def _by_step(coords: Sequence[CoordRecord]) -> Dict[str, List[CoordRecord]]:
     return out
 
 
-def _addr_index(
-    coords: Sequence[CoordRecord],
-) -> Dict[str, CoordRecord]:
+def _addr_index(coords: Sequence[CoordRecord]) -> Dict[str, CoordRecord]:
     out: Dict[str, CoordRecord] = {}
     for c in coords:
         if c.output_address:
@@ -325,81 +372,58 @@ def _edge_maps(
     return children, parents
 
 
-def _root_expand(metas: Sequence[StepMeta]) -> Optional[StepMeta]:
+def _column_steps_for_scope(metas: Sequence[StepMeta], row_scope: Scope) -> List[str]:
+    """Steps whose cells sit on rows of ``row_scope`` (not aggregates/nested expands)."""
+    names: List[str] = []
     for m in metas:
-        if m.shape == "expand" and not m.depends_on and scope_eq(m.scope, PARENT_SCOPE):
-            return m
-    return None
+        if m.shape == "aggregate":
+            continue
+        if m.shape == "expand" and m.scope.kind == "child":
+            continue  # nested expand — child-block columns
+        if scope_eq(m.scope, row_scope):
+            names.append(m.name)
+    return names
 
 
-def _parent_coordinates(
-    metas: Sequence[StepMeta], by_step: Mapping[str, List[CoordRecord]]
-) -> List[str]:
-    """Lane keys that form the parent band."""
-    root_exp = _root_expand(metas)
-    if root_exp is not None:
-        recs = by_step.get(root_exp.name, [])
-        return sorted({r.coordinate for r in recs})
-
-    # Map / constant root: prefer @root, else whatever the first root used.
-    roots = [m for m in metas if not m.depends_on]
-    if not roots:
-        return []
-    coords: set[str] = set()
-    for r in roots:
-        for rec in by_step.get(r.name, []):
-            coords.add(rec.coordinate)
-    if "@root" in coords:
-        return ["@root"]
-    return sorted(coords)
-
-
-def _own_cell_steps(metas: Sequence[StepMeta], own_scope: Scope) -> List[StepMeta]:
+def _nested_expands(metas: Sequence[StepMeta], own_scope: Scope) -> List[StepMeta]:
+    """Non-root expands that nest directly under ``own_scope`` (never joins)."""
     return [
         m
         for m in metas
-        if m.shape not in ("aggregate",)
-        and scope_eq(m.scope, own_scope)
-    ]
-
-
-def _own_expand_steps(metas: Sequence[StepMeta], own_scope: Scope) -> List[StepMeta]:
-    return [
-        m
-        for m in metas
-        if m.shape in ("expand", "join")
-        and not scope_eq(m.scope, PARENT_SCOPE)  # root expand is parent-band
+        if m.shape == "expand"
+        and m.scope.kind == "child"
         and scope_eq(m.source_scope, own_scope)
     ]
 
 
-def _own_summary_steps(metas: Sequence[StepMeta], expand_step: Optional[str]) -> List[StepMeta]:
-    return [
-        m
-        for m in metas
-        if m.shape == "aggregate" and m.scope.expand_step == expand_step
-    ]
+def _section_row_coords(
+    anchor: StepMeta, by_step: Mapping[str, List[CoordRecord]]
+) -> List[str]:
+    recs = by_step.get(anchor.name, [])
+    coords = sorted({r.coordinate for r in recs})
+    if not coords and not anchor.depends_on:
+        # Map root that minted @root
+        return ["@root"]
+    return coords
 
 
 def _children_of_expand(
     expand: StepMeta,
     parent_coord: str,
     coord_index: Mapping[Tuple[str, str], CoordRecord],
-    by_step: Mapping[str, List[CoordRecord]],
     children_of: Mapping[str, List[str]],
     addr_index: Mapping[str, CoordRecord],
 ) -> List[CoordRecord]:
-    """Expand/join child lanes under ``parent_coord`` via materialization edges."""
+    """Expand child lanes under ``parent_coord`` via materialization edges."""
     if not expand.depends_on:
         return []
     dep = expand.depends_on[0]
     parent_rec = coord_index.get((dep, parent_coord))
     if parent_rec is None or not parent_rec.output_address:
         return []
-    child_addrs = children_of.get(parent_rec.output_address, [])
     out: List[CoordRecord] = []
     seen: set[str] = set()
-    for addr in child_addrs:
+    for addr in children_of.get(parent_rec.output_address, []):
         rec = addr_index.get(addr)
         if rec is None or rec.step_name != expand.name:
             continue
@@ -407,149 +431,131 @@ def _children_of_expand(
             continue
         seen.add(rec.coordinate)
         out.append(rec)
-    # Stable order by coordinate.
     out.sort(key=lambda r: r.coordinate)
-    # Fallback: if edges are missing (legacy / edge-less reuse path) and the
-    # expand's coordinates are disjoint from the parent set, leave empty —
-    # inventing a parent would be wrong.
-    _ = by_step
     return out
-
-
-def _depth0_parent_for_addr(
-    addr: str,
-    parents_of: Mapping[str, List[str]],
-    addr_index: Mapping[str, CoordRecord],
-    parent_coords: set[str],
-    *,
-    _seen: Optional[set[str]] = None,
-) -> Optional[str]:
-    """Walk edges upward until we hit a depth-0 parent coordinate."""
-    seen = _seen if _seen is not None else set()
-    if addr in seen:
-        return None
-    seen.add(addr)
-    rec = addr_index.get(addr)
-    if rec is not None and rec.coordinate in parent_coords:
-        return rec.coordinate
-    for p in parents_of.get(addr, []):
-        hit = _depth0_parent_for_addr(
-            p, parents_of, addr_index, parent_coords, _seen=seen
-        )
-        if hit is not None:
-            return hit
-    return None
-
-
-def _attribute_summaries(
-    summary_steps: Sequence[StepMeta],
-    by_step: Mapping[str, List[CoordRecord]],
-    parents_of: Mapping[str, List[str]],
-    addr_index: Mapping[str, CoordRecord],
-    parent_coords: Sequence[str],
-) -> Tuple[Dict[str, Dict[str, CellView]], Dict[str, CellView]]:
-    """Split aggregate cells into per-parent-group vs run-level.
-
-    An aggregate lane attaches to a parent group when every edge-parent
-    resolves to the same depth-0 parent coordinate; otherwise it is
-    run-level (typical ``@all`` over many parents).
-    """
-    parent_set = set(parent_coords)
-    per_group: Dict[str, Dict[str, CellView]] = {c: {} for c in parent_coords}
-    run_level: Dict[str, CellView] = {}
-
-    for step in summary_steps:
-        for rec in by_step.get(step.name, []):
-            cell = _cell(rec)
-            if not rec.output_address:
-                # Failed/blocked with no address — try coordinate match, else run-level.
-                if rec.coordinate in parent_set:
-                    per_group[rec.coordinate][step.name] = cell
-                else:
-                    run_level[step.name] = cell
-                continue
-            parents = parents_of.get(rec.output_address, [])
-            attributed: set[str] = set()
-            for p in parents:
-                hit = _depth0_parent_for_addr(p, parents_of, addr_index, parent_set)
-                if hit is not None:
-                    attributed.add(hit)
-            if len(attributed) == 1:
-                per_group[next(iter(attributed))][step.name] = cell
-            elif rec.coordinate in parent_set:
-                per_group[rec.coordinate][step.name] = cell
-            else:
-                run_level[step.name] = cell
-    return per_group, run_level
 
 
 def _build_node(
     coordinate: str,
     own_scope: Scope,
+    column_steps: Sequence[str],
     metas: Sequence[StepMeta],
+    meta_by_name: Mapping[str, StepMeta],
     coord_index: Mapping[Tuple[str, str], CoordRecord],
-    by_step: Mapping[str, List[CoordRecord]],
     children_of: Mapping[str, List[str]],
-    parents_of: Mapping[str, List[str]],
     addr_index: Mapping[str, CoordRecord],
-    group_summaries: Mapping[str, Mapping[str, CellView]],
 ) -> GroupNode:
     cells: Dict[str, CellView] = {}
-    for step in _own_cell_steps(metas, own_scope):
-        rec = coord_index.get((step.name, coordinate))
+    for name in column_steps:
+        rec = coord_index.get((name, coordinate))
         if rec is not None:
-            cells[step.name] = _cell(rec)
+            cells[name] = _cell(rec)
 
     child_blocks: List[ChildBlock] = []
-    for expand in _own_expand_steps(metas, own_scope):
+    for expand in _nested_expands(metas, own_scope):
         child_recs = _children_of_expand(
-            expand, coordinate, coord_index, by_step, children_of, addr_index
+            expand, coordinate, coord_index, children_of, addr_index
         )
-        child_scope = Scope("child", expand.name)
+        child_own = child_scope(expand.name)
+        child_cols = _column_steps_for_scope(metas, child_own)
+        # Ensure the expand step itself is a column on child rows.
+        if expand.name not in child_cols:
+            child_cols = [expand.name, *child_cols]
         rows: List[GroupNode] = []
         for crec in child_recs:
-            rows.append(
-                _build_node(
-                    crec.coordinate,
-                    child_scope,
-                    metas,
-                    coord_index,
-                    by_step,
-                    children_of,
-                    parents_of,
-                    addr_index,
-                    group_summaries,
-                )
+            node = _build_node(
+                crec.coordinate,
+                child_own,
+                child_cols,
+                metas,
+                meta_by_name,
+                coord_index,
+                children_of,
+                addr_index,
             )
-            # Ensure the expand step's own cell appears on the child row.
-            if expand.name not in rows[-1].cells:
-                rows[-1].cells[expand.name] = _cell(crec)
+            if expand.name not in node.cells:
+                node.cells[expand.name] = _cell(crec)
+            rows.append(node)
         child_blocks.append(ChildBlock(expand_step=expand.name, rows=rows))
-
-    # Summaries whose expand nests under this scope, attributed to this row.
-    summary: Dict[str, CellView] = {}
-    if scope_eq(own_scope, PARENT_SCOPE):
-        summary = dict(group_summaries.get(coordinate, {}))
-        # Also attach summary(None) cells that were attributed to this parent.
-        for step in _own_summary_steps(metas, None):
-            if step.name in summary:
-                continue
-            # left for run_summary
-    else:
-        # Nested: summaries for expands whose source_scope is this child scope
-        # are attributed via edges to depth-0; also allow direct coord match.
-        for expand in _own_expand_steps(metas, own_scope):
-            for step in _own_summary_steps(metas, expand.name):
-                for rec in by_step.get(step.name, []):
-                    if rec.coordinate == coordinate:
-                        summary[step.name] = _cell(rec)
 
     return GroupNode(
         coordinate=coordinate,
         cells=cells,
         children=child_blocks,
-        summary=summary,
+        summary=[],
     )
+
+
+def _expands_owned_by_section(
+    metas: Sequence[StepMeta], row_scope: Scope
+) -> set[str]:
+    """Expand step names that nest somewhere under this section's row scope."""
+    owned: set[str] = set()
+    frontier = [row_scope]
+    seen_scopes: set[Tuple[str, Optional[str]]] = set()
+    while frontier:
+        scope = frontier.pop()
+        key = (scope.kind, scope.expand_step)
+        if key in seen_scopes:
+            continue
+        seen_scopes.add(key)
+        for m in _nested_expands(metas, scope):
+            owned.add(m.name)
+            frontier.append(child_scope(m.name))
+    return owned
+
+
+def _place_aggregates(
+    metas: Sequence[StepMeta],
+    by_step: Mapping[str, List[CoordRecord]],
+    sections: Sequence[Section],
+) -> List[CellView]:
+    """Attach aggregate cells to the owning section; leftovers → run_summary.
+
+    Multi-group aggregates (``group_key``) keep every lane — keyed by cell
+    identity, never collapsed by step name.
+    """
+    meta_by_name = {m.name: m for m in metas}
+    section_expands = {
+        s.id: _expands_owned_by_section(metas, s.row_scope) for s in sections
+    }
+    run_level: List[CellView] = []
+
+    for m in metas:
+        if m.shape != "aggregate":
+            continue
+        cells = [_cell(r) for r in by_step.get(m.name, [])]
+        if not cells:
+            continue
+
+        target: Optional[Section] = None
+        if m.scope.expand_step:
+            for s in sections:
+                if m.scope.expand_step in section_expands[s.id]:
+                    target = s
+                    break
+        else:
+            # Parent-scope fold: prefer the single branch, else the section
+            # whose maps are being folded (first dep's branch/join).
+            if len(sections) == 1:
+                target = sections[0]
+            elif m.depends_on:
+                dep = meta_by_name.get(m.depends_on[0])
+                if dep is not None:
+                    for s in sections:
+                        if scope_eq(s.row_scope, dep.scope) or (
+                            dep.scope.kind == "branch"
+                            and s.kind == "branch"
+                            and s.id == dep.scope.expand_step
+                        ):
+                            target = s
+                            break
+
+        if target is not None:
+            target.summary.extend(cells)
+        else:
+            run_level.extend(cells)
+    return run_level
 
 
 def project_run_view(
@@ -559,51 +565,82 @@ def project_run_view(
     *,
     params: Optional[Mapping[str, Any]] = None,
 ) -> RunView:
-    """Pure projection: definition + coords + edges → grouped RunView.
-
-    No DB, no Home, no I/O — unit-testable with fixture lists.
-    """
+    """Pure projection: definition + coords + edges → sectioned RunView."""
     metas = derive_step_metas(definition)
+    meta_by_name = {m.name: m for m in metas}
     coord_index = _index_coords(coordinates)
     by_step = _by_step(coordinates)
     addr_index = _addr_index(coordinates)
-    children_of, parents_of = _edge_maps(edges)
+    children_of, _parents_of = _edge_maps(edges)
 
-    parent_coords = _parent_coordinates(metas, by_step)
+    sections: List[Section] = []
 
-    # Prefer edge attribution for *all* aggregates; nested ones that resolve
-    # to a single parent land in that group's summary.
-    all_agg = [m for m in metas if m.shape == "aggregate"]
-    per_group, run_level = _attribute_summaries(
-        all_agg, by_step, parents_of, addr_index, parent_coords
-    )
-
-    # Nested-expand summaries that edge-attribution put in run_level stay there;
-    # ones in per_group attach to parent Detail via group.summary.
-    # Additionally, for summary(E) where E is nested, try to place on the
-    # child block's owning parent — already done if attributed.
-
-    groups = [
-        _build_node(
-            coord,
-            PARENT_SCOPE,
-            metas,
-            coord_index,
-            by_step,
-            children_of,
-            parents_of,
-            addr_index,
-            per_group,
+    # Branch sections — one per root, registration/topo order.
+    for m in metas:
+        if m.scope.kind != "branch" or m.scope.expand_step != m.name:
+            continue
+        # Only anchors: the root step itself (expand or map root).
+        if m.depends_on:
+            continue
+        row_scope = branch_scope(m.name)
+        cols = _column_steps_for_scope(metas, row_scope)
+        coords = _section_row_coords(m, by_step)
+        groups = [
+            _build_node(
+                c,
+                row_scope,
+                cols,
+                metas,
+                meta_by_name,
+                coord_index,
+                children_of,
+                addr_index,
+            )
+            for c in coords
+        ]
+        sections.append(
+            Section(
+                id=m.name,
+                kind="branch",
+                title=m.name,
+                column_steps=cols,
+                row_scope=row_scope,
+                groups=groups,
+            )
         )
-        for coord in parent_coords
-    ]
 
-    # Strip nested-expand aggregate cells from run_level when they were also
-    # placed on a group (avoid double-rendering).
-    placed: set[str] = set()
-    for g in groups:
-        placed.update(g.summary.keys())
-    run_summary = {k: v for k, v in run_level.items() if k not in placed}
+    # Join sections — top-level tables, not nested under a branch.
+    for m in metas:
+        if m.shape != "join":
+            continue
+        row_scope = join_scope(m.name)
+        cols = _column_steps_for_scope(metas, row_scope)
+        coords = _section_row_coords(m, by_step)
+        groups = [
+            _build_node(
+                c,
+                row_scope,
+                cols,
+                metas,
+                meta_by_name,
+                coord_index,
+                children_of,
+                addr_index,
+            )
+            for c in coords
+        ]
+        sections.append(
+            Section(
+                id=m.name,
+                kind="join",
+                title=m.name,
+                column_steps=cols,
+                row_scope=row_scope,
+                groups=groups,
+            )
+        )
+
+    run_summary = _place_aggregates(metas, by_step, sections)
 
     totals = {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
     for c in coordinates:
@@ -613,7 +650,7 @@ def project_run_view(
     return RunView(
         steps=metas,
         params=dict(params or {}),
-        groups=groups,
+        sections=sections,
         run_summary=run_summary,
         totals=totals,
     )
@@ -652,7 +689,6 @@ def _preview_for_address(home: Any, address: Optional[str]) -> Optional[Any]:
         return None
     output = row.get("output")
     content_type = row.get("content_type")
-    # Spilled refs look like "objects:<hash>" strings — don't inline bytes.
     if isinstance(output, str) and output.startswith("objects:"):
         return f"<{content_type or 'bytes'}>"
     try:
@@ -662,7 +698,9 @@ def _preview_for_address(home: Any, address: Optional[str]) -> Optional[Any]:
     return truncate_preview(value)
 
 
-def build_run_view(home: Any, run_id: str, *, session: Optional[Session] = None) -> Optional[Dict[str, Any]]:
+def build_run_view(
+    home: Any, run_id: str, *, session: Optional[Session] = None
+) -> Optional[Dict[str, Any]]:
     """Load run artifacts from ``home`` and return a JSON-ready RunView dict."""
 
     def _build(sess: Session) -> Optional[Dict[str, Any]]:
@@ -688,9 +726,7 @@ def build_run_view(home: Any, run_id: str, *, session: Optional[Session] = None)
             .order_by(RunCoordinateStatus.id)
             .all()
         )
-        run_addrs = {
-            str(r.output_address) for r in rcs_rows if r.output_address
-        }
+        run_addrs = {str(r.output_address) for r in rcs_rows if r.output_address}
         edge_rows: Iterable[Any] = []
         if run_addrs:
             edge_rows = (
@@ -726,8 +762,7 @@ def build_run_view(home: Any, run_id: str, *, session: Optional[Session] = None)
                 )
             )
 
-        view = project_run_view(definition, coords, edges, params=params)
-        return view.to_dict()
+        return project_run_view(definition, coords, edges, params=params).to_dict()
 
     if session is not None:
         return _build(session)

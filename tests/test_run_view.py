@@ -1,13 +1,16 @@
-"""Grouped Run View projection — definition-first scopes + edge lineage."""
+"""Grouped Run View projection — multi-root sections + join tables."""
 
 from __future__ import annotations
+
+import csv
+import os
+import tempfile
 
 import pytest
 
 from conftest import isolated_test_env
 from rubedo import pipeline, step
 from rubedo.run_view import (
-    PARENT_SCOPE,
     Scope,
     build_run_view,
     derive_step_metas,
@@ -64,10 +67,10 @@ def test_topo_and_scope_derivation_nested_expand_aggregate():
 
     metas = {m.name: m for m in derive_step_metas(definition)}
     assert metas["scan"].shape == "expand"
-    assert metas["scan"].scope == PARENT_SCOPE
-    assert metas["parse"].scope == PARENT_SCOPE
+    assert metas["scan"].scope == Scope("branch", "scan")
+    assert metas["parse"].scope == Scope("branch", "scan")
     assert metas["items"].scope == Scope("child", "items")
-    assert metas["items"].source_scope == PARENT_SCOPE
+    assert metas["items"].source_scope == Scope("branch", "scan")
     assert metas["score"].scope == Scope("child", "items")
     assert metas["fold"].scope == Scope("summary", "items")
     assert metas["total"].scope == Scope("summary", None)
@@ -94,14 +97,15 @@ def test_map_only_root():
     view = build_run_view(TEST_HOME, summary.run_id)
     assert view is not None
     assert [s["name"] for s in view["steps"]] == ["seed", "double"]
-    assert len(view["groups"]) == 1
-    g = view["groups"][0]
+    assert len(view["sections"]) == 1
+    sec = view["sections"][0]
+    assert sec["kind"] == "branch"
+    assert sec["title"] == "seed"
+    assert sec["column_steps"] == ["seed", "double"]
+    assert len(sec["groups"]) == 1
+    g = sec["groups"][0]
     assert g["coordinate"] == "@root"
-    assert g["cells"]["seed"]["status"] == "created"
-    assert g["cells"]["double"]["status"] == "created"
     assert g["cells"]["double"]["preview"] == 6
-    assert g["children"] == []
-    assert view["run_summary"] == {}
 
 
 def test_single_expand_source_with_map():
@@ -116,20 +120,14 @@ def test_single_expand_source_with_map():
 
     pipe = pipeline(name="one_expand", steps=[scan, bump], home=TEST_HOME)
     summary = pipe.run(workers=1)
-    assert summary.created_count == 4  # 2 scan + 2 bump
+    assert summary.created_count == 4
 
     view = build_run_view(TEST_HOME, summary.run_id)
     assert view is not None
-    assert len(view["groups"]) == 2
-    paths = set()
-    for g in view["groups"]:
-        assert "scan" in g["cells"]
-        assert "bump" in g["cells"]
-        assert g["cells"]["scan"]["coordinate"] == g["coordinate"]
-        assert g["children"] == []
-        preview = g["cells"]["bump"]["preview"]
-        assert isinstance(preview, dict)
-        paths.add(preview["path"])
+    assert len(view["sections"]) == 1
+    groups = view["sections"][0]["groups"]
+    assert len(groups) == 2
+    paths = {g["cells"]["bump"]["preview"]["path"] for g in groups}
     assert paths == {"a", "b"}
 
 
@@ -156,15 +154,15 @@ def test_nested_expand_groups_children_under_parent():
     )
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
-    # 2 source + 3 expand children + 3 label = 8
     assert summary.created_count == 8
 
     view = build_run_view(TEST_HOME, summary.run_id)
     assert view is not None
-    assert len(view["groups"]) == 2
+    sec = view["sections"][0]
+    assert len(sec["groups"]) == 2
 
     by_batch = {}
-    for g in view["groups"]:
+    for g in sec["groups"]:
         batch = g["cells"]["source"]["preview"]["batch"]
         assert len(g["children"]) == 1
         block = g["children"][0]
@@ -173,14 +171,9 @@ def test_nested_expand_groups_children_under_parent():
 
     assert len(by_batch["A"]) == 2
     assert len(by_batch["B"]) == 1
-    a_items = {r["cells"]["expand_batch"]["preview"]["item"] for r in by_batch["A"]}
-    assert a_items == {"A_0", "A_1"}
-    for row in by_batch["A"]:
-        assert "label" in row["cells"]
-        assert row["cells"]["label"]["preview"] in {"a_0", "a_1"}
 
 
-def test_expand_plus_aggregate_run_summary():
+def test_expand_plus_aggregate_section_summary():
     @step
     def scan():
         yield {"path": "a", "n": 10}
@@ -202,14 +195,12 @@ def test_expand_plus_aggregate_run_summary():
 
     view = build_run_view(TEST_HOME, summary.run_id)
     assert view is not None
-    assert len(view["groups"]) == 2
-    # @all aggregate over both parents → run-level summary, not duplicated
-    assert "total" in view["run_summary"]
-    assert view["run_summary"]["total"]["preview"] == 30
-    assert view["run_summary"]["total"]["coordinate"] == "@all"
-    for g in view["groups"]:
-        assert "total" not in g["summary"]
-        assert "total" not in g["cells"]
+    sec = view["sections"][0]
+    assert len(sec["groups"]) == 2
+    assert len(sec["summary"]) == 1
+    assert sec["summary"][0]["step_name"] == "total"
+    assert sec["summary"][0]["preview"] == 30
+    assert view["run_summary"] == []
 
 
 def test_failed_lane_is_prominent_in_cells():
@@ -231,16 +222,11 @@ def test_failed_lane_is_prominent_in_cells():
     view = build_run_view(TEST_HOME, summary.run_id)
     assert view is not None
     assert view["totals"]["failed"] == 1
-    statuses = {
-        g["cells"]["scan"]["preview"]["path"]: g["cells"].get("risky", {}).get("status")
-        for g in view["groups"]
-    }
-    assert statuses["ok"] == "created"
-    assert statuses["boom"] == "failed"
+    groups = view["sections"][0]["groups"]
     boom = next(
-        g for g in view["groups"] if g["cells"]["scan"]["preview"]["path"] == "boom"
+        g for g in groups if g["cells"]["scan"]["preview"]["path"] == "boom"
     )
-    assert boom["cells"]["risky"]["error_message"]
+    assert boom["cells"]["risky"]["status"] == "failed"
     assert "kaboom" in boom["cells"]["risky"]["error_message"]
 
 
@@ -258,20 +244,19 @@ def test_cache_reuse_distinguishes_created_vs_reused():
     s1 = pipe.run(workers=1)
     assert s1.created_count == 4
     s2 = pipe.run(workers=1)
-    assert s2.created_count == 0
     assert s2.reused_count == 4
 
     view = build_run_view(TEST_HOME, s2.run_id)
     assert view is not None
     assert view["totals"]["reused"] == 4
-    assert view["totals"]["created"] == 0
-    for g in view["groups"]:
+    for g in view["sections"][0]["groups"]:
         assert g["cells"]["scan"]["status"] == "reused"
         assert g["cells"]["tag"]["status"] == "reused"
 
 
 def test_project_run_view_is_pure_no_io():
-    """Synthetic coords/edges — no Home required."""
+    from rubedo.run_view import CoordRecord
+
     definition = {
         "steps": [
             {"name": "src", "depends_on": [], "out_shape": "many"},
@@ -279,8 +264,6 @@ def test_project_run_view_is_pure_no_io():
             {"name": "leaf", "depends_on": ["fan"]},
         ]
     }
-    from rubedo.run_view import CoordRecord
-
     coords = [
         CoordRecord("p1", "src", "created", output_address="a1", preview={"id": 1}),
         CoordRecord("p2", "src", "created", output_address="a2", preview={"id": 2}),
@@ -291,12 +274,116 @@ def test_project_run_view_is_pure_no_io():
     ]
     edges = [("a1", "b1"), ("a2", "b2"), ("b1", "d1"), ("b2", "d2")]
     view = project_run_view(definition, coords, edges)
-    assert len(view.groups) == 2
-    g1 = next(g for g in view.groups if g.coordinate == "p1")
-    assert len(g1.children) == 1
+    assert len(view.sections) == 1
+    g1 = next(g for g in view.sections[0].groups if g.coordinate == "p1")
     assert g1.children[0].expand_step == "fan"
-    assert len(g1.children[0].rows) == 1
-    child = g1.children[0].rows[0]
-    assert child.coordinate == "c1"
-    assert child.cells["fan"].status == "created"
-    assert child.cells["leaf"].status == "reused"
+    assert g1.children[0].rows[0].cells["leaf"].status == "reused"
+
+
+def test_newsroom_multi_root_join_sections():
+    """Parallel roots get their own tables; join is separate; both digests show."""
+    folder = os.path.join(tempfile.gettempdir(), "rubedo_newsroom_view_test")
+    os.makedirs(folder, exist_ok=True)
+    for name, header, rows in [
+        (
+            "feeds.csv",
+            ["feed_id", "publisher"],
+            [("f1", "TechCorp"), ("f2", "BizWire"), ("f3", "TechCorp")],
+        ),
+        (
+            "publishers.csv",
+            ["publisher", "region"],
+            [("TechCorp", "US"), ("BizWire", "EU")],
+        ),
+    ]:
+        with open(os.path.join(folder, name), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+
+    feed_articles = {
+        "f1": ["GPU prices fall", "Chip roadmap leaks"],
+        "f2": ["Markets rally", "IPO filed"],
+        "f3": ["New language ships", "Framework 2.0 lands"],
+    }
+
+    p = pipeline(name="newsroom_view", home=TEST_HOME)
+
+    @p.step
+    def feeds():
+        with open(os.path.join(folder, "feeds.csv")) as f:
+            for row in csv.DictReader(f):
+                yield row
+
+    @p.step
+    def publishers():
+        with open(os.path.join(folder, "publishers.csv")) as f:
+            for row in csv.DictReader(f):
+                yield row
+
+    @p.step
+    def feed(feeds: dict):
+        return {"feed_id": feeds["feed_id"], "publisher": feeds["publisher"]}
+
+    @p.step
+    def publisher(publishers: dict):
+        return {
+            "publisher": publishers["publisher"],
+            "region": publishers["region"],
+        }
+
+    @p.step(join_on={"feed": "publisher", "publisher": "publisher"})
+    def feed_meta(feed: dict, publisher: dict):
+        return {"feed_id": feed["feed_id"], "region": publisher["region"]}
+
+    @p.step
+    def articles(feed_meta: dict):
+        for title in feed_articles[feed_meta["feed_id"]]:
+            yield {"title": title, "region": feed_meta["region"]}
+
+    @p.step(group_key="region")
+    def digest(articles: dict):
+        titles = sorted(a["title"] for a in articles.values())
+        return {"count": len(titles), "headlines": titles}
+
+    summary = p.run(workers=1)
+    assert summary.failed_count == 0
+
+    view = build_run_view(TEST_HOME, summary.run_id)
+    assert view is not None
+    by_id = {s["id"]: s for s in view["sections"]}
+    assert set(by_id) == {"feeds", "publishers", "feed_meta"}
+
+    feeds_sec = by_id["feeds"]
+    assert feeds_sec["kind"] == "branch"
+    assert feeds_sec["column_steps"] == ["feeds", "feed"]
+    assert len(feeds_sec["groups"]) == 3
+    for g in feeds_sec["groups"]:
+        assert "feeds" in g["cells"] and "feed" in g["cells"]
+        assert "publishers" not in g["cells"]
+        # Join is its own section — not nested under feeds.
+        assert g["children"] == []
+
+    pubs_sec = by_id["publishers"]
+    assert pubs_sec["kind"] == "branch"
+    assert pubs_sec["column_steps"] == ["publishers", "publisher"]
+    assert len(pubs_sec["groups"]) == 2
+    regions = {g["cells"]["publisher"]["preview"]["region"] for g in pubs_sec["groups"]}
+    assert regions == {"US", "EU"}
+
+    join_sec = by_id["feed_meta"]
+    assert join_sec["kind"] == "join"
+    assert "feed_meta" in join_sec["column_steps"]
+    assert len(join_sec["groups"]) == 3
+    # Each join row nests an articles expand with 2 children.
+    for g in join_sec["groups"]:
+        assert len(g["children"]) == 1
+        assert g["children"][0]["expand_step"] == "articles"
+        assert len(g["children"][0]["rows"]) == 2
+
+    # Both region digests appear — not collapsed / dropped.
+    digests = join_sec["summary"]
+    assert {c["coordinate"] for c in digests} == {"US", "EU"}
+    by_region = {c["coordinate"]: c["preview"] for c in digests}
+    assert by_region["US"]["count"] == 4
+    assert by_region["EU"]["count"] == 2

@@ -107,9 +107,9 @@ test('Run detail shows grouped Run View and stats', async ({ page }) => {
 
   // Default tab is the grouped Run View
   await expect(page.getByRole('button', { name: 'Run View' })).toBeVisible();
-  await expect(page.locator('.rv-parent-table')).toBeVisible();
-  await expect(page.locator('.rv-summary-strip')).toBeVisible();
-  await expect(page.locator('.rv-summary-chip-name', { hasText: 'total' })).toBeVisible();
+  await expect(page.locator('.rv-parent-table').first()).toBeVisible();
+  await expect(page.locator('.rv-summary-strip').first()).toBeVisible();
+  await expect(page.locator('.rv-summary-chip-name').filter({ hasText: 'total' })).toBeVisible();
 
   // Flat coordinates tab still works
   await page.getByRole('button', { name: 'Coordinates' }).click();

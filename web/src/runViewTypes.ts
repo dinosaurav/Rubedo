@@ -30,7 +30,7 @@ export interface RunViewGroup {
   coordinate: string;
   cells: Record<string, RunViewCell>;
   children: RunViewChildBlock[];
-  summary: Record<string, RunViewCell>;
+  summary: RunViewCell[];
 }
 
 export interface RunViewChildBlock {
@@ -38,10 +38,21 @@ export interface RunViewChildBlock {
   rows: RunViewGroup[];
 }
 
+export interface RunViewSection {
+  id: string;
+  kind: string;
+  title: string;
+  column_steps: string[];
+  row_scope: RunViewScope;
+  groups: RunViewGroup[];
+  summary: RunViewCell[];
+}
+
 export interface RunView {
   steps: RunViewStep[];
   params: Record<string, unknown>;
+  sections: RunViewSection[];
   groups: RunViewGroup[];
-  run_summary: Record<string, RunViewCell>;
+  run_summary: RunViewCell[];
   totals: Record<string, number>;
 }

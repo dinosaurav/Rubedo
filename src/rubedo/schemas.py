@@ -178,16 +178,27 @@ class RunViewGroupOut(BaseModel):
     coordinate: str
     cells: Dict[str, RunViewCellOut] = {}
     children: List[RunViewChildBlockOut] = []
-    summary: Dict[str, RunViewCellOut] = {}
+    summary: List[RunViewCellOut] = []
 
 
 RunViewChildBlockOut.model_rebuild()
+
+
+class RunViewSectionOut(BaseModel):
+    id: str
+    kind: str
+    title: str
+    column_steps: List[str] = []
+    row_scope: RunViewScopeOut
+    groups: List[RunViewGroupOut] = []
+    summary: List[RunViewCellOut] = []
 
 
 class RunViewOut(BaseModel):
     """Cardinality-aware grouped projection of one run."""
     steps: List[RunViewStepOut]
     params: Dict[str, Any] = {}
-    groups: List[RunViewGroupOut] = []
-    run_summary: Dict[str, RunViewCellOut] = {}
+    sections: List[RunViewSectionOut] = []
+    groups: List[RunViewGroupOut] = []  # first section; convenience for single-root
+    run_summary: List[RunViewCellOut] = []
     totals: Dict[str, int] = {}
