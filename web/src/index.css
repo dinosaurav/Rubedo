@@ -648,11 +648,27 @@ table.rv-child-table { width: auto; min-width: 280px; }
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  flex-wrap: wrap;
   border: 1px solid var(--border-color);
   padding: 0.15rem 0.45rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   background: #fff;
+  max-width: 100%;
+}
+
+.rv-summary-chip.expanded {
+  align-items: flex-start;
+}
+
+.rv-summary-preview-btn {
+  max-width: 28rem;
+}
+
+.rv-summary-chip .rv-full-preview {
+  flex-basis: 100%;
+  width: 100%;
+  max-width: 40rem;
 }
 
 .rv-summary-chip.status-failed {

@@ -48,6 +48,9 @@ class Scope:
       - ``child``: fan-out lanes of ``expand_step`` (a non-root expand)
       - ``summary``: aggregate cells for the named expand (or ``None`` =
         section/run-level fold over a branch)
+      - ``fold``: post-aggregate continuation; ``expand_step`` is the
+        aggregate step that opened the fold — rendered as a normal
+        one-row-per-group table, not a summary chip
     """
 
     kind: str
@@ -184,15 +187,33 @@ def derive_step_metas(definition: Mapping[str, Any]) -> List[StepMeta]:
             scope = branch_scope(name)
             source_scope = scope
         else:
-            join_scopes = [s for s in dep_scopes if s.kind == "join"]
-            child_scopes = [s for s in dep_scopes if s.kind == "child"]
-            if join_scopes:
-                scope = join_scopes[0]
-            elif child_scopes:
-                scope = child_scopes[0]
+            # Maps after an aggregate (or after another post-aggregate map)
+            # continue in a fold band keyed by that aggregate — a normal
+            # table, not summary chips (graphify / pdf-digest).
+            shapes_so_far = {m.name: m.shape for m in metas}
+            fold_anchor: Optional[str] = None
+            for d in deps:
+                if d not in scopes:
+                    continue
+                if shapes_so_far.get(d) == "aggregate":
+                    fold_anchor = d
+                    break
+                if scopes[d].kind == "fold" and scopes[d].expand_step:
+                    fold_anchor = scopes[d].expand_step
+                    break
+            if fold_anchor is not None:
+                scope = Scope("fold", fold_anchor)
+                source_scope = scope
             else:
-                scope = dep_scopes[0]
-            source_scope = scope
+                join_scopes = [s for s in dep_scopes if s.kind == "join"]
+                child_scopes = [s for s in dep_scopes if s.kind == "child"]
+                if join_scopes:
+                    scope = join_scopes[0]
+                elif child_scopes:
+                    scope = child_scopes[0]
+                else:
+                    scope = dep_scopes[0]
+                source_scope = scope
 
         scopes[name] = scope
         metas.append(
@@ -261,10 +282,10 @@ class ChildBlock:
 
 @dataclass
 class Section:
-    """One top-level table: a root branch or a join."""
+    """One top-level table: a root branch, a join, or a post-aggregate fold."""
 
     id: str
-    kind: str  # branch | join
+    kind: str  # branch | join | fold
     title: str
     column_steps: List[str]
     row_scope: Scope
@@ -509,12 +530,18 @@ def _place_aggregates(
     metas: Sequence[StepMeta],
     by_step: Mapping[str, List[CoordRecord]],
     sections: Sequence[Section],
+    *,
+    skip: Optional[set[str]] = None,
 ) -> List[CellView]:
     """Attach aggregate cells to the owning section; leftovers → run_summary.
+
+    Aggregates listed in ``skip`` (those with a fold continuation table) are
+    omitted — they render as columns on the fold section instead.
 
     Multi-group aggregates (``group_key``) keep every lane — keyed by cell
     identity, never collapsed by step name.
     """
+    skip = skip or set()
     meta_by_name = {m.name: m for m in metas}
     section_expands = {
         s.id: _expands_owned_by_section(metas, s.row_scope) for s in sections
@@ -522,7 +549,7 @@ def _place_aggregates(
     run_level: List[CellView] = []
 
     for m in metas:
-        if m.shape != "aggregate":
+        if m.shape != "aggregate" or m.name in skip:
             continue
         cells = [_cell(r) for r in by_step.get(m.name, [])]
         if not cells:
@@ -537,12 +564,13 @@ def _place_aggregates(
         else:
             # Parent-scope fold: prefer the single branch, else the section
             # whose maps are being folded (first dep's branch/join).
-            if len(sections) == 1:
-                target = sections[0]
+            branch_or_join = [s for s in sections if s.kind in ("branch", "join")]
+            if len(branch_or_join) == 1:
+                target = branch_or_join[0]
             elif m.depends_on:
                 dep = meta_by_name.get(m.depends_on[0])
                 if dep is not None:
-                    for s in sections:
+                    for s in branch_or_join:
                         if scope_eq(s.row_scope, dep.scope) or (
                             dep.scope.kind == "branch"
                             and s.kind == "branch"
@@ -556,6 +584,54 @@ def _place_aggregates(
         else:
             run_level.extend(cells)
     return run_level
+
+
+def _fold_maps_for(metas: Sequence[StepMeta], aggregate_name: str) -> List[StepMeta]:
+    return [
+        m
+        for m in metas
+        if m.scope.kind == "fold" and m.scope.expand_step == aggregate_name
+    ]
+
+
+def _build_fold_sections(
+    metas: Sequence[StepMeta],
+    by_step: Mapping[str, List[CoordRecord]],
+    coord_index: Mapping[Tuple[str, str], CoordRecord],
+) -> List[Section]:
+    """One normal table per aggregate that has downstream maps.
+
+    Columns = the aggregate + every map in its fold chain; rows = the
+    aggregate's group coordinates (``@all`` or ``group_key`` values).
+    """
+    out: List[Section] = []
+    for agg in metas:
+        if agg.shape != "aggregate":
+            continue
+        fold_maps = _fold_maps_for(metas, agg.name)
+        if not fold_maps:
+            continue
+        cols = [agg.name, *[m.name for m in fold_maps]]
+        coords = _section_row_coords(agg, by_step)
+        groups: List[GroupNode] = []
+        for coord in coords:
+            cells: Dict[str, CellView] = {}
+            for name in cols:
+                rec = coord_index.get((name, coord))
+                if rec is not None:
+                    cells[name] = _cell(rec)
+            groups.append(GroupNode(coordinate=coord, cells=cells))
+        out.append(
+            Section(
+                id=f"fold:{agg.name}",
+                kind="fold",
+                title=f"after {agg.name}",
+                column_steps=cols,
+                row_scope=Scope("fold", agg.name),
+                groups=groups,
+            )
+        )
+    return out
 
 
 def project_run_view(
@@ -640,7 +716,16 @@ def project_run_view(
             )
         )
 
-    run_summary = _place_aggregates(metas, by_step, sections)
+    # Post-aggregate continuation tables (aggregate + downstream maps).
+    fold_sections = _build_fold_sections(metas, by_step, coord_index)
+    folded_aggs = {
+        s.row_scope.expand_step for s in fold_sections if s.row_scope.expand_step
+    }
+    sections.extend(fold_sections)
+
+    run_summary = _place_aggregates(
+        metas, by_step, sections, skip=folded_aggs
+    )
 
     totals = {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
     for c in coordinates:

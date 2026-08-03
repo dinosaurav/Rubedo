@@ -387,3 +387,60 @@ def test_newsroom_multi_root_join_sections():
     by_region = {c["coordinate"]: c["preview"] for c in digests}
     assert by_region["US"]["count"] == 4
     assert by_region["EU"]["count"] == 2
+
+
+def test_post_aggregate_maps_form_fold_table():
+    """Maps after an aggregate continue as a normal table, not summary chips."""
+
+    @step
+    def items():
+        yield {"n": 1}
+        yield {"n": 2}
+
+    @step
+    def bump(items: dict):
+        return items["n"] * 10
+
+    @step(depends_on=["bump"], in_shape="aggregate")
+    def total(bump: dict):
+        return sum(bump.values())
+
+    @step
+    def label(total: int):
+        return f"sum={total}"
+
+    @step
+    def shout(label: str):
+        return label.upper()
+
+    pipe = pipeline(
+        name="post_agg",
+        steps=[items, bump, total, label, shout],
+        home=TEST_HOME,
+    )
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 0
+
+    view = build_run_view(TEST_HOME, summary.run_id)
+    assert view is not None
+    by_id = {s["id"]: s for s in view["sections"]}
+    assert "items" in by_id
+    assert "fold:total" in by_id
+
+    # Aggregate alone is not a summary chip when a fold table exists.
+    assert by_id["items"]["summary"] == []
+    assert view["run_summary"] == []
+
+    fold = by_id["fold:total"]
+    assert fold["kind"] == "fold"
+    assert fold["column_steps"] == ["total", "label", "shout"]
+    assert len(fold["groups"]) == 1
+    row = fold["groups"][0]
+    assert row["coordinate"] == "@all"
+    assert row["cells"]["total"]["preview"] == 30
+    assert row["cells"]["label"]["preview"] == "sum=30"
+    assert row["cells"]["shout"]["preview"] == "SUM=30"
+
+    metas = {s["name"]: s for s in view["steps"]}
+    assert metas["label"]["scope"] == {"kind": "fold", "expand_step": "total"}
+    assert metas["shout"]["scope"] == {"kind": "fold", "expand_step": "total"}

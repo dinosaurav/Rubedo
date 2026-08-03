@@ -169,6 +169,67 @@ function DataRow({
   );
 }
 
+function SummaryChip({ cell }: { cell: RunViewCell }) {
+  const [expanded, setExpanded] = useState(false);
+  const [full, setFull] = useState<unknown>(null);
+  const [loading, setLoading] = useState(false);
+  const failed = cell.status === 'failed';
+
+  async function openFull() {
+    if (!cell.output_address) return;
+    if (full !== null) {
+      setExpanded((e) => !e);
+      return;
+    }
+    setLoading(true);
+    try {
+      const obj = await fetchObject(cell.output_address);
+      setFull(obj.preview_json ?? obj.preview_text ?? null);
+      setExpanded(true);
+    } catch (e) {
+      setFull(String(e));
+      setExpanded(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const preview = formatPreview(cell.preview);
+
+  return (
+    <span
+      className={`rv-summary-chip status-${cell.status}${expanded ? ' expanded' : ''}`}
+      title={cell.error_message ?? (preview.length > 80 ? preview : undefined)}
+    >
+      <span className="rv-summary-chip-name">
+        {cell.step_name}
+        {cell.coordinate && cell.coordinate !== '@all' ? (
+          <span className="rv-summary-coord">[{cell.coordinate}]</span>
+        ) : null}
+      </span>
+      <span className={`badge badge-${coordStatusClass(cell.status)}`}>{cell.status}</span>
+      {failed && cell.error_message ? (
+        <span className="rv-error-text">{cell.error_message}</span>
+      ) : (
+        <button
+          type="button"
+          className="rv-preview-btn rv-summary-preview-btn"
+          onClick={openFull}
+          disabled={!cell.output_address || loading}
+        >
+          {loading ? '…' : preview || '—'}
+        </button>
+      )}
+      {cell.output_address && (
+        <Link to={`/objects/${cell.output_address}`} className="rv-addr-link">
+          ↗
+        </Link>
+      )}
+      {expanded && <pre className="rv-full-preview">{formatPreview(full)}</pre>}
+    </span>
+  );
+}
+
 function SummaryStrip({
   summary,
   label,
@@ -181,25 +242,7 @@ function SummaryStrip({
     <div className="rv-summary-strip">
       <span className="rv-summary-label">{label ?? 'Σ summary'}</span>
       {summary.map((cell) => (
-        <span
-          key={`${cell.step_name}:${cell.coordinate}`}
-          className={`rv-summary-chip status-${cell.status}`}
-          title={cell.error_message ?? undefined}
-        >
-          <span className="rv-summary-chip-name">
-            {cell.step_name}
-            {cell.coordinate && cell.coordinate !== '@all' ? (
-              <span className="rv-summary-coord">[{cell.coordinate}]</span>
-            ) : null}
-          </span>
-          <span className={`badge badge-${coordStatusClass(cell.status)}`}>{cell.status}</span>
-          <span className="rv-summary-chip-value">{formatPreview(cell.preview)}</span>
-          {cell.output_address && (
-            <Link to={`/objects/${cell.output_address}`} className="rv-addr-link">
-              ↗
-            </Link>
-          )}
-        </span>
+        <SummaryChip key={`${cell.step_name}:${cell.coordinate}`} cell={cell} />
       ))}
     </div>
   );
