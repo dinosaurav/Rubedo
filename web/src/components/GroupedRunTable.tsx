@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchObject } from '../api';
 import {
+  childColumnSteps,
   childScope,
   formatPreview,
   ownCellSteps,
@@ -222,7 +223,7 @@ function Detail({
         );
         const rows = block?.rows ?? [];
         const childOwn = childScope(expand.name);
-        const childCols = headerSteps(steps, childOwn);
+        const childCols = childColumnSteps(steps, expand);
         const childColNames = childCols.map((c) => c.name);
         return (
           <div className="rv-child-block" key={expand.name}>
