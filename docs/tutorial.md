@@ -129,15 +129,16 @@ Plan for 'reviews' over scan: 1 execute, 1 pending
 created=7 reused=0 filtered=1
 ```
 
-`scan` plans as a single `execute` — an `expand` root has no parent to
-cache its enumeration against, so its actual lanes (one per file) are
-unknowable until it runs. `classify` shows `pending`, not `execute`: its
-output address depends on lanes `scan` hasn't minted yet. `p.run()` resolves
-both: 7 materializations get created (4 `scan` file-lanes + 3 `classify`
-lanes) and `review4.txt` — "meh", one word — gets **filtered**: its step
-returned `Filtered(reason=...)` instead of a value. That verdict
-is cached like any other output; it isn't an error, and it isn't
-re-decided every run.
+`scan` plans as a single `execute` — this tutorial declares
+`check_cache=False`, so the source re-lists the folder every run and the
+dry-run has no cached enumeration to preview against. Its actual lanes
+(one per file) are unknowable until it runs. `classify` shows `pending`,
+not `execute`: its output address depends on lanes `scan` hasn't minted
+yet. `p.run()` resolves both: 7 materializations get created (4 `scan`
+file-lanes + 3 `classify` lanes) and `review4.txt` — "meh", one word —
+gets **filtered**: its step returned `Filtered(reason=...)` instead of a
+value. That verdict is cached like any other output; it isn't an error,
+and it isn't re-decided every run.
 
 Run it again, unchanged:
 

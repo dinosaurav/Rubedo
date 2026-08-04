@@ -71,9 +71,13 @@ The possible actions:
   output — and therefore this lane's own address — isn't knowable without
   actually running it. This is normal downstream of anything that hasn't
   resolved yet: in the example above, `input_files` is a root `expand`
-  source, which always re-executes (a source re-scans the world every run),
-  so nothing downstream of it can be addressed until it actually runs and
-  its children's content hashes are known.
+  with `check_cache=False`, so it always plans as `execute` (it re-scans
+  external state every run and has no cached enumeration for the dry-run
+  to preview against). Nothing downstream can be addressed until it runs
+  and its children's content hashes are known. A root *without*
+  `check_cache=False` is anchor-cached against `@root` and would instead
+  plan its children as `reuse` when the anchor is live — see
+  [`../concepts/sources.md`](../concepts/sources.md).
 - **`filtered`** — a parent lane was declined with `Filtered(...)`; this
   step skips it without running.
 
@@ -187,7 +191,7 @@ See [`../reference/cli.md`](../reference/cli.md#rubedo-show) for the full
 [`../reference/api/index.md`](../reference/api/index.md) for `RunSummary.failures()`,
 the library equivalent.
 
-## The web dashboard (read-only)
+## The web dashboard (read-only UI)
 
 ```bash
 rubedo serve                    # API + UI on http://127.0.0.1:8000
@@ -195,10 +199,34 @@ rubedo serve                    # API + UI on http://127.0.0.1:8000
 
 The dashboard is a browser over the same ledger everything else here reads
 — runs, materializations, lineage, current outputs — with search to drill
-into a specific value or error. It never mutates state: every write path
-(`run`, `invalidate`, `gc --delete`) is library code or the CLI only.
-The built UI is served from the package; to hack on the web UI itself,
-`cd web && npm run dev` (Vite proxies `/api` to `:8000`).
-`server.py` is a read-only FastAPI app that, like the CLI, never imports
-your pipeline code — it only ever reads the ledger and the `definition()`
-snapshot each run recorded.
+into a specific value or error. The **UI never mutates state**: every write
+path a user typically reaches for (`run`, `gc --delete`) is library code or
+the CLI. The API beneath the dashboard is read-only except for one endpoint,
+`POST /api/selection/invalidate`, which is unauthenticated and meant for
+local use — treat `rubedo serve` as a local tool, not something to expose
+publicly. The built UI is served from the package; to hack on the web UI
+itself, `cd web && npm run dev` (Vite proxies `/api` to `:8000`).
+`server.py` never imports your pipeline code — it only ever reads the ledger
+and the `definition()` snapshot each run recorded.
+
+## Run View
+
+Open a run in the dashboard and the default tab is **Run View**: a
+definition-driven layout of that run's cells, not a flat dump of every
+coordinate. The same payload is available as
+`GET /api/runs/{id}/view`.
+
+Sections follow the pipeline shape:
+
+- **Branch** — one table per expand root and its downstream map/expand
+  chain (params band above the first branch when the run recorded any).
+- **Join** — equijoin results as their own tables.
+- **Child** — nested expand fan-out under a parent row (expand column
+  always present so you can open the expand cell itself).
+- **Summary** — aggregate chips (click to expand the aggregate payload).
+- **Fold** — post-aggregate map steps as a normal table after the
+  aggregate they depend on (`after <aggregate>`).
+
+Cell tinting reflects created / reused / failed for the run; clicking a
+cell lazy-loads the object preview. Run View is observability only — it
+does not invalidate or re-run.
