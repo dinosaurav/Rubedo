@@ -766,10 +766,12 @@ def truncate_preview(value: Any, limit: int = PREVIEW_CHARS) -> Any:
     return text[: limit - 1] + "…"
 
 
-def _preview_for_address(home: Any, address: Optional[str]) -> Optional[Any]:
+def _preview_for_address(
+    home: Any, address: Optional[str], address_index: Mapping[str, Dict[str, Any]]
+) -> Optional[Any]:
     if not address:
         return None
-    row = home.lanes.address_row_index().get(address)
+    row = address_index.get(address)
     if not row:
         return None
     output = row.get("output")
@@ -831,6 +833,7 @@ def build_run_view(
             if str(p) in run_addrs and str(c) in run_addrs
         ]
 
+        address_index = home.lanes.address_row_index()
         coords: List[CoordRecord] = []
         for r in rcs_rows:
             addr = str(r.output_address) if r.output_address else None
@@ -843,7 +846,7 @@ def build_run_view(
                     error_message=str(r.error_message) if r.error_message else None,
                     error_type=str(r.error_type) if r.error_type else None,
                     created_at=str(r.created_at) if r.created_at else None,
-                    preview=_preview_for_address(home, addr),
+                    preview=_preview_for_address(home, addr, address_index),
                 )
             )
 
