@@ -144,7 +144,7 @@ By default a step is `map` — 1:1 per lane. Four more shapes cover fan-in, fan-
 - **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
 - **`fold`** (N:1) — like `aggregate`, but receives an accumulator (initialized to `fold_init`) and one parent value at a time for incremental processing. Supports `group_key`.
 - **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
-- **`join`** — an N-way equijoin across multiple `expand` roots, matched on a field of their parent outputs, minting one lane per matched tuple:
+- **`join`** — an N-way equijoin across multiple parents, matched on a field of their outputs, minting one lane per matched tuple:
 
 ```python
 p = pipeline(name="enrich")
@@ -297,7 +297,7 @@ rubedo gc --max-bytes 2GiB --delete   # apply it
 
 Retention deletes **bytes, never facts**: a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove). [notes/retention.md](notes/retention.md) is the full model — policies, the demote/sweep phases, guarantees, and the recompute trade-off.
 
-The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors. (The UI never writes; the API beneath it is read-only except for one endpoint, `POST /api/selection/invalidate`, which is unauthenticated and meant for local use — treat `rubedo serve` as a local tool, not something to expose publicly.)
+The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors. Open a run to get **Run View** — a definition-driven layout of that run's cells (branch / join / child / summary / fold sections; same payload as `GET /api/runs/{id}/view`). (The UI never writes; the API beneath it is read-only except for one endpoint, `POST /api/selection/invalidate`, which is unauthenticated and meant for local use — treat `rubedo serve` as a local tool, not something to expose publicly.)
 
 ```bash
 rubedo serve                    # API + UI on http://127.0.0.1:8000

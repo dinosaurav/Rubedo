@@ -185,12 +185,19 @@ periodic re-scrape on top of that.
 ### Expand roots (sources)
 
 An `expand` step with **no** `depends_on` is a root — it yields the
-pipeline's initial lanes and, having no parent to cache against, **always
-re-executes**, every run (no anchor is written or checked). This *is* how
-ingestion works — there's no separate source concept, just this shape used
-with no parent. A parentless generator function infers `out_shape="many"`
-(the `shape="expand"` alias)
-automatically:
+pipeline's initial lanes. There is no separate ingestion concept: a
+parentless generator infers `out_shape="many"` (the `shape="expand"`
+alias) automatically and *is* the source.
+
+Root expands are **anchor-cached** like any other expand. With no parent
+lane to key on, the anchor is addressed against the constant `@root`
+(`ROOT_LANE` in `planning.py`): the generator runs once, then planning
+replays its children as `reuse` until the step's identity (code version,
+params) changes. That is right for a fixed in-code list; wrong for a
+folder or table you expect to change. Sources that watch external state
+declare `check_cache=False` so the generator re-runs every `p.run()` —
+lanes stay content-addressed, so a rescan that finds nothing new still
+reuses everything downstream. See [sources.md](sources.md).
 
 ```python
 from rubedo import step
@@ -203,6 +210,13 @@ def hn_top():
 
 Drop it straight into `pipeline(steps=[...])` — nothing else needed. See
 [sources.md](sources.md) for the folder/CSV/table/cloud recipes.
+
+!!! note "`@root` in plan output"
+    A dry-run often prints `execute scan @root` for an expand root. That
+    `@root` is the **anchor slot** for the source enumeration — not a
+    minted file lane. Content-addressed child lanes (`row-<hash>`) appear
+    only after the generator runs. A source-less **map** root is different:
+    it mints a real single `@root` lane whose input is the step's params.
 
 Reach for `expand` whenever the *number* of downstream items isn't known
 until you've fetched something — RSS feeds, paginated APIs, multi-page

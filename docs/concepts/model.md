@@ -25,9 +25,12 @@ place*.
     A coordinate is **not the identity of work** — that's the
     content-addressed **output address** (below), computed from the step
     too, not just the item. And it's **not the primary search handle** —
-    that's the output struct's fields. A coordinate is always `row-<hash>`, never
-    a file name or a row id, so nothing downstream can treat it as one.
-    Query by what a step *computed* (its output fields), not by coordinate.
+    that's the output struct's fields. Content-addressed lanes are
+    `row-<hash>`, never a file name or a row id, so nothing downstream
+    can treat them as one — but coordinates are not *only* `row-<hash>`:
+    map roots mint `@root`, aggregates without `group_key` mint `@all`,
+    and joins mint `a|b|…` pair keys. Query by what a step *computed*
+    (its output fields), not by coordinate.
 
 A coordinate can also be **minted mid-DAG**: `expand` mints a fresh
 content-addressed `row-<hash>` lane per yielded payload, and `join` mints an

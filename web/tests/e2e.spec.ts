@@ -97,7 +97,7 @@ test('Runs page lists the run', async ({ page }) => {
   await expect(page.locator('tbody tr')).toContainText('completed');
 });
 
-test('Run detail shows stats and coordinates', async ({ page }) => {
+test('Run detail shows grouped Run View and stats', async ({ page }) => {
   await page.goto('/');
   await page.locator('tbody tr a').first().click();
   await expect(page).toHaveURL(/\/runs\/.+/);
@@ -105,7 +105,14 @@ test('Run detail shows stats and coordinates', async ({ page }) => {
   await expect(page.locator('.stat-label', { hasText: 'Created' })).toBeVisible();
   await expect(page.locator('.stat-value', { hasText: 'completed' })).toBeVisible();
 
-  // Should have coordinate rows (scan + read + total lanes)
+  // Default tab is the grouped Run View
+  await expect(page.getByRole('button', { name: 'Run View' })).toBeVisible();
+  await expect(page.locator('.rv-parent-table').first()).toBeVisible();
+  await expect(page.locator('.rv-summary-strip').first()).toBeVisible();
+  await expect(page.locator('.rv-summary-chip-name').filter({ hasText: 'total' })).toBeVisible();
+
+  // Flat coordinates tab still works
+  await page.getByRole('button', { name: 'Coordinates' }).click();
   const coordRows = page.locator('tbody tr');
   const count = await coordRows.count();
   expect(count).toBeGreaterThan(0);

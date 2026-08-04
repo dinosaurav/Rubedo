@@ -23,7 +23,7 @@ positional arguments:
                         audit
     gc                  Retention GC: prune old runs' outputs and delete
                         unreferenced objects (dry-run unless --delete)
-    serve               Start the read-only FastAPI server (API + web UI)
+    serve               Start the FastAPI server (API + web UI)
     check               Lint a pipeline file for undeclared env reads
 ```
 
@@ -324,9 +324,12 @@ and `rubedo gc`), and the bytes-never-facts guarantee.
 rubedo serve [--host HOST] [--port PORT] [--reload]
 ```
 
-Starts the read-only FastAPI server. The API is at `/api/*` and the web
-dashboard is served at `/` (from the built assets bundled with the
-package). Requires the `server` extra: `pip install "rubedo[server]"`.
+Starts the FastAPI server. The API is at `/api/*` and the web dashboard is
+served at `/` (from the built assets bundled with the package). The **UI is
+read-only**; the API is read-only except for
+`POST /api/selection/invalidate` (unauthenticated, meant for local use —
+treat `rubedo serve` as a local tool). Requires the `server` extra:
+`pip install "rubedo[server]"`.
 
 | Flag | Default | Description |
 |---|---|---|

@@ -24,7 +24,7 @@ def summarize(leads: dict):
 p.run()   # second run: created=0, reused=everything
 ```
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + content-addressed object store).
+Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + Arrow IPC lane store + content-addressed object store).
 
 ## Where to start
 
@@ -43,7 +43,7 @@ Rubedo is a library, not a platform: no daemon, no registry, no magic module. Th
 
 - **[Execution policies](guides/execution-policies.md)** — retries, rate limits, assertions, process pools, scheduling.
 - **[Search & invalidation](guides/search-and-invalidation.md)** — index outputs by content, invalidate surgically.
-- **[Inspecting runs](guides/inspecting-runs.md)** — `p.plan()`, `trace()`, `rubedo du`, the dashboard.
+- **[Inspecting runs](guides/inspecting-runs.md)** — `p.plan()`, `trace()`, `rubedo du`, the dashboard and Run View.
 - **[Trials: sample, diff, roll out](guides/trials.md)** — `RunScope` cohorts, partial runs, run-to-run diff.
 - **[Retention & GC](guides/retention.md)** — keep-windows, `rubedo gc`, bytes-never-facts.
 - **[Cloud storage & sharing](guides/cloud-storage.md)** — S3-compatible buckets, the shared lane store, Postgres.

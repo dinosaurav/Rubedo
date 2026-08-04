@@ -66,13 +66,17 @@ Plan for 'count-lines' over scan: 1 execute, 1 pending
 created=8 reused=0
 ```
 
-`scan` plans as a single `execute` — it has no parent to cache its
-enumeration against, so its actual lanes are unknowable until it runs.
-`count_lines` shows `pending`, not `execute`: its output address depends on
-lanes `scan` hasn't minted yet, so the address (and therefore
-reuse-or-execute) is unknowable without actually running `scan` first. Once
-`p.run()` actually executes it, `created=8` is `scan`'s four file-lanes plus
-`count_lines`'s four downstream lanes.
+`scan` plans as a single `execute` — this quickstart declares
+`check_cache=False`, so the source re-lists the folder every run and the
+dry-run has no cached enumeration to preview against. Its actual lanes
+(one per file) are unknowable until it runs. `count_lines` shows
+`pending`, not `execute`: its output address depends on lanes `scan`
+hasn't minted yet, so the address (and therefore reuse-or-execute) is
+unknowable without actually running `scan` first. Once `p.run()` actually
+executes it, `created=8` is `scan`'s four file-lanes plus `count_lines`'s
+four downstream lanes. (A root *without* `check_cache=False` would be
+anchor-cached against `@root` and could plan children as `reuse` — see
+[Sources](concepts/sources.md).)
 
 ### Run it twice
 
@@ -105,9 +109,9 @@ outputs, version bumps, and invalidation.
 ## The `.rubedo/` state directory
 
 The first `p.run()` (or `p.plan()`, or a CLI command) creates a `.rubedo/`
-directory: a SQLite ledger (`rubedo.sqlite`) plus a content-addressed object
-store (`objects/`). It's created automatically and gitignored automatically
-— there's nothing to set up.
+directory: a SQLite ledger (`rubedo.sqlite`), a content-addressed object
+store (`objects/`), and Arrow lane tables (`tables/`). It's created
+automatically and gitignored automatically — there's nothing to set up.
 
 !!! warning "`.rubedo/` resolves relative to the current working directory"
     Every entry point — `p.run()`, `p.plan()`, the CLI, and the API server —

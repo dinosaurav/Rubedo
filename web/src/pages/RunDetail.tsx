@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { fetchRun, fetchRunCoordinates, fetchRunEvents, API_URL } from '../api';
+import { fetchRun, fetchRunCoordinates, fetchRunEvents, fetchRunView, API_URL } from '../api';
 import { DataTable, TruncatedText, HashCell } from '../components/DataTable';
 import DagView from '../components/DagView';
+import GroupedRunTable from '../components/GroupedRunTable';
 import RunInspector from '../components/RunInspector';
 import { fmtTime, fmtDuration, durationMs, runStatusClass, coordStatusClass } from '../format';
+import type { RunView } from '../runViewTypes';
 import type { ColumnDef } from '@tanstack/react-table';
+
+type Tab = 'view' | 'coords' | 'events';
 
 export default function RunDetail() {
   const { runId } = useParams();
   const [run, setRun] = useState<any>(null);
+  const [view, setView] = useState<RunView | null>(null);
   const [coords, setCoords] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
-  const [tab, setTab] = useState<'coords' | 'events'>('coords');
+  const [tab, setTab] = useState<Tab>('view');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,6 +26,7 @@ export default function RunDetail() {
       setLoading(true);
       Promise.all([
         fetchRun(runId).then(setRun),
+        fetchRunView(runId).then(setView),
         fetchRunCoordinates(runId).then(setCoords),
         fetchRunEvents(runId).then(setEvents),
       ]).catch(e => setError(String(e))).finally(() => setLoading(false));
@@ -31,7 +37,7 @@ export default function RunDetail() {
   useEffect(() => {
     if (run && run.status === 'running') {
       const source = new EventSource(`${API_URL}/runs/${run.id}/stream`);
-      
+
       source.onmessage = (e) => {
         const data = JSON.parse(e.data);
         setRun((prev: any) => ({
@@ -44,19 +50,19 @@ export default function RunDetail() {
           filtered_count: data.totals.filtered,
           by_step: data.by_step
         }));
-        
+
         if (data.status !== 'running') {
           source.close();
-          // Refresh coordinates and events when run completes
+          fetchRunView(run.id).then(setView);
           fetchRunCoordinates(run.id).then(setCoords);
           fetchRunEvents(run.id).then(setEvents);
         }
       };
-      
+
       source.onerror = () => {
         source.close();
       };
-      
+
       return () => source.close();
     }
   }, [run?.status, run?.id]);
@@ -149,10 +155,16 @@ export default function RunDetail() {
       <RunInspector runId={run.id} />
 
       <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem' }}>
+        <button className={`btn ${tab === 'view' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('view')}>Run View</button>
         <button className={`btn ${tab === 'coords' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('coords')}>Coordinates</button>
         <button className={`btn ${tab === 'events' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setTab('events')}>Events</button>
       </div>
 
+      {tab === 'view' && (
+        view
+          ? <div className="card" style={{ padding: '1rem' }}><GroupedRunTable view={view} /></div>
+          : <div>No view available</div>
+      )}
       {tab === 'coords' && (
         <DataTable data={coords} columns={coordColumns} urlKey="coords" initialColumnVisibility={{ input_hash: false, error_type: false }} />
       )}
