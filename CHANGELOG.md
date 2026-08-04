@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-03
+
+### Added
+- **Grouped Run View:** `GET /api/runs/{id}/view` projects a run into
+  definition-driven sections (branch / join / child / summary / fold).
+  The dashboard Run Detail page defaults to this layout, with created /
+  reused / failed tinting and click-to-expand cell and summary previews.
+
+### Changed
+- Docs accuracy: expand-root caching is anchor-cached on `@root` unless
+  `check_cache=False` (shapes, inspecting-runs, getting-started, tutorial);
+  coordinates include `@root` / `@all` / join keys, not only `row-<hash>`;
+  dashboard UI is read-only while `POST /api/selection/invalidate` exists;
+  Home docs mention the Arrow `tables/` plane; join parents need not be
+  expand roots; Run View documented in inspecting-runs and README.
+- Marketing site: prerender the landing page so it is indexable without JS.
+
 ## [0.4.0] - 2026-07-21
 
 ### Added
