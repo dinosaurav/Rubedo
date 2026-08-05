@@ -466,7 +466,9 @@ def _commit_execution_result(
                     .first()
                 )
                 if existing_usage and existing_usage.fulfilled:
-                    existing_row = ctx.home.lanes.address_row_index().get(str(decision.output_address))
+                    existing_row = ctx.home.lanes.rows_by_address(
+                        ctx.pipeline_id, step.name, {str(decision.output_address)}
+                    ).get(str(decision.output_address))
                     if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused"
                 if mat_action != "reused":
@@ -513,7 +515,9 @@ def _commit_execution_result(
                     .first()
                 )
                 if existing_usage and existing_usage.fulfilled:
-                    existing_row = ctx.home.lanes.address_row_index().get(str(decision.output_address))
+                    existing_row = ctx.home.lanes.rows_by_address(
+                        ctx.pipeline_id, step.name, {str(decision.output_address)}
+                    ).get(str(decision.output_address))
                     if existing_row and existing_row.get("output_identity") == identity:
                         mat_action = "reused" if not decision.stale else "refreshed"
 
