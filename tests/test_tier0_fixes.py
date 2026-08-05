@@ -144,6 +144,127 @@ def test_broadcast_deps_no_cross_root_bleed():
     assert outputs == ["0-A-B", "1-A-B", "2-A-B"]
 
 
+def test_broadcast_dep_transitive_chain():
+    """singleton_coordinate_steps must propagate past a direct root — a
+    map step two hops from the root is still singleton."""
+
+    @step
+    def root():
+        return {"threshold": 10}
+
+    @step
+    def scaled(root: dict):
+        return {"threshold": root["threshold"] * 2}
+
+    @step
+    def source():
+        for i in range(3):
+            yield {"i": i}
+
+    @step
+    def combine(source: dict, scaled: dict):
+        return source["i"] + scaled["threshold"]
+
+    pipe = pipeline(name="broadcast-chain", steps=[root, scaled, source, combine], home=TEST_HOME)
+    summary = pipe.run(workers=2)
+    assert summary.failed_count == 0
+
+    cells = TEST_HOME.current(resolve_output=True)
+    outputs = sorted(c.output for c in cells if c.step_name == "combine")
+    assert outputs == [20, 21, 22]
+
+
+def test_broadcast_dep_ungrouped_aggregate():
+    """An aggregate with no group_key is singleton too (always one "@all"
+    group) — must be usable as a broadcast dep, same as a root."""
+
+    @step
+    def source():
+        for i in range(4):
+            yield {"i": i}
+
+    @step(name="total", depends_on=["source"], in_shape="aggregate")
+    def total_step(source):
+        return sum(v["i"] for v in source.values())
+
+    @step
+    def combine(source: dict, total: int):
+        return source["i"] - total
+
+    pipe = pipeline(name="broadcast-agg", steps=[source, total_step, combine], home=TEST_HOME)
+    summary = pipe.run(workers=2)
+    assert summary.failed_count == 0
+
+    cells = TEST_HOME.current(resolve_output=True)
+    outputs = sorted(c.output for c in cells if c.step_name == "combine")
+    assert outputs == [-6, -5, -4, -3]  # total = 0+1+2+3 = 6
+
+
+def test_broadcast_dep_dry_plan_no_raise():
+    """plan()'s own copy of singleton_steps (runner.py, separate from
+    _RunContext) must resolve the broadcast dep the same way run() does."""
+
+    @step
+    def root():
+        return {"threshold": 10}
+
+    @step
+    def source():
+        for i in range(3):
+            yield {"i": i}
+
+    @step
+    def combine(source: dict, root: dict):
+        return source["i"] + root["threshold"]
+
+    pipe = pipeline(name="broadcast-plan", steps=[root, source, combine], home=TEST_HOME)
+    pipe.run(workers=2)
+    plan = pipe.plan()
+    actions = {i.step_name for i in plan.items}
+    assert "combine" in actions
+    assert plan.counts.get("blocked", 0) == 0
+
+
+def test_broadcast_dep_survives_scoped_partial_run():
+    """combine is a coordinate-preserving descendant of the real per-row
+    anchor (scope.coordinate_preserving_scope_steps) — it plans with
+    lanes=[...] instead of lanes=None, exercising the branch of _plan_step
+    the whole-run tests above never touch."""
+    from rubedo import RunScope
+
+    @step
+    def root():
+        return {"threshold": 10}
+
+    @step
+    def source():
+        for i in range(5):
+            yield {"i": i}
+
+    @step
+    def combine(source: dict, root: dict):
+        return source["i"] + root["threshold"]
+
+    pipe = pipeline(name="broadcast-scope", steps=[root, source, combine], home=TEST_HOME)
+    baseline = pipe.run(workers=1)
+    source_cells = baseline.cells("source", resolve_output=True)
+    assert len(source_cells) == 5
+
+    scope = RunScope.explicit(
+        anchor="combine", lanes=[c.coordinate for c in source_cells[:2]]
+    )
+    trial = pipe.run(scope=scope, targets=["combine"], workers=1)
+    assert trial.kind == "partial"
+    combine_cells = trial.cells("combine", resolve_output=True)
+    assert len(combine_cells) == 2
+    scoped_i = {c.output - 10 for c in combine_cells}
+    expected_i = {
+        next(sc for sc in source_cells if sc.coordinate == c.coordinate).output["i"]
+        for c in combine_cells
+    }
+    assert scoped_i == expected_i
+
+
 # --- B3: a failed invalidation must not commit partial flips ---------------
 
 
