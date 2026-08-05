@@ -184,6 +184,8 @@ def load_pdf(params): return split(params["pdf"])   # mints the single '@root' l
 
 See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → aggregate → two summaries.
 
+A source-less root's value (or a plain `group_key=None` aggregate's result) can also be named alongside a real per-row dependency in a downstream step — Rubedo broadcasts the one value to every row instead of requiring a matching per-row coordinate. See [shapes.md](docs/concepts/shapes.md#broadcasting-a-single-value-into-per-row-steps) for the details and the trap (two real multi-lane producers that don't share a coordinate lineage still error, by design — that's what `join` is for).
+
 ## Search and surgical invalidation
 
 Outputs are **searchable by their content**: a step's output struct fields are the query language's open vocabulary, so you can select by what a step *computed*, regardless of file names or row keys:

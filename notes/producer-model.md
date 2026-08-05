@@ -47,9 +47,18 @@ cardinality)`.
 A **diamond** — a step with two parents that share a coordinate lineage (both
 descend from the same root) — is **not** a join. It is a *multi-input map*:
 per-lane, coordinate-preserving, joins its parents by **inherited coordinate
-equality**. This already works today (`planning.py:289` reads
-`coord_step_mats[(coord, dep)]` for each parent) and needs nothing new but
-`hash_on`.
+equality**. This already works today (`planning.py`'s `_plan_step` reads
+`coord_step_mats.get((coord, dep))` for each real per-row parent) and needs
+nothing new but `hash_on`.
+
+TODO 37 (shipped 2026-08-04) extended this: a dependency whose coordinate
+can *never* vary across the run (a source-less root, an unaggregated
+`aggregate`/`fold`, or a map chain built only from those —
+`planning.singleton_coordinate_steps`) is resolved via its one
+materialization and broadcast to every real per-row coordinate, instead of
+requiring exact equality. Two real multi-lane producers with unrelated
+coordinates still raise "disjoint lane sets" — that strictness is
+intentional (see `docs/concepts/shapes.md#broadcasting-a-single-value-into-per-row-steps`).
 
 The natural shape (no synthetic passthrough): `A` parses the source into
 `{doc, customer}`; `B` depends on `A` with `hash_on=["doc"]`, so it **dedupes**

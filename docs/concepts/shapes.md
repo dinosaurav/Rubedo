@@ -81,6 +81,39 @@ scanning for one. See [`../examples.md`](../examples.md)
 (`examples/pdf_digest`) for this feeding an `expand` → vision-LLM →
 `aggregate` chain end to end.
 
+### Broadcasting a single value into per-row steps
+
+A source-less root's value isn't limited to steps that depend on nothing
+else — name it alongside a real per-row dependency in a downstream `map`
+step, and every row sees the same value:
+
+```python
+@p.step
+def threshold(params): return params["min_score"]      # mints '@root'
+
+@p.step(out_shape="many")
+def rows():
+    yield from read_csv("scores.csv")
+
+@p.step
+def flagged(rows: dict, threshold: int):
+    return rows["score"] > threshold                    # threshold, broadcast to every row
+```
+
+`flagged` has one real per-row dependency (`rows`) and one broadcast
+dependency (`threshold`); Rubedo resolves `threshold` from its single
+materialization and applies it to every row, instead of requiring a
+matching per-row coordinate. This works for any dependency whose entire
+chain can never fan out — a source-less root, an unaggregated
+(`group_key=None`) `aggregate`/`fold` result, or a `map` chain built only
+from those — not only a direct root.
+
+Mixing two *real* multi-lane dependencies that don't share a coordinate
+lineage is still an error (`parents produce disjoint lane sets` — see
+[`join`](#join-n-way-equijoin) below, or restructure so they share a
+root). The distinction is whether a dependency *can* ever have more than
+one coordinate for the run, not whether it happens to have one this time.
+
 ## `aggregate` — N:1 (fan-in)
 
 Fans in over a parent's *surviving* lanes. A plain aggregate (`group_key=None`)
@@ -96,6 +129,14 @@ def total_lines(count_lines: dict):
 (A plain `@all` aggregate is the one shape that's always explicit: nothing
 in the code implies it. The parent comes from the parameter name, like
 any other step. Pass `in_shape="aggregate"` explicitly.)
+
+A plain (`group_key=None`) aggregate's result is itself always one value
+for the whole run, so it can be named alongside a real per-row dependency
+in a downstream step the same way a source-less root can — see
+[broadcasting a single value](#broadcasting-a-single-value-into-per-row-steps)
+above. A `group_key`'d aggregate can't: it produces one output per group,
+so it needs the same aligned-coordinate handling as any other multi-lane
+producer.
 
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of a field, read from the parent output struct
