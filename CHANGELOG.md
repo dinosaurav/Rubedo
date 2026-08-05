@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-04
+
+### Fixed
+- **Same quadratic-scan bug on the commit path (`ledger.py`):**
+  `_commit_execution_result`'s reuse-identity check called the same
+  uncached `address_row_index()` from 0.4.2's fix, once per committed
+  lane, on the write path for every `check_cache=False` source re-run —
+  a documented, encouraged pattern, not an edge case. Swapped in
+  `lane_store.rows_by_address`, the same per-step cached, anchor-aware
+  address lookup the planning phase already uses for reuse checks.
+- **Broadcast/singleton dependencies raised "disjoint lane sets"
+  (TODO 37):** `_plan_step` required every named dependency to have a
+  materialization at the exact same coordinate as the step being
+  planned. That broke whenever one dependency was a true singleton (a
+  source-less map root, or an aggregate/fold with no `group_key` —
+  always exactly one coordinate for the whole run) mixed with a real
+  per-row dependency. `planning.singleton_coordinate_steps` now
+  statically classifies such steps; `_plan_step` resolves a singleton
+  dependency via its one materialization and broadcasts it to every
+  real per-row target instead of requiring exact-coordinate equality.
+  Two genuinely unrelated multi-lane producers still raise the same
+  error — that strictness is unchanged. See
+  `docs/concepts/shapes.md#broadcasting-a-single-value-into-per-row-steps`.
+
 ## [0.4.2] - 2026-08-04
 
 ### Fixed
