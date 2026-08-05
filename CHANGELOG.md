@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-04
+
+### Fixed
+- **Quadratic hang in `GET /api/runs/{id}/view`:** `build_run_view`'s
+  per-coordinate preview lookup called the uncached
+  `home.lanes.address_row_index()` once per coordinate row instead of
+  once per request; each call rescans and re-parses every step's Arrow
+  table in the lane store. A run with thousands of coordinates could
+  turn the endpoint into an effective hang. Fixed by computing the
+  address index once per `build_run_view` call, matching every other
+  call site's pattern.
+
 ## [0.4.1] - 2026-08-03
 
 ### Added
