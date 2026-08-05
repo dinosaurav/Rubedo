@@ -84,6 +84,66 @@ def test_diamond_parents_still_run():
     assert summary.created_count == 4  # scan + upper + lower + both
 
 
+# --- TODO 37: real per-row dep mixed with a singleton/broadcast dep --------
+
+
+def test_broadcast_dep_mixed_with_per_row_dep_runs():
+    @step
+    def root():
+        return {"threshold": 10}
+
+    @step
+    def source():
+        for i in range(5):
+            yield {"i": i}
+
+    @step
+    def combine(source: dict, root: dict):
+        return source["i"] + root["threshold"]
+
+    pipe = pipeline(name="broadcast", steps=[root, source, combine], home=TEST_HOME)
+    summary = pipe.run(workers=2)
+    assert summary.failed_count == 0
+    assert summary.created_count == 11  # root + 5 source + 5 combine
+
+    cells = TEST_HOME.current(resolve_output=True)
+    outputs = sorted(c.output for c in cells if c.step_name == "combine")
+    assert outputs == [10, 11, 12, 13, 14]
+
+    # Second run: everything reused, no re-raise, no re-materialization.
+    summary2 = pipe.run(workers=2)
+    assert summary2.failed_count == 0
+    assert summary2.created_count == 0
+    assert summary2.reused_count == 11
+
+
+def test_broadcast_deps_no_cross_root_bleed():
+    @step
+    def root_a():
+        return {"v": "A"}
+
+    @step
+    def root_b():
+        return {"v": "B"}
+
+    @step
+    def source():
+        for i in range(3):
+            yield {"i": i}
+
+    @step
+    def combine(source: dict, root_a: dict, root_b: dict):
+        return f"{source['i']}-{root_a['v']}-{root_b['v']}"
+
+    pipe = pipeline(name="multiroot", steps=[root_a, root_b, source, combine], home=TEST_HOME)
+    summary = pipe.run(workers=2)
+    assert summary.failed_count == 0
+
+    cells = TEST_HOME.current(resolve_output=True)
+    outputs = sorted(c.output for c in cells if c.step_name == "combine")
+    assert outputs == ["0-A-B", "1-A-B", "2-A-B"]
+
+
 # --- B3: a failed invalidation must not commit partial flips ---------------
 
 

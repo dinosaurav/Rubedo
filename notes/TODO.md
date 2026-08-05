@@ -22,11 +22,11 @@ before being written down. Item 35 is the post-Home read-surface gap
 (2026-07-20).
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) is shipped. Item 36 (persist the invalidation
+(7 → 7b → 8 → 13) is shipped. Item 37 (singleton/ancestor deps in
+`_plan_step`) shipped 2026-08-04. Item 36 (persist the invalidation
 `reason`) is the sole open item — **[needs owner decision]**, do not
-build until the owner schedules it. Remaining Parked items are
-engine-shaped only (allocate, streaming expand, etc.) — design session
-before building.
+build until scheduled. Remaining Parked items are engine-shaped only
+(allocate, streaming expand, etc.) — design session before building.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -415,6 +415,99 @@ updated to say where it lives.
 
 ──────────────────────────────────────────────────────────────────────
 
+## 37. Singleton/ancestor deps wrongly hit "disjoint lane sets"  **[needs owner decision — added 2026-08-04, surfaced by an ai-table-v2 (Rubedo-Cloud) caller]**
+
+**Problem.** `_plan_step` (`planning.py:708–714`) requires every named
+dependency of a step to have a materialization at the *exact same
+coordinate* as the step being planned:
+
+```python
+for dep in step.depends_on:
+    if (coord, dep) not in coord_step_mats:
+        if step.declarative: continue
+        raise ValueError("parents produce disjoint lane sets ...")
+```
+
+Flat string equality, no ancestry awareness. Correct for the case it's
+tested against (`test_disjoint_parent_lanes_raise_clear_error` in
+`test_tier0_fixes.py`: two independently-sourced multi-lane producers
+that don't align — a real bug, should error). But it also fires when one
+dependency is a genuine ancestor with a single coordinate for the whole
+run (a root, or anything whose own chain never passes through an
+`out_shape="many"` step) and the other is a descendant fanned out N ways
+beneath it. That's not disjoint — the single-coordinate producer is a
+strict ancestor of every one of the N coordinates by construction
+(coordinates are hierarchical paths) — but `_plan_step` can't currently
+tell the two situations apart, so a step mixing "one broadcast value +
+one real per-row value" throws unconditionally, every time, on first
+plan. `test_diamond_parents_still_run` (same file) confirms the
+adjacent case — multiple *real* per-lane deps sharing a common
+multi-lane ancestor — already works fine; it's specifically the
+single-coordinate-ancestor mix that's unhandled.
+
+**Not a join.** A join means two independently-enumerable sets matched
+by a shared key with the pairing unknown ahead of time — real M×N risk
+if the key doesn't disambiguate. This isn't that: every descendant
+coordinate has exactly one ancestor at any shallower depth, fully
+determined by the coordinate's own path prefix. The fix is a single
+ancestor lookup, O(1) per consumed coordinate, not a join — no
+sensitivity to how many root-level rows exist.
+
+**`out_shape` is not directly reusable for this.** `spec.py:79`'s
+`out_shape: "one" | "many"` already exists but tracks a different axis:
+whether *one invocation* of a step fans out to many children (expand)
+vs. one value (map/aggregate/etc). It says nothing about a step's *total*
+coordinate count across the run. A map step downstream of an expand is
+`out_shape="one"` (each of its own coordinates produces one value) but
+still has N coordinates total. The missing property is transitive:
+"does this step's dependency chain ever pass through an `out_shape="many"`
+step" — not currently tracked or exposed at plan time. `ROOT_LANE`/`@root`
+(`planning.py`, `scheduler.py:_scanned_for`, `docs/concepts/shapes.md`)
+is the closest existing precedent — a distinguished single-coordinate
+anchor, but only for steps with no `depends_on` at all, not generalized
+to "single-coordinate transitively."
+
+**Recommended fix (shape TBD — this is the owner decision).** Derive
+single-coordinate-ness per step from its dependency chain (no new
+annotation for call sites — it's a static DAG property, not something
+a step author should hand-declare). When `_plan_step` is planning a step
+whose `depends_on` mixes a multi-coordinate dep with a
+transitively-single-coordinate one, resolve the latter via its one
+existing materialization (or an ancestor-path walk, if you want it
+scoped per-root rather than globally singleton) instead of requiring
+exact-coordinate equality. Leave the genuinely-disjoint path (two
+unrelated multi-coordinate producers) exactly as strict as it is today —
+don't loosen the check that `test_disjoint_parent_lanes_raise_clear_error`
+pins.
+
+**Secondary spot once this exists:** `scheduler.py:_deep_eligible`
+currently treats any step with `len(depends_on) > 1` as a segment
+barrier. A step with one real per-row dep and one singleton/broadcast
+dep doesn't need to wait on siblings the way a true multi-parent step
+does — worth revisiting so such steps aren't needlessly pinned to
+`broad`-style barrier scheduling under `schedule="deep"`.
+
+**Trap:** do not weaken the equality check for the case two multi-lane
+producers are actually unrelated — that's intentional and tested.
+
+**Motivating caller:** `Rubedo-Cloud/prototypes/ai-table-v2/server/`
+hits this whenever a child-scope (per-row) map step names a parent-scope
+input directly alongside a real per-row dependency — compiles fine
+(scope-checking there is unrelated to this), throws on first real
+`pipe.run()`. Currently worked around caller-side by hand-threading the
+value through the expand (`seed.py`, `sht_digest`'s `stories` →
+`stories__min_score` etc.) rather than naming the parent-scope column
+directly. That workaround can be reverted once this ships.
+
+Acceptance: a step depending on both a real per-row value and a
+transitively-single-coordinate ancestor value plans and runs without
+error, resolving the singleton via lookup rather than exact match; a
+synthetic multi-root-row test confirms each root's descendants only ever
+see *that* root's value (no cross-root bleed); existing disjoint-lane and
+diamond tests in `test_tier0_fixes.py` still pass unmodified.
+
+──────────────────────────────────────────────────────────────────────
+
 ## Parked (ideas, deliberately unspecced — design session required before building)
 
 - **Bucketed aggregation / `allocate`** (batching lanes into ~N-sized
@@ -469,6 +562,27 @@ updated to say where it lives.
 The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-08-04 — singleton/ancestor deps (TODO 37) shipped, respecced
+  during build:** the item's own "Recommended fix" section claimed
+  coordinates are hierarchical paths an ancestor lookup could walk —
+  checked against `expand_child_coord` (`planning.py`) and found false:
+  expand-child coordinates are pure content hashes (`row-<hash>`) with no
+  structural relationship to a parent's coordinate string, and join/
+  aggregate coordinates aren't paths either. Built the simpler mechanism
+  instead: `planning.singleton_coordinate_steps` statically classifies
+  steps whose dependency chain never crosses an `out_shape="many"` step
+  (or an aggregate/fold with no `group_key`) as guaranteed
+  single-coordinate for the whole run; `_plan_step` resolves such a dep
+  via its one existing materialization (a plain dict lookup, not a walk)
+  and broadcasts it to every real per-row target, instead of requiring
+  exact-coordinate equality. `_RunContext.singleton_steps` and
+  `runner.plan()`'s local copy thread it to both `_plan_step` call
+  sites. The scheduler-barrier follow-up the item flagged as secondary
+  (`_deep_eligible` treating any `len(depends_on) > 1` step as a
+  barrier) was intentionally left out — scope was the planning fix.
+  Tests: `test_broadcast_dep_mixed_with_per_row_dep_runs`,
+  `test_broadcast_deps_no_cross_root_bleed` (`test_tier0_fixes.py`);
+  existing disjoint-lane and diamond tests pass unmodified.
 - **2026-07-21 — retired control plane + human overrides from Parked:**
   product-layer ideas, not engine work; dropped rather than deferred.
 - **2026-07-21 — retired did-you-mean (#25) and parked cost-tracking:**

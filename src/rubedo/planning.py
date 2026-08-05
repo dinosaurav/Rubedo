@@ -181,6 +181,35 @@ def topological_sort(pipeline: PipelineSpec) -> List[StepSpec]:
     return order
 
 
+def singleton_coordinate_steps(topo_steps: List[StepSpec]) -> frozenset:
+    """Step names guaranteed to produce exactly one coordinate for the
+    whole run — a source-less map root (mints the single ``ROOT_LANE``
+    lane), an aggregate/fold with no ``group_key`` (always one ``"@all"``
+    group), or a map step whose every dependency is itself singleton
+    (a 1:1 step propagates its parent's one coordinate unchanged).
+
+    Everything else — expand (``out_shape="many"``), join, a group_key'd
+    aggregate, or a map step with any non-singleton dependency — is not
+    singleton: it may produce many coordinates, so exact-coordinate
+    matching against its own lanes must stay strict (see the "disjoint
+    lane sets" check in ``_plan_step``, and the trap noted on TODO 37 in
+    ``notes/TODO.md``: this must never widen to steps that only
+    *happen* to have one lane this run, like a single-item expand root —
+    only steps that can *never* have more than one).
+
+    ``topo_steps`` must already be in dependency order (as returned by
+    ``topological_sort``) so a step's own deps are decided before it is.
+    """
+    singleton: set = set()
+    for step in topo_steps:
+        if step.in_shape == "one" and step.out_shape == "one":
+            if all(dep in singleton for dep in step.depends_on):
+                singleton.add(step.name)
+        elif step.in_shape in ("aggregate", "fold") and step.group_key is None:
+            singleton.add(step.name)
+    return frozenset(singleton)
+
+
 def _compute_step_input_hash(
     step: StepSpec,
     coordinate: str,
@@ -569,8 +598,17 @@ def _plan_step(
     lanes: Optional[List[str]] = None,
     pipeline_id: str = "",
     home: Optional["Home"] = None,
+    singleton_steps: "frozenset" = frozenset(),
 ) -> List[StepDecision]:
     """Decide the fate of every coordinate for one step. Read-only.
+
+    `singleton_steps` (see `singleton_coordinate_steps`) names dependencies
+    guaranteed to produce exactly one coordinate for the whole run. A dep
+    in this set is resolved via its own sole materialization and broadcast
+    to every target coordinate, instead of requiring an exact coordinate
+    match — the fix for TODO 37 (mixing a real per-row dep with a
+    root/aggregate-broadcast dep otherwise raised "disjoint lane sets").
+    Deps not in this set keep the strict exact-match check unchanged.
 
     `lanes`, when given, restricts planning to that subset of coordinates —
     the deep scheduler's per-lane advance uses it so a lane can be planned
@@ -664,27 +702,47 @@ def _plan_step(
         )
 
     decisions = []
-    
+    broadcast_deps: set = set()
+    broadcast_mats: Dict[str, Any] = {}
+
     if not step.depends_on:
         targets = [(it.coordinate, it, it.content_hash) for it in scanned_items]
         if lanes is not None:
             wanted = set(lanes)
             targets = [t for t in targets if t[0] in wanted]
     else:
+        # Broadcast deps (singleton_steps) never define real per-row
+        # targets — they have one materialization for the whole run, not
+        # one per row. Only real (non-singleton) deps drive target
+        # coordinates; if every dep happens to be singleton, this step is
+        # itself singleton (see singleton_coordinate_steps) and falls back
+        # to scanning all deps, which share one coordinate anyway.
+        broadcast_deps = {d for d in step.depends_on if d in singleton_steps}
+        real_deps = [d for d in step.depends_on if d not in broadcast_deps]
+        scan_deps = real_deps or step.depends_on
+
         if lanes is not None:
             # Per-lane advance: the caller knows exactly which coordinates
             # just resolved, so don't rescan every cell.
             coords = {
                 c
                 for c in lanes
-                if any((c, dep) in coord_step_mats for dep in step.depends_on)
+                if any((c, dep) in coord_step_mats for dep in scan_deps)
             }
         else:
             coords = set()
-            for dep in step.depends_on:
+            for dep in scan_deps:
                 for (c, d) in coord_step_mats.keys():
                     if d == dep:
                         coords.add(c)
+
+        # Resolve each broadcast dep's sole materialization once, not once
+        # per target coordinate — it is the same value for every row.
+        for dep in broadcast_deps:
+            for (c, d), ref in coord_step_mats.items():
+                if d == dep:
+                    broadcast_mats[dep] = ref
+                    break
 
         coord_to_item = {it.coordinate: it for it in scanned_items}
         targets = []
@@ -706,13 +764,16 @@ def _plan_step(
         pending = False
 
         for dep in step.depends_on:
-            if (coord, dep) not in coord_step_mats:
+            if dep in broadcast_deps:
+                parent_mat = broadcast_mats.get(dep)
+            else:
+                parent_mat = coord_step_mats.get((coord, dep))
+            if parent_mat is None:
                 if step.declarative:
                     # Declarative union: a lane only needs to exist in one
                     # parent, not all — skip missing parents
                     continue
                 raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use in_shape='join'")
-            parent_mat = coord_step_mats[(coord, dep)]
             if parent_mat == "blocked":
                 blocked_parents.append(dep)
             elif parent_mat == "failed":
@@ -722,7 +783,7 @@ def _plan_step(
             elif parent_mat == "filtered" or getattr(parent_mat, "filtered", False):
                 filtered_parents.append(dep)
             else:
-                parent_mats[dep] = parent_mat  # type: ignore
+                parent_mats[dep] = parent_mat
 
         if step.skip_cache:
             if failed_parents or blocked_parents:

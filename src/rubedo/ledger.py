@@ -135,6 +135,7 @@ class _RunContext:
     totals: Dict[str, int]
     by_step: Dict[str, Dict[str, int]]
     coord_step_mats: Dict[tuple, Any] = field(default_factory=dict)
+    singleton_steps: frozenset = field(default_factory=frozenset)
     # Partial-run scope tracking (anchor coordinates that produced a decision).
     scope_reached: set = field(default_factory=set)
     scope_counts: Optional[Dict[str, Any]] = None

@@ -222,6 +222,7 @@ def _run_segment(
             lanes=lanes,
             pipeline_id=ctx.pipeline_id,
             home=ctx.home,
+            singleton_steps=ctx.singleton_steps,
         )
         if scope_anchor is not None and step.name == scope_anchor:
             for d in decisions:

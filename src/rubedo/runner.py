@@ -32,6 +32,7 @@ from .planning import (
     StepDecision,  # noqa: F401
     _plan_step,
     _step_accepts_params,
+    singleton_coordinate_steps,
     topological_sort,
 )
 from .scheduler import SCHEDULES, _partition_segments, _run_segment, _scanned_for
@@ -260,6 +261,7 @@ def plan(
     topo_steps = topological_sort(pipeline)
     if inv.active_steps is not None:
         topo_steps = [s for s in topo_steps if s.name in inv.active_steps]
+    singleton_steps = singleton_coordinate_steps(topo_steps)
     params_hash = hash_json(params or {})
 
     items: List[PlannedCoordinate] = []
@@ -294,6 +296,7 @@ def plan(
                 lanes=lanes,
                 pipeline_id=pipeline.name,
                 home=home,
+                singleton_steps=singleton_steps,
             )
             if scope_anchor is not None and step.name == scope_anchor:
                 # A dry plan cannot enumerate children of an executing expand
@@ -519,6 +522,7 @@ def run_pipeline(
             for s in topo_steps
             if not s.skip_cache
         },
+        singleton_steps=singleton_coordinate_steps(topo_steps),
     )
 
     run_kind = "partial" if inv.is_partial else "process"
