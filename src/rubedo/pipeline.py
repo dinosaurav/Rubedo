@@ -297,10 +297,12 @@ class Pipeline:
         return decorator
 
     def join(self, *, name: str, join_on: Dict[str, str], version: str = "0",
-             on_failed: str = "use_passed"):
+             on_failed: str = "use_passed",
+             join_mode: str = "intersect"):
         """Declarative join — no function body. The engine builds the
         output by nesting each matched parent's output dict under its
-        step name: ``{"orders": {...}, "customers": {...}}``.
+        step name: ``{"orders": {...}, "customers": {...}}`` (absent
+        sides are ``None`` when ``join_mode="union"``).
 
         Zero Python function calls per matched pair — the output struct
         is assembled directly from the parents' struct values. Caching
@@ -313,6 +315,11 @@ class Pipeline:
                 f"Step '{name}': in_shape='join' requires at least two parents in "
                 "join_on (N-way star join on a shared value)"
             )
+        if join_mode not in ("intersect", "union"):
+            raise ValueError(
+                f"Step '{name}': join_mode must be 'intersect' or 'union', "
+                f"got {join_mode!r}"
+            )
         s = StepSpec(
             name=name,
             fn=None,  # type: ignore[arg-type]
@@ -322,6 +329,7 @@ class Pipeline:
             in_shape="join",
             out_shape="many",
             join_on=join_on,
+            join_mode=join_mode,  # type: ignore[arg-type]
             declarative=True,
             on_failed=on_failed,  # type: ignore[arg-type]
         )

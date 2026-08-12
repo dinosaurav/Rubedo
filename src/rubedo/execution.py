@@ -297,8 +297,10 @@ def _process_decision(
         """
         if step.in_shape == "join":
             return {
-                dep: _resolve_parent_value(
-                    decision.parent_mats[dep], params, memo
+                dep: (
+                    _resolve_parent_value(decision.parent_mats[dep], params, memo)
+                    if dep in decision.parent_mats
+                    else None
                 )
                 for dep in step.depends_on
             }
@@ -405,7 +407,11 @@ def _process_decision(
             return accumulator
         else:
             kwargs = {
-                _dep_kwarg(step, dep): bind_parent(decision.parent_mats[dep])
+                _dep_kwarg(step, dep): (
+                    bind_parent(decision.parent_mats[dep])
+                    if dep in decision.parent_mats
+                    else None
+                )
                 for dep in step.depends_on
             }
         if accepts_params:

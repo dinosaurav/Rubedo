@@ -143,6 +143,12 @@ class StepDecision:
 # generation (exactly like a stable-coordinate source lane whose bytes change).
 ROOT_LANE = "@root"
 
+# Reserved pair-coordinate / join-hash sentinel for an absent outer-join
+# side. Parent coordinates must not equal this string (like ``@root`` /
+# ``@all``). The hash slot uses the same spelling; real content hashes
+# are hex, so they cannot collide with it.
+JOIN_MISSING = "@missing"
+
 
 def topological_sort(pipeline: PipelineSpec) -> List[StepSpec]:
     """Sort the pipeline steps in topological order based on dependencies."""
@@ -228,6 +234,29 @@ def _compute_step_input_hash(
         dep: parent_mats[dep].output_content_hash
         for dep in sorted(step.depends_on)
         if dep in parent_mats
+    }
+    return hash_json(parent_hashes)
+
+
+def _compute_join_input_hash(
+    step: StepSpec,
+    parent_mats: Dict[str, MatRef],
+) -> str:
+    """Join cache identity: every depends_on slot, absent → JOIN_MISSING.
+
+    Matched pairs (all sides present) hash identically to the generic
+    multi-parent path. Explicit slots keep ``join_on`` extensions from
+    colliding with older addresses when a new side is often null.
+    ``join_mode`` is intentionally not hashed — flipping intersect↔union
+    must reuse matched work.
+    """
+    parent_hashes = {
+        dep: (
+            parent_mats[dep].output_content_hash
+            if dep in parent_mats
+            else JOIN_MISSING
+        )
+        for dep in sorted(step.depends_on)
     }
     return hash_json(parent_hashes)
 
@@ -429,6 +458,80 @@ def _aggregate_group_decision(
 
 
 
+def _warn_join_duplicate_keys(
+    step: StepSpec,
+    deps: List[str],
+    buckets: Dict[str, Dict[str, List[tuple]]],
+    key_set: set,
+) -> None:
+    """Warn when any join key has duplicate lanes on a side (cartesian fan-out).
+
+    Equijoin multiplicity is intentional — many-to-one enrichment is normal —
+    but duplicate keys are a common footgun on messy data (especially a
+    "dimension" side with two rows for the same key). One warning per plan
+    summarizes the worst key; silence means every participating key is
+    unique on every side.
+    """
+    import warnings
+
+    examples: List[str] = []
+    n_keys = 0
+    worst: Optional[Tuple[str, List[int], int]] = None
+    for value in sorted(key_set):
+        # Empty side (union null-pad) counts as 1 for product display.
+        raw = [len(buckets[d].get(value, [])) for d in deps]
+        counts = [max(c, 1) for c in raw]
+        if all(c <= 1 for c in raw):
+            continue
+        n_keys += 1
+        product = 1
+        for c in counts:
+            product *= c
+        if worst is None or product > worst[2]:
+            worst = (value, counts, product)
+        if len(examples) < 3:
+            sides = ", ".join(
+                f"{d}×{c}" for d, c in zip(deps, raw) if c > 1
+            )
+            examples.append(f"{value!r} ({sides})")
+
+    if worst is None:
+        return
+
+    value, counts, product = worst
+    warnings.warn(
+        f"join step {step.name!r}: {n_keys} join key(s) have duplicate lanes "
+        f"on at least one side; each such key emits the cartesian product of "
+        f"its sides (e.g. key {value!r} → {'×'.join(str(c) for c in counts)} "
+        f"= {product} lane(s)). This is intentional equijoin behavior — "
+        f"dedupe upstream if you expected one output per key. "
+        f"Examples: {'; '.join(examples)}.",
+        UserWarning,
+        stacklevel=2,
+    )
+
+
+def _warn_join_failed_as_unmatched(
+    step: StepSpec,
+    failed_parents: List[str],
+    blocked_parents: List[str],
+) -> None:
+    """Under union + use_passed, dropped failed/blocked lanes look like unmatched."""
+    import warnings
+
+    n_failed = len(failed_parents)
+    n_blocked = len(blocked_parents)
+    warnings.warn(
+        f"join step {step.name!r}: join_mode='union' with on_failed='use_passed' "
+        f"dropped {n_failed} failed and {n_blocked} blocked parent lane(s); "
+        f"surviving sides may still emit with None on the dropped side "
+        f"(failed ≈ unmatched). Use on_failed='block' to refuse the join "
+        f"instead.",
+        UserWarning,
+        stacklevel=2,
+    )
+
+
 def _plan_join(
     session: Session,
     home: "Home",
@@ -444,7 +547,9 @@ def _plan_join(
     Bucket each side's lanes by its `join_on` field value (read from the
     index at plan time), then emit one decision per matched tuple — the
     cartesian product of the sides that share a value. Pair coordinate is the
-    members' coordinates joined by '|'.
+    members' coordinates joined by '|'. With ``join_mode="union"``, the key
+    universe is the union of sides and absent sides contribute a
+    ``JOIN_MISSING`` coordinate segment / ``None`` parent.
     """
     import itertools
 
@@ -468,6 +573,12 @@ def _plan_join(
         elif ref == "filtered" or getattr(ref, "filtered", False):
             pass
         elif ref is not None:
+            if coord == JOIN_MISSING:
+                raise ValueError(
+                    f"join step '{step.name}': parent coordinate {JOIN_MISSING!r} "
+                    f"is reserved for absent outer-join sides; rename the upstream "
+                    f"lane (side '{d}')"
+                )
             coord_ref_map[d].append((coord, ref))
 
     if failed_parents or blocked_parents:
@@ -481,6 +592,8 @@ def _plan_join(
                 )
             ]
         # use_passed: fall through, computing permutations of surviving lanes
+        if step.join_mode == "union":
+            _warn_join_failed_as_unmatched(step, failed_parents, blocked_parents)
     if pending:
         return [StepDecision(coordinate="@join", action="pending")]
 
@@ -492,21 +605,39 @@ def _plan_join(
                 raise ValueError(
                     f"join step '{step.name}': side '{d}' has no value "
                     f"for join field '{field}' at lane '{coord}'. "
-                    f"The field must exist in the parent's output dict."
+                    f"The field must exist and be non-None in the parent's "
+                    f"output dict (null join keys are rejected so they "
+                    f"cannot cartesian-match each other)."
                 )
             for v in values:
                 buckets[d].setdefault(v, []).append((coord, ref))
 
-    common = set(buckets[deps[0]])
-    for dep in deps[1:]:
-        common &= set(buckets[dep])
+    if step.join_mode == "union":
+        key_universe: set = set()
+        for dep in deps:
+            key_universe |= set(buckets[dep])
+    else:
+        key_universe = set(buckets[deps[0]])
+        for dep in deps[1:]:
+            key_universe &= set(buckets[dep])
 
+    _warn_join_duplicate_keys(step, deps, buckets, key_universe)
+
+    missing_slot = (JOIN_MISSING, None)
     combo_list = []
-    for value in sorted(common):
-        for combo in itertools.product(*[buckets[dep][value] for dep in deps]):
+    for value in sorted(key_universe):
+        side_lists = []
+        for dep in deps:
+            lanes = buckets[dep].get(value, [])
+            side_lists.append(lanes if lanes else [missing_slot])
+        for combo in itertools.product(*side_lists):
             pair_coord = "|".join(coord for coord, _ in combo)
-            parent_mats = {dep: ref for dep, (coord, ref) in zip(deps, combo)}
-            input_hash = _compute_step_input_hash(step, pair_coord, "", parent_mats)
+            parent_mats = {
+                dep: ref
+                for dep, (_coord, ref) in zip(deps, combo)
+                if ref is not None
+            }
+            input_hash = _compute_join_input_hash(step, parent_mats)
             output_address = compute_output_address(
                 step.name,
                 step.version,
