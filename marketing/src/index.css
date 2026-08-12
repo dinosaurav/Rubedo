@@ -197,10 +197,20 @@ a:hover { color: var(--accent-hover); }
   background-size: auto, 26px 26px, 26px 26px;
 }
 .hero-inner {
-  max-width: 880px;
+  max-width: 1040px;
   margin: 0 auto;
   min-width: 0;
   width: 100%;
+}
+.hero-kicker {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent-primary);
+  margin-bottom: 1rem;
+  animation: rise-in 0.5s ease both;
 }
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(12px); }
@@ -216,9 +226,9 @@ a:hover { color: var(--accent-hover); }
 }
 .hero-accent { color: var(--accent-primary); }
 .hero .lede {
-  font-size: 1.2rem;
+  font-size: 1.25rem;
   color: var(--text-secondary);
-  max-width: 560px;
+  max-width: 640px;
   margin-bottom: 2rem;
   line-height: 1.55;
   animation: rise-in 0.55s ease 0.12s both;
@@ -233,10 +243,20 @@ a:hover { color: var(--accent-hover); }
 }
 
 .hero-proof {
-  max-width: 640px;
+  max-width: 100%;
   min-width: 0;
   width: 100%;
   animation: rise-in 0.65s ease 0.26s both;
+}
+.hero-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  gap: 1.75rem;
+  align-items: start;
+}
+.hero-code-col,
+.hero-explain-col {
+  min-width: 0;
 }
 .snippet-label {
   font-size: 0.7rem;
@@ -260,7 +280,68 @@ a:hover { color: var(--accent-hover); }
   color: var(--text-secondary);
   line-height: 1.45;
 }
-.reuse-block { color: var(--text-secondary); }
+
+/* ---------- Walkthrough (explains what the code is doing) ---------- */
+.walkthrough {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--border-strong);
+  margin-bottom: 1.25rem;
+}
+.walkthrough li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.walkthrough strong {
+  font-size: 0.92rem;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.walkthrough span {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ---------- Reuse stats (the run-twice proof, as numbers) ---------- */
+.reuse-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  box-shadow: var(--shadow-md);
+}
+.reuse-stat {
+  padding: 0.9rem 1rem;
+  border-right: 1px solid var(--border-color);
+}
+.reuse-stat:last-child { border-right: none; }
+.reuse-stat-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-primary);
+  margin-bottom: 0.35rem;
+}
+.reuse-stat-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  margin-bottom: 0.2rem;
+}
+.reuse-stat-note {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
 
 /* ---------- Section blocks ---------- */
 .block {
@@ -316,6 +397,8 @@ a:hover { color: var(--accent-hover); }
 .why-item code,
 .beat code,
 .faq-item code,
+.try-note code,
+.agent-aside code,
 figcaption code {
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -368,11 +451,25 @@ figcaption code {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-md);
 }
+.try-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.try-split .walkthrough { margin-bottom: 0; }
+.try-note {
+  margin-top: 0.85rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-width: 640px;
+}
 .code-step { white-space: pre; }
 
 /* ---------- Comparison table ---------- */
 .compare-table {
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
 }
@@ -427,6 +524,11 @@ figcaption code {
   border: 1px solid var(--border-strong);
   max-width: 640px;
 }
+.beat-quiet h3 {
+  font-size: 0.98rem;
+  color: var(--text-secondary);
+}
+.beat-quiet p { font-size: 0.9rem; }
 
 /* ---------- Dashboard shot ---------- */
 .dashboard-shot {
@@ -494,6 +596,23 @@ figcaption code {
 .closing-inner p { color: var(--text-secondary); font-size: 1.05rem; margin-bottom: 2rem; line-height: 1.6; }
 .closing .hero-cta { justify-content: center; margin-bottom: 0; }
 
+/* ---------- Agent / crawler aside (dense, visually quiet) ---------- */
+.agent-aside {
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+  padding: 2rem 2.5rem;
+}
+.agent-aside-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+}
+.agent-aside p {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 820px;
+}
+
 /* ---------- Footer ---------- */
 .landing-footer {
   border-top: 1px solid var(--border-strong);
@@ -517,6 +636,14 @@ figcaption code {
 .footer-meta code { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* ---------- Responsive ---------- */
+@media (max-width: 1000px) {
+  .hero-split,
+  .try-split {
+    grid-template-columns: 1fr;
+    gap: 1.35rem;
+  }
+}
+
 @media (max-width: 900px) {
   .compare-row {
     grid-template-columns: 1fr;
@@ -599,9 +726,18 @@ figcaption code {
     min-height: 2.75rem;
     padding: 0.75rem 1rem;
   }
+  .hero-kicker {
+    font-size: 0.72rem;
+    margin-bottom: 0.75rem;
+  }
   .hero-proof {
     max-width: 100%;
     min-width: 0;
+  }
+  .hero-split,
+  .try-split {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
   }
   .hero-proof .pre-block {
     font-size: 0.72rem;
@@ -612,6 +748,20 @@ figcaption code {
   .hero-caption {
     font-size: 0.88rem;
   }
+  .walkthrough li { padding: 0.75rem 0; }
+  .walkthrough strong { font-size: 0.88rem; }
+  .walkthrough span { font-size: 0.88rem; }
+  .reuse-stats {
+    grid-template-columns: 1fr;
+    box-shadow: 3px 3px 0 rgba(255, 0, 51, 0.12);
+  }
+  .reuse-stat {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.85rem 1rem;
+  }
+  .reuse-stat:last-child { border-bottom: none; }
+  .reuse-stat-value { font-size: 1rem; }
 
   /* --- Sections --- */
   .block {
@@ -668,6 +818,10 @@ figcaption code {
   .reuse-block {
     font-size: 0.75rem;
     white-space: pre-wrap;
+  }
+  .try-note {
+    font-size: 0.88rem;
+    max-width: none;
   }
 
   /* --- How it works beats --- */
@@ -743,6 +897,15 @@ figcaption code {
     align-items: stretch;
   }
 
+  /* --- Agent aside --- */
+  .agent-aside {
+    padding: 1.5rem 1.25rem;
+  }
+  .agent-aside p {
+    font-size: 0.84rem;
+    max-width: none;
+  }
+
   /* --- Footer --- */
   .landing-footer {
     padding: 1.75rem 1.25rem 2.25rem;
@@ -781,6 +944,7 @@ figcaption code {
   .block,
   .block-tinted,
   .closing,
+  .agent-aside,
   .landing-footer {
     padding-left: 0.85rem;
     padding-right: 0.85rem;

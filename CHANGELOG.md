@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Marketing landing (rubedo.run):** identity-first rewrite. Hero now
+  says what Rubedo is (a Python library for batch pipelines) and walks
+  through the example instead of captioning a DAG. Human outcomes lead
+  (don't re-pay the last-step fix); mechanism language (content-addressed
+  caching, ledger, dbt-style incrementality, surgical invalidation) stays
+  in bodies, FAQ, meta, and a compact "At a glance" aside for crawlers.
+  Proof (dashboard + reuse numbers) sits above Try it; Compare is demoted.
+
 ## [0.5.0] - 2026-08-12
 
 ### Added

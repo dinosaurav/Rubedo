@@ -3,15 +3,28 @@
 The Rubedo landing page, deployed to GitHub Pages at
 https://dinosaurav.github.io/Rubedo/ (see
 [`../.github/workflows/pages.yml`](../.github/workflows/pages.yml)): a Vite +
-React app. Content must stay in sync with the root
-[`README.md`](../README.md) — that file is the source of truth for what
-Rubedo does; this page restates it, never invents beyond it.
+React app.
+
+Claims must stay true to the root [`README.md`](../README.md) — that file is
+the source of truth for what Rubedo *does*. The landing may **reframe** those
+claims for humans (what it is, the job it kills, proof you can see) and keep
+mechanism language in bodies, FAQ, meta, and the agent aside. It must not
+invent capabilities.
 
 Deployed under the custom domain **rubedo.run** (GitHub Pages hosting,
 Cloudflare DNS — see the root-level deploy notes). The Vite base path is `/`
 (see [`vite.config.js`](vite.config.js)) and `public/CNAME` carries the
 apex domain for GitHub Pages. DNS + Pages settings are configured outside
 the repo — the build here just needs to be self-consistent with that.
+
+## Dual audience
+
+The page is prerendered to static HTML (`scripts/prerender.mjs`), so crawlers
+and agents that don't execute JS still see the full copy. Visual hierarchy
+is for humans: identity, pain, proof, try. Mechanism nouns (content-addressed
+caching, append-only ledger, dbt-style incrementality, surgical invalidation)
+live in section bodies, the FAQ, meta description, and the compact
+“At a glance” aside — dense enough for an LLM that reads the page once.
 
 ## Develop
 
