@@ -230,9 +230,11 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 ```
 
-See [shapes.md](shapes.md) for the `join` step this setup feeds, and
-`examples/newsroom` (see [`../examples.md`](../examples.md)) for a full
-join → expand → `group_key` pipeline over two CSV sources.
+See [shapes.md](shapes.md) for the `join` step this setup feeds,
+[Data enrichment](../guides/data-enrichment.md) for normalize / dedupe /
+outer-join practices, and `examples/newsroom` (see
+[`../examples.md`](../examples.md)) for a full join → expand → `group_key`
+pipeline over two CSV sources.
 
 A pipeline needs no source-shaped root at all, as long as some root
 originates lanes — either an `expand` root (a generator that mints N

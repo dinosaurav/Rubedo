@@ -346,7 +346,8 @@ def test_newsroom_multi_root_join_sections():
         titles = sorted(a["title"] for a in articles.values())
         return {"count": len(titles), "headlines": titles}
 
-    summary = p.run(workers=1)
+    with pytest.warns(UserWarning, match="duplicate lanes"):
+        summary = p.run(workers=1)
     assert summary.failed_count == 0
 
     view = build_run_view(TEST_HOME, summary.run_id)

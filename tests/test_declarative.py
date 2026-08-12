@@ -53,7 +53,8 @@ def test_declarative_join_nested_output():
     def enrich(joined: dict):
         return {"oid": joined["orders"]["oid"], "name": joined["customers"]["name"]}
 
-    summary = p.run(workers=1)
+    with pytest.warns(UserWarning, match="duplicate lanes"):
+        summary = p.run(workers=1)
     assert summary.failed_count == 0
 
     joined = _outputs("joined")

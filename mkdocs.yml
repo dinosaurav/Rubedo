@@ -102,6 +102,7 @@ nav:
     - Code Changes & Versioning: concepts/versioning.md
   - Guides:
     - Execution Policies: guides/execution-policies.md
+    - Data Enrichment: guides/data-enrichment.md
     - Search & Invalidation: guides/search-and-invalidation.md
     - Inspecting Runs: guides/inspecting-runs.md
     - Trials — Sample, Diff, Roll Out: guides/trials.md

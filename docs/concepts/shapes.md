@@ -3,10 +3,11 @@
 A step's `in_shape`/`out_shape` decide how many output lanes it produces
 from its input lanes. There are five conceptual shapes: `map` (1:1),
 `aggregate` (N:1), `fold` (N:1, sequential), `expand` (1:N), and
-`join` (N-way, minting pair lanes). Every shape is a special case of the same
-underlying idea — a producer that takes some input lanes and emits some
-output lanes — but each has a distinct planning and caching story worth
-knowing on its own. See [`../development/producer-model.md`](../development/producer-model.md)
+`join` (N-way equijoin, minting pair lanes — inner or symmetric outer via
+`join_mode`). Every shape is a special case of the same underlying idea —
+a producer that takes some input lanes and emits some output lanes — but
+each has a distinct planning and caching story worth knowing on its own.
+See [`../development/producer-model.md`](../development/producer-model.md)
 for the design behind the taxonomy.
 
 The five conceptual shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
@@ -295,73 +296,99 @@ non-generator function doesn't auto-infer the shape).
 
 ## `join` — N-way equijoin
 
-Combines lane sets from **different roots** on a shared, indexed value —
-unlike a multi-parent `map`, which joins parents by *inherited* coordinate
-because they share a lineage (a "diamond"), `join` matches lanes whose
-coordinates are otherwise unrelated. It buckets each side by its declared
-field, intersects on shared values, and mints one pair lane per matched
-tuple — coordinate `a|b|…`, the members' coordinates joined by `|`:
+Combines lane sets from **different roots** on a shared field value.
+Unlike a multi-parent `map` (a "diamond"), which pairs parents by
+*inherited* coordinate equality because they share a lineage, `join`
+matches lanes whose coordinates are otherwise unrelated. It buckets each
+side by a declared field, then mints one pair lane per combination —
+coordinate `a|b|…` (absent sides under outer join use the reserved
+`@missing` segment).
+
+Reach for `join` when two (or more) lane sets come from genuinely
+independent roots and need matching by *value* — orders with customers,
+feeds with publishers. If both sides already descend from the same
+source, you almost certainly want a plain multi-parent `map` instead;
+see
+[`../development/producer-model.md`](../development/producer-model.md#the-distinction-that-matters-most-diamond-join).
+
+### `join_mode`: intersect vs union
+
+All `join_on` sides are equal — there is no left/right bias. The mode
+only chooses which key universe emits lanes:
+
+| `join_mode` | Key universe | Absent sides |
+|-------------|--------------|--------------|
+| `"intersect"` (default) | ∩ of per-side keys | never (inner join) |
+| `"union"` | ∪ of per-side keys | bound as Python `None` |
 
 ```python
-p = pipeline(name="enrich")
-
-@p.step
-def orders_src():
-    with open("orders.csv", newline="") as f:
-        yield from csv.DictReader(f)
-
-@p.step
-def customers_src():
-    with open("customers.csv", newline="") as f:
-        yield from csv.DictReader(f)
-
-@p.step
-def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
-
-@p.step
-def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
-
-@p.step(
-        join_on={"order": "cust", "customer": "cid"})
-def enrich(order, customer):        # one lane per matched pair
+@p.step(join_on={"order": "cust", "customer": "cid"})          # intersect
+def enrich_inner(order, customer):
     return {"oid": order["oid"], "name": customer["name"]}
+
+@p.step(join_on={"order": "cust", "customer": "cid"},
+        join_mode="union")
+def enrich_outer(order, customer):                             # customer may be None
+    return {
+        "oid": order["oid"] if order else None,
+        "name": None if customer is None else customer["name"],
+    }
 ```
 
-(`join_on=` implies `in_shape="join"`/`out_shape="many"`; the parents are the `join_on` keys,
-confirmed by the function's parameters at build time.)
+`join_on=` implies `in_shape="join"` / `out_shape="many"`; its keys are
+the parents (and must match the function's parameter names). N-way stars
+are first-class — `join_on={a: "uid", b: "uid", c: "uid"}` matches every
+side on the same field value. Different pairwise keys compose by chaining
+join steps. Non-equi predicates and anti-joins are a `Filtered` step
+afterward (`join_mode="union"` + filter where a side is `None`).
 
-Every side named in `join_on` must carry the field it's matched by in its
-output struct, and `join_on`'s keys must exactly match the
-function's parameter names (which become the parents). `join` accepts two
-or more parents — `join_on={a:"uid",
-b:"uid", c:"uid"}` is a valid N-way star, all matched on the same field
-name. Sides joined on *different* pairwise keys compose by chaining `join`
-steps; an arbitrary pair predicate isn't part of `join` itself — express it
-as a `filter`-style step (return `Filtered(...)`) immediately after.
+### Keys, duplicates, and nulls
 
-Like `aggregate`, `join` honors `on_failed` (default `"use_passed"`): a failed
-or blocked lane on one side just drops out of that side's bucket instead of
-blocking every match.
+- **Null / missing join-field values raise** at plan time. They never
+  share a null bucket (so messy tables cannot silently cartesian-match
+  on `None`). Clean or drop them upstream.
+- **Duplicate keys** on any side produce a cartesian product within that
+  key (SQL equijoin multiplicity). Many-to-one enrichment is intentional;
+  duplicate rows on a *lookup* side are the usual footgun — plan emits a
+  `UserWarning` when any key fans out. Dedupe before the join if you
+  expected one output per key.
+- Under `join_mode="union"` with `on_failed="use_passed"`, a failed parent
+  lane is dropped from its bucket, so **failed ≈ unmatched** (other sides
+  may still emit with `None`). Plan warns; use `on_failed="block"` to
+  refuse instead.
 
-Reach for `join` only when two lane sets come from genuinely independent
-roots and need matching by *value* — enriching orders with customer
-records, feeds with publisher metadata. If two steps already share a
-lineage (both descend from the same source), you almost certainly want a
-plain multi-parent `map`, not a `join` — see
-[`../development/producer-model.md`](../development/producer-model.md#the-distinction-that-matters-most-diamond-join)
-for why a diamond isn't a join.
+For normalize → dedupe → join recipes, see
+[Data enrichment](../guides/data-enrichment.md).
+
+### Caching
+
+Join identity is the parents' content hashes (every `depends_on` slot;
+absent outer sides use an internal `@missing` sentinel). `join_mode` is
+**not** part of the address: flipping intersect↔union reuses matched
+pairs and only adds/drops unmatched lanes. When a previously unmatched
+lane later finds a match, the `@missing` coordinate is **removed** and a
+new pair coordinate is **added** — not an in-place update.
+
+### Declarative join
+
+`p.join(name=..., join_on=..., join_mode=...)` builds the nested struct
+`{"orders": {...}, "customers": {...}}` with no function body (absent
+sides are `None` under union). Same caching rules.
 
 ## Putting it together
 
-`join` → `expand` → `aggregate` compose in one pipeline the way you'd expect:
-two sources join to enrich each feed with its publisher's region, each feed
-expands into a lane per article (cached, so a re-run re-scrapes nothing),
-and the articles aggregate by region into one digest per region. See
-`examples/newsroom` (listed in [`../examples.md`](../examples.md)) for the
-whole thing, runnable end to end.
+`join` → `expand` → `aggregate` compose the way you'd expect: two sources
+join to enrich each feed with its publisher's region, each feed expands
+into a lane per article (cached, so a re-run re-scrapes nothing), and the
+articles aggregate by region into one digest per region. See
+`examples/newsroom` in [`../examples.md`](../examples.md) for the runnable
+pipeline, and [Data enrichment](../guides/data-enrichment.md) for
+normalize / dedupe / outer-join practices around the join itself.
 
 ## Next
 
+- [Data enrichment](../guides/data-enrichment.md) — normalize, dedupe, and
+  join independent tables safely.
 - [sources.md](sources.md) — where a `map`/`join`/`expand` root's lanes
   actually come from.
 - [model.md](model.md) — the addressing and ledger mechanics every shape

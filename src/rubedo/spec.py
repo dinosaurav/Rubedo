@@ -80,6 +80,7 @@ class StepSpec:
     executor: ExecutorSpec = "thread"
     group_key: Optional[str] = None  # aggregate/fold: field to group lanes by
     join_on: Optional[Dict[str, str]] = None  # join: {parent: field}
+    join_mode: Literal["intersect", "union"] = "intersect"  # join key universe
     arrow_aggregate: bool = False  # aggregate: pass parent's output as pa.Table, not dict-of-lanes
     fold_init: Any = None  # fold: initial accumulator value (required when in_shape="fold")
     declarative: bool = False  # no fn — engine builds the output (join: nested struct, union: passthrough)
@@ -202,6 +203,7 @@ def step(
     executor: ExecutorSpec = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
+    join_mode: Literal["intersect", "union"] = "intersect",
     arrow_aggregate: bool = False,
     fold_init: Any = None,
     output_model: Optional[Type[BaseModel]] = None,
@@ -443,6 +445,11 @@ def step(
             raise ValueError(f"Step '{step_name}': code must be 'warn' or 'auto', got {code!r}")
 
         # join validation
+        if join_mode not in ("intersect", "union"):
+            raise ValueError(
+                f"Step '{step_name}': join_mode must be 'intersect' or 'union', "
+                f"got {join_mode!r}"
+            )
         if resolved_in == "join":
             if not join_on:
                 raise ValueError(
@@ -458,6 +465,10 @@ def step(
                     f"Step '{step_name}': join_on keys {sorted(join_on)} must match "
                     f"depends_on {sorted(depends_on_list)}"
                 )
+        elif join_mode != "intersect":
+            raise ValueError(
+                f"Step '{step_name}': join_mode requires in_shape='join'"
+            )
         if join_on is not None and resolved_in != "join":
             raise ValueError(f"Step '{step_name}': join_on requires in_shape='join'")
 
@@ -605,6 +616,7 @@ def step(
             executor=executor,
             group_key=group_key,
             join_on=join_on,
+            join_mode=join_mode,
             arrow_aggregate=arrow_aggregate,
             fold_init=fold_init,
             output_model=output_model,
@@ -663,6 +675,8 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["fold_init"] = s.fold_init
         if s.join_on is not None:
             entry["join_on"] = dict(s.join_on)
+            if s.join_mode != "intersect":
+                entry["join_mode"] = s.join_mode
         if s.executor != "thread":
             if isinstance(s.executor, str):
                 entry["executor"] = s.executor

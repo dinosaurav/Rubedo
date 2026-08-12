@@ -22,11 +22,11 @@ before being written down. Item 35 is the post-Home read-surface gap
 (2026-07-20).
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
-(7 → 7b → 8 → 13) is shipped. Item 37 (singleton/ancestor deps in
-`_plan_step`) shipped 2026-08-04. Item 36 (persist the invalidation
-`reason`) is the sole open item — **[needs owner decision]**, do not
-build until scheduled. Remaining Parked items are engine-shaped only
-(allocate, streaming expand, etc.) — design session before building.
+(7 → 7b → 8 → 13) is shipped. Item 38 (symmetric outer join) shipped
+2026-08-12. Item 36 (persist the invalidation `reason`) is the sole open
+item — **[needs owner decision]**, do not build until scheduled.
+Remaining Parked items are engine-shaped only (allocate, streaming
+expand, etc.) — design session before building.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -415,96 +415,133 @@ updated to say where it lives.
 
 ──────────────────────────────────────────────────────────────────────
 
-## 37. Singleton/ancestor deps wrongly hit "disjoint lane sets"  **[needs owner decision — added 2026-08-04, surfaced by an ai-table-v2 (Rubedo-Cloud) caller]**
+## 38. Symmetric outer join (`join_mode`)  **[SHIPPED 2026-08-12]**
 
-**Problem.** `_plan_step` (`planning.py:708–714`) requires every named
-dependency of a step to have a materialization at the *exact same
-coordinate* as the step being planned:
+**Problem.** Today's `join` is inner-only: `_plan_join` intersects
+per-side key buckets and only mints matched tuples
+(`src/rubedo/planning.py`). Pipelines that need "every order, customer
+nullable" (or the N-way equal treatment of every side) have no honest
+shape — you cannot reconstruct unmatched lanes from an inner join +
+union without lying about coordinates and parent sets.
+
+**Shipped.** `join_mode="intersect"|"union"` on `in_shape="join"`
+(default intersect). Union key universe, `None` pads, `@missing` coords,
+join-only hash slots, failed≈unmatched warning, docs + tests. See the
+settled-semantics block below for the design record.
+
+**Problem.** Today's `join` is inner-only: `_plan_join` intersects
+per-side key buckets and only mints matched tuples
+(`src/rubedo/planning.py`). Pipelines that need "every order, customer
+nullable" (or the N-way equal treatment of every side) have no honest
+shape — you cannot reconstruct unmatched lanes from an inner join +
+union without lying about coordinates and parent sets.
+
+**Settled semantics (symmetric, N-way).** Still `in_shape="join"` /
+`out_shape="many"` / `join_on={parent: field}`. One new knob:
 
 ```python
-for dep in step.depends_on:
-    if (coord, dep) not in coord_step_mats:
-        if step.declarative: continue
-        raise ValueError("parents produce disjoint lane sets ...")
+@step(join_on={"order": "cust", "customer": "cid"}, join_mode="union")
+def enrich(order, customer):  # customer may be None
+    ...
 ```
 
-Flat string equality, no ancestry awareness. Correct for the case it's
-tested against (`test_disjoint_parent_lanes_raise_clear_error` in
-`test_tier0_fixes.py`: two independently-sourced multi-lane producers
-that don't align — a real bug, should error). But it also fires when one
-dependency is a genuine ancestor with a single coordinate for the whole
-run (a root, or anything whose own chain never passes through an
-`out_shape="many"` step) and the other is a descendant fanned out N ways
-beneath it. That's not disjoint — the single-coordinate producer is a
-strict ancestor of every one of the N coordinates by construction
-(coordinates are hierarchical paths) — but `_plan_step` can't currently
-tell the two situations apart, so a step mixing "one broadcast value +
-one real per-row value" throws unconditionally, every time, on first
-plan. `test_diamond_parents_still_run` (same file) confirms the
-adjacent case — multiple *real* per-lane deps sharing a common
-multi-lane ancestor — already works fine; it's specifically the
-single-coordinate-ancestor mix that's unhandled.
+| `join_mode` | Key universe | Absent sides |
+|-------------|--------------|--------------|
+| `"intersect"` (default, today's behavior) | ∩ of bucket keys | never |
+| `"union"` | ∪ of bucket keys | bind `None` into the step fn |
 
-**Not a join.** A join means two independently-enumerable sets matched
-by a shared key with the pairing unknown ahead of time — real M×N risk
-if the key doesn't disambiguate. This isn't that: every descendant
-coordinate has exactly one ancestor at any shallower depth, fully
-determined by the coordinate's own path prefix. The fix is a single
-ancestor lookup, O(1) per consumed coordinate, not a join — no
-sensitivity to how many root-level rows exist.
+All `join_on` sides are equal — no left/right, no preserve set. N-way
+union is the natural full-outer generalization. Anti-join = union +
+`Filtered` when a side is `None`. Rejected alternatives: `how=` /
+`preserve=` / `keys=` (poorly scoped names); `in_shape="outer_join"`
+(same execution path as join — fold earned a separate shape because
+execution differs; outer does not).
 
-**`out_shape` is not directly reusable for this.** `spec.py:79`'s
-`out_shape: "one" | "many"` already exists but tracks a different axis:
-whether *one invocation* of a step fans out to many children (expand)
-vs. one value (map/aggregate/etc). It says nothing about a step's *total*
-coordinate count across the run. A map step downstream of an expand is
-`out_shape="one"` (each of its own coordinates produces one value) but
-still has N coordinates total. The missing property is transitive:
-"does this step's dependency chain ever pass through an `out_shape="many"`
-step" — not currently tracked or exposed at plan time. `ROOT_LANE`/`@root`
-(`planning.py`, `scheduler.py:_scanned_for`, `docs/concepts/shapes.md`)
-is the closest existing precedent — a distinguished single-coordinate
-anchor, but only for steps with no `depends_on` at all, not generalized
-to "single-coordinate transitively."
+**"Missing" vocabulary (do not conflate).**
 
-**Recommended fix (shape TBD — this is the owner decision).** Derive
-single-coordinate-ness per step from its dependency chain (no new
-annotation for call sites — it's a static DAG property, not something
-a step author should hand-declare). When `_plan_step` is planning a step
-whose `depends_on` mixes a multi-coordinate dep with a
-transitively-single-coordinate one, resolve the latter via its one
-existing materialization (or an ancestor-path walk, if you want it
-scoped per-root rather than globally singleton) instead of requiring
-exact-coordinate equality. Leave the genuinely-disjoint path (two
-unrelated multi-coordinate producers) exactly as strict as it is today —
-don't loosen the check that `test_disjoint_parent_lanes_raise_clear_error`
-pins.
+1. **Unmatched key** — value present on some sides' buckets, not others
+   → the outer case; absent sides → Python `None` at the fn /
+   declarative nest.
+2. **Failed/blocked parent lane** — `on_failed` policy; dropped from
+   buckets under `use_passed`.
+3. **Filtered parent lane** — already dropped unconditionally.
+4. **Bookkeeping placeholders** — coord segment `@missing` in the
+   `a|b|…` pair key when a side contributed no lane; hash-slot
+   `"@missing"` inside join `input_hash` (not user payload).
 
-**Secondary spot once this exists:** `scheduler.py:_deep_eligible`
-currently treats any step with `len(depends_on) > 1` as a segment
-barrier. A step with one real per-row dep and one singleton/broadcast
-dep doesn't need to wait on siblings the way a true multi-parent step
-does — worth revisiting so such steps aren't needlessly pinned to
-`broad`-style barrier scheduling under `schedule="deep"`.
+**Null join *keys* (field values).** Keep today's reject: a lane whose
+`join_on` field is missing/`None` raises at plan time (message already
+says they cannot cartesian-match each other). Never stringify nulls into
+a shared bucket. Distinct from (1): absent *parent* vs null *key*.
 
-**Trap:** do not weaken the equality check for the case two multi-lane
-producers are actually unrelated — that's intentional and tested.
+**Duplicate keys.** Equijoin cartesian product within a key stays
+(intentional). Plan already `UserWarning`s when any participating key
+has duplicate lanes on a side (`_warn_join_duplicate_keys`). No
+auto-dedupe; opt-in uniqueness later if needed.
 
-**Motivating caller:** `Rubedo-Cloud/prototypes/ai-table-v2/server/`
-hits this whenever a child-scope (per-row) map step names a parent-scope
-input directly alongside a real per-row dependency — compiles fine
-(scope-checking there is unrelated to this), throws on first real
-`pipe.run()`. Currently worked around caller-side by hand-threading the
-value through the expand (`seed.py`, `sht_digest`'s `stories` →
-`stories__min_score` etc.) rather than naming the parent-scope column
-directly. That workaround can be reverted once this ships.
+**`on_failed` under `union`.** Accept **failed ≈ unmatched** under
+`use_passed`: a failed lane is absent from its bucket, so the other
+sides may still emit with `None` on the failed side. Document + warn
+when `join_mode="union"` and `failed_parents`/`blocked_parents` are
+non-empty under `use_passed`. `on_failed="block"` unchanged (whole join
+blocks). Filtered stays drop-only (never triggers `on_failed`).
 
-Acceptance: a step depending on both a real per-row value and a
-transitively-single-coordinate ancestor value plans and runs without
-error, resolving the singleton via lookup rather than exact match; a
-synthetic multi-root-row test confirms each root's descendants only ever
-see *that* root's value (no cross-root bleed); existing disjoint-lane and
-diamond tests in `test_tier0_fixes.py` still pass unmodified.
+**Caching.**
+
+- Address stays `hash(step, version, input_hash[, params][, code], pipeline)`.
+- **Do not** salt with `join_mode` — matched pairs are the same
+  computation either way; flipping intersect↔union must reuse matched
+  addresses and only add/drop unmatched lanes.
+- Join-only `input_hash`: every `depends_on` key always present;
+  absent side → `"@missing"` sentinel (non-hex; real identities are
+  hex). Fixes the omit-collision when `join_on` grows a side without a
+  version bump (outer makes absences routine). Do not change the
+  generic multi-parent hasher (union/maps keep omit).
+- Pair coordinate uses `@missing` segments for absent sides so N-way
+  stays uniform; coordinate is **not** part of `input_hash` (already
+  true for inner). Match appear/disappear = new address + orphan old
+  lane (remove+add, not in-place update) — document it.
+- Reserve `@missing` like `@root`/`@all`; reject or escape if a parent
+  coordinate literally equals `@missing`.
+- Edges only to present parents; declarative output nests `None` for
+  absent sides (`{"order": {...}, "customer": None}`).
+
+**Execution.** Binding today assumes every `depends_on` is in
+`parent_mats` (`execution.py` ~408 and declarative join). One rule for
+hash + bind + edges + declarative: always include every dep; absent →
+`None` at bind time (no `KeyError`). Reuse decisions stay parent-free.
+
+**Files.** `spec.py` (`join_mode` on `StepSpec` + validation +
+definition snapshot); `pipeline.py` `Pipeline.join(...)`;
+`planning.py` `_plan_join` (union key set, null pads, join-specific
+hasher, union+use_passed warning); `execution.py` bind/`None`;
+`docs/concepts/shapes.md`; `tests/test_join.py` (and declarative).
+
+**Trap:** (1) failed≈unmatched under union+`use_passed` — warn, don't
+special-case away without an owner revisit. (2) Do not put `join_mode`
+in the address. (3) Do not let null join keys match each other. (4)
+`@missing` in coords vs hash slots are different roles, same spelling —
+keep both non-user-payload. (5) Arrow/`None` in *stored outputs* is a
+pre-existing sharpness; binding an absent parent as `None` is fine —
+don't block on a broader None policy.
+
+**Acceptance.**
+
+1. `join_mode="intersect"` bit-identical to today's join (including the
+   duplicate-key warning).
+2. Binary union: unmatched left/right emit with the other side `None`;
+   matched unchanged.
+3. N-way union: key in the ∪ of all sides; any absent side `None`.
+4. Unmatched lane reuses on re-run; adding the missing side creates a
+   new address and orphans the `@missing` coord lane.
+5. intersect→union reuses matched addresses; only unmatched appear.
+6. Extending `join_on` with a new side does not reuse old addresses when
+   the new side is absent (hash sentinel slots).
+7. Null join-field value still raises (cartesian-match message).
+8. Duplicate keys still warn; cartesian counts unchanged.
+9. union + `use_passed` + failed parent warns that failed≈unmatched.
+10. Docs: shapes join section covers `join_mode`, None pads, caching
+    remove+add, failed≈unmatched.
 
 ──────────────────────────────────────────────────────────────────────
 
