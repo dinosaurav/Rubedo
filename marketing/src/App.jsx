@@ -267,8 +267,8 @@ function App() {
           <h2 className="block-title">Second run: nothing changed, nothing recomputed.</h2>
           <p className="block-lede">
             This is a real dashboard over a real run of the bundled
-            example — 22 results kept, 0 re-run, 0.1s. No account, no cloud.
-            <code>rubedo serve</code> opens it on your machine.
+            example — 22 results kept, 0 re-run, 0.1s. No account, no
+            cloud. <code>rubedo serve</code> opens it on your machine.
           </p>
           <figure className="dashboard-shot">
             <picture>
