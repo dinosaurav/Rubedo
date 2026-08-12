@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-12
+
+### Added
+- **Symmetric outer join (`join_mode`, TODO 38):** `join_mode="intersect"`
+  (default, today's inner join) or `"union"` on `@step(..., join_on=...)`
+  and declarative `p.join(...)`. Union emits the ∪ of per-side join keys
+  with absent sides bound as Python `None` (pair coordinates use the
+  reserved `@missing` segment). All sides are equal — no left/right.
+  Join `input_hash` always reserves a slot per `depends_on` parent
+  (absent → `@missing` sentinel) so extending `join_on` cannot collide
+  with older addresses; `join_mode` itself is not part of cache identity,
+  so flipping intersect↔union reuses matched pairs. Null join-*field*
+  values still raise (they never share a null bucket). Under union with
+  `on_failed="use_passed"`, failed parent lanes look like unmatched
+  (plan warns). See `docs/concepts/shapes.md` and
+  `docs/guides/data-enrichment.md`.
+- **Join duplicate-key warning:** plan emits a `UserWarning` when any
+  participating join key has duplicate lanes on a side (cartesian
+  fan-out), so messy lookup tables are visible instead of silently
+  multiplying enrich rows.
+- **Data enrichment guide:** normalize → dedupe (`group_key`) →
+  intersect/union/anti-join practices in
+  `docs/guides/data-enrichment.md`.
+
 ## [0.4.3] - 2026-08-04
 
 ### Fixed
