@@ -312,7 +312,7 @@ budget: 5.7 MiB before -> ~3.9 MiB after (max 2.0 GiB)
     mid-commit on an output pointing at bytes GC is about to unlink. Retry
     once the other run finishes. Dry-run (no `--delete`) is always safe.
 
-See [`../guides/retention.md`](../guides/retention.md) for the full
+See [Inspect a run](../guides/inspecting-runs.md#keep-the-store-small) for the full
 policy model — what a prune does, the two triggers (`retention=` auto-prune
 and `rubedo gc`), and the bytes-never-facts guarantee.
 

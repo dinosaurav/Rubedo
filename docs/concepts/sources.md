@@ -1,5 +1,9 @@
 # Sources
 
+!!! note "Long form"
+    Start at [How it works](model.md#sources). This page is the full recipe
+    book — folder, CSV, SQL, cloud LIST-only, multi-source.
+
 A source is a step that yields items — not a class, not a protocol. A
 parentless generator (`shape="expand"` / `out_shape="many"`, inferred)
 `yield`s one payload per item, and each payload mints its own
@@ -239,12 +243,3 @@ originates lanes — either an `expand` root (a generator that mints N
 lanes, as above) or a source-less `map` root (mints one
 lane from its `params`). See
 [shapes.md](shapes.md#the-source-less-map-root).
-
-## Next
-
-- [shapes.md](shapes.md) — what steps do with the lanes a source-shaped
-  root produces.
-- [model.md](model.md) — how a lane's coordinate feeds into a step's output
-  address.
-- [`../guides/search-and-invalidation.md`](../guides/search-and-invalidation.md)
-  — finding rows by what they *are*, not by coordinate.

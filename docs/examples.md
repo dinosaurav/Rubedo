@@ -15,7 +15,7 @@ uv run python examples/<name>/<name>.py
 ```
 
 `.rubedo/` is created relative to wherever you run from (see the CWD gotcha
-in [First run](getting-started.md)) — run from the repo root and every
+in [Tutorial](tutorial.md)) — run from the repo root and every
 example shares the one store `rubedo ls` and the dashboard read. Run from
 inside an example's folder and you silently fork a second, stray `.rubedo/`
 there.

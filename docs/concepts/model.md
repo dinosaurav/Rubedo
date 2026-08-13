@@ -1,126 +1,138 @@
-# What Rubedo remembers
+# How it works
 
 You write steps. Rubedo stores every result at a deterministic address and,
-on the next run, recomputes only what changed. This page is the vocabulary
-behind that: lanes, addresses, the ledger, and the four promises. Nothing
-here is magic — it's a hash function, a commit rule, and a log.
-[`../development/invariants.md`](../development/invariants.md) is the
-canonical source if the two ever disagree.
+on the next run, recomputes only what changed. Nothing here is magic — a
+hash function, a commit rule, and a log. The guarantees are in the
+[invariants](../development/invariants.md).
 
 ## Lanes
 
-A **lane** is the unit the engine schedules work over — one row, one file,
-one joined pair, one expanded child. Every lane has a **coordinate** (a lane
-key): the engine's dataflow key. Within a run it matches a step's output to
-its consumers; across runs it decides "is this the same item as last time."
+A **lane** is the unit of work — one row, one file, one joined pair, one
+expanded child. Its **coordinate** is the dataflow key: within a run it
+matches a step's output to its consumers; across runs it decides "is this
+the same item as last time."
 
-A coordinate is **content-addressed by default** — `row-<hash>`, where the
-hash is over the item's content. That single design choice buys you a lot,
-covered in full in [sources.md](sources.md): identical items collapse to one
-lane, and an edited item reads as *removed + added* rather than *changed in
-place*.
+Coordinates are **content-addressed** by default (`row-<hash>` over the
+item's content). Identical items collapse to one lane. An edited item
+reads as *removed + added*, not *changed in place* — so incrementality
+survives reordering, dedup, and appends.
 
-!!! note "What a coordinate is not"
-    A coordinate is **not the identity of work** — that's the
-    content-addressed **output address** (below), computed from the step
-    too, not just the item. And it's **not the primary search handle** —
-    that's the output struct's fields. Content-addressed lanes are
-    `row-<hash>`, never a file name or a row id, so nothing downstream
-    can treat them as one — but coordinates are not *only* `row-<hash>`:
-    map roots mint `@root`, aggregates without `group_key` mint `@all`,
-    and joins mint `a|b|…` pair keys. Query by what a step *computed*
-    (its output fields), not by coordinate.
-
-A coordinate can also be **minted mid-DAG**: `expand` mints a fresh
-content-addressed `row-<hash>` lane per yielded payload, and `join` mints an
-`a|b|…` pair-lane by joining its matched parents' coordinates with `|`. See
-[shapes.md](shapes.md).
+A coordinate is **not** the identity of work (that's the output address
+below) and **not** the search handle (that's the output struct's fields).
+Query by what a step *computed*. Special coordinates: `@root` (map root),
+`@all` (ungrouped aggregate), `a|b|…` (join pairs).
 
 ## Output addresses
 
-Every step's output is stored at a **deterministic address**:
+Every result lives at:
 
 ```
 hash(step, version, input_hash[, params_hash][, code_hash], pipeline)
 ```
 
-Concretely (`hashing.compute_output_address`): `step`, `version`, and
-`input_hash` are always in; `params_hash` is appended only for steps that
-declare a `params` argument, and `code_hash` only for `code="auto"` steps;
-`pipeline` (the owning pipeline's name) is always appended last, and unlike
-`params_hash`/`code_hash` it is required, never optional — so no address can
-be minted without it. This scopes every address to its pipeline: two
-pipelines with an identically named+versioned step and identical input never
-collide on an address, a cache hit, or a liveness row (renaming a pipeline
-invalidates its own cache, the same way renaming a step does).
-Each optional segment is labeled so its presence or absence can't collide
-with another combination. The whole thing is SHA-256'd. This is what makes
-caching **order-independent and rerun-safe**: the address doesn't care when
-you ran, only *what* you'd be computing — so two different execution orders
-(`schedule="broad"` vs `"deep"`, see
-[../guides/execution-policies.md](../guides/execution-policies.md)) always
-converge on identical ledger rows.
+`step`, `version`, and `input_hash` are always in; `params_hash` only if
+the function takes `params`; `code_hash` only for `code="auto"`;
+`pipeline` is always last and required. Two pipelines with an identically
+named step never share a cache entry. The address does not care *when* you
+ran, only *what* you'd be computing — so `schedule="broad"` vs `"deep"`
+and thread vs process vs an external pool always converge on the same
+rows.
 
-## Two inputs, two cache-key slots
+A step has two cache-key slots: **data** (always hashed into
+`input_hash`) and **params** (hashed only for steps that declare `params`).
+Turning a knob recomputes exactly the steps that read it.
 
-A step consumes up to two independent things, and each gets its own slot in
-the address:
+## When code changes
 
-- **data** — the source payload for a root step, or the parent output(s) for
-  a dependent step. Always hashed into `input_hash`.
-- **params** — run-level knobs, validated against the pipeline's
-  `params_model` if one is declared. Hashed into `params_hash` *only* for
-  steps whose function signature actually accepts a `params` argument — a
-  step that never reads a knob never recomputes when it changes.
+Two independent axes on `@step`:
 
-Turning a knob recomputes exactly the steps that read it, and nothing else.
-`code_hash` is a third, opt-in slot — see [versioning.md](versioning.md).
+- **`version`** — you bump it for a deliberate behavior change (or an
+  edit the engine can't see, like a helper the step calls). Default `"0"`.
+- **`code`** — what a *source* edit means. `code="auto"` folds the
+  function's source into the cache key (right for cheap deterministic
+  steps). `code="warn"` (default) never recomputes on edits, but warns
+  loudly when reused code has drifted — so recomputing an LLM step stays
+  a deliberate choice.
+
+`stale_after="24h"` is a wall-clock TTL, independent of both: past it the
+step re-runs; identical bytes refresh the clock, different bytes supersede
+and downstream recomputes.
+
+`skip_cache=True` marks a cheap, deterministic helper that is never
+materialized — its identity fuses into its consumers. Don't skip anything
+expensive, flaky, or non-deterministic. Full rules:
+[When code changes](versioning.md).
+
+## Shapes
+
+Most of the time you don't pass `shape=` — it's inferred. A generator is
+`expand`, `join_on=` is `join`, `group_key=` is `aggregate`, anything else
+is `map`. An explicit value that contradicts the code raises.
+
+| Shape | In → out | When |
+|---|---|---|
+| `map` | 1:1 | Almost every transform. A parentless non-generator is a **source-less root**: one `@root` lane whose input is its params. |
+| `expand` | 1:N | The step `yield`s payloads; each becomes a `row-<hash>` child. A parentless generator is a **source**. |
+| `aggregate` | N:1 | Fan-in over surviving parent lanes (`@all`), or `group_key="field"` for one output per field value. |
+| `fold` | N:1 | Like aggregate, but an accumulator (`fold_init`) plus one parent value at a time. |
+| `join` | N-way | Equijoin on `join_on={parent: field}`, minting `a\|b\|…` pair lanes. Inner or outer via `join_mode`. |
+
+**Broadcast.** A source-less root (or an ungrouped aggregate) can be named
+alongside a real per-row dependency — every row sees the same value. Two
+*real* multi-lane parents that don't share a coordinate lineage still
+error; that's what `join` is for.
+
+The traps, caching stories, and `p.join(...)` live in the
+[shape reference](shapes.md). Joining two tables:
+[Enrich and join tables](../guides/data-enrichment.md).
+
+## Sources
+
+A source is a step that yields items — not a class. `check_cache=False`
+on a source that watches the outside world (folder, CSV, table), so it
+re-enumerates every run. Without that, the fan-out is cached and new files
+don't show up.
+
+```python
+# folder — one lane per file (read the bytes, not just the path)
+@p.step(check_cache=False)
+def scan():
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
+
+# CSV — one lane per row
+@p.step(check_cache=False)
+def leads():
+    with open("data/leads.csv", newline="") as f:
+        yield from csv.DictReader(f)
+
+# SQL — one lane per row
+@p.step(check_cache=False)
+def orders():
+    with engine.connect() as conn:
+        for row in conn.execute(text("SELECT * FROM orders")).mappings():
+            yield dict(row)
+```
+
+Cloud object storage: LIST only in the source (yield `key`/`etag`/`size`);
+a cached downstream step does the GetObject. Recipes, including that
+pattern: [Sources](sources.md).
 
 ## The ledger
 
-The control plane is **append-only SQLite** (enforced at the ORM layer), while the data plane is **append-only Arrow IPC files** (`.rubedo/tables/`). It records:
+Append-only SQLite (control plane) + append-only Arrow IPC files (data
+plane, `.rubedo/tables/`). It records runs (terminal status only — in-flight
+is a heartbeat), events, per-lane statuses (`created` / `reused` /
+`failed` / `blocked` / `filtered`), lineage edges, and
+`input_hash_usages` — the liveness gate (`fulfilled=True` means reuse).
 
-- **Runs** — a user-triggered execution attempt over some scope. Status is
-  terminal-only (`completed` / `completed_with_failures` / `failed`); a run
-  in flight has no stored "running" state — readers derive that from a
-  heartbeat, because a durable "running" row could outlive a killed process
-  and lie forever.
-- **Run events** — every attempt, successful or not, including retries.
-- **Run-coordinate statuses** — the relationship between a run and a
-  coordinate at a step: `created`, `reused`, `failed`, `blocked`, `filtered`.
-- **Lane store (Arrow)** — pure data. One IPC file per step. Each row is one successful computation, storing the actual output (inline or an object-store ref). No tombstones, no liveness.
-- **Input hash usages** — the `input_hash_usages` SQLite table is the single gate for liveness. It maps `address → (last_run_id, fulfilled)`. `fulfilled=True` means a filled Arrow row exists (reuse); `fulfilled=False` means recompute (covers crash, invalidation, pruning).
-- **Materialization edges** — lineage: which output(s) a given output was
-  derived from, stored by `address`. This is what `trace()` walks.
-
-## Generations and Liveness
-
-An output address can accumulate **generations** over time (as multiple rows in the Arrow file), but only the most recent run's status governs liveness via `input_hash_usages.fulfilled`. When a step re-executes:
-
-- **Identical bytes (same content hash)** → `reused`: the existing output bytes are identical, so the child's `input_hash` stays the same. The downstream cascade is skipped for free.
-- **Different bytes** → `created`: a new Arrow row is appended, and downstream steps recompute.
-- **A `stale_after` re-verification** → `refreshed`: the clock resets. If bytes are identical, downstream is saved.
-
-This is the mechanism behind "different bytes supersede, identical bytes
-reuse" — it's what lets a pipeline safely re-run non-idempotent
-steps: same output, no new row; genuinely different output, a new
-generation that downstream recomputes against.
+When a step re-executes: identical bytes → `reused` (downstream skipped);
+different bytes → `created` (downstream recomputes); a `stale_after`
+re-check with identical bytes → `refreshed`.
 
 ## Plan → execute → commit
-
-A run has three phases with a hard boundary between them:
-
-- **Planning is read-only and value-free.** `planning.py`'s only database
-  access is querying `input_hash_usages` (accelerated by `_FULFILLED_CACHE` and memory-cached Arrow address indexes) to check liveness. It never reads a payload's actual value (with the
-  narrow, documented exception of `group_key`/`join_on`, which read
-  *fields of the parent output* at plan time). The output is a
-  `StepDecision` per lane: `reuse`, `execute`, `blocked`, `pending`, or
-  `filtered`.
-- **Execution is DB-free.** `execution.py` runs step functions in a thread
-  or process pool, applies retries/rate limiting/assertions, and returns
-  outcomes — it never touches the ledger.
-- **Commit is the only writer.** `ledger.py` takes execution outcomes and
-  applies the generations protocol above, appending Arrow rows to the lane store and updating `input_hash_usages.fulfilled = True` for successful outputs, all from the main thread.
 
 ```mermaid
 flowchart LR
@@ -131,47 +143,30 @@ flowchart LR
         E1["thread/process pool"] --> E2["retries, rate limit,\nassertions"] --> E3["ExecutionOutcome"]
     end
     subgraph Commit["commit (ledger writes)"]
-        C1["ledger.py\n(generations protocol)"] --> C2["Arrow lane store,\ninput_hash_usages,\nlineage edges,\nrun-coordinate statuses"]
+        C1["ledger.py"] --> C2["Arrow, liveness, lineage"]
     end
     Plan -->|execute decisions| Execute --> Commit
     Plan -->|reuse decisions| Commit
 ```
 
-`p.plan()` runs the plan phase alone and writes nothing — a dry-run of what
-`p.run()` would do and why. `p.run()` chains all three per step, feeding each
-step's committed materializations forward as the next step's parent lookup.
-See [../guides/inspecting-runs.md](../guides/inspecting-runs.md) for reading
-the output of both.
+`p.plan()` is the plan phase alone and writes nothing. `p.run()` chains
+all three. Planning never reads payload values (except `group_key` /
+`join_on` fields). Execution never touches the ledger. Commit is the only
+writer, on the main thread.
 
-## The promises, plainly
+A `check_cache=False` source always plans as `execute` (no cached
+enumeration to preview); everything downstream shows `pending` until the
+source actually runs. That's why `created=2` after editing one file is two
+*steps* for one file, not two files.
 
-Everything above exists to keep four promises (the full guarantee-level
-detail lives in [`../development/invariants.md`](../development/invariants.md)):
+## The four promises
 
-1. **Never pay twice for the same computation.** "Already done" is checked
-   against the ledger, not memory — skip-if-exists is an `input_hash_usages` lookup keyed on the deterministic output address, not a runtime cache,
-   and the generations protocol extends this across time so identical
-   bytes always reuse rather than recompute.
-2. **Never lie about what happened.** No Arrow row exists unless
-   its output actually landed; an Arrow row never changes in
-   place (fix forward with a new generation); a dying worker corrupts
-   nothing committed, because execution is DB-free; users see current state
-   through views, never raw storage; run status lives on the
-   run–coordinate edge, not on the bytes (the same output can be `created`
-   in one run and `reused` in the next).
-3. **Order and parallelism never change results.** Output addresses come
-   from `step`/`version`/`input_hash`(/`params`/`code`), never from
-   wall-clock order or worker assignment, so `schedule="broad"` vs
-   `"deep"` and thread vs process vs external-pool executors always converge on
-   identical ledger rows.
+1. **Never pay twice for the same computation.** Checked against the
+   ledger, not memory.
+2. **Never lie about what happened.** No Arrow row unless the output
+   landed; rows never change in place; a dying worker corrupts nothing
+   committed.
+3. **Order and parallelism never change results.** Addresses don't include
+   wall-clock or worker id.
 4. **Bytes are disposable, facts are not.** Invalidation and retention
-   delete facts never, bytes sometimes: retention GC (see
-   [../guides/retention.md](../guides/retention.md)) demotes and eventually
-   deletes *object bytes*, but the ledger row, the lineage, and the record
-   of the deletion itself (`object_reclamations`) all survive forever.
-
-## Next
-
-- [Shapes](shapes.md) — the five ways a step turns lanes into lanes.
-- [Sources](sources.md) — where lanes come from.
-- [When code changes](versioning.md) — how edits interact with the cache.
+   delete bytes sometimes, ledger rows never.

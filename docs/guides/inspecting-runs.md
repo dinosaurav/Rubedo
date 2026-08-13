@@ -110,7 +110,8 @@ point at a different `.rubedo/` root, pass a `Home` when constructing the
 pipeline (`pipeline(name=..., home=Home("/other/path"))`) — it applies to
 both `.plan()` and `.run()` for that pipeline. Different `Home` instances
 are independent storage roots; concurrent runs against them in one
-process are safe — see [`../getting-started.md`](../getting-started.md).
+process are safe — see [Tutorial](../tutorial.md) for the working-directory
+rule.
 
 ## `trace()`: lineage from any point
 
@@ -165,9 +166,43 @@ never has to guess at a file it can't explain. Key numbers:
 - **Reclaimable (dry-run only)** — objects that currently have **zero live
   references**: every materialization pointing at that content hash is
   non-live. This is exactly the ref-counting rule retention GC uses (see
-  [`../guides/retention.md`](retention.md)) — `rubedo du` computes the same
+  [Keep the store small](#keep-the-store-small) — `rubedo du` computes the same
   audit but never deletes anything. `--json` gives you the same numbers as
   structured output for scripts.
+
+## Keep the store small
+
+The object store keeps every generation **forever by default** — old bytes
+are cheap insurance against re-running an LLM call. Retention is the
+opt-in for when they stop being worth their storage. The full design
+(rejected policies, demote/sweep, every trap) is in
+[`../development/retention.md`](../development/retention.md).
+
+With no `retention=` set, nothing is ever deleted. Once the store crosses
+roughly 1 GiB, a run prints a one-line warning pointing here.
+
+```python
+pipeline(name="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
+```
+
+Auto-prune runs at the end of every **successful** run: it keeps everything
+the last `N` terminal runs referenced (`N >= 1`), demotes the rest, and
+deletes bytes only when *no* live output anywhere still points at them.
+It skips silently if another run's heartbeat is live.
+
+```bash
+rubedo gc                        # dry-run: exactly what --delete would prune
+rubedo gc --max-bytes 2GiB --delete
+```
+
+`rubedo gc` with no flags deletes nothing. `--delete` refuses while any run
+is live. Recovery is lazy: if a pruned input reappears, the next run
+recomputes it onto the same content hash. Expand-cache anchors are always
+kept — pruning one would re-pay the scrape the anchor exists to avoid.
+
+Set `retention=` on pipelines whose old generations you'd never resurrect.
+Leave it unset where recomputation would be expensive if a pruned input
+came back.
 
 ## The run event log
 

@@ -6,11 +6,15 @@ so fixing the last step doesn't re-pay a thousand LLM calls, scrapes, or
 APIs.
 
 > **At a glance.** Local-first library, not an orchestrator: DAG pipelines
-> over keyed collections (files, CSV rows, URLs) with content-addressed
-> row-level caching, an append-only run ledger, and surgical invalidation.
-> Think dbt-style state for Python tasks. Every output lives at
+> over keyed collections with content-addressed row-level caching, an
+> append-only run ledger, and surgical invalidation. Think dbt-style state
+> for Python tasks. Every output lives at
 > `hash(step, code_version, input_hash, pipeline)`. State lives in
-> `.rubedo/` (SQLite + Arrow IPC + object store). Pre-1.0, MIT licensed.
+> `.rubedo/`. Pre-1.0, MIT licensed.
+
+```bash
+pip install rubedo
+```
 
 ## A pipeline is two functions
 
@@ -41,19 +45,13 @@ p.run()   # second run: already-seen rows skip the LLM
 3. **Run it again.** Already-seen rows skip the LLM. Only new or edited
    rows pay.
 
-A library, not a platform: no daemon, no registry. You import the engine;
-the engine never imports your code.
-
 ## Read in this order
 
-1. **[First run](getting-started.md)** — install, write two functions, run
-   twice. Watch reuse without an API key.
-2. **[Tutorial](tutorial.md)** — a small classifier end to end: query by
+1. **[Tutorial](tutorial.md)** — install, build a classifier, query by
    content, edit an input, bump a version, invalidate a selection.
-3. **[What Rubedo remembers](concepts/model.md)** — lanes, addresses, the
-   ledger, and the four promises. The vocabulary the rest of the docs use.
+2. **[How it works](concepts/model.md)** — lanes, addresses, shapes,
+   sources, the ledger, the four promises.
+3. **[Examples](examples.md)** — the same ideas against real services.
 
-Stuck on a shape or a knob? **[Shapes](concepts/shapes.md)** and the
-**How to** pages (retries, joins, invalidation, trials, sharing the cache).
 Signatures: **[API](reference/api/index.md)** and **[CLI](reference/cli.md)**.
-The engine's guarantees live under **Internals**.
+Guarantees: **[Invariants](development/invariants.md)**.

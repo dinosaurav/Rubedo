@@ -1,5 +1,9 @@
 # Shapes
 
+!!! note "Long form"
+    Start at [How it works](model.md#shapes). This page is the full shape
+    reference — inference, caching, and the traps.
+
 Most steps are 1:1: one item in, one item out. The other shapes cover
 fan-in, fan-out, and joins — still just Python functions, with a different
 count of lanes in and out.
@@ -388,14 +392,3 @@ articles aggregate by region into one digest per region. See
 `examples/newsroom` in [`../examples.md`](../examples.md) for the runnable
 pipeline, and [Enrich and join tables](../guides/data-enrichment.md) for
 normalize / dedupe / outer-join practices around the join itself.
-
-## Next
-
-- [Enrich and join tables](../guides/data-enrichment.md) — normalize, dedupe, and
-  join independent tables safely.
-- [sources.md](sources.md) — where a `map`/`join`/`expand` root's lanes
-  actually come from.
-- [model.md](model.md) — the addressing and ledger mechanics every shape
-  shares.
-- [versioning.md](versioning.md) — how `version`/`code` interact with each
-  shape's cache identity.

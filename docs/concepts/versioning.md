@@ -1,5 +1,9 @@
 # When code changes
 
+!!! note "Long form"
+    Start at [How it works](model.md#when-code-changes). This page is the
+    full `version` / `code` / `stale_after` / `skip_cache` reference.
+
 A cached output is only useful if you can trust *why* it's being reused.
 Two independent axes on `@step` — `version` and `code` — plus two policies
 for outputs that shouldn't live forever (`stale_after`) or shouldn't be
@@ -182,13 +186,3 @@ addressed, cached, retried, rate-limited, searchable, and inspectable via
 `trace()`, all of which `skip_cache` deliberately gives up. Reach for
 `skip_cache` only for the boring glue code you'd otherwise inline directly
 into a bigger step just to avoid the ledger noise of one more row per lane.
-
-## Next
-
-- [model.md](model.md) — how `version`/`code`/`stale_after` feed into the
-  output address and the generations protocol.
-- [shapes.md](shapes.md) — `stale_after` on `expand`'s cache anchor, and
-  where `skip_cache` can and can't appear per shape.
-- [`../guides/inspecting-runs.md`](../guides/inspecting-runs.md) — reading
-  code-drift warnings and stale/reuse decisions out of `p.plan()` and run
-  output.

@@ -175,9 +175,5 @@ reach for `join_on=` (or to restructure so they share a root). Details:
 5. **Heed** the duplicate-key `UserWarning` — cartesian fan-out is real.
 6. **Expect** remove+add when an outer match appears or disappears.
 
-## See also
-
-- [Shapes: join](../concepts/shapes.md#join-n-way-equijoin) — `join_mode`, caching, declarative `p.join`.
-- [Sources](../concepts/sources.md) — multi-root CSV / folder recipes.
-- [`examples/newsroom`](../examples.md) — join → expand → `group_key` aggregate end to end.
-- [Execution policies: Filtered](execution-policies.md) — declining a lane as a cached verdict.
+See [`examples/newsroom`](../examples.md) for join → expand → `group_key`
+end to end.

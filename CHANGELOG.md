@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Docs slash:** public nav is Home → Tutorial → Examples → How it works
+  (one page) → How to (six jobs) → Reference → Invariants. First-run folded
+  into the tutorial; retention folded into Inspect a run. Shapes, sources,
+  versioning, producer-model, Arrow, and retention-design stay as long-form
+  URLs (banners point back) but are off the sidebar. Getting-started and
+  the retention guide are stubs so old links still resolve.
+
 - **Docs IA:** nav is now Start → How it works → How to → Reference →
   Internals instead of a flat encyclopedia. Home matches the landing/README
   dual-audience pass (identity first, At a glance for crawlers). Getting

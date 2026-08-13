@@ -1,14 +1,24 @@
 # Tutorial
 
-Build a small pipeline and actually use it: a folder of reviews, classified
-as positive / negative / neutral. Along the way you query an output field
-by content, edit an input and watch only that file recompute, bump a
-step's `version`, decline an input with `Filtered`, and hand-invalidate a
-selection.
+Install, build a small pipeline, actually use it. A folder of reviews,
+classified as positive / negative / neutral. Along the way you query an
+output field by content, edit an input and watch only that file recompute,
+bump a step's `version`, decline an input with `Filtered`, and
+hand-invalidate a selection.
 
 Every command below was actually run to produce the output shown — copy the
 code blocks into a real directory and you'll see the same shapes (exact hash
 prefixes and coordinates will differ, since they're content-addressed).
+
+## Install
+
+```bash
+pip install rubedo           # or: pip install "rubedo[server]"
+```
+
+Requires Python 3.11+. The `server` extra adds the read-only dashboard.
+The `s3` extra adds the S3-compatible cloud store. To hack on Rubedo
+itself, clone the repo and `uv sync`.
 
 ## Setup
 
@@ -34,6 +44,14 @@ meh
 
 (`review4.txt` is deliberately too short to classify — that's the
 `Filtered` case below.)
+
+!!! warning "`.rubedo/` follows the working directory"
+    This tutorial `cd`s into `reviews-demo/`, so state lands in
+    `reviews-demo/.rubedo/` — not in whatever repo you cloned. `rubedo ls`
+    from the parent directory will show nothing. To pin it:
+    `export RUBEDO_HOME=/path/to/.rubedo`. The Python API takes a `Home`
+    instance (`pipeline(name="...", home=Home("/path"))`), not a path
+    string.
 
 ## An expand root and a map step over a folder
 
@@ -78,37 +96,12 @@ if __name__ == "__main__":
     )
 ```
 
-There's no `folder=` kwarg — ingestion is just a step. `scan` is a
-parentless step that walks `./input` and `yield`s each file's own content
-(not just its path — the yielded payload is what gets hashed into the
-lane's identity), and each yield mints its own content-addressed lane.
-`check_cache=False` makes `scan` re-list the folder on every `p.run()`
-instead of trusting a cached enumeration — the folder is external state
-that can change between runs (an edit, a new file), and only a fresh scan
-notices that (see [Sources](concepts/sources.md)).
-`classify` is an ordinary dependent `map` step. Its `rating` output field
-is queryable by content later, not just by which file produced it — the
-output struct's fields are searchable directly.
-
-Neither step spells out much at all, and every dropped kwarg is inferred
-from the code rather than defaulted blindly: `scan` is a generator
-function, so its shape defaults to `expand` (`out_shape="many"`) — a plain
-`def` would default to `"map"` instead. `classify`'s only parameter,
-`scan`, names a registered
-step, so it becomes a dependency (`depends_on=["scan"]`) without saying so;
-an unmatched parameter name would raise at build time instead of failing
-oddly the first time the step actually runs. Neither step passes `name=` or
-`version=` either: `name` defaults to the function's name (so `scan` and
-`classify` are exactly what shows up below), and `version` defaults to
-`"0"` — see [When code changes](concepts/versioning.md) for when you'd
-bump it explicitly, which we do a few sections down. Spelling everything
-out explicitly still works and is identical once built —
-`@step(shape="expand")` (`@step(out_shape="many")`) /
-`@step(depends_on=["scan"])` —
-reach for it once a pipeline has enough steps that inference stops reading
-as obvious, or when a parameter's name legitimately differs from the step
-it depends on (`depends_on={"raw": "scan"}` binds a differently-named
-parameter to a parent's output).
+There's no `folder=` kwarg — ingestion is a parentless generator that
+yields each file's content (that payload is what gets hashed).
+`check_cache=False` re-lists the folder every run so edits show up.
+`classify`'s argument name `scan` is the parent; `name` defaults to the
+function name and `version` to `"0"`. A generator infers `expand`; a
+plain `def` infers `map`. See [How it works](concepts/model.md).
 
 Run it:
 
@@ -159,7 +152,7 @@ caches its own enumeration to preview against, by design: that's what lets
 it notice a folder edit) and everything downstream stays `pending`, even
 immediately after a completed run. (A root *without* `check_cache=False`
 is anchor-cached like any `expand` and would instead plan every lane as
-`reuse` here — see [Sources](concepts/sources.md).) This is
+`reuse` here — see [How it works](concepts/model.md).) This is
 deliberate: `p.plan()` is a pure
 dry-run and can't reach into a hypothetical future execution to say what an
 unexecuted generator would yield. `p.run()`'s summary is where the real
@@ -262,7 +255,7 @@ stays 1 both before and after the bump), regardless of whether that lane's
 actual verdict changed, because `version` is folded into every lane's
 output address: bumping it mints a whole new set of addresses for that
 step. This is the deliberate, coarse-grained lever — contrast it with
-[`code="auto"`](concepts/versioning.md), which recomputes only where the
+[`code="auto"`](concepts/model.md#when-code-changes), which recomputes only where the
 function's source actually changed.
 
 ## Invalidating a selection and re-running
@@ -325,7 +318,5 @@ after (to confirm what actually moved): run `trace()` with the same
 
 ## Next
 
-- [Shapes](concepts/shapes.md) — `aggregate`, `fold`, `expand`, `join`.
-- [Find and invalidate a row](guides/search-and-invalidation.md) — the full
-  `Selection` language.
+- [How it works](concepts/model.md) — lanes, addresses, shapes, the ledger.
 - [Examples](examples.md) — the same ideas over real services.

@@ -92,21 +92,15 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Start:
-    - First run: getting-started.md
     - Tutorial: tutorial.md
     - Examples: examples.md
-  - How it works:
-    - What Rubedo remembers: concepts/model.md
-    - Shapes: concepts/shapes.md
-    - Sources: concepts/sources.md
-    - When code changes: concepts/versioning.md
+  - How it works: concepts/model.md
   - How to:
     - Retries, rate limits, assertions: guides/execution-policies.md
     - Enrich and join tables: guides/data-enrichment.md
     - Find and invalidate a row: guides/search-and-invalidation.md
     - Inspect a run: guides/inspecting-runs.md
     - Trial a change: guides/trials.md
-    - Keep the store small: guides/retention.md
     - Share the cache: guides/cloud-storage.md
   - Reference:
     - API: reference/api/index.md
@@ -118,7 +112,4 @@ nav:
     - Changelog: changelog.md
   - Internals:
     - Invariants: development/invariants.md
-    - Producer model: development/producer-model.md
-    - Arrow storage: development/arrow-storage.md
-    - Retention design: development/retention.md
     - Contributing: development/contributing.md
