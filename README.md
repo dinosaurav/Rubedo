@@ -1,25 +1,23 @@
 # Rubedo
 
-**Content-addressed caching and run history for Python batch pipelines — built for steps you can't afford to re-run.**
+**A Python library for batch pipelines.** You write steps as ordinary functions. Rubedo stores every result and only recomputes what changed — so fixing the last step doesn't re-pay a thousand LLM calls, scrapes, or APIs.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Status: pre-1.0](https://img.shields.io/badge/status-pre--1.0-orange.svg)](#project-status)
 
-Rubedo is a local-first batch engine: you define a DAG of Python steps over a collection of items — files in a folder, rows in a CSV, rows in a SQL table — and Rubedo runs it with **dbt-style state**. Every step output is stored immutably at a deterministic address (`hash(step, code_version, input_hash, pipeline)`), so re-running a pipeline recomputes only what actually changed. The pipeline name is folded into the address, so two pipelines with an identically named/versioned step and identical input never share a cache entry or a liveness row. An append-only run ledger records what happened to every item in every run, and lineage edges connect each output to the outputs it was derived from.
-
-It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid APIs — where "just re-run the script" means paying for everything again and hoping the results come back the same.
+> **At a glance.** Local-first library, not an orchestrator: DAG pipelines over keyed collections (files, CSV rows, URLs) with content-addressed row-level caching, an append-only run ledger, and surgical invalidation. Think dbt-style state for Python tasks, built for non-idempotent steps. Every output lives at `hash(step, code_version, input_hash, pipeline)` — pipeline name always last, so identically named steps in two pipelines never share a cache entry or a liveness row. State lives in `.rubedo/` (SQLite control plane + Arrow IPC lane store + object store); optional S3-compatible store and Postgres ledger. Pre-1.0, MIT licensed.
 
 ## Why
 
-If you've ever processed a thousand rows through an LLM and then needed to fix the last step, you know the failure modes:
+If you've processed a thousand rows through an LLM and then needed to change the prompt, you know the failure modes:
 
-- **Re-running re-pays.** Without durable per-item state, every code tweak or crash means re-running every API call before it.
-- **`functools.cache` and pickle files don't know your DAG.** Ad-hoc caches can't tell you *why* something recomputed, can't invalidate downstream when an input changes, and silently go stale when the code does.
-- **Orchestrators are the wrong tool.** Airflow/Prefect/Dagster schedule and monitor services; they don't give you row-level, content-addressed incrementality inside a local script. dbt does — but only for SQL.
+- **Re-running re-pays.** Without durable per-item state, every code tweak or crash means re-running every API call before it. Rubedo keeps the rows that still hold and only recomputes the ones that don't.
+- **A pickle file cannot see your pipeline.** `functools.cache` and ad-hoc caches go stale silently. They can't tell you *why* something recomputed, and they can't invalidate downstream when an input changes.
+- **Orchestrators are a different tool.** Airflow, Prefect, and Dagster schedule and monitor services. Rubedo is dbt-style incrementality inside a local Python script — row by row, only what changed. You import it; you don't operate it.
 - **Make/Snakemake track files.** Rubedo tracks *content*, at row granularity, with a queryable history of every run.
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite control plane + Arrow IPC lane store + content-addressed object store), created on first run and gitignored automatically — and each of those planes can be pointed at a shared Postgres database or an S3-compatible bucket when one machine stops being enough (see [sharing state](#local-by-default-shared-when-you-need-it)).
+A library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite control plane + Arrow IPC lane store + content-addressed object store), created on first run and gitignored automatically — and each of those planes can be pointed at a shared Postgres database or an S3-compatible bucket when one machine stops being enough (see [sharing state](#local-by-default-shared-when-you-need-it)).
 
 > **Note:** `.rubedo/` resolves **relative to the current working directory** — pipelines, the CLI, and the server must all run from the same directory (typically your project root) to see the same state. Running from somewhere else silently creates a fresh, empty store there. To run from anywhere, pin the location with the `RUBEDO_HOME` (or `RUBEDO_DB_PATH`) environment variable.
 
@@ -33,14 +31,14 @@ Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend for
 
 ## Quickstart
 
-Pipelines are plain Python objects — define them wherever your code lives:
+No API key. A folder of files in, a line count out — boring on purpose, so you can see reuse without paying for it. Pipelines are plain Python objects; define them wherever your code lives:
 
 ```python
 from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)   # a source watching external state: rescan every run
+@p.step(check_cache=False)   # rescan the folder every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -49,26 +47,32 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict):
+def count_lines(scan: dict):  # argument name = parent step
     return {"line_count": len(scan["text"].splitlines())}
 
-print(p.describe())           # the DAG, before ever running (also: format="mermaid", format="ascii")
-print(p.plan())                # dry-run: what would p.run() do to my data, and why
+print(p.describe())           # the graph, before ever running (also: format="mermaid", format="ascii")
+print(p.plan())                # dry-run: what would p.run() do, and why
 summary = p.run()              # execute
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
-Nothing is spelled out that the code already says: `scan` is a parentless generator, so it's an `expand`-shaped source; `count_lines`'s parameter names the `scan` step, so that's its dependency; names default to the function names and `version` to `"0"`. The one explicit knob is `check_cache=False`: sources are cached like any step by default, so one that watches external state (a folder, a CSV, a table) must declare that it re-enumerates every run — that's what lets the edit below get noticed.
+**What this is doing**
+
+1. **`scan`** lists a folder and yields one item per file. `check_cache=False` means it re-reads the folder every run, so new and edited files show up.
+2. **`count_lines`** runs once per file. The argument name `scan` is the parent — Rubedo builds the graph from the function signature. No YAML, no DAG file.
+3. **`plan()`, then `run()`.** `plan()` is a dry-run: what would recompute, and why. `run()` executes.
+
+Nothing else is spelled out that the code already says: `scan` is a parentless generator, so it's an `expand`-shaped source; names default to the function names and `version` to `"0"`. Sources are cached like any step by default, so one that watches external state (a folder, a CSV, a table) must declare that it re-enumerates every run — that's what lets the edit below get noticed.
 
 Run it twice and watch the point of the whole project:
 
 ```text
-# first run          created=8  reused=0
+# first run          created=8  reused=0   ← every file is new
 # second run         created=0  reused=8   ← nothing changed, nothing recomputed
-# edit one file...   created=2  reused=6   ← only that file's lanes re-run
+# edit one file...   created=2  reused=6   ← scan + count for that file; the rest stay
 ```
 
-Each run also snapshots the pipeline's definition (steps, edges, policies) into the ledger, so history and the dashboard can show the DAG of anything that has ever run — no imports of user code required.
+`created=2` is two steps for one file, not two files. The other files don't re-run. Each run also snapshots the pipeline's definition (steps, edges, policies) into the ledger, so history and the dashboard can show the graph of anything that has ever run — no imports of user code required.
 
 Prefer steps defined away from the pipeline that uses them? `pipeline(steps=[...])` takes an explicit list of `@step`-decorated functions, and it's one object either way — no separate builder class; the two forms compose freely:
 
@@ -84,9 +88,11 @@ def count_lines(scan): ...
 p = pipeline(name="count-lines", steps=[scan, count_lines])
 ```
 
-## Ingestion is a step
+## A source is a step that yields items
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `out_shape="many"` inferred — the `shape="expand"` alias) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage:
+There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `out_shape="many"` inferred — the `shape="expand"` alias) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage.
+
+Same shape, expensive step — one LLM call per row, cached:
 
 ```python
 import csv
@@ -100,9 +106,11 @@ def leads():
         yield from csv.DictReader(f)
 
 @p.step
-def enrich(leads: dict):
+def enrich(leads: dict):  # one call per row; argument name = parent
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
+
+`leads` yields one item per CSV row. `enrich` calls the LLM once per row. Re-run: already-seen rows skip the LLM; new or edited rows pay. That is the whole product.
 
 Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), query it — the lane key is never a human key.
 
@@ -171,7 +179,7 @@ def enrich(order, customer):        # one lane per matched pair
     return {"oid": order["oid"], "name": customer["name"]}
 ```
 
-Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
+Two sources, two maps, one join. `enrich` runs once per matched `(order, customer)` pair — `join_on` names the fields, not a join table. Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
 
 When a join or union has no interesting body, declare it without one: `p.join(name="pair", join_on={...})` assembles a nested struct from the matched parents, and `p.union(name="all", depends_on=[...])` merges lane sets deduped by content hash — zero per-lane Python calls, cached like any step.
 
@@ -186,7 +194,7 @@ See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding
 
 A source-less root's value (or a plain `group_key=None` aggregate's result) can also be named alongside a real per-row dependency in a downstream step — Rubedo broadcasts the one value to every row instead of requiring a matching per-row coordinate. See [shapes.md](docs/concepts/shapes.md#broadcasting-a-single-value-into-per-row-steps) for the details and the trap (two real multi-lane producers that don't share a coordinate lineage still error, by design — that's what `join` is for).
 
-## Search and surgical invalidation
+## Find a row. Invalidate just that.
 
 Outputs are **searchable by their content**: a step's output struct fields are the query language's open vocabulary, so you can select by what a step *computed*, regardless of file names or row keys:
 
@@ -197,7 +205,7 @@ invalidate(Selection(index={"company": "acme"}))          # recompute acme's row
 Selection.parse("step:extract company:acme live:true")     # query-string form (Python, CLI, and UI)
 ```
 
-Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches a field of the step's output struct. A label is just a field a step returns — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
+That is **surgical invalidation**: only the matched rows (and, with `downstream=True`, what they contaminated) recompute. Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches a field of the step's output struct. A label is just a field a step returns — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
 
 `downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that an aggregate or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
 
@@ -338,7 +346,7 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 ## Design
 
-The control plane is an **append-only SQL ledger** (SQLite by default, Postgres for shared deployments — immutability enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
+The control plane is an **append-only SQL ledger** (SQLite by default, Postgres for shared deployments — immutability enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Lineage edges connect each output to the outputs it was derived from. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
 
 ## Performance
 

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **README:** same dual-audience pass as the landing page. Opens with what
+  Rubedo is (a Python library for batch pipelines) and the last-step /
+  don't-re-pay job; a compact "At a glance" block keeps the mechanism
+  nouns (content-addressed caching, ledger, surgical invalidation,
+  dbt-style state, address formula) on the first screen for crawlers.
+  Quickstart and the LLM/CSV example walk through what the code is doing;
+  `created=2` is explained as two steps for one file.
+
 - **Marketing landing (rubedo.run):** identity-first rewrite. Hero now
   says what Rubedo is (a Python library for batch pipelines) and walks
   through the example instead of captioning a DAG. Human outcomes lead
