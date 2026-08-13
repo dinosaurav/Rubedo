@@ -1,11 +1,10 @@
 # Tutorial
 
-This walks through a small, real pipeline end to end: a folder of review
-files gets read and classified as positive/negative/neutral. Along the way
-you'll query an output field by content, edit an input and watch surgical
-recompute, bump a step's `version` and see what that invalidates, decline an
-input with `Filtered`, and finish by hand-invalidating a selection and
-re-running.
+Build a small pipeline and actually use it: a folder of reviews, classified
+as positive / negative / neutral. Along the way you query an output field
+by content, edit an input and watch only that file recompute, bump a
+step's `version`, decline an input with `Filtered`, and hand-invalidate a
+selection.
 
 Every command below was actually run to produce the output shown — copy the
 code blocks into a real directory and you'll see the same shapes (exact hash
@@ -86,7 +85,7 @@ lane's identity), and each yield mints its own content-addressed lane.
 `check_cache=False` makes `scan` re-list the folder on every `p.run()`
 instead of trusting a cached enumeration — the folder is external state
 that can change between runs (an edit, a new file), and only a fresh scan
-notices that (see [Concepts: sources](concepts/sources.md)).
+notices that (see [Sources](concepts/sources.md)).
 `classify` is an ordinary dependent `map` step. Its `rating` output field
 is queryable by content later, not just by which file produced it — the
 output struct's fields are searchable directly.
@@ -101,7 +100,7 @@ an unmatched parameter name would raise at build time instead of failing
 oddly the first time the step actually runs. Neither step passes `name=` or
 `version=` either: `name` defaults to the function's name (so `scan` and
 `classify` are exactly what shows up below), and `version` defaults to
-`"0"` — see [Concepts: versioning](concepts/versioning.md) for when you'd
+`"0"` — see [When code changes](concepts/versioning.md) for when you'd
 bump it explicitly, which we do a few sections down. Spelling everything
 out explicitly still works and is identical once built —
 `@step(shape="expand")` (`@step(out_shape="many")`) /
@@ -160,7 +159,7 @@ caches its own enumeration to preview against, by design: that's what lets
 it notice a folder edit) and everything downstream stays `pending`, even
 immediately after a completed run. (A root *without* `check_cache=False`
 is anchor-cached like any `expand` and would instead plan every lane as
-`reuse` here — see [Concepts: sources](concepts/sources.md).) This is
+`reuse` here — see [Sources](concepts/sources.md).) This is
 deliberate: `p.plan()` is a pure
 dry-run and can't reach into a hypothetical future execution to say what an
 unexecuted generator would yield. `p.run()`'s summary is where the real
@@ -194,7 +193,7 @@ facts (`step`, `coord`, `version`, `live`, ...); anything else — here
 root's stored payload so you can see *which file* — `review1.txt` — and
 what text actually produced the verdict, since the coordinate itself
 (`row-76410e514a8e`) doesn't say. See
-[Guide: search and invalidation](guides/search-and-invalidation.md) for the
+[Find and invalidate a row](guides/search-and-invalidation.md) for the
 full selection language.
 
 ## Editing an input: surgical recompute
@@ -322,20 +321,11 @@ which two those'll be (it never sees past the `scan` root — see above),
 but `trace()` can, both before invalidating (to see the blast radius) and
 after (to confirm what actually moved): run `trace()` with the same
 `Selection` and read the counts, exactly as
-[Guide: search and invalidation](guides/search-and-invalidation.md) covers.
+[Find and invalidate a row](guides/search-and-invalidation.md) covers.
 
-## Where to go next
+## Next
 
-- [Concepts: shapes](concepts/shapes.md) — `aggregate`, `fold`, `expand`, and
-  `join`, the four shapes beyond the `map` step used here.
-- [Concepts: sources](concepts/sources.md) — the ingestion recipes: folder,
-  CSV, SQL table, cloud object storage.
-- [Guide: search and invalidation](guides/search-and-invalidation.md) — the
-  full `Selection` query language, `downstream=True`, and the CLI
-  equivalents.
-- [Guide: execution policies](guides/execution-policies.md) — retries, rate
-  limits, `stale_after`, and assertions for flaky or expensive steps.
-- [Guide: inspecting runs](guides/inspecting-runs.md) — `trace()`, the CLI,
-  and the web dashboard.
-- [Examples](examples.md) — the same ideas over real services: Hacker News,
-  GitHub, an LLM, a SQL table.
+- [Shapes](concepts/shapes.md) — `aggregate`, `fold`, `expand`, `join`.
+- [Find and invalidate a row](guides/search-and-invalidation.md) — the full
+  `Selection` language.
+- [Examples](examples.md) — the same ideas over real services.

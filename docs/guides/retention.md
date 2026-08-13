@@ -1,12 +1,10 @@
-# Retention & Garbage Collection
+# Keep the store small
 
-Rubedo's object store keeps every generation of every output **forever by
-default** — recompute-avoidance is the whole point of the engine, and old
-bytes are cheap insurance against re-running a non-idempotent step (an LLM
-call, a scrape). Retention is the opt-in mechanism for when old bytes stop
-being worth their storage. This page is the user-facing summary; for the
-full model — the two policies that were considered and rejected, the exact
-demote/sweep algorithm, and every guarantee with its rationale — see
+The object store keeps every generation of every output **forever by
+default** — recompute-avoidance is the point, and old bytes are cheap
+insurance against re-running a non-idempotent step. Retention is the
+opt-in for when old bytes stop being worth their storage. This page is the
+user-facing summary; the full model lives in
 [`../development/retention.md`](../development/retention.md).
 
 ## Default: keep everything

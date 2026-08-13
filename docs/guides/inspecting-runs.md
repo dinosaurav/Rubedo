@@ -1,11 +1,10 @@
-# Inspecting Runs
+# Inspect a run
 
-Rubedo gives you read-only ways to look at what a pipeline did or would
-do, without changing anything: `p.plan()` (before you run), the `Cell`
-query surface on `Home` / `RunSummary` (after you run), `trace()` (lineage
-from any point), and `rubedo du` / `storage_report()` (how big the store
-is and why). Those, plus the run event log and the web dashboard, are
-covered here.
+Read-only ways to look at what a pipeline did or would do, without changing
+anything: `p.plan()` (before you run), the `Cell` query surface on `Home` /
+`RunSummary` (after you run), `trace()` (lineage from any point), and
+`rubedo du` / `storage_report()` (how big the store is and why). Those, plus
+the run event log and the web dashboard, are covered here.
 
 ## `Cell`: reading what a run produced
 

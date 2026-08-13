@@ -1,12 +1,12 @@
-# Execution Policies
+# Retries, rate limits, assertions
 
-A step is a Python function plus a set of policies declared as `@step(...)`
-keyword arguments — how it retries, how fast it's allowed to run, what it's
-allowed to produce, and which pool runs it. None of these affect cache
-identity (the output address doesn't encode `retries=3` or `rate_limit=`);
-they only govern *how* a step gets from "needs to execute" to "committed."
-This page covers each one, plus the two things that govern a whole
-pipeline's runs: `schedule` and `Filtered`.
+A step is a Python function plus policies declared as `@step(...)` keyword
+arguments — how it retries, how fast it's allowed to run, what it's allowed
+to produce, and which pool runs it. None of these affect cache identity
+(the output address doesn't encode `retries=3` or `rate_limit=`); they only
+govern *how* a step gets from "needs to execute" to "committed." This page
+covers each one, plus the two things that govern a whole pipeline's runs:
+`schedule` and `Filtered`.
 
 ## Retries
 

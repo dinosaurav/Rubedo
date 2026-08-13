@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Docs IA:** nav is now Start → How it works → How to → Reference →
+  Internals instead of a flat encyclopedia. Home matches the landing/README
+  dual-audience pass (identity first, At a glance for crawlers). Getting
+  started is a short first-run page; concept and guide titles are jobs
+  ("What Rubedo remembers", "Find and invalidate a row") rather than
+  mechanism nouns. File paths are unchanged so existing URLs still resolve.
+
 - **README:** same dual-audience pass as the landing page. Opens with what
   Rubedo is (a Python library for batch pipelines) and the last-step /
   don't-re-pay job; a compact "At a glance" block keeps the mechanism

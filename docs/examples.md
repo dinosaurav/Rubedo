@@ -1,11 +1,12 @@
 # Examples
 
+Runnable pipelines against **real** services (no mocks), using the Python
+standard library. Run any of them twice — the second run is the point.
+
 Every example in [`examples/`](https://github.com/dinosaurav/Rubedo/tree/main/examples)
-is a self-contained folder — one runnable script plus any data it needs —
-that talks to a **real** service (no mocks), using only the Python standard
-library. A few need a library already in the dev dependency group (PyMuPDF
-for `pdf_digest`), so `uv run python examples/...` just works without extra
-installs.
+is a self-contained folder — one script plus any data it needs. A few need a
+library already in the dev dependency group (PyMuPDF for `pdf_digest`), so
+`uv run python examples/...` just works without extra installs.
 
 Run them from the **repo root**, not from inside the example's folder:
 
@@ -14,7 +15,7 @@ uv run python examples/<name>/<name>.py
 ```
 
 `.rubedo/` is created relative to wherever you run from (see the CWD gotcha
-in [Getting Started](getting-started.md)) — run from the repo root and every
+in [First run](getting-started.md)) — run from the repo root and every
 example shares the one store `rubedo ls` and the dashboard read. Run from
 inside an example's folder and you silently fork a second, stray `.rubedo/`
 there.
@@ -82,7 +83,7 @@ genuinely CPU-bound.
 then rolls it up with a source-shaped `@p.step` root that's a plain `SELECT * FROM
 orders` loop, one row per lane. A table recipe like this buffers every row
 before the run commits (fine here; see
-[Concepts: sources](concepts/sources.md) for the streaming variant a much
+[Sources](concepts/sources.md) for the streaming variant a much
 larger table would need).
 
 **[`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown)**
@@ -97,8 +98,8 @@ instantly regardless of executor.
 **[`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor)**
 — a zero-argument factory (`executor=make_dask_pool`) hands a step's
 execution to a local Dask `LocalCluster`/`Client.get_executor()`, the
-Future-shaped pool `executor=` accepts (see [Execution Policies: bring your
-own pool](guides/execution-policies.md#bring-your-own-pool)). Rubedo never
+Future-shaped pool `executor=` accepts (see
+[bring your own pool](guides/execution-policies.md#bring-your-own-pool)). Rubedo never
 imports Dask itself — the factory owns that — and shuts the cluster down
 after the run. The second run reuses every lane from the local cache
 without touching Dask again. Optional dependency: `uv run --with
@@ -150,7 +151,7 @@ version) against a citations-only baseline on another sampled cohort, prints
 the cohort-aware `diff`, and rolls out the accepted policy — `home.runs(...)`
 lists the resulting mix of full and partial runs at the end. Keyless;
 `OPENALEX_EMAIL` is optional and identifies requests to OpenAlex's polite
-pool. See [Trials: sample, diff, roll out](guides/trials.md) for the
+pool. See [Trial a change](guides/trials.md) for the
 underlying API.
 
 ## Keys
@@ -168,6 +169,5 @@ OPENROUTER_API_KEY=sk-or-...
 override with `OPENROUTER_VISION_MODEL` / `OPENROUTER_TEXT_MODEL`).
 `github_health` works unauthenticated but is happier with `GITHUB_TOKEN` set.
 
-See the [tutorial](tutorial.md) for a from-scratch walkthrough of the same
-ideas, and the [API reference](reference/api/index.md) for every function and
-parameter these examples use.
+See the [tutorial](tutorial.md) for a from-scratch walkthrough, and the
+[API reference](reference/api/index.md) for every function these examples use.

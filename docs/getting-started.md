@@ -1,4 +1,8 @@
-# Getting Started
+# First run
+
+Install, write two functions, run twice. No API key — a folder of files
+in, a line count out. Boring on purpose, so you can see reuse without
+paying for it.
 
 ## Install
 
@@ -6,16 +10,13 @@
 pip install rubedo           # or: pip install "rubedo[server]"
 ```
 
-Requires Python 3.11+. The `server` extra adds the read-only FastAPI backend
-that powers the web dashboard — skip it if you only need the library and CLI.
+Requires Python 3.11+. The `server` extra adds the read-only FastAPI
+backend that powers the web dashboard. The `s3` extra
+(`pip install "rubedo[s3]"`) adds the S3-compatible cloud store. To hack
+on Rubedo itself, or to run the bundled [examples](examples.md), clone the
+repo and `uv sync`.
 
-To hack on Rubedo itself, or to run the bundled [examples](examples.md),
-clone the repo and `uv sync` instead.
-
-## Quickstart
-
-Pipelines are plain Python objects — define them wherever your code lives,
-no project scaffolding required:
+## Two functions
 
 ```python
 from rubedo import pipeline
@@ -31,33 +32,33 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 @p.step
-def count_lines(scan: dict):
+def count_lines(scan: dict):  # argument name = parent step
     return {"line_count": len(scan["text"].splitlines())}
 
-print(p.describe())           # the DAG, before ever running (also: format="mermaid")
-print(p.plan())                # dry-run: what would p.run() do to my data, and why
-summary = p.run()              # execute
+print(p.describe())           # the graph, before ever running (also: format="mermaid")
+print(p.plan())                # dry-run: what would p.run() do, and why
+summary = p.run()
 print(f"created={summary.created_count} reused={summary.reused_count}")
 ```
 
-There's no `folder=` kwarg — ingestion is just a step: `scan` is a
-parentless generator that walks `./input` and `yield`s each file's own
-content (not just its path — the yielded payload is what gets hashed into
-the lane's identity), so its `shape="expand"` (`out_shape="many"`) is
-inferred; `count_lines`'s parameter names the `scan` step, so its
-dependency is inferred too (see [Shapes](concepts/shapes.md)). `p.describe()` renders the DAG before
-anything runs; `p.plan()` is a read-only dry-run of what `p.run()` would do to
-every lane and why (`reuse`, `execute`, `blocked`, `filtered`, `pending`);
-`p.run()` actually executes it and returns a `RunSummary`.
+**What this is doing**
 
-`check_cache=False` matters here: by default a root generator's fan-out is
-cached against its own identity like any `expand` (see
-[Shapes](concepts/shapes.md#expand-1n-fan-out)), so it wouldn't notice a
-folder edit on its own — `check_cache=False` re-runs `scan` every `p.run()`
-so it always sees the folder's current contents (see
-[Sources](concepts/sources.md)).
+1. **`scan`** lists a folder and yields one item per file.
+   `check_cache=False` re-reads the folder every run, so new and edited
+   files show up. (Sources are cached like any step by default.)
+2. **`count_lines`** runs once per file. The argument name `scan` is the
+   parent — Rubedo builds the graph from the function signature.
+3. **`plan()`, then `run()`.** `plan()` is a dry-run. `run()` executes.
 
-With four input files, that quickstart prints:
+`scan` is a parentless generator, so its shape is inferred as `expand`
+(`out_shape="many"`). Names default to the function names; `version`
+defaults to `"0"`. Prefer steps defined away from the pipeline?
+`pipeline(steps=[...])` takes an explicit list of `@step`-decorated
+functions — one object either way. See [Shapes](concepts/shapes.md).
+
+## What `plan()` prints
+
+With four input files, the first run looks like this:
 
 ```text
 Plan for 'count-lines' over scan: 1 execute, 1 pending
@@ -66,75 +67,59 @@ Plan for 'count-lines' over scan: 1 execute, 1 pending
 created=8 reused=0
 ```
 
-`scan` plans as a single `execute` — this quickstart declares
-`check_cache=False`, so the source re-lists the folder every run and the
-dry-run has no cached enumeration to preview against. Its actual lanes
-(one per file) are unknowable until it runs. `count_lines` shows
-`pending`, not `execute`: its output address depends on lanes `scan`
-hasn't minted yet, so the address (and therefore reuse-or-execute) is
-unknowable without actually running `scan` first. Once `p.run()` actually
-executes it, `created=8` is `scan`'s four file-lanes plus `count_lines`'s
-four downstream lanes. (A root *without* `check_cache=False` would be
-anchor-cached against `@root` and could plan children as `reuse` — see
-[Sources](concepts/sources.md).)
+`scan` plans as a single `execute` — `check_cache=False` means the source
+re-lists the folder every run, so the dry-run has no cached enumeration
+to preview. Its actual lanes (one per file) are unknowable until it runs.
+`count_lines` shows `pending`, not `execute`: its output address depends
+on lanes `scan` hasn't minted yet. Once `p.run()` executes,
+`created=8` is `scan`'s four file-lanes plus `count_lines`'s four
+downstream lanes.
 
-### Run it twice
+A root *without* `check_cache=False` is anchor-cached against `@root` and
+can plan children as `reuse` — see [Sources](concepts/sources.md).
 
-This is the point of the whole project. Run the exact same script again,
-untouched:
+## Run it twice
+
+Same script, untouched:
 
 ```text
 created=0 reused=8
 ```
 
-Nothing recomputed — every lane's output is already sitting at its
-content-addressed location, so `p.run()` reads it back instead of re-executing
-your code. Now edit one input file and run a third time:
+Nothing recomputed. Edit one input file and run a third time:
 
 ```text
 created=2 reused=6
 ```
 
-Only the edited file's two lanes (`scan` and `count_lines`) recompute; the
-other three files' outputs are untouched and reused as-is. This is
-**surgical invalidation**: Rubedo doesn't know or care that only one file
-changed — it just discovers that six of the eight addresses are still valid
-and two aren't. For a step that calls a paid LLM instead of counting lines,
-this is the difference between a few cents and re-paying for a thousand
-rows every time you touch the code.
+`created=2` is two steps for one file (`scan` and `count_lines`), not two
+files. The other three files stay put. For a step that calls a paid LLM
+instead of counting lines, that is the difference between a few cents and
+re-paying for a thousand rows.
 
-See the [tutorial](tutorial.md) for a longer walkthrough — querying
-outputs, version bumps, and invalidation.
-
-## The `.rubedo/` state directory
+## Where state lives
 
 The first `p.run()` (or `p.plan()`, or a CLI command) creates a `.rubedo/`
 directory: a SQLite ledger (`rubedo.sqlite`), a content-addressed object
-store (`objects/`), and Arrow lane tables (`tables/`). It's created
-automatically and gitignored automatically — there's nothing to set up.
+store (`objects/`), and Arrow lane tables (`tables/`). Created
+automatically, gitignored automatically.
 
 !!! warning "`.rubedo/` resolves relative to the current working directory"
     Every entry point — `p.run()`, `p.plan()`, the CLI, and the API server —
     resolves `.rubedo/` relative to **wherever the process is running from**,
-    not relative to the script's location or the pipeline's definition.
-    Running the same pipeline from two different directories silently
-    creates two separate, empty-looking stores; `rubedo ls` run from the
-    wrong directory just shows nothing.
+    not relative to the script's location. Running the same pipeline from
+    two directories silently creates two stores; `rubedo ls` from the wrong
+    directory shows nothing.
 
-    Run everything from your project root (typically the repo root), and
-    keep it consistent. If you need to run from anywhere — a cron job, a
-    packaged CLI, a different working directory per invocation — pin the
-    location explicitly instead of relying on the CWD:
+    Run everything from your project root. To run from anywhere, pin it:
 
     ```bash
     export RUBEDO_HOME=/var/lib/myproject/.rubedo
     ```
 
-    or the lower-level `RUBEDO_DB_PATH` to point at the SQLite ledger
-    directly. Precedence for the ambient default is `RUBEDO_DB_PATH` >
-    `RUBEDO_HOME`/`rubedo.sqlite` > `.rubedo/rubedo.sqlite` (the
-    CWD-relative default). The Python API takes a `Home` instance
-    instead of a path string:
+    Precedence for the ambient default is `RUBEDO_DB_PATH` >
+    `RUBEDO_HOME`/`rubedo.sqlite` > `.rubedo/rubedo.sqlite`. The Python API
+    takes a `Home` instance, not a path string:
 
     ```python
     from rubedo import Home, pipeline
@@ -143,63 +128,11 @@ automatically and gitignored automatically — there's nothing to set up.
     pipe = pipeline(name="...", home=home, steps=[...])
     ```
 
-    Each `Home` owns its own ledger, object store, and lane tables, so
-    concurrent runs against different homes in one process are safe —
-    construct one `Home` per root and inject it.
+    Each `Home` owns its own ledger, object store, and lane tables —
+    concurrent runs against different homes in one process are safe.
 
-## Registering steps as a list
+## Next
 
-The `@p.step` decorators above accumulate steps on the `Pipeline` object;
-`pipeline(steps=[...])` takes an explicit list of `@step`-decorated
-functions instead, which suits steps defined away from the pipeline that
-uses them — there's no separate builder class, just one object either way,
-and both forms compose freely:
-
-```python
-from rubedo import step, pipeline
-
-@step(check_cache=False)
-def scan():
-    import os
-    for name in sorted(os.listdir("input")):
-        path = os.path.join("input", name)
-        if os.path.isfile(path):
-            yield {"path": name, "text": open(path).read()}
-
-@step
-def count_lines(scan: dict): ...
-
-p = pipeline(name="count-lines", steps=[scan, count_lines])
-```
-
-There's no `.build()` step: the underlying `PipelineSpec` is constructed and
-validated lazily the first time you call a verb (`.run()`/`.plan()`/
-`.describe()`), and cached from then on. `scan` above is a parentless
-generator, so its `shape="expand"` (`out_shape="many"`) is inferred
-automatically (see [Shapes](concepts/shapes.md)) — the same recipe
-[`examples/count_lines`](https://github.com/dinosaurav/Rubedo/tree/main/examples/count_lines)
-uses itself.
-
-## Where to go next
-
-- [Tutorial](tutorial.md) — build a small pipeline up incrementally:
-  querying outputs, editing an input, bumping a step's version, and
-  invalidating a selection.
-- [Concepts: the model](concepts/model.md) — lanes, coordinates, addresses,
-  and the vocabulary the rest of the docs assume.
-- [Concepts: shapes](concepts/shapes.md) — `map`, `aggregate`, `fold`, `expand`, `join`.
-- [Concepts: sources](concepts/sources.md) — the folder, CSV, SQL table, and
-  cloud storage ingestion recipes.
-- [Concepts: versioning](concepts/versioning.md) — `version` vs. `code`, and
-  what a source edit means.
-- [Guide: execution policies](guides/execution-policies.md) — retries, rate
-  limits, `stale_after`, assertions, `executor="process"`.
-- [Guide: search and invalidation](guides/search-and-invalidation.md) —
-  `Selection`, `invalidate()`, `trace()`.
-- [Guide: inspecting runs](guides/inspecting-runs.md) — `p.plan()`, `trace()`,
-  the CLI, the dashboard.
-- [Guide: retention](guides/retention.md) — `retention=N` and `rubedo gc`.
-- [Examples](examples.md) — a tour of the runnable example pipelines.
-- [API reference](reference/api/index.md) — every public function and class.
-- [CLI reference](reference/cli.md) — `rubedo ls`, `show`, `invalidate`,
-  `trace`, `du`, `gc`.
+- **[Tutorial](tutorial.md)** — query by content, edit an input, bump a
+  version, invalidate a selection.
+- **[Examples](examples.md)** — the same ideas against real services.

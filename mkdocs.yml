@@ -1,5 +1,5 @@
 site_name: Rubedo
-site_description: Local-first batch engine - DAG pipelines over keyed collections
+site_description: A Python library for batch pipelines that remember every step
 site_url: https://rubedo.run/docs/
 site_dir: marketing/dist/docs
 
@@ -91,34 +91,34 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Installation & Quickstart: getting-started.md
+  - Start:
+    - First run: getting-started.md
     - Tutorial: tutorial.md
     - Examples: examples.md
-  - Concepts:
-    - The Model: concepts/model.md
+  - How it works:
+    - What Rubedo remembers: concepts/model.md
     - Shapes: concepts/shapes.md
     - Sources: concepts/sources.md
-    - Code Changes & Versioning: concepts/versioning.md
-  - Guides:
-    - Execution Policies: guides/execution-policies.md
-    - Data Enrichment: guides/data-enrichment.md
-    - Search & Invalidation: guides/search-and-invalidation.md
-    - Inspecting Runs: guides/inspecting-runs.md
-    - Trials — Sample, Diff, Roll Out: guides/trials.md
-    - Retention & GC: guides/retention.md
-    - Cloud Storage & Sharing: guides/cloud-storage.md
-  - API Reference:
-    - reference/api/index.md
+    - When code changes: concepts/versioning.md
+  - How to:
+    - Retries, rate limits, assertions: guides/execution-policies.md
+    - Enrich and join tables: guides/data-enrichment.md
+    - Find and invalidate a row: guides/search-and-invalidation.md
+    - Inspect a run: guides/inspecting-runs.md
+    - Trial a change: guides/trials.md
+    - Keep the store small: guides/retention.md
+    - Share the cache: guides/cloud-storage.md
+  - Reference:
+    - API: reference/api/index.md
     - Steps: reference/api/step.md
     - Pipelines: reference/api/pipeline.md
-    - Selection & Invalidation: reference/api/selection.md
-    - GC & Storage: reference/api/gc.md
-  - CLI: reference/cli.md
-  - Changelog: changelog.md
-  - Contributing: development/contributing.md
-  - Design Notes:
+    - Selection & invalidation: reference/api/selection.md
+    - GC & storage: reference/api/gc.md
+    - CLI: reference/cli.md
+    - Changelog: changelog.md
+  - Internals:
     - Invariants: development/invariants.md
-    - Producer Model: development/producer-model.md
-    - Arrow Storage: development/arrow-storage.md
-    - Retention Design: development/retention.md
+    - Producer model: development/producer-model.md
+    - Arrow storage: development/arrow-storage.md
+    - Retention design: development/retention.md
+    - Contributing: development/contributing.md

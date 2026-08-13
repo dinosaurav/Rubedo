@@ -1,10 +1,18 @@
-# Rubedo
+# Rubedo docs
 
-**Content-addressed caching and run history for Python batch pipelines — built for steps you can't afford to re-run.**
+**A Python library for batch pipelines.** You write steps as ordinary
+functions. Rubedo stores every result and only recomputes what changed —
+so fixing the last step doesn't re-pay a thousand LLM calls, scrapes, or
+APIs.
 
-Rubedo is a local-first batch engine: you define a DAG of Python steps over a collection of items — files in a folder, rows in a CSV, rows in a SQL table — and Rubedo runs it with **dbt-style state**. Every step output is stored immutably at a deterministic address, so re-running a pipeline recomputes only what actually changed. An append-only run ledger records what happened to every item in every run, and lineage edges connect each output to the outputs it was derived from.
+> **At a glance.** Local-first library, not an orchestrator: DAG pipelines
+> over keyed collections (files, CSV rows, URLs) with content-addressed
+> row-level caching, an append-only run ledger, and surgical invalidation.
+> Think dbt-style state for Python tasks. Every output lives at
+> `hash(step, code_version, input_hash, pipeline)`. State lives in
+> `.rubedo/` (SQLite + Arrow IPC + object store). Pre-1.0, MIT licensed.
 
-It exists for **non-idempotent, expensive steps** — LLM calls, scraping, paid APIs — where "just re-run the script" means paying for everything again and hoping the results come back the same.
+## A pipeline is two functions
 
 ```python
 import csv
@@ -18,45 +26,34 @@ def leads():
         yield from csv.DictReader(f)
 
 @p.step
-def summarize(leads: dict):
-    return {"summary": call_llm(leads["notes"])}   # runs once per distinct row — ever
+def summarize(leads: dict):  # argument name = parent step
+    return {"summary": call_llm(leads["notes"])}
 
-p.run()   # second run: created=0, reused=everything
+p.run()   # second run: already-seen rows skip the LLM
 ```
 
-Rubedo is a library, not a platform: no daemon, no registry, no magic module. The engine never imports your code — you import the engine. State lives in a `.rubedo/` directory (SQLite ledger + Arrow IPC lane store + content-addressed object store).
+**What this is doing**
 
-## Where to start
+1. **`leads`** yields one item per CSV row. `check_cache=False` re-reads
+   the file every run, so new and edited rows show up.
+2. **`summarize`** calls the LLM once per row. The argument name `leads`
+   is the dependency — no YAML, no DAG file.
+3. **Run it again.** Already-seen rows skip the LLM. Only new or edited
+   rows pay.
 
-- **[Getting started](getting-started.md)** — install, the quickstart, and the run-it-twice payoff.
-- **[Tutorial](tutorial.md)** — build a pipeline step by step: incrementality, versioning, indexing, invalidation.
-- **[Examples](examples.md)** — self-contained example pipelines against real services (Hacker News, GitHub, LLMs via OpenRouter).
+A library, not a platform: no daemon, no registry. You import the engine;
+the engine never imports your code.
 
-## Understand the model
+## Read in this order
 
-- **[The model](concepts/model.md)** — lanes, addresses, the ledger, and the promises it keeps.
-- **[Shapes](concepts/shapes.md)** — `map`, `aggregate`, `fold`, `expand`, `join`.
-- **[Sources](concepts/sources.md)** — folders, CSV rows, SQL tables, multi-source pipelines.
-- **[Code changes & versioning](concepts/versioning.md)** — what an edit means to the cache.
+1. **[First run](getting-started.md)** — install, write two functions, run
+   twice. Watch reuse without an API key.
+2. **[Tutorial](tutorial.md)** — a small classifier end to end: query by
+   content, edit an input, bump a version, invalidate a selection.
+3. **[What Rubedo remembers](concepts/model.md)** — lanes, addresses, the
+   ledger, and the four promises. The vocabulary the rest of the docs use.
 
-## Day-to-day guides
-
-- **[Execution policies](guides/execution-policies.md)** — retries, rate limits, assertions, process pools, scheduling.
-- **[Data enrichment](guides/data-enrichment.md)** — normalize, dedupe, and join independent tables (inner / outer).
-- **[Search & invalidation](guides/search-and-invalidation.md)** — index outputs by content, invalidate surgically.
-- **[Inspecting runs](guides/inspecting-runs.md)** — `p.plan()`, `trace()`, `rubedo du`, the dashboard and Run View.
-- **[Trials: sample, diff, roll out](guides/trials.md)** — `RunScope` cohorts, partial runs, run-to-run diff.
-- **[Retention & GC](guides/retention.md)** — keep-windows, `rubedo gc`, bytes-never-facts.
-- **[Cloud storage & sharing](guides/cloud-storage.md)** — S3-compatible buckets, the shared lane store, Postgres.
-
-## Reference
-
-- **[API Reference](reference/api/index.md)** — every public function and class.
-- **[CLI](reference/cli.md)** — every subcommand and flag.
-- **[Changelog](changelog.md)** — every released version, kept in [Keep a Changelog](https://keepachangelog.com/) form.
-- **[Contributing](development/contributing.md)** — setup, verification checklist, conventions.
-- **Design notes** — the canonical engine-design docs published verbatim from the repo: the [invariants](development/invariants.md), the [producer model](development/producer-model.md), the [Arrow storage design](development/arrow-storage.md), and the [retention design](development/retention.md).
-
-## Project status
-
-Pre-1.0 and moving fast: the API is unstable and there are no migrations or backwards-compatibility shims. The [README](https://github.com/dinosaurav/Rubedo#readme) carries the canonical overview; [CONTRIBUTING](https://github.com/dinosaurav/Rubedo/blob/main/CONTRIBUTING.md) covers setup and conventions. MIT licensed.
+Stuck on a shape or a knob? **[Shapes](concepts/shapes.md)** and the
+**How to** pages (retries, joins, invalidation, trials, sharing the cache).
+Signatures: **[API](reference/api/index.md)** and **[CLI](reference/cli.md)**.
+The engine's guarantees live under **Internals**.

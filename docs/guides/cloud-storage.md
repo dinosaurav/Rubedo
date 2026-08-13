@@ -1,8 +1,10 @@
-# Cloud storage
+# Share the cache
 
-Rubedo can put both spilled outputs and Arrow lane history in an
-S3-compatible bucket. AWS S3, Cloudflare R2, Backblaze B2, and MinIO use
-the same backend; provider names are configuration, not engine concepts.
+Put spilled outputs and Arrow lane history in an S3-compatible bucket. AWS
+S3, Cloudflare R2, Backblaze B2, and MinIO use the same backend; provider
+names are configuration, not engine concepts. A second machine against the
+same bucket and ledger reuses the first's work — the run-it-twice payoff,
+across machines.
 
 ## Configure a cloud home
 
@@ -59,7 +61,7 @@ a shared SQLAlchemy database URL (Postgres coverage is TODO 7b).
 ## Pass-by-reference execution
 
 When a step runs under `executor="process"` or a factory pool (see
-[Execution Policies](execution-policies.md#bring-your-own-pool)) against a
+[Retries, rate limits, assertions](execution-policies.md#bring-your-own-pool)) against a
 cloud store, spilled parent values travel **by reference**: workers rebuild
 a store client from picklable `store_config`, GET their own inputs, and PUT
 spill-worthy results directly — the coordinator process never relays those

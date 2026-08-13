@@ -1,11 +1,9 @@
-# Sources: recipes, not classes
+# Sources
 
-There's no `Source` protocol and no source classes to import. Ingestion is
-just a step: a parentless generator — its `shape="expand"`
-(`out_shape="many"`) inferred, the
-same producer shape `expand` and `join` already use downstream — that
-`yield`s one payload per item. Each yielded payload mints its own
-content-addressed lane (`row-<hash>`); the engine never imports your code,
+A source is a step that yields items — not a class, not a protocol. A
+parentless generator (`shape="expand"` / `out_shape="many"`, inferred)
+`yield`s one payload per item, and each payload mints its own
+content-addressed lane (`row-<hash>`). The engine never imports your code,
 so there's nothing to subclass or register.
 
 ```python
@@ -231,7 +229,7 @@ def enrich(order, customer):        # one lane per matched pair
 ```
 
 See [shapes.md](shapes.md) for the `join` step this setup feeds,
-[Data enrichment](../guides/data-enrichment.md) for normalize / dedupe /
+[Enrich and join tables](../guides/data-enrichment.md) for normalize / dedupe /
 outer-join practices, and `examples/newsroom` (see
 [`../examples.md`](../examples.md)) for a full join → expand → `group_key`
 pipeline over two CSV sources.

@@ -1,5 +1,9 @@
 # Shapes
 
+Most steps are 1:1: one item in, one item out. The other shapes cover
+fan-in, fan-out, and joins — still just Python functions, with a different
+count of lanes in and out.
+
 A step's `in_shape`/`out_shape` decide how many output lanes it produces
 from its input lanes. There are five conceptual shapes: `map` (1:1),
 `aggregate` (N:1), `fold` (N:1, sequential), `expand` (1:N), and
@@ -358,7 +362,7 @@ afterward (`join_mode="union"` + filter where a side is `None`).
   refuse instead.
 
 For normalize → dedupe → join recipes, see
-[Data enrichment](../guides/data-enrichment.md).
+[Enrich and join tables](../guides/data-enrichment.md).
 
 ### Caching
 
@@ -382,12 +386,12 @@ join to enrich each feed with its publisher's region, each feed expands
 into a lane per article (cached, so a re-run re-scrapes nothing), and the
 articles aggregate by region into one digest per region. See
 `examples/newsroom` in [`../examples.md`](../examples.md) for the runnable
-pipeline, and [Data enrichment](../guides/data-enrichment.md) for
+pipeline, and [Enrich and join tables](../guides/data-enrichment.md) for
 normalize / dedupe / outer-join practices around the join itself.
 
 ## Next
 
-- [Data enrichment](../guides/data-enrichment.md) — normalize, dedupe, and
+- [Enrich and join tables](../guides/data-enrichment.md) — normalize, dedupe, and
   join independent tables safely.
 - [sources.md](sources.md) — where a `map`/`join`/`expand` root's lanes
   actually come from.

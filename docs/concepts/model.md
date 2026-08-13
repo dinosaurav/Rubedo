@@ -1,12 +1,11 @@
-# The Model
+# What Rubedo remembers
 
-Rubedo runs a DAG of Python steps over a keyed collection of items and gives
-you dbt-style state for it: every output lands at a deterministic address,
-an append-only ledger records what happened to every item in every run, and
-lineage edges connect each output to the outputs it was derived from.
-Nothing here is magic — it's a hash function, a commit rule, and a log. This
-page is the vocabulary; [`../development/invariants.md`](../development/invariants.md) is
-the canonical source if the two ever disagree.
+You write steps. Rubedo stores every result at a deterministic address and,
+on the next run, recomputes only what changed. This page is the vocabulary
+behind that: lanes, addresses, the ledger, and the four promises. Nothing
+here is magic — it's a hash function, a commit rule, and a log.
+[`../development/invariants.md`](../development/invariants.md) is the
+canonical source if the two ever disagree.
 
 ## Lanes
 
@@ -171,12 +170,8 @@ detail lives in [`../development/invariants.md`](../development/invariants.md)):
    deletes *object bytes*, but the ledger row, the lineage, and the record
    of the deletion itself (`object_reclamations`) all survive forever.
 
-## Where to go next
+## Next
 
-- [shapes.md](shapes.md) — the five ways a step turns lanes into lanes.
-- [sources.md](sources.md) — where lanes come from.
-- [versioning.md](versioning.md) — how code changes interact with all of the
-  above.
-- [../guides/search-and-invalidation.md](../guides/search-and-invalidation.md)
-  and [../guides/inspecting-runs.md](../guides/inspecting-runs.md) — using
-  this model day to day.
+- [Shapes](shapes.md) — the five ways a step turns lanes into lanes.
+- [Sources](sources.md) — where lanes come from.
+- [When code changes](versioning.md) — how edits interact with the cache.

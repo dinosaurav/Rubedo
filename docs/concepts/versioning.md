@@ -1,11 +1,10 @@
-# Code Changes and Caching
+# When code changes
 
 A cached output is only useful if you can trust *why* it's being reused.
-Rubedo gives you two independent axes on `@step` for that — `version` and
-`code` — plus two policies for outputs that shouldn't live forever
-(`stale_after`) or shouldn't be materialized at all (`skip_cache`). None of
-these overlap: each answers a different question about when a step's output
-stops being valid.
+Two independent axes on `@step` — `version` and `code` — plus two policies
+for outputs that shouldn't live forever (`stale_after`) or shouldn't be
+materialized at all (`skip_cache`). None of these overlap: each answers a
+different question about when a step's output stops being valid.
 
 ## `version` — the semantic identity
 

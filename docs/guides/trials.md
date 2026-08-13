@@ -1,4 +1,4 @@
-# Trials: sample, diff, roll out
+# Trial a change
 
 Run an expensive step on a frozen lane cohort, compare the trial against a
 baseline, then roll out — without changing cache identity or replacing the
