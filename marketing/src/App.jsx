@@ -184,6 +184,14 @@ function App() {
             </a>
           </div>
 
+          <ReuseStats
+            rows={[
+              { label: 'First run', value: '8 LLM calls', note: 'every URL is new' },
+              { label: 'Second run', value: '0 LLM calls', note: 'nothing changed' },
+              { label: 'One new URL', value: '1 LLM call', note: 'the other 7 reused' },
+            ]}
+          />
+
           <div className="hero-proof">
             <div className="hero-split">
               <div className="hero-code-col">
@@ -206,13 +214,6 @@ function App() {
                       title: 'Run it again',
                       body: 'Already-seen URLs skip the LLM. Only new ones pay. That is the whole product.',
                     },
-                  ]}
-                />
-                <ReuseStats
-                  rows={[
-                    { label: 'First run', value: '8 LLM calls', note: 'every URL is new' },
-                    { label: 'Second run', value: '0 LLM calls', note: 'nothing changed' },
-                    { label: 'One new URL', value: '1 LLM call', note: 'the other 7 reused' },
                   ]}
                 />
               </div>

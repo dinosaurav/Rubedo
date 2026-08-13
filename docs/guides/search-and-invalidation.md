@@ -1,13 +1,10 @@
 # Find and invalidate a row
 
-Every output lives at a content-addressed, opaque address — great for
-caching, useless for asking "which rows mention `acme`?" or "recompute
-everything for `region=EU`." Searchable output fields bridge that gap: they
-make outputs findable by what a step *computed*, not by file name or row
-position. This page covers the `Selection` query language and the two ways
-to act on a selection: `invalidate()` and `trace()`. That is surgical
-invalidation: only the matched rows (and, with `downstream=True`, what they
-contaminated) recompute.
+Ask "which rows mention `acme`?" and recompute just those. Outputs are
+findable by what a step *computed*, not by file name or row position.
+`Selection` is the query language; `invalidate()` tombs matches (never
+deletes); `trace()` is the blast-radius preview. With `downstream=True`,
+only the matched rows and what they contaminated recompute.
 
 ## Searchable output fields
 

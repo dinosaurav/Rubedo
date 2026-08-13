@@ -318,5 +318,15 @@ after (to confirm what actually moved): run `trace()` with the same
 
 ## Next
 
+Look at the run in a browser:
+
+```bash
+pip install "rubedo[server]"
+rubedo serve                    # http://127.0.0.1:8000
+```
+
+The dashboard is read-only — [Inspect a run](guides/inspecting-runs.md)
+covers `serve`, `p.plan()`, `Home`, and retention.
+
 - [How it works](concepts/model.md) — lanes, addresses, shapes, the ledger.
 - [Examples](examples.md) — the same ideas over real services.

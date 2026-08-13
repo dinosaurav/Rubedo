@@ -1,6 +1,8 @@
 # Writing Rubedo Pipelines (LLM Guide)
 
-Rubedo is a local-first batch engine: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think "dbt state for Python tasks," built for non-idempotent steps like LLM calls or web scraping.
+Rubedo is a Python library for batch pipelines. You write steps as ordinary functions; it stores every result and only recomputes what changed — so fixing the last step doesn't re-pay LLM calls, scrapes, or APIs.
+
+**At a glance.** Local-first library, not an orchestrator: DAG pipelines over keyed collections (files, CSV rows) with content-addressed caching, an append-only run ledger, and surgical invalidation. Think dbt-style state for Python tasks, built for non-idempotent steps. Every output lives at `hash(step, version, input_hash, pipeline)`. State lives in `.rubedo/`. Human docs: https://rubedo.run/docs/. This file is the compact contract for writing pipelines.
 
 ## Concepts in 10 lines
 1. **Lanes:** Every input is a distinct "lane" (e.g. a row in a CSV, a file in a folder), always content-addressed (`row-<hash>`; identical payloads collapse). To find a lane by a human field, query its output struct fields — the lane key is never a human key.

@@ -1,9 +1,9 @@
 # Trial a change
 
-Run an expensive step on a frozen lane cohort, compare the trial against a
-baseline, then roll out — without changing cache identity or replacing the
-authoritative full-run view, and without writing anything extra to the
-ledger.
+Try a prompt (or a version bump) on 100 frozen rows, diff against the
+baseline, then roll out. Scope never enters cache identity and a partial
+run never replaces `home.current()`. Nothing extra is written to the
+ledger beyond the trial itself.
 
 ## The workflow
 

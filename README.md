@@ -88,11 +88,11 @@ def count_lines(scan): ...
 p = pipeline(name="count-lines", steps=[scan, count_lines])
 ```
 
-## A source is a step that yields items
+The copy-paste version with query, edit, version bump, and invalidation is the [tutorial](https://rubedo.run/docs/tutorial/).
 
-There's no `Source` protocol, no source classes — ingestion is just a parentless generator step (its `out_shape="many"` inferred — the `shape="expand"` alias) that `yield`s a payload per item. Each payload mints its own content-addressed lane. A folder scan is a three-line generator (above); a CSV is a `csv.DictReader` loop; a SQL table is a plain `SELECT` loop — see [docs/concepts/sources.md](docs/concepts/sources.md) for all the recipes, including cloud object storage.
+## When the last step is an LLM
 
-Same shape, expensive step — one LLM call per row, cached:
+Same graph, expensive step — one call per row, cached. That's the [landing-page](https://rubedo.run/) walkthrough (`inbox` → `decide`). A CSV is the same idea:
 
 ```python
 import csv
@@ -110,15 +110,19 @@ def enrich(leads: dict):  # one call per row; argument name = parent
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
 
-`leads` yields one item per CSV row. `enrich` calls the LLM once per row. Re-run: already-seen rows skip the LLM; new or edited rows pay. That is the whole product.
+Re-run: already-seen rows skip the LLM; new or edited rows pay.
 
-Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created — so incrementality survives row reordering, deduplication, and appends for free. To find or track a row by a human field (email, id), query it — the lane key is never a human key.
+Each row is a **content-addressed lane** (`row-<hash>`): identical rows collapse to one lane, and an edited row shows up as removed + created. To find a row by a human field (email, id), query the output struct — the lane key is never a human key.
 
-A step consumes up to two things, each with its own slot in the cache key: **data** (the source payload for root steps, parent outputs for dependent steps — always hashed) and **params** (run-level knobs, validated against the pipeline's `params_model` and hashed only for steps that declare a `params` parameter — so turning a knob recomputes exactly the steps that read it).
+A step consumes up to two things, each with its own slot in the cache key: **data** (always hashed) and **params** (hashed only for steps that declare a `params` parameter — so turning a knob recomputes exactly the steps that read it).
 
-## Built for flaky, expensive work
+## Sources, shapes, policies
 
-Steps carry their own execution policies:
+There's no `Source` protocol. A parentless generator is a source (`out_shape="many"` inferred). Folder / CSV / SQL recipes live in [How it works](https://rubedo.run/docs/concepts/model/#sources); cloud LIST-only and the rest are in [sources.md](docs/concepts/sources.md).
+
+**Shapes.** Default is `map` (1:1). `aggregate` / `fold` fan in; `expand` fans out; `join` is an N-way equijoin (`join_mode="intersect"` inner, `"union"` symmetric outer). A parentless non-generator is a source-less `@root` lane whose input is its params. Broadcast, traps, and `p.join(...)` / `p.union(...)`: [shapes](docs/concepts/shapes.md). Practical join: [Enrich and join tables](docs/guides/data-enrichment.md).
+
+**Policies** — none of these enter cache identity:
 
 ```python
 def check_price_positive(val: dict):
@@ -129,74 +133,11 @@ def check_price_positive(val: dict):
 def enrich(row: dict): ...
 ```
 
-- **Retries** apply only to exceptions matching `retry_on` (keep it narrow — retrying a deterministic bug on a paid API just multiplies cost). Every attempt lands in the run event log.
-- **`rate_limit`** paces the step evenly across all its workers, retries included.
-- **`stale_after`** expires outputs: past the TTL the step re-executes — different bytes supersede the old generation (downstream recomputes), identical bytes just refresh the clock.
-- **`assertions`** run against the output value before it commits; if any raise, the step fails and bad data never propagates downstream.
-- **`executor="process"` or `executor=<factory>`** switches a step from the
-  default thread path to a `loky` process pool or any Future-shaped external
-  pool returned by a zero-argument factory — [`examples/dask_executor`](examples/dask_executor/)
-  and [`examples/ray_executor`](examples/ray_executor/) run real step bodies on
-  Dask and Ray with full second-run reuse. Executor choice never changes
-  cache identity.
-- **`pipeline(..., schedule="broad"|"deep")`** picks the execution order — never the results (cache identity is order-independent, and either mode fully reuses the other's outputs). `"broad"` (default) completes each step across all lanes before the next one starts — natural inspection checkpoints, so you see all of a paid step's output before the next stage spends anything. `"deep"` lets each item race ahead through consecutive 1:1 steps as soon as its own inputs land — first results as early as possible, no stalling at stage boundaries while a slow sibling scrapes. `aggregate`/`join` always synchronize on all lanes either way.
-
-A step can **decline an item** by returning `Filtered(reason=...)`: downstream steps skip it with status `filtered` instead of executing, and the verdict itself is cached like any output — an expensive LLM-based filter runs once per input, not once per run. When the input changes, the decision is made fresh.
-
-`skip_cache=True` marks an inline util — a quick, idempotent helper that keeps other steps readable. It's never materialized or recorded: its identity fuses into its consumers' cache keys, and it executes lazily (memoized per run) only when a consumer actually runs, so fully-cached runs skip it entirely. If a step is expensive, flaky, or non-deterministic, it deserves materialization — don't skip it.
-
-## Shapes
-
-By default a step is `map` — 1:1 per lane. Four more shapes cover fan-in, fan-out, and joins:
-
-- **`aggregate`** (N:1) — fan in over all a parent's surviving lanes: `@step(in_shape="aggregate")` receives `{lane: value}` and returns one output. Add `group_key="field"` to fan in *per group* instead — one output per value of a parent output field. By default it drops failed parent lanes and proceeds with what passed (`on_failed="use_passed"`).
-- **`fold`** (N:1) — like `aggregate`, but receives an accumulator (initialized to `fold_init`) and one parent value at a time for incremental processing. Supports `group_key`.
-- **`expand`** (1:N) — the step `yield`s a payload per item and each becomes its own content-addressed downstream lane (fetch a feed → a lane per article). The whole expansion is cached against its parent, so a scrape runs once and a re-run re-expands nothing; `stale_after` gives periodic re-scrape.
-- **`join`** — an N-way equijoin across multiple parents, matched on a field of their outputs, minting one lane per matched tuple:
-
-```python
-p = pipeline(name="enrich")
-
-@p.step
-def orders_src():
-    with open("orders.csv", newline="") as f:
-        yield from csv.DictReader(f)
-
-@p.step
-def customers_src():
-    with open("customers.csv", newline="") as f:
-        yield from csv.DictReader(f)
-
-@p.step
-def order(orders_src): return {"oid": orders_src["oid"], "cust": orders_src["cust"]}
-
-@p.step
-def customer(customers_src): return {"cid": customers_src["cid"], "name": customers_src["name"]}
-
-@p.step(
-        join_on={"order": "cust", "customer": "cid"})
-def enrich(order, customer):        # one lane per matched pair
-    return {"oid": order["oid"], "name": customer["name"]}
-```
-
-Two sources, two maps, one join. `enrich` runs once per matched `(order, customer)` pair — `join_on` names the fields, not a join table. Multiple sources are just multiple `expand`-shaped roots in the same pipeline — nothing extra to declare; `join` doesn't care that its parents are expand roots. See [`examples/newsroom`](examples/newsroom/) for join → expand → `group_key` working together.
-
-When a join or union has no interesting body, declare it without one: `p.join(name="pair", join_on={...})` assembles a nested struct from the matched parents, and `p.union(name="all", depends_on=[...])` merges lane sets deduped by content hash — zero per-lane Python calls, cached like any step.
-
-A pipeline doesn't need a source-shaped root at all. A `map` step with no `depends_on` is a **source-less root**: it mints a single lane whose input is its params (or a constant when it takes none), so you can feed a value *into* the head instead of scanning for one — `p.run(params={"pdf": "…"})`. Same params reuse the cached output; a changed param recomputes. It's the everyday counterpart to an `expand` root (which mints N): a `map` root mints one.
-
-```python
-@p.step                                    # no parents, not a generator
-def load_pdf(params): return split(params["pdf"])   # mints the single '@root' lane
-```
-
-See [`examples/pdf_digest`](examples/pdf_digest/) for a source-less head feeding expand → vision-LLM → aggregate → two summaries.
-
-A source-less root's value (or a plain `group_key=None` aggregate's result) can also be named alongside a real per-row dependency in a downstream step — Rubedo broadcasts the one value to every row instead of requiring a matching per-row coordinate. See [shapes.md](docs/concepts/shapes.md#broadcasting-a-single-value-into-per-row-steps) for the details and the trap (two real multi-lane producers that don't share a coordinate lineage still error, by design — that's what `join` is for).
+Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `skip_cache=True` fuses a cheap helper into its consumers and never materializes it — don't skip anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)).
 
 ## Find a row. Invalidate just that.
 
-Outputs are **searchable by their content**: a step's output struct fields are the query language's open vocabulary, so you can select by what a step *computed*, regardless of file names or row keys:
+Outputs are searchable by their content — a step's output struct fields are the query language's open vocabulary:
 
 ```python
 from rubedo import Selection, invalidate
@@ -205,22 +146,22 @@ invalidate(Selection(index={"company": "acme"}))          # recompute acme's row
 Selection.parse("step:extract company:acme live:true")     # query-string form (Python, CLI, and UI)
 ```
 
-That is **surgical invalidation**: only the matched rows (and, with `downstream=True`, what they contaminated) recompute. Reserved prefixes (`step:`, `live:`, `version:<2.0`-style ranges, lane-key globs) cover engine facts; any other `field:value` matches a field of the step's output struct. A label is just a field a step returns — non-unique, multi-valued, attachable at any step, never part of cache identity. Invalidation is a logical tombstone, never a delete: history stays intact, and the next run recomputes exactly the invalidated lanes plus their downstream.
-
-`downstream=True` (CLI `--downstream`) widens the tombstone to everything *derived* from the matches — the full downstream closure over the recorded lineage edges, exactly the set `rubedo trace "<same query>"` shows as live seed + downstream, so **trace is the preview of the blast radius**: run it first and read the counts. Be aware that an aggregate or join inside the closure honestly carries everything after it (one bad lane contaminated the fan-in, so the fan-in and its descendants flip too); recovery is never more than re-running the pipeline, which recomputes exactly the invalidated set.
+That is **surgical invalidation**: only the matched rows (and, with `downstream=True`, what they contaminated) recompute. Invalidation is a logical tombstone, never a delete. `trace()` is the preview of the blast radius. Full language and the fan-in trap: [Find and invalidate a row](docs/guides/search-and-invalidation.md).
 
 ## Code changes and caching
 
 Two independent axes on `@step`:
 
 - **`version`** is the semantic identity — bump it for deliberate behavior changes (also the escape hatch for edits the engine can't see, like helpers your step calls).
-- **`code`** decides what a *source edit* means. `code="auto"` folds the function's source hash into the cache identity, so any edit recomputes without version bookkeeping (right for cheap, deterministic steps). `code="warn"` (the default) never recomputes on edits, but warns loudly — in the run output, the event log, and `p.plan()` — whenever it reuses an output whose code has since changed, so recomputing an expensive LLM step stays a deliberate choice.
+- **`code`** decides what a *source edit* means. `code="auto"` folds the function's source hash into the cache identity. `code="warn"` (the default) never recomputes on edits, but warns loudly whenever it reuses an output whose code has since changed.
+
+`stale_after="24h"` is a wall-clock TTL, independent of both. Details: [When code changes](docs/concepts/versioning.md).
 
 ## Inspecting runs
 
-`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything.
+`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything. A `check_cache=False` source always plans as `execute`; everything downstream shows `pending` until it actually runs — that's why the tutorial's first-run plan looks coarse.
 
-Everything a run wrote is queryable through **`Home`** — the handle to one storage root (the `.rubedo/` directory, or wherever `RUBEDO_HOME` points). A `Cell` is one (run, step, lane) outcome with its status and resolved output value:
+Everything a run wrote is queryable through **`Home`**:
 
 ```python
 from rubedo import Home
@@ -231,108 +172,31 @@ home.select("step:enrich company:acme")     # same query language as the CLI and
 home.runs(pipeline="triage", limit=10)      # run history, newest first
 ```
 
-`RunSummary.cells` gives the same view for the run you just executed, so tests and scripts never hand-roll coordinate lookups.
+The **web dashboard** is a read-only browser over the same ledger (`rubedo serve` → http://127.0.0.1:8000). Treat it as a local tool, not something to expose publicly.
 
-### Partial runs and sampling
-
-To trial an expensive step on a frozen cohort without paying for the whole batch (and without changing cache identity):
-
-```python
-from rubedo import RunScope
-
-scope = RunScope.sample_n(anchor="classify", cells=candidates, n=100, seed="v2")
-trial = p.run(scope=scope, targets=["classify"])  # kind='partial'
-p.run()  # full run reuses those classify addresses
-```
-
-Scope and targets never enter output addresses. Partial runs do not displace `home.current()` (latest full `process` run) or steal retention protection from it. See [trials: sample, diff, roll out](docs/guides/trials.md).
-
-### Run history and run-to-run diff
-
-After a baseline full run and a version-bumped `RunScope` trial, compare
-at the anchor (cohort-aware by default) then roll out:
-
-```python
-baseline = p.run()
-# …bump step version, sample a cohort…
-trial = p.run(scope=scope, targets=["classify"])
-diff = home.diff(step="classify", before=baseline, after=trial)
-print(diff)  # unchanged / changed / added / removed / failed
-p.run()      # full rollout reuses the trial's addresses
-```
-
-`home.runs(pipeline=..., kind=..., status=..., limit=...)` lists history
-(newest first; effective status; includes partials). See
-[trials: sample, diff, roll out](docs/guides/trials.md).
-
-`trace()` follows lineage from any selection — upstream to the source items everything came from (roots show their stored payload), downstream to everything derived from it. "This output looks wrong — what produced it, and what did it contaminate?" is one command:
-
-```python
-from rubedo import Selection, trace
-print(trace(Selection.parse("company:acme")))    # or: rubedo trace "company:acme"
-```
-
-By default only live outputs seed a trace; `include_superseded=True` (CLI `--all`) seeds history too. Traversal always follows the real derivation edges either way — superseded generations are marked, never hidden.
-
-`rubedo du` (or `storage_report()` from `rubedo.du`) answers "why is `.rubedo` this big?": total object-store size, a per-pipeline/per-step breakdown, and a reclaimable estimate — a dry-run ref-count audit computed from the ledger. Objects are content-addressed and shared, so an object counts as reclaimable only when *no* live output references it. Purely a report: nothing is ever deleted. `--json` for scripts.
-
-The **CLI** browses and invalidates against the local ledger:
+Partial runs, sampling, run-to-run diff, `trace()`, and `rubedo du`: [Inspect a run](docs/guides/inspecting-runs.md) and [Trial a change](docs/guides/trials.md).
 
 ```bash
 rubedo ls                          # recent runs
-rubedo show <run_id> --failed      # what broke, per lane (--json for scripts)
+rubedo show <run_id> --failed      # what broke, per lane
 rubedo invalidate "step:enrich company:acme" --reason "bad prompt"
-rubedo check                       # lint declared pipeline(secrets=/env=) against the environment
+rubedo serve                       # dashboard
 ```
 
 ## Retention and garbage collection
 
-The store keeps every generation forever by default — recompute-avoidance is the whole point, and old outputs are cheap insurance. When they stop being worth their bytes, retention prunes by **run recency**: it never touches what recent runs used, so the safety of caching is preserved.
-
-Set a keep-window per pipeline:
-
-```python
-pipeline(name="scrape", ..., retention=5)   # keep only the last 5 runs' outputs
-```
-
-At the end of each successful run, generations that only older runs referenced are demoted and — once no live output anywhere references the bytes — the object is deleted. It's set-and-forget; a run skips its own prune (never errors) if another run is in flight.
-
-Or reconcile on demand across all pipelines with a global byte budget:
-
-```bash
-rubedo gc                       # dry-run: exactly what --delete would prune, deletes nothing
-rubedo gc --max-bytes 2GiB      # dry-run against a budget (oldest runs first)
-rubedo gc --max-bytes 2GiB --delete   # apply it
-```
-
-Retention deletes **bytes, never facts**: a demoted generation keeps its ledger row and lineage, every deletion is logged in an append-only table, and recovery is lazy — if a pruned lane's input reappears, the next run rewrites the bytes and restores the row. `rubedo du` reports GC-reclaimed objects separately from genuinely missing ones. GC refuses to delete while any run is live (a concurrent run could be committing an output that points at bytes GC is about to remove). [notes/retention.md](notes/retention.md) is the full model — policies, the demote/sweep phases, guarantees, and the recompute trade-off.
-
-The **web dashboard** is a read-only browser over runs, materializations, lineage, and current outputs, with search to drill into specific values or errors. Open a run to get **Run View** — a definition-driven layout of that run's cells (branch / join / child / summary / fold sections; same payload as `GET /api/runs/{id}/view`). (The UI never writes; the API beneath it is read-only except for one endpoint, `POST /api/selection/invalidate`, which is unauthenticated and meant for local use — treat `rubedo serve` as a local tool, not something to expose publicly.)
-
-```bash
-rubedo serve                    # API + UI on http://127.0.0.1:8000
-```
-
-The built UI is served from the package — no separate dev server needed. To hack on the web UI itself, use `cd web && npm run dev` (Vite proxies `/api` to `:8000`).
-
-Running, recomputing, and invalidation always happen from library code or the CLI; the UI never mutates state.
+The store keeps every generation forever by default. `pipeline(..., retention=5)` keeps only the last 5 runs' outputs; `rubedo gc` (dry-run by default) reconciles against a byte budget. Retention deletes **bytes, never facts**. Details: [Inspect a run](docs/guides/inspecting-runs.md#keep-the-store-small); full model: [notes/retention.md](notes/retention.md).
 
 ## Local by default, shared when you need it
 
-All state hangs off a `Home` — one storage root owning three planes: the **ledger** (SQLite by default), the content-addressed **object store**, and the Arrow **lane tables**. The default home is the local `.rubedo/` directory and nothing else exists until you point at it; every knob below is optional.
-
-To share the cache beyond one machine, move the data planes into an S3-compatible bucket — AWS S3, Cloudflare R2, Backblaze B2, and MinIO all use the same backend; the provider is configuration, not an engine concept:
+All state hangs off a `Home` — ledger (SQLite by default), content-addressed object store, Arrow lane tables. To share beyond one machine:
 
 ```python
 home = Home(".rubedo", store_url="s3://my-bucket/rubedo")   # or RUBEDO_STORE_URL
 p = pipeline(name="scrape", home=home)
 ```
 
-Spilled outputs land under `objects/…`, and lane history is written as immutable Arrow segments under `tables/…`, guarded by a renewable single-writer lease per pipeline (read-only `.plan()` never takes the lease) with threshold compaction keeping segment chains short. A second home against the same bucket and ledger reuses the first's outputs — the run-it-twice payoff, across machines. For truly multi-machine setups the ledger itself moves to a shared database via `db_url=` (any SQLAlchemy URL; Postgres is what the test suite covers).
-
-When steps run in a process pool or an external pool against a cloud store, spilled payloads travel **by reference**: workers receive `objects:<hash>` refs, fetch their inputs from the bucket directly, and put results straight back — the coordinator never relays the bytes (`p.run(payload_refs=False)` forces hub routing if you need it).
-
-Two honest caveats: destructive `rubedo gc --delete` currently refuses cloud stores (dry-run reporting works fine), and the cloud planes are the newest part of the engine. [docs/guides/cloud-storage.md](docs/guides/cloud-storage.md) has the full setup, including R2 endpoint configuration.
+A second home against the same bucket and ledger reuses the first's outputs. Multi-machine ledgers move to Postgres via `db_url=`. Caveats: `rubedo gc --delete` currently refuses cloud stores (dry-run works), and the cloud planes are the newest part of the engine. Setup: [Share the cache](docs/guides/cloud-storage.md).
 
 ## Examples
 
@@ -346,18 +210,18 @@ See the [examples README](examples/README.md) for the full table of what each on
 
 ## Design
 
-The control plane is an **append-only SQL ledger** (SQLite by default, Postgres for shared deployments — immutability enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Lineage edges connect each output to the outputs it was derived from. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary and the promises the engine guarantees; [notes/producer-model.md](notes/producer-model.md) covers the design behind sources, `expand`, and `join`.
+The control plane is an **append-only SQL ledger** (SQLite by default, Postgres for shared deployments — immutability enforced at the ORM layer), while outputs land in **append-only Arrow IPC files**. Committed outputs are immutable, every liveness transition is recorded in the `input_hash_usages` table, and workers can die at any point without corrupting committed state. Planning is read-only and value-free; execution is DB-free; all writes go through one commit path. [notes/invariants.md](notes/invariants.md) is the canonical vocabulary; [notes/producer-model.md](notes/producer-model.md) covers sources, `expand`, and `join`.
 
 ## Performance
 
 The data plane is columnar: each step's outputs live in a per-step, append-only **Arrow IPC** file, and the reuse checks that dominate plan time are vectorized Arrow scans rather than per-row SQLite queries. On top of that store:
 
-- **Reuse lookups are O(matches), not O(history).** Each loaded table carries an in-memory `address → row` index; planning probes it and `table.take`s only the matching rows through Arrow's C++ kernels instead of deserializing a step's whole history. In the micro benchmarks this made warm lookups **1.6×** faster and sparse lookups (few matches in a deep table) **2.8×** faster.
-- **Liveness is one SQLite query per run.** The set of fulfilled addresses loads once at run start and is consulted as a Python set intersection, replacing a per-step `IN (...)` query — a `.plan()` over a 5K-lane store went from 0.35s to 0.22s when this landed (~31% at 20K lanes).
-- **Tables stay in memory while they're needed.** A parent step's table is flushed to disk only once no future segment reads it, and flushing writes *through* the cache — durability never costs a re-read.
-- **Data can stay in Arrow end-to-end.** An aggregate step can request its fan-in as a `pa.Table` (`arrow_aggregate=True`) and an expand step can return one, skipping the Python-dict round trip entirely; that's also why any output field is searchable and joinable with no index declaration.
+- **Reuse lookups are O(matches), not O(history).** Each loaded table carries an in-memory `address → row` index; warm lookups **1.6×** faster and sparse lookups **2.8×** faster in the micro benchmarks.
+- **Liveness is one SQLite query per run.** The set of fulfilled addresses loads once at run start — a `.plan()` over a 5K-lane store went from 0.35s to 0.22s when this landed.
+- **Tables stay in memory while they're needed.** A parent step's table is flushed to disk only once no future segment reads it.
+- **Data can stay in Arrow end-to-end.** An aggregate can request fan-in as a `pa.Table` (`arrow_aggregate=True`); that's also why any output field is searchable and joinable with no index declaration.
 
-[`benchmarks/`](benchmarks/) is the before/after harness behind these numbers. Scenarios report **work counters** (Arrow rows written, reuse lookups, SQLite statements) alongside timings, so a change can demonstrate it does no extra work — see [`benchmarks/README.md`](benchmarks/README.md).
+[`benchmarks/`](benchmarks/) is the before/after harness. Scenarios report **work counters** alongside timings — see [`benchmarks/README.md`](benchmarks/README.md).
 
 ## Project status
 

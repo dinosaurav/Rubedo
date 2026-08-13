@@ -1,3 +1,8 @@
+---
+search:
+  exclude: true
+---
+
 # Shapes
 
 !!! note "Long form"

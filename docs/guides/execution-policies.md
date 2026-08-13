@@ -1,12 +1,10 @@
 # Retries, rate limits, assertions
 
-A step is a Python function plus policies declared as `@step(...)` keyword
-arguments — how it retries, how fast it's allowed to run, what it's allowed
-to produce, and which pool runs it. None of these affect cache identity
-(the output address doesn't encode `retries=3` or `rate_limit=`); they only
-govern *how* a step gets from "needs to execute" to "committed." This page
-covers each one, plus the two things that govern a whole pipeline's runs:
-`schedule` and `Filtered`.
+Make a flaky paid step survive the network without multiplying the bill
+for a bug. Policies on `@step(...)` govern *how* a lane gets from "needs
+to execute" to "committed" — retries, pace, assertions, which pool runs
+it. None of them enter cache identity. This page also covers
+`schedule` (order, never results) and `Filtered` (decline a row).
 
 ## Retries
 

@@ -1,10 +1,41 @@
 # Inspect a run
 
-Read-only ways to look at what a pipeline did or would do, without changing
-anything: `p.plan()` (before you run), the `Cell` query surface on `Home` /
-`RunSummary` (after you run), `trace()` (lineage from any point), and
-`rubedo du` / `storage_report()` (how big the store is and why). Those, plus
-the run event log and the web dashboard, are covered here.
+See what a pipeline did — or would do — without changing anything.
+
+```bash
+rubedo serve                    # dashboard at http://127.0.0.1:8000
+print(p.plan())                 # dry-run: writes nothing
+```
+
+The dashboard is a read-only browser over the ledger (runs, lineage,
+current outputs). `p.plan()` is the same planning phase `p.run()` uses,
+alone. `Home` / `RunSummary` cells, `trace()`, `rubedo du`, the event log,
+and retention/`gc` are below. Requires `pip install "rubedo[server]"` for
+the UI.
+
+## The web dashboard
+
+```bash
+rubedo serve                    # API + UI on http://127.0.0.1:8000
+```
+
+A browser over the same ledger everything else here reads — runs,
+materializations, lineage, current outputs — with search to drill into a
+value or error. The **UI never mutates state**: `run` and `gc --delete`
+are library code or the CLI. The API is read-only except for one
+unauthenticated local endpoint, `POST /api/selection/invalidate` — treat
+`rubedo serve` as a local tool, not something to expose publicly. The
+built UI ships in the package; to hack on it, `cd web && npm run dev`
+(Vite proxies `/api` to `:8000`). `server.py` never imports your pipeline
+code.
+
+Open a run and the default tab is **Run View**: a definition-driven layout
+of that run's cells (`GET /api/runs/{id}/view` is the same payload).
+Sections follow the pipeline shape: **Branch** (expand root + downstream
+maps), **Join**, **Child** (nested expand), **Summary** (aggregates),
+**Fold**. Cell tinting is created / reused / failed; clicking a cell
+lazy-loads the object preview. Observability only — it does not
+invalidate or re-run.
 
 ## `Cell`: reading what a run produced
 
@@ -224,43 +255,3 @@ See [`../reference/cli.md`](../reference/cli.md#rubedo-show) for the full
 `show` reference, and
 [`../reference/api/index.md`](../reference/api/index.md) for `RunSummary.failures()`,
 the library equivalent.
-
-## The web dashboard (read-only UI)
-
-```bash
-rubedo serve                    # API + UI on http://127.0.0.1:8000
-```
-
-The dashboard is a browser over the same ledger everything else here reads
-— runs, materializations, lineage, current outputs — with search to drill
-into a specific value or error. The **UI never mutates state**: every write
-path a user typically reaches for (`run`, `gc --delete`) is library code or
-the CLI. The API beneath the dashboard is read-only except for one endpoint,
-`POST /api/selection/invalidate`, which is unauthenticated and meant for
-local use — treat `rubedo serve` as a local tool, not something to expose
-publicly. The built UI is served from the package; to hack on the web UI
-itself, `cd web && npm run dev` (Vite proxies `/api` to `:8000`).
-`server.py` never imports your pipeline code — it only ever reads the ledger
-and the `definition()` snapshot each run recorded.
-
-## Run View
-
-Open a run in the dashboard and the default tab is **Run View**: a
-definition-driven layout of that run's cells, not a flat dump of every
-coordinate. The same payload is available as
-`GET /api/runs/{id}/view`.
-
-Sections follow the pipeline shape:
-
-- **Branch** — one table per expand root and its downstream map/expand
-  chain (params band above the first branch when the run recorded any).
-- **Join** — equijoin results as their own tables.
-- **Child** — nested expand fan-out under a parent row (expand column
-  always present so you can open the expand cell itself).
-- **Summary** — aggregate chips (click to expand the aggregate payload).
-- **Fold** — post-aggregate map steps as a normal table after the
-  aggregate they depend on (`after <aggregate>`).
-
-Cell tinting reflects created / reused / failed for the run; clicking a
-cell lazy-loads the object preview. Run View is observability only — it
-does not invalidate or re-run.

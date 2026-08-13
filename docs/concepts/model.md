@@ -60,8 +60,8 @@ and downstream recomputes.
 
 `skip_cache=True` marks a cheap, deterministic helper that is never
 materialized — its identity fuses into its consumers. Don't skip anything
-expensive, flaky, or non-deterministic. Full rules:
-[When code changes](versioning.md).
+expensive, flaky, or non-deterministic. Full rules for `version` / `code` /
+TTL / skip: [When code changes](versioning.md).
 
 ## Shapes
 
@@ -75,7 +75,7 @@ is `map`. An explicit value that contradicts the code raises.
 | `expand` | 1:N | The step `yield`s payloads; each becomes a `row-<hash>` child. A parentless generator is a **source**. |
 | `aggregate` | N:1 | Fan-in over surviving parent lanes (`@all`), or `group_key="field"` for one output per field value. |
 | `fold` | N:1 | Like aggregate, but an accumulator (`fold_init`) plus one parent value at a time. |
-| `join` | N-way | Equijoin on `join_on={parent: field}`, minting `a\|b\|…` pair lanes. Inner or outer via `join_mode`. |
+| `join` | N-way | Equijoin on `join_on={parent: field}`, minting `a\|b\|…` pair lanes. `join_mode="intersect"` (inner, default) or `"union"` (symmetric outer; absences are `None`). Anti-join = union, then `Filtered`. |
 
 **Broadcast.** A source-less root (or an ungrouped aggregate) can be named
 alongside a real per-row dependency — every row sees the same value. Two
@@ -83,7 +83,7 @@ alongside a real per-row dependency — every row sees the same value. Two
 error; that's what `join` is for.
 
 The traps, caching stories, and `p.join(...)` live in the
-[shape reference](shapes.md). Joining two tables:
+[shape reference](shapes.md). Inner vs outer vs anti-join:
 [Enrich and join tables](../guides/data-enrichment.md).
 
 ## Sources

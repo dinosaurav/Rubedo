@@ -1,3 +1,8 @@
+---
+search:
+  exclude: true
+---
+
 # Sources
 
 !!! note "Long form"

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Identity everywhere:** PyPI `description`, `/llms.txt`, and `AGENTS.md`
+  now open with the same line as the landing and README (a Python library
+  for batch pipelines that remember every step). Mechanism nouns stay in
+  the At a glance / 10-line contract.
+
+- **One cheap example, one paid proof.** Docs home uses the same
+  no-key folder `count_lines` snippet as the README; the tutorial stays
+  the copy-paste classifier; the landing keeps `inbox` → `decide` as the
+  LLM walkthrough. README later sections point at docs instead of
+  re-teaching. How-to pages lead with the job; the dashboard is on the
+  Inspect a run opening and in the tutorial Next. Off-nav long-form
+  (shapes, sources, versioning, producer-model, Arrow, retention-design)
+  is excluded from MkDocs search. Getting-started and retention stubs
+  are clearer jump pages.
+
+- **Landing:** the 8 / 0 / 1 LLM-call stats sit under the hero CTA so
+  the reuse proof is above the fold; code + walkthrough stay below.
+
 - **Docs slash:** public nav is Home → Tutorial → Examples → How it works
   (one page) → How to (six jobs) → Reference → Invariants. First-run folded
   into the tutorial; retention folded into Inspect a run. Shapes, sources,

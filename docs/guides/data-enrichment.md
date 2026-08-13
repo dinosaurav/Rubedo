@@ -1,15 +1,13 @@
 # Enrich and join tables
 
 Two independent tables, match on a business key, carry fields from one
-side onto the other — orders with customers, events with accounts, feeds
-with publishers. In Rubedo that is a multi-root pipeline ending in a
-[`join`](../concepts/shapes.md#join-n-way-equijoin), not a multi-parent
-`map` (a map only pairs lanes that already share a coordinate lineage — a
-diamond).
+side onto the other. That is a multi-root pipeline ending in a
+[`join`](../concepts/shapes.md#join-n-way-equijoin) — not a multi-parent
+`map` (a map only pairs lanes that already share a coordinate lineage).
 
-This page is the practical companion to the join shape: how to normalize
-keys, dedupe before you fan out, choose inner vs outer, and read the
-warnings join will give you.
+Normalize keys, dedupe the lookup side, then pick inner (`intersect`) vs
+outer (`union`) vs anti-join. The shape reference is
+[How it works](../concepts/model.md#shapes).
 
 ## The skeleton
 

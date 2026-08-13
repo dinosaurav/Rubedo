@@ -1,3 +1,8 @@
+---
+search:
+  exclude: true
+---
+
 # When code changes
 
 !!! note "Long form"

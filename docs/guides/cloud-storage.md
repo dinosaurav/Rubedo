@@ -1,10 +1,9 @@
 # Share the cache
 
-Put spilled outputs and Arrow lane history in an S3-compatible bucket. AWS
-S3, Cloudflare R2, Backblaze B2, and MinIO use the same backend; provider
-names are configuration, not engine concepts. A second machine against the
-same bucket and ledger reuses the first's work — the run-it-twice payoff,
-across machines.
+Point the object store at an S3-compatible bucket (AWS S3, Cloudflare R2,
+Backblaze B2, MinIO — same backend). A second machine against the same
+bucket and ledger reuses the first's work — the run-it-twice payoff,
+across machines. Local `.rubedo/` stays the default.
 
 ## Configure a cloud home
 

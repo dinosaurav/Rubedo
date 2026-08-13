@@ -1,8 +1,10 @@
 # Working on Rubedo (agent instructions — canonical)
 
-Local-first batch engine: DAG pipelines over keyed collections (files, CSV
-rows) with content-addressed caching, an append-only run ledger, and
-surgical invalidation. Think "dbt state for Python tasks," built for
+Rubedo is a Python library for batch pipelines. You write steps as ordinary
+functions; it stores every result and only recomputes what changed. Under
+the hood: DAG pipelines over keyed collections (files, CSV rows) with
+content-addressed caching, an append-only run ledger, and surgical
+invalidation. Think dbt-style state for Python tasks, built for
 non-idempotent steps (LLM calls, scraping). Read `README.md` for the user
 view and `notes/invariants.md` for the vocabulary and guarantees — both are
 accurate and load-bearing; keep them updated when behavior changes.

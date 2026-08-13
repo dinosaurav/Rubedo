@@ -18,40 +18,57 @@ pip install rubedo
 
 ## A pipeline is two functions
 
+No API key. A folder of files in, a line count out — the same shape as
+the [tutorial](tutorial.md) and the README. When the last step *is* an
+LLM, this is still the graph: a source that yields items, a map that
+spends, a second run that doesn't. That paid version is the
+[landing-page walkthrough](https://rubedo.run/).
+
 ```python
-import csv
 from rubedo import pipeline
 
-p = pipeline(name="summarize")
+p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)   # re-read the CSV every run
-def leads():
-    with open("leads.csv", newline="") as f:
-        yield from csv.DictReader(f)
+@p.step(check_cache=False)   # rescan the folder every run
+def scan():
+    import os
+    for name in sorted(os.listdir("input")):
+        path = os.path.join("input", name)
+        if os.path.isfile(path):
+            yield {"path": name, "text": open(path).read()}
 
 @p.step
-def summarize(leads: dict):  # argument name = parent step
-    return {"summary": call_llm(leads["notes"])}
+def count_lines(scan: dict):  # argument name = parent step
+    return {"line_count": len(scan["text"].splitlines())}
 
-p.run()   # second run: already-seen rows skip the LLM
+print(p.plan())               # dry-run: what would recompute, and why
+summary = p.run()
+print(summary.created_count, summary.reused_count)
 ```
 
 **What this is doing**
 
-1. **`leads`** yields one item per CSV row. `check_cache=False` re-reads
-   the file every run, so new and edited rows show up.
-2. **`summarize`** calls the LLM once per row. The argument name `leads`
-   is the dependency — no YAML, no DAG file.
-3. **Run it again.** Already-seen rows skip the LLM. Only new or edited
-   rows pay.
+1. **`scan`** lists a folder and yields one item per file.
+   `check_cache=False` re-reads every run, so new and edited files show up.
+2. **`count_lines`** runs once per file. The argument name `scan` is the
+   parent — no YAML, no DAG file.
+3. **`plan()`, then `run()`.** `plan()` writes nothing. `run()` executes.
+   Run it twice: first run creates; second run reuses.
+
+Look at the run in a browser: `rubedo serve` (needs
+`pip install "rubedo[server]"`) — covered in
+[Inspect a run](guides/inspecting-runs.md).
 
 ## Read in this order
 
 1. **[Tutorial](tutorial.md)** — install, build a classifier, query by
-   content, edit an input, bump a version, invalidate a selection.
+   content, edit an input, bump a version, invalidate a selection. What
+   `plan()` prints lives there.
 2. **[How it works](concepts/model.md)** — lanes, addresses, shapes,
    sources, the ledger, the four promises.
 3. **[Examples](examples.md)** — the same ideas against real services.
 
-Signatures: **[API](reference/api/index.md)** and **[CLI](reference/cli.md)**.
+How-to jobs (retries, joins, invalidation, the dashboard, trials, sharing
+the cache) sit under **How to** in the sidebar. Signatures:
+**[API](reference/api/index.md)** and **[CLI](reference/cli.md)**.
 Guarantees: **[Invariants](development/invariants.md)**.
