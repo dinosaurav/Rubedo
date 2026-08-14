@@ -19,6 +19,7 @@ concurrently within the same segment.
 """
 
 import concurrent.futures
+import os
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import loky
@@ -33,6 +34,21 @@ if TYPE_CHECKING:
     from .scope import RunScope
 
 SCHEDULES = ("broad", "deep")
+
+#: How many planned ledger rows to accumulate before ``session.commit``.
+#: Deep reuse used to commit once per lane (a fsync storm). ``1`` restores
+#: that cadence. Execute decisions always flush immediately so a nested
+#: ``_commit_execution_result`` writer cannot deadlock SQLite.
+_DEFAULT_LEDGER_BATCH = 128
+
+
+def _ledger_batch_size() -> int:
+    raw = (os.environ.get("RUBEDO_LEDGER_BATCH") or str(_DEFAULT_LEDGER_BATCH)).strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = _DEFAULT_LEDGER_BATCH
+    return max(1, n)
 
 
 def _shutdown_worker_pool(pool: Any) -> None:
@@ -154,6 +170,34 @@ def _run_segment(
     else:
         scoped_steps = set()
 
+    pending_ledger = 0
+    pending_progress: List[tuple] = []
+    ledger_batch = _ledger_batch_size()
+
+    def drain_progress() -> None:
+        """Fire queued progress after the rows they describe are committed.
+
+        Product engines resolve outputs from a nested ``home.session()``
+        inside ``progress_cb``. Firing before ``commit`` made those reads
+        miss reuse/identity rows and mint duplicate child records.
+        """
+        if not pending_progress:
+            return
+        events = pending_progress[:]
+        pending_progress.clear()
+        if not progress_cb:
+            return
+        for step_name, coordinate, status in events:
+            progress_cb(step_name, coordinate, status)
+
+    def flush_ledger() -> None:
+        """Persist accumulated plan rows, then deliver their progress events."""
+        nonlocal pending_ledger
+        if pending_ledger:
+            session.commit()
+            pending_ledger = 0
+        drain_progress()
+
     def dispatch(step: StepSpec, decision: StepDecision) -> None:
         # Two layers, on purpose: the thread pool orchestrates the retry
         # loop and the shared rate limiter for every lane; a loky process
@@ -203,6 +247,7 @@ def _run_segment(
 
     def plan_cells(step: StepSpec, lanes: Optional[List[str]]) -> None:
         """Plan a step (whole, or one lane's cell) and act on the decisions."""
+        nonlocal pending_ledger
         if step.name in scoped_steps:
             assert scope_lanes is not None
             if lanes is None:
@@ -228,11 +273,17 @@ def _run_segment(
             for d in decisions:
                 ctx.scope_reached.add(d.coordinate)
         _record_planned(session, ctx, step, decisions)
-        session.commit()
+        pending_ledger += max(len(decisions), 1)
         if progress_cb:
             for d in decisions:
                 if d.action != "execute":
-                    progress_cb(step.name, d.coordinate, d.action)
+                    pending_progress.append((step.name, d.coordinate, d.action))
+        # Execute rows must hit disk before workers run *and* before
+        # ``_commit_execution_result`` opens a nested writer session.
+        # Reuse progress waits for the same commit so nested ledger
+        # reads in progress_cb see the rows.
+        if any(d.action == "execute" for d in decisions) or pending_ledger >= ledger_batch:
+            flush_ledger()
         for d in decisions:
             if d.action == "execute":
                 dispatch(step, d)
@@ -262,6 +313,8 @@ def _run_segment(
                 plan_cells(s, None)
 
         # Completion loop: all ledger writes stay here in the main thread.
+        # Flush planned rows before nested execute commits (SQLite lock).
+        flush_ledger()
         while in_flight:
             done, _ = concurrent.futures.wait(
                 in_flight, return_when=concurrent.futures.FIRST_COMPLETED
@@ -269,6 +322,7 @@ def _run_segment(
             for fut in done:
                 step = in_flight.pop(fut)
                 outcomes = fut.result()
+                flush_ledger()
                 for outcome in outcomes:
                     status = "failed"
                     if outcome.success:
@@ -283,6 +337,7 @@ def _run_segment(
                     if not outcome.is_anchor:
                         advance(step, outcome.decision.coordinate)
 
+        flush_ledger()
         # Flush this segment's steps to disk — durability per segment.
         # The flushed table stays in the disk-table cache so downstream
         # lookups get a cache hit (no re-read).  The write buffers are

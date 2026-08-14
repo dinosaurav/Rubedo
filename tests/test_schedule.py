@@ -467,3 +467,67 @@ def test_deep_concurrent_root_expands():
     assert gate_a.is_set() and gate_b.is_set()
     # 2 sources (1 lane each) + 2 process = 4
     assert summary.created_count == 4
+
+
+def test_deep_reuse_batches_ledger_commits(monkeypatch):
+    """Warm deep reuse must not fsync once per lane.
+
+    20 files × scan+s1+s2+s3 = 80 reuse decisions. Unbatched deep commits
+    once per ``plan_cells`` call (dozens–hundreds). Batched (default 128)
+    should be a handful of run-bookkeeping commits plus one plan flush.
+    """
+    from sqlalchemy.orm import Session
+
+    for i in range(20):
+        create_file(f"f{i:02d}.txt", f"hello {i}")
+    steps = _chain_steps()
+    kwargs = dict(name="batch_reuse", steps=steps, home=TEST_HOME, schedule="deep")
+    first = pipeline(**kwargs).run()
+    assert first.status == "completed"
+    assert first.created_count == 80
+
+    commits = {"n": 0}
+    real = Session.commit
+
+    def counting(self, *a, **k):
+        commits["n"] += 1
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Session, "commit", counting)
+    monkeypatch.setenv("RUBEDO_LEDGER_BATCH", "128")
+    second = pipeline(**kwargs).run()
+    assert second.status == "completed"
+    assert (second.created_count, second.reused_count) == (0, 80)
+    assert commits["n"] < 30
+
+
+def test_reuse_progress_cb_sees_status_via_nested_session():
+    """ai-table resolves outputs from a nested Home session inside progress_cb.
+
+    Batched commits must land *before* that callback, or reuse identity
+    rows are invisible and the sheet mints duplicate children.
+    """
+    create_file("a.txt", "alpha")
+    create_file("b.txt", "beta")
+    steps = _chain_steps()
+    kwargs = dict(name="nested_cb", steps=steps, home=TEST_HOME, schedule="deep")
+    pipeline(**kwargs).run()
+
+    seen = []
+
+    def cb(step_name, coordinate, status):
+        if status != "reuse":
+            return
+        with TEST_HOME.session() as session:
+            row = (
+                session.query(RunCoordinateStatus)
+                .filter_by(step_name=step_name, coordinate=coordinate)
+                .order_by(RunCoordinateStatus.id.desc())
+                .first()
+            )
+            seen.append(row is not None and row.status in ("reused", "reuse", "created"))
+
+    second = pipeline(**kwargs).run(progress_cb=cb)
+    assert second.status == "completed"
+    assert (second.created_count, second.reused_count) == (0, 8)
+    assert seen and all(seen)

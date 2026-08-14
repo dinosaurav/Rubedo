@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Batched ledger commits on plan (`RUBEDO_LEDGER_BATCH`):** `plan_cells`
+  used to `session.commit()` after every lane — a fsync storm under
+  `schedule="deep"` reuse. Planned rows now commit in batches of 128
+  (set `RUBEDO_LEDGER_BATCH=1` to restore the old cadence). Execute
+  decisions still flush immediately so nested execute transactions
+  cannot deadlock the SQLite writer. `progress_cb` for reuse/skip
+  fires after that commit so nested ledger reads (ai-table's
+  mid-run `_resolve`) see the rows.
+
 - **Identity everywhere:** PyPI `description`, `/llms.txt`, and `AGENTS.md`
   now open with the same line as the landing and README (a Python library
   for batch pipelines that remember every step). Mechanism nouns stay in
