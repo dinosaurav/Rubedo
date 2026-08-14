@@ -397,8 +397,9 @@ class Pipeline:
         Params are validated against `params_model` whenever one is
         declared. `force=True` re-executes every cell regardless of cache
         state. `progress=True` prints a live terminal progress view;
-        `progress_cb` (step_name, coordinate, status) is a lower-level hook
-        for the same events.
+        `progress_cb` (step_name, coordinate, status[, output, content_type])
+        is a lower-level hook for the same events. Extra args are optional;
+        reuse passes the Arrow output so callers can skip a ledger round-trip.
 
         ``scope`` / ``targets`` select a partial run over a frozen lane
         cohort and/or a target-bounded subgraph. Neither enters cache

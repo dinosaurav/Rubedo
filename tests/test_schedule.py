@@ -531,3 +531,23 @@ def test_reuse_progress_cb_sees_status_via_nested_session():
     assert second.status == "completed"
     assert (second.created_count, second.reused_count) == (0, 8)
     assert seen and all(seen)
+
+
+def test_reuse_progress_cb_receives_planned_output():
+    """Product engines should not have to re-query the ledger on reuse."""
+    create_file("a.txt", "alpha")
+    create_file("b.txt", "beta")
+    steps = _chain_steps()
+    kwargs = dict(name="payload_cb", steps=steps, home=TEST_HOME, schedule="deep")
+    pipeline(**kwargs).run()
+
+    payloads = []
+
+    def cb(step_name, coordinate, status, output=None, content_type=None):
+        if status == "reuse":
+            payloads.append(output is not None)
+
+    second = pipeline(**kwargs).run(progress_cb=cb)
+    assert second.status == "completed"
+    assert (second.created_count, second.reused_count) == (0, 8)
+    assert payloads and all(payloads)

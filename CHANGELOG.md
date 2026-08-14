@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decisions still flush immediately so nested execute transactions
   cannot deadlock the SQLite writer. `progress_cb` for reuse/skip
   fires after that commit so nested ledger reads (ai-table's
-  mid-run `_resolve`) see the rows.
+  mid-run `_resolve`) see the rows. Reuse also passes the Arrow
+  ``output`` already loaded during plan as optional 4th/5th callback
+  args so product engines can skip that nested read entirely.
 
 - **Identity everywhere:** PyPI `description`, `/llms.txt`, and `AGENTS.md`
   now open with the same line as the landing and README (a Python library

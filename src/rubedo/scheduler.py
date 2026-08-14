@@ -51,6 +51,29 @@ def _ledger_batch_size() -> int:
     return max(1, n)
 
 
+def _call_progress(
+    cb: Optional[Callable[..., None]],
+    step_name: str,
+    coordinate: str,
+    status: str,
+    output: Any = None,
+    content_type: Optional[str] = None,
+) -> None:
+    """Fire ``progress_cb``. Extra payload args are optional.
+
+    3-arg callbacks (tests, ``rubedo serve``) keep working. Product
+    engines accept ``(step, coord, status, output, content_type)`` so
+    they can skip a nested ledger read — planning already has the Arrow
+    value on reuse.
+    """
+    if cb is None:
+        return
+    try:
+        cb(step_name, coordinate, status, output, content_type)
+    except TypeError:
+        cb(step_name, coordinate, status)
+
+
 def _shutdown_worker_pool(pool: Any) -> None:
     """Shut down a process/external pool created by this segment."""
     shutdown = getattr(pool, "shutdown", None)
@@ -187,8 +210,10 @@ def _run_segment(
         pending_progress.clear()
         if not progress_cb:
             return
-        for step_name, coordinate, status in events:
-            progress_cb(step_name, coordinate, status)
+        for step_name, coordinate, status, output, content_type in events:
+            _call_progress(
+                progress_cb, step_name, coordinate, status, output, content_type
+            )
 
     def flush_ledger() -> None:
         """Persist accumulated plan rows, then deliver their progress events."""
@@ -277,7 +302,16 @@ def _run_segment(
         if progress_cb:
             for d in decisions:
                 if d.action != "execute":
-                    pending_progress.append((step.name, d.coordinate, d.action))
+                    existing = getattr(d, "existing", None)
+                    pending_progress.append(
+                        (
+                            step.name,
+                            d.coordinate,
+                            d.action,
+                            getattr(existing, "output", None),
+                            getattr(existing, "content_type", None),
+                        )
+                    )
         # Execute rows must hit disk before workers run *and* before
         # ``_commit_execution_result`` opens a nested writer session.
         # Reuse progress waits for the same commit so nested ledger
@@ -332,7 +366,12 @@ def _run_segment(
                             status = "created"
                     _commit_execution_result(ctx, step, outcome)
                     if progress_cb:
-                        progress_cb(step.name, outcome.decision.coordinate, status)
+                        _call_progress(
+                            progress_cb,
+                            step.name,
+                            outcome.decision.coordinate,
+                            status,
+                        )
                 for outcome in outcomes:
                     if not outcome.is_anchor:
                         advance(step, outcome.decision.coordinate)
