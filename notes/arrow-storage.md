@@ -115,7 +115,7 @@ To avoid repeatedly reading from disk and scanning massive lists of rows during 
 | Table | Status | Notes |
 |---|---|---|
 | `runs` | unchanged | run identity, params, definition snapshot, heartbeat |
-| `run_events` | unchanged | append-only audit log: run lifecycle, retries, drift, warnings, human messages with severities. Per-lane outcome events (`step_cache_hit`, `materialization_created`, …) overlap with the structured outcome table, but the audit-feed shape (severities, free-text messages, per-attempt retry traces) is genuinely different. Keep until a real reader wants to consolidate. |
+| `run_events` | sparse audit log | run lifecycle, retries, drift, warnings, human messages with severities. Per-lane outcomes (`created`/`reused`/`failed`/`blocked`/`filtered`) live only on `run_coordinate_statuses` — census events (`step_cache_hit`, `materialization_created`, `step_filtered`, `step_blocked`, `step_processing_started`) are not written. |
 | `object_reclamations` | unchanged | GC audit of deleted object bytes |
 | `run_coordinate_statuses` | **trimmed** (see "decision below") | drop `output_address` and `materialization_id` columns — both now derivable from `(step, lane_key, input_hash)` via an Arrow lookup. Keep `status`, `error_*`, `source_id`, `metadata_json`. The structural mat-linkage the server UI depends on becomes a join against the Arrow file, not against SQLite. |
 | `materialization_edges` | **kept for now** (defer deletion; see "edges") | the lineage table. Deletion is the goal but `expand` parentage is not derivable from bytes alone — expanded child `lane_key`s are their own content hashes, not their parent's. Deletion requires persisting parent lane origin alongside each expanded child output. Doable but a separate sub-project; keep the table until then. |
@@ -459,14 +459,12 @@ The four promises don't change. The mechanisms that keep them do:
    readers" — a smaller, cleaner step once address-based lookups are
    exercised.
 
-1. **`run_coordinate_statuses` vs `run_events` consolidation.** They
-   overlap on per-lane outcome signal. `run_events` is the audit log
-   (severities, retry traces, run lifecycle); `run_coordinate_statuses`
-   is the structured outcome table (`source_id`, indexed `status`, the
-   one-row-per-lane invariant for "latest run's lanes"). Neither
-   subsumes the other without losing readers. **Working decision: keep
-   both for now; revisit after Phase 2 lands and the server readers are
-   rewritten.** The consolidation is a cleanup, not a refactor — defer.
+1. **`run_coordinate_statuses` vs `run_events` consolidation.** Done:
+   per-lane census events are no longer written. `run_events` is the
+   sparse audit log (severities, retry traces, run lifecycle, drift,
+   warnings); `run_coordinate_statuses` is the structured one-row-per-cell
+   outcome table. The two tables remain — they no longer duplicate the
+   census.
 2. **Per-lane materialization for dict outputs.** The whole "1 mat row per
    table-shaped step" optimization... is *not* part of this design. This
    design keeps one Arrow row per lane, per step, whether the output is a

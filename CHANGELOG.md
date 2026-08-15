@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Per-lane census events dropped:** `run_events` no longer writes
+  `step_cache_hit`, `materialization_{created,reused,refreshed}`,
+  `step_filtered`, `step_blocked`, or `step_processing_started`. Those
+  duplicated `RunCoordinateStatus` (the one-row-per-cell census) with no
+  extra data. The event log stays for sparse audit: run lifecycle,
+  retries, failures, code-drift, `partial_fan_in`, retention. Existing
+  homes keep historical rows; new runs do not write them.
+
 - **Batched ledger commits on plan (`RUBEDO_LEDGER_BATCH`):** `plan_cells`
   used to `session.commit()` after every lane — a fsync storm under
   `schedule="deep"` reuse. Planned rows now commit in batches of 128

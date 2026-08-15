@@ -215,13 +215,35 @@ def test_failed_coordinate_records_failed(setup_teardown):
         assert len(mats) == 6  # 5 lanes + 1 root-anchor
 
 
+CENSUS_EVENT_TYPES = {
+    "step_cache_hit",
+    "step_filtered",
+    "step_blocked",
+    "step_processing_started",
+    "materialization_created",
+    "materialization_reused",
+    "materialization_refreshed",
+}
+
+
 def test_event_log_populated(setup_teardown):
-    res = dummy_pipeline().run(workers=1)
+    pipe = dummy_pipeline()
+    res = pipe.run(workers=1)
 
     with TEST_HOME.session() as session:
         events = session.query(RunEvent).filter_by(run_id=res.run_id).all()
         types = [e.event_type for e in events]
         assert "run_started" in types
-        assert "step_processing_started" in types
-        assert "materialization_created" in types
         assert "run_completed" in types
+        assert CENSUS_EVENT_TYPES.isdisjoint(types)
+
+    res2 = pipe.run(workers=1)
+    assert res2.reused_count > 0
+    with TEST_HOME.session() as session:
+        types2 = [
+            e.event_type
+            for e in session.query(RunEvent).filter_by(run_id=res2.run_id).all()
+        ]
+        assert "run_started" in types2
+        assert "run_completed" in types2
+        assert CENSUS_EVENT_TYPES.isdisjoint(types2)
