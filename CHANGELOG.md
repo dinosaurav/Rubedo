@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-15
+
 ### Changed
 - **Per-lane census events dropped:** `run_events` no longer writes
   `step_cache_hit`, `materialization_{created,reused,refreshed}`,
