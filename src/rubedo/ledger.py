@@ -232,14 +232,6 @@ def _record_planned(
                     ),
                 )
             )
-            _emit(
-                session,
-                ctx,
-                "info",
-                "step_blocked",
-                step_name=step.name,
-                coordinate=d.coordinate,
-            )
             ctx.count(step.name, "blocked")
 
         elif d.action == "reuse":
@@ -276,14 +268,6 @@ def _record_planned(
                     metadata_json=json.dumps(meta) if meta else None,
                 )
             )
-            _emit(
-                session,
-                ctx,
-                "info",
-                "step_cache_hit",
-                step_name=step.name,
-                coordinate=d.coordinate,
-            )
             ctx.count(step.name, status)
 
         elif d.action == "filtered":
@@ -299,26 +283,9 @@ def _record_planned(
                     ),
                 )
             )
-            _emit(
-                session,
-                ctx,
-                "info",
-                "step_filtered",
-                step_name=step.name,
-                coordinate=d.coordinate,
-            )
             ctx.count(step.name, "filtered")
 
         elif d.action == "execute":
-            _emit(
-                session,
-                ctx,
-                "info",
-                "step_processing_started",
-                step_name=step.name,
-                coordinate=d.coordinate,
-                data={"reason": "stale"} if d.stale else None,
-            )
             # Claim: record that this run is executing this address.
             # We do NOT flip fulfilled=False here — the old output may
             # produce identical bytes (expand root re-run, force=True),
@@ -617,15 +584,6 @@ def _commit_execution_result(
                     output_address=decision.output_address,
                     metadata_json=json.dumps(status_meta) if status_meta else None,
                 )
-            )
-            _emit(
-                session,
-                ctx,
-                "info",
-                "step_filtered" if is_filtered else f"materialization_{mat_action}",
-                step_name=step.name,
-                coordinate=decision.coordinate,
-                data={"output_address": str(decision.output_address)},
             )
             ctx.count(step.name, status)
             ctx.coord_step_mats[(decision.coordinate, step.name)] = MatRef(
