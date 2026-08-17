@@ -316,7 +316,7 @@ def digest(phrases: dict) -> dict:
     }
 
 
-@step(in_shape="aggregate", depends_on=["digest"])
+@step(shape="aggregate", depends_on=["digest"])
 def report(digest: dict) -> str:
     rows = sorted(
         digest.values(),

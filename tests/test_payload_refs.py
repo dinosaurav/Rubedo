@@ -281,7 +281,7 @@ def test_aggregate_over_spilled_parents_uses_shim(tmp_path, count_shim):
     def produce(src: dict):
         return blob + bytes([src["i"]])
 
-    @step(executor=make_fake_pool, in_shape="aggregate", depends_on=["produce"])
+    @step(executor=make_fake_pool, shape="aggregate", depends_on=["produce"])
     def total(produce: dict):
         return sum(len(v) for v in produce.values())
 

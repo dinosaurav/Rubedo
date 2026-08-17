@@ -105,7 +105,7 @@ def _deep_eligible(step: StepSpec) -> bool:
     expands (independent sources that yield their own lanes). aggregate/join
     consume whole lane sets (true barriers).
     """
-    if step.in_shape == "one" and len(step.depends_on) <= 1:
+    if step.shape in ("map", "expand") and len(step.depends_on) <= 1:
         return True
     return False
 

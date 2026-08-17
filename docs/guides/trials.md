@@ -81,7 +81,7 @@ Anchor accepts a step name, `StepSpec`, or decorated step callable
 
 ### Anchor rules
 
-Anchors must be **non-root**, `in_shape="one"`, `out_shape="one"` map
+Anchors must be **non-root**, `shape="map"` map
 steps. Aggregate / fold / join / expand / root anchors are rejected —
 they mint different coordinate namespaces. They may still appear
 *downstream* of an anchor.

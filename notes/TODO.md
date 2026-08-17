@@ -23,10 +23,11 @@ before being written down. Item 35 is the post-Home read-surface gap
 
 **Priority order:** review items 29–35 are all shipped. The cloud chain
 (7 → 7b → 8 → 13) is shipped. Item 38 (symmetric outer join) shipped
-2026-08-12. Item 36 (persist the invalidation `reason`) is the sole open
-item — **[needs owner decision]**, do not build until scheduled.
-Remaining Parked items are engine-shaped only (allocate, streaming
-expand, etc.) — design session before building.
+2026-08-12. Items 39–41 (step `shape=` rewrite, `join_table`,
+expand-from-table) shipped 2026-08-17. Item 36 (persist the invalidation
+`reason`) is the sole open item — **[needs owner decision]**, do not
+build until scheduled. Remaining Parked items are engine-shaped only
+(allocate, streaming expand, etc.) — design session before building.
 
 ──────────────────────────────────────────────────────────────────────
 
@@ -543,6 +544,34 @@ don't block on a broader None policy.
 10. Docs: shapes join section covers `join_mode`, None pads, caching
     remove+add, failed≈unmatched.
 
+## 39. One `shape=` + `as_table`  **[SHIPPED 2026-08-17]**
+
+Drop `in_shape`/`out_shape`/`one`/`many`. `StepSpec.shape` is
+`map`/`expand`/`aggregate`/`fold`/`join`/`join_table`. Maps zip parent
+coordinates (never mint). `as_table=True` is the producer opt-in for one
+table-valued cache entry (must return DataFrame/`pa.Table`; returning a
+frame without it errors). Expand return is `list`/`tuple` or a generator;
+expand + dict/str/DataFrame errors (unless `row_key=`). Aggregate table
+*input* is inferred from a parent-parameter annotation. `definition()`
+snapshots `shape` (if not map), `as_table`, `table_input`, `row_key`,
+`join_on`. No compat shim. Dev-stage: `rm -rf .rubedo` if an existing
+home's snapshots still have `in_shape`/`out_shape`.
+
+## 40. `shape="join_table"`  **[SHIPPED 2026-08-17]**
+
+One `@all` coordinate whose value is the joined frame. Same `join_on` /
+`join_mode` / null-key raise / dup-key warn+cartesian / skip_cache-parent
+rules as pair-lane `join`. `p.join(...)` stays pair-lane;
+`p.join_table(...)` is the declarative table form. `join_on=` still infers
+`join`, not `join_table`. Identity is the parents' content hashes.
+
+## 41. Expand-from-table (`row_key=`)  **[SHIPPED 2026-08-17]**
+
+An `expand` whose parent is `as_table`, with `row_key=`: mint N **dict**
+lanes. Identity is the key column (missing/duplicate keys raise), not
+full-payload hash collapse. No user-facing Arrow-row map flag; column
+formulas are `as_table` + `select`/`with_columns`.
+
 ──────────────────────────────────────────────────────────────────────
 
 ## Parked (ideas, deliberately unspecced — design session required before building)
@@ -599,6 +628,13 @@ don't block on a broader None policy.
 The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
 (and git log has the detail). Since the restructure:
 
+- **2026-08-17 — step interface rewrite (TODO 39–41):** one `shape=`
+  (`map`/`expand`/`aggregate`/`fold`/`join`/`join_table`); `as_table=True`
+  for one table-valued cache entry; expand no longer explodes a DataFrame
+  or iterates a dict/str; aggregate table input from annotations
+  (deleted `arrow_aggregate`); `join_table` one-coordinate joins;
+  expand-from-table via `row_key=`. `definition()` snapshots `shape` not
+  `in_shape`/`out_shape`.
 - **2026-08-04 — singleton/ancestor deps (TODO 37) shipped, respecced
   during build:** the item's own "Recommended fix" section claimed
   coordinates are hierarchical paths an ancestor lookup could walk —

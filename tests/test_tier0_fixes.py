@@ -183,7 +183,7 @@ def test_broadcast_dep_ungrouped_aggregate():
         for i in range(4):
             yield {"i": i}
 
-    @step(name="total", depends_on=["source"], in_shape="aggregate")
+    @step(name="total", depends_on=["source"], shape="aggregate")
     def total_step(source):
         return sum(v["i"] for v in source.values())
 

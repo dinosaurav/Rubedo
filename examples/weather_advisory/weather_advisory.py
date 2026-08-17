@@ -92,7 +92,7 @@ def advice(forecast: dict) -> dict:
     return {**forecast, "outlook": outlook, "tip": tip}
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def briefing(advice: dict) -> str:
     """Fan every city's advice into one morning briefing."""
     rows = sorted(advice.values(), key=lambda a: a["tmax"], reverse=True)

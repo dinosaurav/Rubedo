@@ -8,9 +8,11 @@ across a run's calls (the rate limiter, the _RunMemo) is created by the
 runner and passed in.
 """
 
+import inspect
 import threading
 import time
 import traceback
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -36,8 +38,7 @@ from .planning import (
     ROOT_LANE,
 )
 from .spec import StepSpec
-from .lane_store import _make_row_id, _schema
-from .store import _try_arrow, _to_arrow_table
+from .store import _from_arrow_table, _try_arrow, _to_arrow_table
 
 if TYPE_CHECKING:
     from .home import Home
@@ -261,6 +262,102 @@ def _validate_output(step: StepSpec, value: Any) -> None:
             assertion(value)
 
 
+def _validate_table_grain(step: StepSpec, value: Any) -> None:
+    """Require as_table=True to return a DataFrame; require a table when set."""
+    is_table = _try_arrow(value)
+    if step.as_table:
+        if not is_table:
+            raise ValueError(
+                f"step {step.name!r} has as_table=True but returned "
+                f"{type(value).__name__}; must return a DataFrame/Table"
+            )
+    elif is_table:
+        raise ValueError(
+            f"step {step.name!r} returned a DataFrame/Table without "
+            "as_table=True; set as_table=True to keep one table-valued "
+            "cache entry, or yield/return a list to mint row lanes"
+        )
+
+
+def _prepare_join_table_parent(step: StepSpec, dep: str, value: Any) -> Any:
+    """Require a table-valued parent and enforce null/duplicate join-key rules."""
+    if not _try_arrow(value):
+        raise ValueError(
+            f"join_table step {step.name!r} parent {dep!r} must return a "
+            "DataFrame/Table (as_table=True)"
+        )
+    tbl, _ = _to_arrow_table(value)
+    field = (step.join_on or {}).get(dep)
+    if not field:
+        return value
+    if field not in tbl.column_names:
+        raise ValueError(
+            f"join_table step {step.name!r}: side {dep!r} has no column "
+            f"{field!r} to join on"
+        )
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    col = tbl.column(field)
+    nulls = pc.sum(pc.cast(pc.is_null(col), pa.int64())).as_py()
+    if nulls:
+        raise ValueError(
+            f"join_table step {step.name!r}: side {dep!r} has a null value "
+            f"for join field {field!r}. The field must exist and be non-None "
+            "in the parent's table (null join keys are rejected so they "
+            "cannot cartesian-match each other)."
+        )
+    nuniq = pc.count_distinct(col).as_py()
+    if nuniq < tbl.num_rows:
+        warnings.warn(
+            f"join_table step {step.name!r}: join key {field!r} on {dep!r} "
+            "has duplicate rows; the join emits the cartesian product of "
+            "matching keys",
+            UserWarning,
+            stacklevel=2,
+        )
+    return value
+
+
+def _join_table_parent_value(
+    step: StepSpec, dep: str, lanes: Dict[str, Any], params: Optional[dict], memo: "_RunMemo"
+) -> Any:
+    """Hydrate a join_table parent: exactly one table-valued lane."""
+    if not isinstance(lanes, dict) or len(lanes) != 1:
+        n = 0 if not isinstance(lanes, dict) else len(lanes)
+        raise ValueError(
+            f"join_table step {step.name!r} parent {dep!r} must be a single "
+            f"table-valued lane, got {n}"
+        )
+    ref = next(iter(lanes.values()))
+    val = _resolve_parent_value(ref, params, memo)
+    return _prepare_join_table_parent(step, dep, val)
+
+
+def _engine_join_tables(step: StepSpec, tables_by_parent: Dict[str, Any]) -> Any:
+    """Declarative equijoin of table-valued parents (intersect=inner, union=outer)."""
+    deps = list((step.join_on or {}).keys())
+    converted = []
+    kinds = []
+    for dep in deps:
+        t, kind = _to_arrow_table(tables_by_parent[dep])
+        converted.append(t)
+        kinds.append(kind)
+    join_type = "inner" if step.join_mode == "intersect" else "full outer"
+    acc = converted[0]
+    left_key = step.join_on[deps[0]]  # type: ignore[index]
+    for dep, right in zip(deps[1:], converted[1:]):
+        right_key = step.join_on[dep]  # type: ignore[index]
+        acc = acc.join(
+            right,
+            keys=left_key,
+            right_keys=right_key,
+            join_type=join_type,
+            coalesce_keys=True,
+        )
+    return _from_arrow_table(acc, kinds[0])
+
+
 def _process_decision(
     step: StepSpec,
     decision: StepDecision,
@@ -283,7 +380,7 @@ def _process_decision(
     calling (thread) layer.
 
     Returns a list because an expand fans one parent lane into an anchor
-    plus N children; every other in_shape/out_shape returns exactly one outcome.
+    plus N children; every other shape returns exactly one outcome.
     """
 
     def _declarative_result(decision: StepDecision) -> Any:
@@ -295,7 +392,7 @@ def _process_decision(
         - Declarative union (map shape): pass through the single present
           parent's output unchanged
         """
-        if step.in_shape == "join":
+        if step.shape == "join":
             return {
                 dep: (
                     _resolve_parent_value(decision.parent_mats[dep], params, memo)
@@ -304,6 +401,12 @@ def _process_decision(
                 )
                 for dep in step.depends_on
             }
+        if step.shape == "join_table":
+            tables = {}
+            for dep in step.depends_on:
+                lanes = decision.parent_mats.get(dep) or {}
+                tables[dep] = _join_table_parent_value(step, dep, lanes, params, memo)
+            return _engine_join_tables(step, tables)
         # Declarative map (union) — passthrough the one parent that has
         # this lane (parent_mats only contains present parents)
         dep = list(decision.parent_mats.keys())[0]
@@ -331,8 +434,8 @@ def _process_decision(
         args: List[Any] = []
         if not step.depends_on:
             kwargs: Dict[str, Any] = {}
-        elif step.in_shape == "aggregate":
-            if step.arrow_aggregate:
+        elif step.shape == "aggregate":
+            if step.table_input:
                 # Arrow aggregate path stays coordinator-side (table build).
                 kwargs = {
                     _dep_kwarg(step, dep): _resolve_parent_table(
@@ -349,7 +452,7 @@ def _process_decision(
                     }
                     for dep in step.depends_on
                 }
-        elif step.in_shape == "fold":
+        elif step.shape == "fold":
             # A fold is the aggregate cache/plan shape with a different
             # execution strategy: deterministic, one-lane-at-a-time calls.
             # The current fold API is unary (accumulator + one parent value).
@@ -405,6 +508,14 @@ def _process_decision(
                 else:
                     accumulator = step.fn(accumulator, value)
             return accumulator
+        elif step.shape == "join_table":
+            use_refs = False
+            kwargs = {
+                _dep_kwarg(step, dep): _join_table_parent_value(
+                    step, dep, decision.parent_mats.get(dep) or {}, params, memo
+                )
+                for dep in step.depends_on
+            }
         else:
             kwargs = {
                 _dep_kwarg(step, dep): (
@@ -418,7 +529,7 @@ def _process_decision(
             kwargs["params"] = _build_step_params(step, params)
 
         # Expand stays by-value (TODO 13): never shim generator/table fan-out.
-        if step.out_shape == "many" and step.in_shape == "one":
+        if step.shape == "expand":
             use_refs = False
 
         ships_ref = any(
@@ -453,13 +564,36 @@ def _process_decision(
         Emits the cache anchor first (the child content hashes, addressed by
         the parent — or ROOT_LANE for a root expand — so a re-run can skip
         the fn). Then one child per distinct payload — each a content-
-        addressed lane `row-<hash>`; identical payloads collapse.
+        addressed lane `row-<hash>`. Without ``row_key``, identical payloads
+        collapse; with ``row_key``, identity is that field (missing/dup raise).
         """
         seen: set = set()
         children: List[tuple] = []  # (child_hash, value)
         for value in values:
+            if _try_arrow(value):
+                raise ValueError(
+                    f"expand step {step.name!r} cannot yield a DataFrame/Table; "
+                    "use as_table=True on a map, or yield dicts / return a list"
+                )
             _validate_output(step, value)
-            if isinstance(value, bytes):
+            if step.row_key is not None:
+                if not isinstance(value, dict):
+                    raise ValueError(
+                        f"expand step {step.name!r}: row_key={step.row_key!r} "
+                        f"requires dict payloads, got {type(value).__name__}"
+                    )
+                if step.row_key not in value or value[step.row_key] is None:
+                    raise ValueError(
+                        f"expand step {step.name!r}: missing row_key "
+                        f"{step.row_key!r}"
+                    )
+                child_hash = hash_json(value[step.row_key])
+                if child_hash in seen:
+                    raise ValueError(
+                        f"expand step {step.name!r}: duplicate row_key "
+                        f"{step.row_key!r}={value[step.row_key]!r}"
+                    )
+            elif isinstance(value, bytes):
                 child_hash = "b:" + hash_bytes(value)
             else:
                 child_hash = hash_json(value)
@@ -511,124 +645,30 @@ def _process_decision(
             )
         return outcomes
 
-    def _expand_table_outcomes(
-        decision: StepDecision, source_table: Any,
-        attempt: int, attempt_errors: List[str]
+    def _expand_result(
+        decision: StepDecision, result: Any, attempt: int, attempt_errors: List[str]
     ) -> List[ExecutionOutcome]:
-        """Fan a table-return expand into content-addressed lanes, keeping
-        the data in Arrow throughout.  One ``to_pylist()`` for hashing only;
-        the struct column is written directly to the lane store's arrow batch
-        buffer — no Python dict → Arrow round trip at flush time.
-        """
-        import pyarrow as pa
-        import pyarrow.compute as pc
-        from datetime import datetime, timezone
-
-        # One bulk conversion for hashing only
-        src_pa_table, _ = _to_arrow_table(source_table)
-        rows = src_pa_table.to_pylist()
-        seen: set = set()
-        children: List[tuple] = []  # (row_idx, child_hash, lane_key, input_hash, address)
-        for idx, row in enumerate(rows):
-            _validate_output(step, row)
-            child_hash = hash_json(row)
-            if child_hash in seen:
-                continue
-            seen.add(child_hash)
-            lane_key = expand_child_coord(child_hash)
-            input_hash, child_address = expand_child_identity(
-                step, child_hash, params_hash, accepts_params, pipeline_id
-            )
-            children.append((idx, child_hash, lane_key, input_hash, child_address))
-
-        # Build the lane store Arrow table directly from the source table's
-        # struct column + computed metadata — no Python dict buffer.
-        if children:
-            ts = datetime.now(timezone.utc)
-            # Extract the struct array for the deduped rows
-            # src_pa_table is already a pa.Table (converted above)
-            # Build the struct column by selecting deduped rows
-            row_indices = [c[0] for c in children]
-            struct_type = pa.struct([
-                pa.field(name, src_pa_table.column(name).type)
-                for name in src_pa_table.column_names
-            ])
-            cols = []
-            for name in src_pa_table.column_names:
-                col = src_pa_table.column(name)
-                if isinstance(col, pa.ChunkedArray):
-                    combined = pa.concat_arrays(col.chunks)
-                else:
-                    combined = col
-                cols.append(combined)
-            struct_arr = pa.StructArray.from_arrays(
-                [pc.take(c, row_indices) for c in cols],
-                fields=[pa.field(n, c.type) for n, c in zip(src_pa_table.column_names, cols)],
-            )
-
-            lane_keys = [c[2] for c in children]
-            addresses = [c[4] for c in children]
-            input_hashes = [c[3] for c in children]
-            output_identities = [c[1] for c in children]  # child_hash == _identity_of(row)
-            row_ids = [
-                _make_row_id(pipeline_id, step.name, lk, ts)
-                for lk in lane_keys
-            ]
-
-            batch_table = pa.table({
-                "row_id": pa.array(row_ids, type=pa.string()),
-                "lane_key": pa.array(lane_keys, type=pa.string()),
-                "address": pa.array(addresses, type=pa.string()),
-                "input_hash": pa.array(input_hashes, type=pa.string()),
-                "code_version": pa.array([step.version] * len(children), type=pa.string()),
-                "output": struct_arr,
-                "output_identity": pa.array(output_identities, type=pa.string()),
-                "content_type": pa.array(["json"] * len(children), type=pa.string()),
-                "code_hash": pa.array([step.code_hash] * len(children), type=pa.string()),
-                "ts": pa.array([ts] * len(children), type=pa.timestamp("us", tz="UTC")),
-                "run_id": pa.array([run_id] * len(children), type=pa.string()),
-                "filtered": pa.array([False] * len(children), type=pa.bool_()),
-            }, schema=_schema(pa, struct_type))
-
-            memo.home.lanes.append_arrow_batch(pipeline_id, step.name, batch_table)
-
-        # Build outcomes — no dict values, arrow_batched=True
-        outcomes: List[ExecutionOutcome] = []
-        if step.depends_on:
-            parent_hash = decision.parent_mats[step.depends_on[0]].output_content_hash
-        else:
-            parent_hash = ROOT_LANE
-        anchor = StepDecision(
-            coordinate=decision.coordinate,
-            action="execute",
-            input_hash=parent_hash,
-            output_address=expand_anchor_address(
-                step, parent_hash, params_hash, accepts_params, pipeline_id
-            ),
-            parent_mats=decision.parent_mats,
-        )
-        outcomes.append(
-            ExecutionOutcome(
-                anchor, True, result=[c[1] for c in children],
-                attempts=attempt, attempt_errors=attempt_errors, is_anchor=True,
-            )
-        )
-
-        for _, child_hash, lane_key, input_hash, child_address in children:
-            child = StepDecision(
-                coordinate=lane_key,
-                action="execute",
-                input_hash=input_hash,
-                output_address=child_address,
-                parent_mats=decision.parent_mats,
-            )
-            outcomes.append(
-                ExecutionOutcome(
-                    child, True, result=None, attempts=attempt,
-                    attempt_errors=attempt_errors, arrow_batched=True,
+        if _try_arrow(result):
+            if not step.row_key:
+                raise ValueError(
+                    f"expand step {step.name!r} cannot return a DataFrame/Table; "
+                    "use as_table=True on a map to keep one table-valued cache "
+                    "entry, or yield / return a list to mint row lanes, or set "
+                    "row_key= to mint lanes from the table"
                 )
+            src, _ = _to_arrow_table(result)
+            values = src.to_pylist()
+            return _expand_outcomes(decision, values, attempt, attempt_errors)
+        if inspect.isgenerator(result):
+            values = list(result)
+        elif isinstance(result, (list, tuple)):
+            values = list(result)
+        else:
+            raise ValueError(
+                f"expand step {step.name!r} must yield or return a list/tuple "
+                f"(got {type(result).__name__})"
             )
-        return outcomes
+        return _expand_outcomes(decision, values, attempt, attempt_errors)
 
     def process(  # type: ignore
         decision: StepDecision, pool: Optional[Any] = None
@@ -640,22 +680,14 @@ def _process_decision(
                 limiter.acquire()
             try:
                 result = call(decision, pool)
-                if step.out_shape == "many" and step.in_shape == "one":
-                    if _try_arrow(result):
-                        # Table-return expand: keep data in Arrow, one
-                        # to_pylist for hashing only, struct column
-                        # written directly to the arrow batch buffer.
-                        return _expand_table_outcomes(
-                            decision, result, attempt, attempt_errors
-                        )
-                    else:
-                        values = list(result)
-                        return _expand_outcomes(
-                            decision, values, attempt, attempt_errors
-                        )
+                if step.shape == "expand":
+                    return _expand_result(
+                        decision, result, attempt, attempt_errors
+                    )
                 # SpilledResult was validated + spilled worker-side.
                 if not isinstance(result, SpilledResult):
                     _validate_output(step, result)
+                    _validate_table_grain(step, result)
                 return [
                     ExecutionOutcome(
                         decision,

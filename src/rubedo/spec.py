@@ -3,7 +3,7 @@ Pipeline and step specification definitions.
 """
 import inspect
 import re
-from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal, Union
+from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal, Union, get_type_hints
 from pydantic import BaseModel
 from dataclasses import dataclass
 
@@ -46,6 +46,54 @@ def parse_duration(spec: str) -> float:
     return float(m.group(1)) * _DURATION_UNITS[m.group(2)]
 
 
+SHAPES = ("map", "expand", "aggregate", "fold", "join", "join_table")
+COLLECTIVE_SHAPES = frozenset({"aggregate", "fold", "join", "join_table"})
+JOIN_SHAPES = frozenset({"join", "join_table"})
+
+
+def _is_table_annotation(ann: Any) -> bool:
+    """True if ``ann`` names a polars/pandas DataFrame or pyarrow Table."""
+    if ann is inspect.Parameter.empty or ann is None:
+        return False
+    if isinstance(ann, str):
+        tail = ann.rsplit(".", 1)[-1]
+        return tail in ("DataFrame", "Table") or ann in (
+            "pl.DataFrame", "pd.DataFrame", "pa.Table",
+        )
+    name = getattr(ann, "__name__", "") or ""
+    mod = getattr(ann, "__module__", "") or ""
+    if name == "DataFrame" and ("polars" in mod or "pandas" in mod):
+        return True
+    if name == "Table" and "pyarrow" in mod:
+        return True
+    return False
+
+
+def _table_input_from_fn(fn: Optional[Callable], parent_params: List[str]) -> bool:
+    """Infer aggregate-as-table from a parent parameter annotation."""
+    if fn is None:
+        return False
+    try:
+        hints = get_type_hints(fn)
+    except Exception:
+        hints = {
+            n: p.annotation
+            for n, p in inspect.signature(fn).parameters.items()
+        }
+    for name in parent_params:
+        if _is_table_annotation(hints.get(name, inspect.Parameter.empty)):
+            return True
+    # Positional parent (first non-params, non-accum for fold is not used here)
+    sig = inspect.signature(fn)
+    for n, p in sig.parameters.items():
+        if n == "params":
+            continue
+        if _is_table_annotation(p.annotation) or _is_table_annotation(hints.get(n, inspect.Parameter.empty)):
+            return True
+        break
+    return False
+
+
 @dataclass
 class StepSpec:
     """The static definition of a pipeline step and its policies."""
@@ -75,15 +123,16 @@ class StepSpec:
     stale_after: Optional[float] = None  # seconds; None = never stale
     skip_cache: bool = False  # inline util: never materialized, fused into consumers
     check_cache: bool = True  # when False, always re-execute (still commits, like --force for one step)
-    in_shape: str = "one"  # one | aggregate | fold | join
-    out_shape: str = "one"  # one | many
+    shape: str = "map"  # map | expand | aggregate | fold | join | join_table
+    as_table: bool = False  # output is one table-valued cache entry
+    table_input: bool = False  # aggregate: pass parent lanes as pa.Table
     executor: ExecutorSpec = "thread"
     group_key: Optional[str] = None  # aggregate/fold: field to group lanes by
-    join_on: Optional[Dict[str, str]] = None  # join: {parent: field}
-    join_mode: Literal["intersect", "union"] = "intersect"  # join key universe
-    arrow_aggregate: bool = False  # aggregate: pass parent's output as pa.Table, not dict-of-lanes
-    fold_init: Any = None  # fold: initial accumulator value (required when in_shape="fold")
-    declarative: bool = False  # no fn — engine builds the output (join: nested struct, union: passthrough)
+    join_on: Optional[Dict[str, str]] = None  # join / join_table: {parent: field}
+    join_mode: Literal["intersect", "union"] = "intersect"
+    row_key: Optional[str] = None  # expand-from-table: identity column
+    fold_init: Any = None  # fold: initial accumulator (required when shape="fold")
+    declarative: bool = False  # no fn — engine builds the output
     output_model: Optional[Type[BaseModel]] = None
     assertions: Optional[List[Callable[[Any], None]]] = None
     on_failed: Literal["use_passed", "block"] = "use_passed"
@@ -100,11 +149,11 @@ class PipelineSpec:
     """The static definition of a complete DAG pipeline.
 
     Ingestion has no separate concept: a root step (no `depends_on`) *is*
-    the source. An `out_shape="many"` root (a parentless generator whose
-    shape is inferred automatically — see `docs/concepts/sources.md`)
-    yields the initial lanes; an `in_shape="one", out_shape="one"` root
-    mints a single lane from its params (or a constant). A pipeline may
-    declare several roots — `join` doesn't care that its parents are roots.
+    the source. An expand root (a parentless generator whose shape is
+    inferred automatically — see `docs/concepts/sources.md`) yields the
+    initial lanes; a map root mints a single `@root` lane from its params
+    (or a constant). A pipeline may declare several roots — `join` doesn't
+    care that its parents are roots.
 
     `name` is the pipeline's sole identity (there is no separate `id`): the
     ledger's `pipeline_id` column stores it verbatim, and `Selection`'s
@@ -134,8 +183,6 @@ class PipelineSpec:
 
 def _hash_source(fn: Callable) -> Optional[str]:
     """Extract and hash the source code of a function for code drift detection."""
-    import inspect
-
     from .hashing import hash_text
 
     try:
@@ -146,38 +193,10 @@ def _hash_source(fn: Callable) -> Optional[str]:
 
 def _get_source(fn: Callable) -> Optional[str]:
     """Extract the raw source text of a function, for the definition snapshot."""
-    import inspect
-
     try:
         return inspect.getsource(fn).strip()
     except (OSError, TypeError):
         return None
-
-
-# shape= compatibility alias → (in_shape, out_shape).  shape= is never
-# stored on StepSpec — step() translates it to the pair and discards it.
-_SHAPE_MAP: Dict[str, Tuple[str, str]] = {
-    "map":    ("one",       "one"),
-    "expand": ("one",       "many"),
-    "join":   ("join",      "many"),
-}
-
-# Valid (in_shape, out_shape) combinations.  Anything else raises at
-# decoration time.  Future combinations (aggregate+many, fold+many,
-# join+one) are meaningful but unimplemented — they raise
-# NotImplementedError, not ValueError.
-_VALID_SHAPES: set = {
-    ("one", "one"),
-    ("one", "many"),
-    ("aggregate", "one"),
-    ("fold", "one"),
-    ("join", "many"),
-}
-_FUTURE_SHAPES: set = {
-    ("aggregate", "many"),
-    ("fold", "many"),
-    ("join", "one"),
-}
 
 
 def step(
@@ -198,13 +217,12 @@ def step(
     skip_cache: bool = False,
     check_cache: bool = True,
     shape: Optional[str] = None,
-    in_shape: Optional[str] = None,
-    out_shape: Optional[str] = None,
+    as_table: bool = False,
     executor: ExecutorSpec = "thread",
     group_key: Optional[str] = None,
     join_on: Optional[Dict[str, str]] = None,
     join_mode: Literal["intersect", "union"] = "intersect",
-    arrow_aggregate: bool = False,
+    row_key: Optional[str] = None,
     fold_init: Any = None,
     output_model: Optional[Type[BaseModel]] = None,
     assertions: Optional[List[Callable[[Any], None]]] = None,
@@ -221,47 +239,49 @@ def step(
     loudly at pipeline-construction time, naming both functions so you
     can tell where the collision came from.
 
-    `shape`, `depends_on`, `join_on`, and `group_key` restate what the
-    code already implies, so each has an inferred default (any explicit
-    value always wins, and an explicit value that contradicts what the
-    code implies raises). `shape=` is a convenience alias that translates
-    into the pair (`in_shape`, `out_shape`) via the table below;
-    `in_shape=`/`out_shape=` are the primary fields on `StepSpec` and can
-    be passed directly for combinations `shape=` can't express:
+    `shape` is the lane cardinality of the step:
 
-    | `shape=` | `in_shape` | `out_shape` | meaning |
-    | -------- | ---------- | ----------- | ------- |
-    | `map`    | `one`      | `one`       | 1:1 (default) |
-    | `expand` | `one`      | `many`      | 1:N fan-out (yields content-addressed lanes) |
-    | `join`   | `join`     | `many`      | N-way equijoin (mints pair lanes) |
+    | `shape=`      | meaning |
+    | ------------- | ------- |
+    | `map`         | 1:1 zip with parent coordinates (default) |
+    | `expand`      | mint N lanes (`yield`, `yield from`, or `return list`) |
+    | `aggregate`   | N:1 fan-in (`group_key=` implies this) |
+    | `fold`        | sequential N:1 (`fold_init=` implies this) |
+    | `join`        | mint pair lanes (`join_on=` implies this) |
+    | `join_table`  | equijoin that emits one table-valued coordinate |
 
-    Aggregate (`in_shape="aggregate"`, `out_shape="one"`) and fold
-    (`in_shape="fold"`, `out_shape="one"`) have no `shape=` shortcut —
-    pass `in_shape=` directly (or let `group_key=` / `fold_init=` imply
-    them).
+    Inference (an explicit `shape=` that contradicts the code raises):
 
-    - A generator function defaults to `out_shape="many"` (`in_shape`
-      stays `"one"`) — it's a fan-out by construction. An explicit
-      `out_shape="one"` on a generator raises (a generator under
-      map/aggregate is already broken; better to fail at decoration than
-      mid-run).
-    - `join_on=` explicitly sets `in_shape="join"`, `out_shape="many"`
-      (not just inference — a conflicting `out_shape=` raises).
-      `group_key=` sets `in_shape="aggregate"`. A plain `@all` aggregate
-      (no `group_key`) still needs an explicit `in_shape="aggregate"` —
-      nothing else implies it.
-    - `depends_on` (when omitted entirely) is inferred at pipeline-build
-      time (`_build_spec`, once every sibling step's name is known, not
-      here): every parameter of the decorated function other than
-      `params` must name a registered step and becomes a dependency, in
-      signature order. An unmatched parameter raises `ValueError` naming
-      the step, the parameter, and the available step names. A signature
-      using `*args`/`**kwargs` skips inference entirely (pass
-      `depends_on=` explicitly if such a step has parents). A step with
-      no non-`params` parameters is a root. Passing `depends_on=`
-      explicitly — as a list (unchanged) or as
-      `{"param_name": "step_name"}` to bind a parent's output to a
-      differently-named parameter — disables inference for that step.
+    - A generator defaults to `shape="expand"`.
+    - `join_on=` defaults to `shape="join"` (pass `shape="join_table"` to
+      emit one table instead of pair lanes).
+    - `group_key=` defaults to `shape="aggregate"`.
+    - `fold_init=` defaults to `shape="fold"`.
+    - A plain `@all` aggregate still needs `shape="aggregate"`.
+
+    `as_table=True` marks the output as one table-valued cache entry
+    (must return a DataFrame / `pa.Table`). Returning a DataFrame without
+    it raises — don't guess explode vs keep. `join_table` implies it.
+
+    Aggregate *input* as a table is inferred from a parent-parameter
+    annotation (`pl.DataFrame`, `pa.Table`, `pd.DataFrame`).
+
+    `row_key=` on expand: identity column when minting lanes from a
+    table parent (missing/duplicate keys raise). Omit it to hash each
+    yielded payload as today.
+
+    `depends_on` (when omitted entirely) is inferred at pipeline-build
+    time (`_build_spec`, once every sibling step's name is known, not
+    here): every parameter of the decorated function other than
+    `params` must name a registered step and becomes a dependency, in
+    signature order. An unmatched parameter raises `ValueError` naming
+    the step, the parameter, and the available step names. A signature
+    using `*args`/`**kwargs` skips inference entirely (pass
+    `depends_on=` explicitly if such a step has parents). A step with
+    no non-`params` parameters is a root. Passing `depends_on=`
+    explicitly — as a list (unchanged) or as
+    `{"param_name": "step_name"}` to bind a parent's output to a
+    differently-named parameter — disables inference for that step.
 
     `version` defaults to `"0"`. It's the step's semantic identity —
     bump it for deliberate behavior changes (also the escape hatch for
@@ -329,13 +349,6 @@ def step(
     def decorator(f: Callable) -> StepSpec:
         step_name = name if name is not None else f.__name__
 
-        # depends_on: list form is unchanged; dict form ({"param": "step"})
-        # is an alias — the step name (for depends_on/planning, everywhere
-        # else in the engine) plus a reverse param-name mapping execution
-        # uses to bind the parent's value to the right kwarg. Either form,
-        # or an empty list, is "explicit" and disables signature inference
-        # (which happens later, in `pipeline.py::_build_spec`, once sibling
-        # step names are known).
         depends_on_explicit = depends_on is not None
         if isinstance(depends_on, dict):
             depends_on_list = list(depends_on.values())
@@ -344,120 +357,73 @@ def step(
             depends_on_list = list(depends_on) if depends_on is not None else []
             depends_on_aliases = None
 
-        # join_on keys name the parents (they ARE the depends_on set),
-        # so a join that omits depends_on= can be validated at decoration
-        # time by borrowing join_on's keys.
         if depends_on is None and join_on is not None:
             depends_on_list = list(join_on.keys())
 
-        # --- in_shape / out_shape resolution ---
-        # Precedence: explicit in_shape=/out_shape= > shape= alias >
-        # join_on= > group_key= > generator > default (one, one).
         is_generator = inspect.isgeneratorfunction(f)
 
-        shape_in: Optional[str] = None
-        shape_out: Optional[str] = None
-        if shape is not None:
-            if shape not in _SHAPE_MAP:
-                raise ValueError(
-                    f"Step '{step_name}': shape must be one of {sorted(_SHAPE_MAP)}, "
-                    f"got {shape!r}"
-                )
-            shape_in, shape_out = _SHAPE_MAP[shape]
+        # Precedence: explicit shape= > join_on= / group_key= / fold_init= /
+        # generator > default map.
+        resolved = shape
+        if resolved is not None and resolved not in SHAPES:
+            raise ValueError(
+                f"Step '{step_name}': shape must be one of {list(SHAPES)}, "
+                f"got {resolved!r}"
+            )
 
-        # Explicit in_shape=/out_shape= override the alias; join_on= and
-        # group_key= explicitly set in_shape (the owner wants explicit
-        # translation code, not just inference defaults — so a conflicting
-        # explicit out_shape= raises, not silently overridden).
-        resolved_in = in_shape if in_shape is not None else shape_in
-        resolved_out = out_shape if out_shape is not None else shape_out
-
-        if resolved_in is None or resolved_out is None:
+        if resolved is None:
             if join_on is not None:
-                if resolved_in is not None and resolved_in != "join":
-                    raise ValueError(
-                        f"Step '{step_name}': join_on= requires in_shape='join' "
-                        f"(got in_shape={resolved_in!r})"
-                    )
-                if resolved_out is not None and resolved_out != "many":
-                    raise ValueError(
-                        f"Step '{step_name}': join_on= requires out_shape='many' "
-                        f"(got out_shape={resolved_out!r})"
-                    )
-                resolved_in = resolved_in or "join"
-                resolved_out = resolved_out or "many"
+                resolved = "join"
+            elif fold_init is not None:
+                resolved = "fold"
             elif group_key is not None:
-                if resolved_in is not None and resolved_in not in ("aggregate", "fold"):
-                    raise ValueError(
-                        f"Step '{step_name}': group_key= requires in_shape='aggregate' or 'fold' "
-                        f"(got in_shape={resolved_in!r})"
-                    )
-                resolved_in = resolved_in or "aggregate"
-                resolved_out = resolved_out or "one"
+                resolved = "aggregate"
             elif is_generator:
-                if resolved_out is not None and resolved_out != "many":
-                    raise ValueError(
-                        f"Step '{step_name}': a generator function must have out_shape='many' "
-                        f"(got out_shape={resolved_out!r}) — a generator under any other "
-                        "out_shape never runs to completion as intended"
-                    )
-                if resolved_in is not None and resolved_in not in ("one",):
-                    raise ValueError(
-                        f"Step '{step_name}': a generator function must have in_shape='one' "
-                        f"(got in_shape={resolved_in!r})"
-                    )
-                resolved_in = resolved_in or "one"
-                resolved_out = resolved_out or "many"
+                resolved = "expand"
             else:
-                resolved_in = resolved_in or "one"
-                resolved_out = resolved_out or "one"
-
-        assert resolved_in is not None and resolved_out is not None
-
-        # A generator + in_shape="aggregate"/"fold" is contradictory.
-        if is_generator and resolved_in not in ("one",):
-            raise ValueError(
-                f"Step '{step_name}': a generator function must have in_shape='one' "
-                f"(got in_shape={resolved_in!r}) — a collective input is 1:N, not a generator"
-            )
-        # A generator + out_shape="one" is contradictory (generators fan out).
-        if is_generator and resolved_out != "many":
-            raise ValueError(
-                f"Step '{step_name}': a generator function must have out_shape='many' "
-                f"(got out_shape={resolved_out!r}) — a generator under any other "
-                "out_shape never runs to completion as intended"
-            )
-
-        # Valid combination check.
-        pair = (resolved_in, resolved_out)
-        if pair not in _VALID_SHAPES:
-            if pair in _FUTURE_SHAPES:
-                raise NotImplementedError(
-                    f"Step '{step_name}': in_shape={resolved_in!r} + out_shape={resolved_out!r} "
-                    "is not yet supported"
+                resolved = "map"
+        else:
+            if join_on is not None and resolved not in JOIN_SHAPES:
+                raise ValueError(
+                    f"Step '{step_name}': join_on= requires shape='join' or "
+                    f"'join_table' (got shape={resolved!r})"
                 )
+            if group_key is not None and resolved not in ("aggregate", "fold"):
+                raise ValueError(
+                    f"Step '{step_name}': group_key= requires shape='aggregate' or 'fold' "
+                    f"(got shape={resolved!r})"
+                )
+            if is_generator and resolved != "expand":
+                raise ValueError(
+                    f"Step '{step_name}': a generator function must have shape='expand' "
+                    f"(got shape={resolved!r}) — a generator under any other "
+                    "shape never runs to completion as intended"
+                )
+
+        assert resolved is not None
+
+        if is_generator and resolved != "expand":
             raise ValueError(
-                f"Step '{step_name}': invalid combination in_shape={resolved_in!r} + "
-                f"out_shape={resolved_out!r}"
+                f"Step '{step_name}': a generator function must have shape='expand' "
+                f"(got shape={resolved!r})"
             )
 
         if code not in ("warn", "auto"):
             raise ValueError(f"Step '{step_name}': code must be 'warn' or 'auto', got {code!r}")
 
-        # join validation
         if join_mode not in ("intersect", "union"):
             raise ValueError(
                 f"Step '{step_name}': join_mode must be 'intersect' or 'union', "
                 f"got {join_mode!r}"
             )
-        if resolved_in == "join":
+        if resolved in JOIN_SHAPES:
             if not join_on:
                 raise ValueError(
-                    f"Step '{step_name}': in_shape='join' requires join_on={{parent: field}}"
+                    f"Step '{step_name}': shape={resolved!r} requires join_on={{parent: field}}"
                 )
             if len(depends_on_list) < 2:
                 raise ValueError(
-                    f"Step '{step_name}': in_shape='join' requires at least two parents in "
+                    f"Step '{step_name}': shape={resolved!r} requires at least two parents in "
                     "depends_on (N-way star join on a shared value)"
                 )
             if set(join_on) != set(depends_on_list):
@@ -467,19 +433,20 @@ def step(
                 )
         elif join_mode != "intersect":
             raise ValueError(
-                f"Step '{step_name}': join_mode requires in_shape='join'"
+                f"Step '{step_name}': join_mode requires shape='join' or 'join_table'"
             )
-        if join_on is not None and resolved_in != "join":
-            raise ValueError(f"Step '{step_name}': join_on requires in_shape='join'")
+        if join_on is not None and resolved not in JOIN_SHAPES:
+            raise ValueError(
+                f"Step '{step_name}': join_on requires shape='join' or 'join_table'"
+            )
 
-        # expand constraints (out_shape="many", in_shape="one")
-        if resolved_out == "many" and skip_cache:
+        if resolved == "expand" and skip_cache:
             raise ValueError(
-                f"Step '{step_name}': skip_cache is not supported with out_shape='many'"
+                f"Step '{step_name}': skip_cache is not supported with shape='expand'"
             )
-        if resolved_out == "many" and resolved_in == "one" and len(depends_on_list) > 1:
+        if resolved == "expand" and len(depends_on_list) > 1:
             raise ValueError(
-                f"Step '{step_name}': in_shape='one' + out_shape='many' takes at most one parent — "
+                f"Step '{step_name}': shape='expand' takes at most one parent — "
                 "none = a root (a source that yields the initial lanes); two+ would be a join"
             )
         if isinstance(executor, str):
@@ -498,24 +465,22 @@ def step(
                     "zero arguments"
                 ) from exc
             except (ValueError, AttributeError):
-                # Some extension callables have no inspectable signature;
-                # invocation at run time remains the authoritative check.
                 pass
         else:
             raise ValueError(
                 f"Step '{step_name}': executor must be 'thread', 'process', "
                 f"or a zero-argument pool factory, got {executor!r}"
             )
-        if resolved_in in ("aggregate", "fold") and skip_cache:
+        if resolved in ("aggregate", "fold") and skip_cache:
             raise ValueError(
-                f"Step '{step_name}': skip_cache is meaningless with in_shape={resolved_in!r} "
+                f"Step '{step_name}': skip_cache is meaningless with shape={resolved!r} "
                 "(collective steps must be materialized)"
             )
-        if group_key is not None and resolved_in not in ("aggregate", "fold"):
+        if group_key is not None and resolved not in ("aggregate", "fold"):
             raise ValueError(
-                f"Step '{step_name}': group_key requires in_shape='aggregate' or 'fold' "
-                f"(got in_shape={resolved_in!r}) — it partitions a collective's input lanes "
-                "by an indexed field)"
+                f"Step '{step_name}': group_key requires shape='aggregate' or 'fold' "
+                f"(got shape={resolved!r}) — it partitions a collective's input lanes "
+                "by an indexed field"
             )
         if version == "auto":
             raise ValueError(
@@ -543,27 +508,19 @@ def step(
             raise ValueError(
                 f"Step '{step_name}': on_failed must be 'use_passed' or 'block', got {on_failed!r}"
             )
-        if arrow_aggregate and resolved_in != "aggregate":
+        if fold_init is not None and resolved != "fold":
             raise ValueError(
-                f"Step '{step_name}': arrow_aggregate=True requires in_shape='aggregate' "
-                f"(got in_shape={resolved_in!r})"
+                f"Step '{step_name}': fold_init is only valid with shape='fold' "
+                f"(got shape={resolved!r})"
             )
-        # fold_init belongs only to fold steps and is part of the static
-        # definition: it is reset for every fold group.  Reject an omitted
-        # value and non-JSON values here so definition snapshots stay safe.
-        if fold_init is not None and resolved_in != "fold":
-            raise ValueError(
-                f"Step '{step_name}': fold_init is only valid with in_shape='fold' "
-                f"(got in_shape={resolved_in!r})"
-            )
-        if resolved_in == "fold":
+        if resolved == "fold":
             if fold_init is None:
                 raise ValueError(
-                    f"Step '{step_name}': in_shape='fold' requires fold_init"
+                    f"Step '{step_name}': shape='fold' requires fold_init"
                 )
             if len(depends_on_list) > 1:
                 raise ValueError(
-                    f"Step '{step_name}': in_shape='fold' takes exactly one parent "
+                    f"Step '{step_name}': shape='fold' takes exactly one parent "
                     "(accumulator + one lane value)"
                 )
             try:
@@ -574,6 +531,36 @@ def step(
                 raise ValueError(
                     f"Step '{step_name}': fold_init must be JSON-serializable"
                 ) from e
+            fold_params = [
+                n for n in inspect.signature(f).parameters if n != "params"
+            ]
+            if _table_input_from_fn(f, fold_params):
+                raise ValueError(
+                    f"Step '{step_name}': table-typed annotations are only valid "
+                    "on shape='aggregate' (fold receives one lane at a time)"
+                )
+
+        if as_table and resolved == "expand":
+            raise ValueError(
+                f"Step '{step_name}': as_table=True is not valid with shape='expand' "
+                "— a table is one cache entry (use a map) or mint lanes with yield / "
+                "return list / row_key="
+            )
+        if row_key is not None and resolved != "expand":
+            raise ValueError(
+                f"Step '{step_name}': row_key= is only valid with shape='expand' "
+                f"(got shape={resolved!r})"
+            )
+
+        resolved_as_table = as_table or resolved == "join_table"
+        table_input = False
+        if resolved == "aggregate":
+            parent_params: List[str] = []
+            if depends_on_aliases:
+                parent_params = [depends_on_aliases.get(d, d) for d in depends_on_list]
+            else:
+                parent_params = list(depends_on_list)
+            table_input = _table_input_from_fn(f, parent_params)
 
         resolved_retry_on = (retry_on,) if isinstance(retry_on, type) and issubclass(retry_on, BaseException) else retry_on
         parsed_rate = parse_rate_limit(rate_limit) if rate_limit else None
@@ -611,13 +598,14 @@ def step(
             stale_after=parsed_stale,
             skip_cache=skip_cache,
             check_cache=check_cache,
-            in_shape=resolved_in,
-            out_shape=resolved_out,
+            shape=resolved,
+            as_table=resolved_as_table,
+            table_input=table_input,
             executor=executor,
             group_key=group_key,
             join_on=join_on,
             join_mode=join_mode,
-            arrow_aggregate=arrow_aggregate,
+            row_key=row_key,
             fold_init=fold_init,
             output_model=output_model,
             assertions=list(assertions) if assertions else None,
@@ -647,8 +635,6 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         if source:
             entry["source"] = source
         if s.depends_on_aliases:
-            # Only the dict alias form produces this — additive, so the
-            # common (list-form or inferred) case's snapshot is unchanged.
             entry["depends_on_aliases"] = dict(s.depends_on_aliases)
         if s.skip_cache:
             entry["skip_cache"] = True
@@ -664,14 +650,19 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["stale_after_seconds"] = s.stale_after
         if s.params_model is not None:
             entry["params_schema"] = s.params_model.model_json_schema()
-        if s.in_shape != "one" or s.out_shape != "one":
-            entry["in_shape"] = s.in_shape
-            entry["out_shape"] = s.out_shape
+        if s.shape != "map":
+            entry["shape"] = s.shape
             if s.on_failed != "use_passed":
                 entry["on_failed"] = s.on_failed
+        if s.as_table:
+            entry["as_table"] = True
+        if s.table_input:
+            entry["table_input"] = True
+        if s.row_key is not None:
+            entry["row_key"] = s.row_key
         if s.group_key is not None:
             entry["group_key"] = s.group_key
-        if s.in_shape == "fold":
+        if s.shape == "fold":
             entry["fold_init"] = s.fold_init
         if s.join_on is not None:
             entry["join_on"] = dict(s.join_on)
@@ -697,7 +688,7 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["output_schema"] = s.output_model.model_json_schema()
         if s.assertions:
             entry["assertions"] = [
-                a.__name__ if hasattr(a, "__name__") and a.__name__ != "<lambda>" else "assertion" 
+                a.__name__ if hasattr(a, "__name__") and a.__name__ != "<lambda>" else "assertion"
                 for a in s.assertions
             ]
         steps.append(entry)
@@ -706,14 +697,9 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
         "id": spec.name,
         "name": spec.name,
         "steps": steps,
-        # Emitted unconditionally (even empty): these are declarations, not
-        # policy toggles, and dashboards/tooling read definition_json as the
-        # authoritative list of a pipeline's environment surface.
         "secrets": list(spec.secrets),
         "env": list(spec.env),
     }
     if spec.retention is not None:
-        # The ops path (rubedo gc / auto-prune) reads each pipeline's policy from
-        # its latest run's definition_json — never by importing user code.
         snapshot["retention"] = spec.retention
     return snapshot

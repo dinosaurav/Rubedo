@@ -5,7 +5,7 @@ It controls *which* cells are requested — never cache/input/output identity.
 Deterministic sampling helpers construct scopes; ``origin`` metadata is
 diagnostic only (persisted for reproducibility, never hashed).
 
-MVP anchors are non-root ``in_shape="one"`` / ``out_shape="one"`` map steps.
+MVP anchors are non-root ``shape="map"`` steps.
 ``skip_cache`` anchors are rejected: those steps are never materialized or
 recorded on ``RunCoordinateStatus``, so a cohort anchored there would be
 invisible in the ledger and unsafe to treat as a durable experiment boundary.
@@ -307,7 +307,7 @@ def coordinate_preserving_scope_steps(
     while stack:
         parent = stack.pop()
         for child in children.get(parent, []):
-            if child.in_shape != "one" or child.out_shape != "one":
+            if child.shape != "map":
                 continue
             if child.name not in scoped:
                 scoped.add(child.name)
@@ -383,15 +383,15 @@ def normalize_partial_invocation(
         if not step.depends_on:
             raise ValueError(
                 f"scope anchor '{anchor_name}' is a root — MVP anchors must be "
-                "non-root map steps (in_shape='one', out_shape='one'); "
+                "non-root map steps (shape='map'); "
                 "sample historical child lanes but anchor at the first "
                 "downstream map"
             )
-        if step.in_shape != "one" or step.out_shape != "one":
+        if step.shape != "map":
             raise ValueError(
                 f"scope anchor '{anchor_name}' has "
-                f"in_shape={step.in_shape!r}, out_shape={step.out_shape!r}; "
-                "MVP only permits map anchors (in_shape='one', out_shape='one'). "
+                f"shape={step.shape!r}; "
+                "MVP only permits map anchors (shape='map'). "
                 "Reject aggregate/fold/join/expand anchors — they mint different "
                 "coordinate namespaces; they may still appear *downstream* of an "
                 "anchor"

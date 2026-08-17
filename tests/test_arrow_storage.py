@@ -122,7 +122,7 @@ def test_dataframe_step_caches_and_reuses():
 
     call_count = 0
 
-    @step
+    @step(as_table=True)
     def make_df():
         nonlocal call_count
         call_count += 1
@@ -152,7 +152,7 @@ def test_dataframe_recompute_on_version_bump():
 
     calls = 0
 
-    @step(version="0")
+    @step(version="0", as_table=True)
     def gen():
         nonlocal calls
         calls += 1
@@ -162,7 +162,7 @@ def test_dataframe_recompute_on_version_bump():
     p.run(workers=1)
     assert calls == 1
 
-    @step(version="1")
+    @step(version="1", as_table=True)
     def gen2():
         nonlocal calls
         calls += 1

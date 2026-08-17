@@ -167,7 +167,7 @@ core must never leak into the simple case.
 4. **Multi-root pipeline API — RESOLVED: no pipeline-level API at all.** Item
    14 settled it: a root is just any step with no `depends_on`, and a
    pipeline may declare as many as it likes (a parentless generator `@step`
-   infers an `out_shape="many"` (the `shape="expand"` alias) root
+   infers a `shape="expand"` root
    automatically). `join`/multi-parent steps
    `depends_on` whichever roots they need — no dict, no per-step routing
    kwarg. See 4a below.
@@ -208,7 +208,7 @@ so it is premature abstraction. Instead ship the capability first and let the
 census follow when a concrete need (expand *caching*) pulls it in.
 
 **Expand emit contract (as shipped):**
-- `@step(out_shape="many")` (the `shape="expand"` alias); the fn yields bare payload values — no subkey, no
+- `@step(shape="expand")`; the fn yields bare payload values — no subkey, no
   pair.
 - Minted coordinate: content-addressed by decision A, always —
   `row-<hash(value)[:12]>` (`expand_child_coord`, `planning.py`). Identical
@@ -261,7 +261,7 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    deleted the `@source` sugar itself, leaving a plain parentless
    `@step`); the content-addressing behavior described above is unchanged,
    just moved into plain generator code.)*
-1. **`expand`** (`out_shape="many"` — alias `shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
+1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
    yields bare payload values (no subkey, no pair); each distinct value mints
    a content-addressed `row-<hash>` lane with address `hash(step, version,
    child-content-hash[, params])` — the child's identity is its own content,
@@ -298,7 +298,7 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    was later removed as well: today there is no removal report anywhere, only
    silent orphaning. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
-3. **`group_key` aggregate** — ✅ **DONE**. `@step(in_shape="aggregate",
+3. **`group_key` aggregate** — ✅ **DONE**. `@step(shape="aggregate",
    group_key="field")` partitions the aggregation's parent lanes by a named
    field of the parent output, emitting one output per
    group (coordinate = the group value); `group_key=None` is the old single
@@ -318,15 +318,14 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      shipped here (`pipeline(sources={name: Source})`, a named-sources dict,
      and `@step(source="name")` routing) is gone: item 14 deleted the
      `Source` protocol entirely, and with it the routing kwarg. Today
-     "multi-source" is just several parentless `@step(out_shape="many")`
-     (alias `shape="expand"`) roots
+     "multi-source" is just several parentless `@step(shape="expand")`
      declared in the same pipeline — no pipeline-level kwarg, no
      per-root routing. A downstream step names whichever root(s) it needs in
      `depends_on`; coordinates never collide because `coord_step_mats` is
      keyed by `(coord, step)`. Live-verified in
      `examples/newsroom/newsroom.py` (two source-shaped roots joined on
      publisher) and covered by `tests/test_join.py`.
-   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(in_shape="join",
+   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
      depends_on=[a, b, ...], join_on={a: field, b: field, ...})` (alias
      `shape="join"`): an **N-way**
       equijoin matching each side's field by value

@@ -468,11 +468,11 @@ The four promises don't change. The mechanisms that keep them do:
 2. **Per-lane materialization for dict outputs.** The whole "1 mat row per
    table-shaped step" optimization... is *not* part of this design. This
    design keeps one Arrow row per lane, per step, whether the output is a
-   dict or a DataFrame. A table-shaped step returning one DataFrame
+   dict or a DataFrame. A table-shaped step (`as_table=True`) returning one DataFrame
    produces one Arrow row (the DataFrame is the value of that one row);
    50 lanes producing 50 dicts produce 50 rows in the step's file. The
-   1M-lane overhead fix came from *choosing the right step shape*
-   (return a table, don't `yield` 1M rows), not from collapsing per-lane
+   1M-lane overhead fix came from *choosing the right grain*
+   (`as_table=True`, don't `yield` 1M rows), not from collapsing per-lane
    rows. This is simpler and matches how readers work today.
 3. **`expand` parentage persistence (2i).** Real storage-format change.
    Don't spec it until 2h is done and the lineage queries are the

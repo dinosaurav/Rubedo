@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **One `shape=` (TODO 39–41).** `StepSpec` stores `shape`
+  (`map`/`expand`/`aggregate`/`fold`/`join`/`join_table`) instead of
+  `in_shape`/`out_shape`. Maps zip parent coordinates; only expand, pair
+  `join`, and grouped aggregate/fold mint new lanes. `as_table=True` keeps
+  a DataFrame as one cache entry (returning a frame without it errors).
+  Expand must `yield` or `return` a list/tuple — a dict or str no longer
+  fans out keys/characters, and expand + DataFrame errors unless
+  `row_key=` mints dict lanes from a table. Aggregate table input is
+  inferred from a `pa.Table`/`pl.DataFrame` annotation (`arrow_aggregate`
+  deleted). `shape="join_table"` / `p.join_table(...)` is one table-valued
+  coordinate with the same join invariants as pair-lane `join`.
+  `definition()` snapshots `shape` (not the in/out pair). Dev-stage:
+  `rm -rf .rubedo` if an existing home still has the old snapshot fields.
+
 ## [0.5.1] - 2026-08-15
 
 ### Changed

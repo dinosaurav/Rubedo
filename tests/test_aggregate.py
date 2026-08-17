@@ -81,7 +81,7 @@ def test_aggregate_basic_and_lineage():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -106,7 +106,7 @@ def test_aggregate_caching():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -146,7 +146,7 @@ def test_aggregate_filtered_lane():
             return Filtered("dropped")
         return int(text.split(":")[1])
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         # a.txt (10) is always present; b.txt (20) only when un-filtered.
         # Coordinates are content-addressed (row-<hash>), not "a.txt"/
@@ -188,7 +188,7 @@ def test_aggregate_failed_parent_lane():
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate", on_failed="block")
+    @step(name="sum", depends_on=["parse"], shape="aggregate", on_failed="block")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -217,7 +217,7 @@ def test_aggregate_failed_parent_lane_use_passed():
             raise ValueError("bad data")
         return int(text)
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -242,7 +242,7 @@ def test_aggregate_downstream_map():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -267,7 +267,7 @@ def test_aggregate_plan():
     def parse(scan):
         return int(scan["text"].strip())
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 
@@ -290,12 +290,12 @@ def test_aggregate_plan():
     assert any(i.action == "pending" for i in sum_items2)
 
 def test_registration_errors():
-    with pytest.raises(ValueError, match="skip_cache is meaningless with in_shape='aggregate'"):
-        @step(name="sum", depends_on=["x"], in_shape="aggregate", skip_cache=True)
+    with pytest.raises(ValueError, match="skip_cache is meaningless with shape='aggregate'"):
+        @step(name="sum", depends_on=["x"], shape="aggregate", skip_cache=True)
         def sum_v1(x):
             pass
 
-    with pytest.raises(ValueError, match=r"shape must be one of \['expand', 'join', 'map'\]"):
+    with pytest.raises(ValueError, match="shape must be one of"):
         @step(name="sum", shape="banana")
         def sum_v2(x):
             pass
@@ -304,7 +304,7 @@ def test_registration_errors():
     # decoration time — the parent-count check moved to build time so that
     # an aggregate omitting depends_on= can get its parent from signature
     # inference. It raises when the pipeline is built:
-    @step(name="sum", in_shape="aggregate")
+    @step(name="sum", shape="aggregate")
     def sum_v3():
         pass
     with pytest.raises(ValueError, match="requires at least one parent"):
@@ -319,7 +319,7 @@ def test_aggregate_all_filtered():
         from rubedo import Filtered
         return Filtered("reason")
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_values(parse):
         return sum(parse.values())
 

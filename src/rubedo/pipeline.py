@@ -176,9 +176,9 @@ def _build_spec(
     # parent. Checked here (not at decoration time) because one declared
     # without depends_on= gets its parent from signature inference above.
     for s in steps:
-        if s.in_shape in ("aggregate", "fold") and not s.depends_on:
+        if s.shape in ("aggregate", "fold") and not s.depends_on:
             raise ValueError(
-                f"Step '{s.name}': in_shape={s.in_shape!r} requires at least one parent "
+                f"Step '{s.name}': shape={s.shape!r} requires at least one parent "
                 "in depends_on (or a parameter naming a parent step)"
             )
 
@@ -194,14 +194,14 @@ def _build_spec(
                 f"Step '{s.name}' has skip_cache but no consumer: its output "
                 "would never be computed or stored"
             )
-        if s.in_shape == "join":
+        if s.shape in ("join", "join_table"):
             for dep in s.join_on or {}:
                 parent = name_to_step.get(dep)
                 if parent and parent.skip_cache:
                     raise ValueError(
-                        f"Step '{s.name}': in_shape='join' cannot have a skip_cache parent ('{dep}')"
+                        f"Step '{s.name}': shape={s.shape!r} cannot have a skip_cache parent ('{dep}')"
                     )
-        if s.in_shape in ("aggregate", "fold") and s.group_key is not None:
+        if s.shape in ("aggregate", "fold") and s.group_key is not None:
             for dep in s.depends_on:
                 parent = name_to_step.get(dep)
                 if parent and parent.skip_cache:
@@ -312,7 +312,7 @@ class Pipeline:
         """
         if len(join_on) < 2:
             raise ValueError(
-                f"Step '{name}': in_shape='join' requires at least two parents in "
+                f"Step '{name}': shape='join' requires at least two parents in "
                 "join_on (N-way star join on a shared value)"
             )
         if join_mode not in ("intersect", "union"):
@@ -326,8 +326,44 @@ class Pipeline:
             version=version,
             depends_on=list(join_on.keys()),
             depends_on_explicit=True,
-            in_shape="join",
-            out_shape="many",
+            shape="join",
+            join_on=join_on,
+            join_mode=join_mode,  # type: ignore[arg-type]
+            declarative=True,
+            on_failed=on_failed,  # type: ignore[arg-type]
+        )
+        self._steps.append(s)
+        self._spec = None
+        return s
+
+    def join_table(self, *, name: str, join_on: Dict[str, str], version: str = "0",
+                   on_failed: str = "use_passed",
+                   join_mode: str = "intersect"):
+        """Declarative table join — one coordinate whose value is the
+        joined table. Same ``join_on`` / ``join_mode`` / null /
+        duplicate-key rules as pair-lane ``join``, without minting pair
+        lanes. Parents must be table-valued (``as_table=True``).
+
+        Requires ``name=``.
+        """
+        if len(join_on) < 2:
+            raise ValueError(
+                f"Step '{name}': shape='join_table' requires at least two parents in "
+                "join_on (N-way star join on a shared value)"
+            )
+        if join_mode not in ("intersect", "union"):
+            raise ValueError(
+                f"Step '{name}': join_mode must be 'intersect' or 'union', "
+                f"got {join_mode!r}"
+            )
+        s = StepSpec(
+            name=name,
+            fn=None,  # type: ignore[arg-type]
+            version=version,
+            depends_on=list(join_on.keys()),
+            depends_on_explicit=True,
+            shape="join_table",
+            as_table=True,
             join_on=join_on,
             join_mode=join_mode,  # type: ignore[arg-type]
             declarative=True,
@@ -356,8 +392,7 @@ class Pipeline:
             version=version,
             depends_on=list(depends_on),
             depends_on_explicit=True,
-            in_shape="one",
-            out_shape="one",
+            shape="map",
             declarative=True,
             on_failed=on_failed,  # type: ignore[arg-type]
         )

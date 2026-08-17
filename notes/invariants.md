@@ -113,8 +113,7 @@ just data a step chose to return).
 
 **Source:**
 Not a separate type — ingestion is a root step. A parentless generator
-function decorated `@step` (its `out_shape="many"` inferred automatically
-— the `shape="expand"` alias)
+function decorated `@step` (its `shape="expand"` inferred automatically)
 yields payloads; each becomes a content-addressed `row-<hash>` lane. A
 pipeline may declare several source-shaped roots; `join` doesn't care
 that its parents are roots. Conceptually a source is the root
@@ -122,7 +121,7 @@ that its parents are roots. Conceptually a source is the root
 `producer-model.md`).
 
 **Root (head of a pipeline):**
-Any step with no `depends_on` originates lanes, and its `out_shape` sets how
+Any step with no `depends_on` originates lanes, and its `shape` sets how
 many: an `expand` root yields N (a source-shaped root — anchor-cached
 like any expand, so the generator is not re-run while its identity is
 unchanged; sources that watch external state declare `check_cache=False`
@@ -136,7 +135,7 @@ blocked, filtered. "Filtered" means a step declined the coordinate — a
 cached, first-class verdict, not an error.
 
 **Collective Steps & Fan-in:**
-Collective steps (`aggregate` / `fold` / `join`) default to partial fan-in
+Collective steps (`aggregate` / `fold` / `join` / `join_table`) default to partial fan-in
 (`on_failed="use_passed"`): if a parent lane fails or is blocked, the step
 drops it and proceeds with the surviving lanes (firing a `partial_fan_in`
 warning). They block entirely only if `on_failed="block"` is requested,

@@ -131,7 +131,7 @@ def classify(screen: dict) -> dict:
     }
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def digest(classify: dict) -> str:
     """Fan in every classified story and let the LLM write the editor's note."""
     stories = sorted(classify.values(), key=lambda s: s["score"], reverse=True)

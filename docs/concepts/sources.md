@@ -10,7 +10,7 @@ search:
     book — folder, CSV, SQL, cloud LIST-only, multi-source.
 
 A source is a step that yields items — not a class, not a protocol. A
-parentless generator (`shape="expand"` / `out_shape="many"`, inferred)
+parentless generator (`shape="expand"`, inferred)
 `yield`s one payload per item, and each payload mints its own
 content-addressed lane (`row-<hash>`). The engine never imports your code,
 so there's nothing to subclass or register.
@@ -96,6 +96,19 @@ def leads():
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
+
+For a large CSV you want as **one table** (census load — one cache slot,
+vectorized work) rather than one lane per row:
+
+```python
+@p.step(as_table=True, check_cache=False)
+def patients():
+    return pl.read_csv("patients.csv")
+```
+
+Inner rows of that frame are not coordinates until a later `expand`
+(with `row_key=` if identity should follow a column). See
+[shapes.md](shapes.md#tables-vs-lanes).
 
 ## SQL table
 

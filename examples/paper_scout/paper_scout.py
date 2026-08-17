@@ -100,7 +100,7 @@ def fetch_work(discover: dict) -> dict:
     }
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def reading_list(fetch_work: dict) -> str:
     """Compile the complete batch; a pilot aggregate could never impersonate it."""
     works = sorted(

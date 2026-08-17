@@ -178,7 +178,7 @@ def build_pipeline(executor: str):
     p.step(
         name=f"combine_{executor}",
         depends_on=[f"analyze_{executor}"],
-        in_shape="aggregate",
+        shape="aggregate",
     )(combine_chunks)
 
     return p

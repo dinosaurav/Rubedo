@@ -70,23 +70,25 @@ or a tag pointing at the wrong commit wastes a publish attempt:
 - `src/rubedo/spec.py` — pure data leaf: `StepSpec`/`PipelineSpec`
   dataclasses plus `step()` and `definition()` (the JSON
   snapshot each run records). No registry: the engine never imports user
-  code. `StepSpec` carries `in_shape`/`out_shape` as the primary fields;
-  the legacy `shape=` kwarg on `step()` is translated to the pair and
-  never stored. The four conceptual shapes: `map`
-  (`in_shape="one", out_shape="one"`, 1:1, default) / **`aggregate`**
-  (`in_shape="aggregate", out_shape="one"` — N:1 fan-in over a parent's
-  surviving lanes; `group_key` partitions into one
-  output per field value read from the parent's output dict, else a single
-  `"@all"`) / `expand` (`in_shape="one", out_shape="many"` — 1:N; the fn
-  yields payloads, minting content-addressed `row-<hash>` child lanes; **no
-  `depends_on` = a root = a source** that yields the initial lanes and
-  is anchor-cached by default — sources that watch external state declare
-  `check_cache=False` to re-enumerate each run — so `pipeline(steps=[...])`
-  needs no separate ingestion
-  concept — a parentless generator `@step` infers this shape automatically)
-  / `join` (`in_shape="join", out_shape="many"` — N-way equijoin on
-  `join_on={parent: field}`, minting `a|b|…` pair lanes; the field is
-  read from the parent's output dict). A
+  code. `StepSpec` carries `shape` (`map` / `expand` / `aggregate` /
+  `fold` / `join` / `join_table`) plus producer grain `as_table` (one
+  table-valued cache entry) and `table_input` (aggregate fan-in as a
+  `pa.Table`, inferred from a DataFrame/Table parent annotation).
+  The shapes: `map` (1:1 zip with parent coordinates, default) /
+  **`aggregate`** (N:1 fan-in over a parent's surviving lanes;
+  `group_key` partitions into one output per field value read from the
+  parent's output dict, else a single `"@all"`) / `expand` (1:N; the fn
+  yields payloads or returns a list, minting content-addressed
+  `row-<hash>` child lanes; **no `depends_on` = a root = a source**
+  that yields the initial lanes and is anchor-cached by default —
+  sources that watch external state declare `check_cache=False` to
+  re-enumerate each run — so `pipeline(steps=[...])` needs no separate
+  ingestion concept — a parentless generator `@step` infers this shape
+  automatically) / `join` (N-way equijoin on `join_on={parent: field}`,
+  minting `a|b|…` pair lanes) / `join_table` (same join keys/mode, one
+  table-valued `@all` coordinate). `as_table=True` does not mint lanes —
+  a DataFrame is a value in the step's existing coordinate(s). Returning
+  a DataFrame without it errors. A
   **source-less `map` root** (no `depends_on`) mints a single `@root` lane
   whose input is its params (or a constant) — so a pipeline can begin with
   a plain step fed a value instead of scanning for one; same params reuse,
@@ -258,13 +260,13 @@ kwarg — TODO 15). `.test_*/` is gitignored.
 
 Ingestion has no separate concept (TODO 14): there is no `folder=` pipeline
 kwarg. A test folder is scanned by a bare-`@step` root — a parentless
-generator infers `out_shape="many"` (a `shape="expand"` alias — the folder recipe from
+generator infers `shape="expand"` (the folder recipe from
 `docs/concepts/sources.md`) — and the downstream step's parameter name is
 its dependency declaration. Tests use this terse form throughout: no
 `name=`/`version=`/`shape=`/`depends_on=` unless the kwarg is the test's
 subject (version bumps, drift, validation errors), the name genuinely
 differs from the function's, or the shape can't be inferred — a plain
-`@all` aggregate keeps `in_shape="aggregate"`,
+`@all` aggregate keeps `shape="aggregate"`,
 and aggregate/join steps keep an
 explicit `depends_on=` (parent counts validate at decoration time, before
 build-time inference runs):

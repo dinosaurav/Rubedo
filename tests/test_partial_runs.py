@@ -171,7 +171,7 @@ def test_sampled_aggregate_address_differs_from_full():
     def parse(scan: dict):
         return {"path": scan["path"], "n": 1}
 
-    @step(name="total", depends_on=["parse"], in_shape="aggregate")
+    @step(name="total", depends_on=["parse"], shape="aggregate")
     def total(parse: dict):
         return {"sum": sum(v["n"] for v in parse.values())}
 
@@ -472,7 +472,7 @@ def test_invalid_anchors_and_targets():
     def parse(scan: dict):
         return scan
 
-    @step(name="sum", depends_on=["parse"], in_shape="aggregate")
+    @step(name="sum", depends_on=["parse"], shape="aggregate")
     def sum_step(parse: dict):
         return {"n": len(parse)}
 
@@ -495,7 +495,7 @@ def test_invalid_anchors_and_targets():
     with pytest.raises(ValueError, match="root"):
         pipe.run(scope=RunScope.explicit(anchor="scan", lanes=[coord]))
 
-    with pytest.raises(ValueError, match="aggregate|in_shape|map anchors"):
+    with pytest.raises(ValueError, match="aggregate|shape|map anchors"):
         pipe.run(scope=RunScope.explicit(anchor="sum", lanes=["@all"]))
 
     with pytest.raises(ValueError, match="skip_cache"):

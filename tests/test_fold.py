@@ -30,7 +30,7 @@ def test_fold_accumulates_lanes_in_coordinate_order_and_reuses():
         yield {"value": "a"}
         yield {"value": "m"}
 
-    @step(in_shape="fold", fold_init="", depends_on=["source"])
+    @step(shape="fold", fold_init="", depends_on=["source"])
     def combine(acc, source):
         calls.append(source["value"])
         return acc + source["value"]
@@ -61,7 +61,7 @@ def test_fold_groups_and_resets_its_accumulator():
         yield {"group": "west", "amount": 3}
         yield {"group": "east", "amount": 5}
 
-    @step(in_shape="fold", fold_init=0, group_key="group", depends_on=["source"])
+    @step(shape="fold", fold_init=0, group_key="group", depends_on=["source"])
     def total(acc, source):
         return acc + source["amount"]
 
@@ -81,7 +81,7 @@ def test_fold_check_cache_false_reexecutes():
         yield {"value": 1}
 
     @step(
-        in_shape="fold", fold_init=0, depends_on=["source"], check_cache=False
+        shape="fold", fold_init=0, depends_on=["source"], check_cache=False
     )
     def total(acc, source):
         calls.append(source["value"])
@@ -99,7 +99,7 @@ def test_fold_copies_mutable_initial_values_per_group():
         yield {"group": "east", "value": "a"}
         yield {"group": "west", "value": "b"}
 
-    @step(in_shape="fold", fold_init=[], group_key="group", depends_on=["source"])
+    @step(shape="fold", fold_init=[], group_key="group", depends_on=["source"])
     def collect(acc, source):
         acc.append(source["value"])
         return acc
@@ -114,30 +114,30 @@ def test_fold_copies_mutable_initial_values_per_group():
 def test_fold_requires_json_serializable_initial_value():
     with pytest.raises(ValueError, match="requires fold_init"):
 
-        @step(in_shape="fold", depends_on=["source"])
+        @step(shape="fold", depends_on=["source"])
         def missing(acc, source):
             return acc
 
     with pytest.raises(ValueError, match="JSON-serializable"):
 
-        @step(in_shape="fold", fold_init={object()}, depends_on=["source"])
+        @step(shape="fold", fold_init={object()}, depends_on=["source"])
         def invalid(acc, source):
             return acc
 
 
-def test_fold_rejects_arrow_aggregate():
-    with pytest.raises(ValueError, match="arrow_aggregate=True requires"):
+def test_fold_rejects_table_annotation():
+    import pyarrow as pa
 
-        @step(
-            in_shape="fold", fold_init=0, depends_on=["source"], arrow_aggregate=True
-        )
-        def total(acc, source):
-            return acc + source
+    with pytest.raises(ValueError, match="table-typed annotations"):
+
+        @step(shape="fold", fold_init=0, depends_on=["source"])
+        def total(acc, source: pa.Table):
+            return acc + 1
 
 
 def test_fold_rejects_multiple_parents():
     with pytest.raises(ValueError, match="takes exactly one parent"):
 
-        @step(in_shape="fold", fold_init=0, depends_on=["left", "right"])
+        @step(shape="fold", fold_init=0, depends_on=["left", "right"])
         def total(acc, value):
             return acc + value
