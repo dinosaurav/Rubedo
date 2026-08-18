@@ -218,11 +218,11 @@ def test_expand_from_table_row_key_identity_not_full_payload():
 
     p2 = pipeline(name="rk-id", steps=[src2, cells2], home=TEST_HOME)
     p2.run(workers=1)
-    keys_v2 = [
+    keys_v2 = sorted(
         r.get("lane_key")
         for r in TEST_HOME.lanes.all_filled_rows()
         if r.get("step_name") == "cells2"
-    ]
+    )
     assert keys_v1 == keys_v2
 
 
