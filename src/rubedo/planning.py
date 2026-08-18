@@ -49,7 +49,7 @@ def _field_values_from_ref(ref, field: str) -> List[str]:
 @dataclass
 class RootItem:
     """A synthetic lane item for a source-less root map: its single `@root`
-    lane, or (for a root skip_cache step) the per-coordinate placeholder
+    lane, or (for a root use_cache=False step) the per-coordinate placeholder
     used to key its ephemeral memo. Not part of the public API — a root
     step (no `depends_on`) mints its own lanes directly: an expand root
     yields N via its generator, a map root mints this one synthetic lane."""
@@ -97,7 +97,7 @@ class _ArrowRowRef:
 
 @dataclass
 class EphemeralRef:
-    """A skip_cache step's stand-in for a materialization.
+    """A use_cache=False step's stand-in for a materialization.
 
     Carries the step's identity (not its output — it hasn't run) so that
     consumers' cache keys can be computed statically, plus everything needed
@@ -814,16 +814,16 @@ def _plan_step(
     sets); the decisions are byte-identical to what whole-step planning
     would produce for those coordinates at the same ledger state.
 
-    `force` is the run-level override (``--force``); `step.check_cache=False`
+    `force` is the run-level override (``--force``); `step.force=True`
     is the per-step equivalent. Both make plan skip reuse and emit "execute",
     but the commit path is unaffected — results still land in cache.
     """
-    # check_cache=False on the step is a per-step force: skip reuse, still commit.
+    # step.force is a per-step force: skip reuse, still commit.
     if home is None:
         from .home import Home
 
         home = Home.default()
-    force = force or not step.check_cache
+    force = force or step.force
     if lanes is not None and step.shape not in ("map", "expand"):
         raise ValueError(
             f"lane-subset planning requires shape='map' or 'expand' (step '{step.name}' "
@@ -988,7 +988,7 @@ def _plan_step(
             else:
                 parent_mats[dep] = parent_mat
 
-        if step.skip_cache:
+        if step.use_cache is False:
             if failed_parents or blocked_parents:
                 coord_step_mats[(coord, step.name)] = "blocked"
             elif filtered_parents:

@@ -130,11 +130,11 @@ def test_census_as_table_chain_is_o1_coordinates():
     """Two as_table loads → as_table merge → as_table agg: one lane each."""
     pl = pytest.importorskip("polars")
 
-    @step(as_table=True, check_cache=False)
+    @step(as_table=True, force=True)
     def patients():
         return pl.DataFrame({"patient_id": [1, 2], "name": ["a", "b"]})
 
-    @step(as_table=True, check_cache=False)
+    @step(as_table=True, force=True)
     def claims():
         return pl.DataFrame({"patient_id": [1, 1, 2], "dx": ["x", "y", "z"]})
 

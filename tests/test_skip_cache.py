@@ -42,7 +42,7 @@ def build_pipeline(calls, util_version="1"):
     def read(scan):
         return scan["text"]
 
-    @step(version=util_version, skip_cache=True)
+    @step(version=util_version, use_cache=False)
     def parse(read):
         calls.append("parse")
         return read.strip().lower()
@@ -119,7 +119,7 @@ def test_util_shared_by_two_consumers_runs_once():
     def read(scan):
         return scan["text"]
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def norm(read):
         calls.append("norm")
         return read.strip()
@@ -145,7 +145,7 @@ def test_util_failure_fails_the_consumer():
     def read(scan):
         return scan["text"]
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def boom(read):
         raise RuntimeError("util exploded")
 
@@ -170,7 +170,7 @@ def test_blocked_propagates_through_util():
     def read(scan):
         raise ValueError("root fails")
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def mid(read):
         return read
 
@@ -194,11 +194,11 @@ def test_chained_utils():
     def read(scan):
         return scan["text"]
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def strip(read):
         return read.strip()
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def lower(strip):
         return strip.lower()
 
@@ -228,11 +228,11 @@ def test_plan_omits_utils():
 def test_registration_validations():
     with pytest.raises(ValueError, match="stale_after is meaningless"):
 
-        @step(skip_cache=True, stale_after="1h")
+        @step(use_cache=False, stale_after="1h")
         def x(path):
             pass
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def orphan():
         pass
 

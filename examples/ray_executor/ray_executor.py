@@ -151,7 +151,7 @@ def fetch(books: dict) -> dict:
     return {"id": books["id"], "title": books["title"], "text": text}
 
 
-@step(skip_cache=True)
+@step(use_cache=False)
 def clean(fetch: dict) -> dict:
     """Strip Gutenberg boilerplate; fused into downstream cache keys."""
     text = fetch["text"]

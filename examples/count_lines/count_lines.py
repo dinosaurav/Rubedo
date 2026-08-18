@@ -19,7 +19,7 @@ class CountLinesParams(BaseModel):
 p = pipeline(name="count-lines", params_model=CountLinesParams)
 
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):

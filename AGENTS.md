@@ -81,7 +81,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   yields payloads or returns a list, minting content-addressed
   `row-<hash>` child lanes; **no `depends_on` = a root = a source**
   that yields the initial lanes and is anchor-cached by default —
-  sources that watch external state declare `check_cache=False` to
+  sources that watch external state declare `force=True` to
   re-enumerate each run — so `pipeline(steps=[...])` needs no separate
   ingestion concept — a parentless generator `@step` infers this shape
   automatically) / `join` (N-way equijoin on `join_on={parent: field}`,
@@ -108,10 +108,10 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   verbs are methods — `.run()`/`.plan()`/`.describe()`/`.definition()`) and
   the `pipeline()` factory that constructs one. `_build_spec` does the
   validation the old free `pipeline()` builder did (at least one root,
-  skip_cache/join/group_key consistency) — run lazily on first `.spec`/verb
+  use_cache/join/group_key consistency) — run lazily on first `.spec`/verb
   access and cached, not at construction (`.build()` is gone). `name` is
-  the pipeline's sole identity (no `id=`); `schedule=`/`home=` join
-  `retention=`/`params_model=` as construction-time settings. `home=` is a
+  the pipeline's sole identity (no `id=`); `schedule=`/`home=`/`cache_default=`
+  join `retention=`/`params_model=` as construction-time settings. `home=` is a
   `Home` instance (see `home.py`), not a path string.
 - `src/rubedo/home.py` — `Home`: one storage root owning `Database` +
   `ObjectStore` (`LocalStore` or `S3Store`) + `LaneStore`. Interned by
@@ -148,7 +148,7 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   addresses = `hash(step, version, input_hash[, params][, code], pipeline)`
   (`pipeline` is required, always-last — TODO 33 scopes every address to
   its owning pipeline);
-  staleness, code-drift, `EphemeralRef` (skip_cache fusion) live here.
+  staleness, code-drift, `EphemeralRef` (use_cache=False fusion) live here.
   Reuse checks consult `input_hash_usages.fulfilled` (liveness gate) +
   `lane_store.find_latest_filled_by_address` (content retrieval) via
   `batch_lookup_by_address`. Per shape: aggregate → one decision per group
@@ -159,7 +159,8 @@ or a tag pointing at the wrong commit wastes a publish attempt:
   fields from parent output dicts).
 - `src/rubedo/execution.py` — DB-free execute phase: thread or process pool
   (per `step.executor`), retry loop, rate limiter, data quality assertions (`step.assertions`), per-run memo for
-  skip_cache utils.
+  use_cache=False utils (a fused map over a table parent with a `dict`
+  annotation is a row kernel inside that one coordinate — never mints).
 - `src/rubedo/lane_store.py` — local `LaneStore` (per-home): per-step Arrow IPC
   files under `$home/tables/`: append-only rows of lane metadata (row_id, lane_key,
   address, input_hash, code_version, output, output_identity, content_type,
@@ -313,7 +314,7 @@ downstream lane), not 1.
   dependent-expand shape (the one shape where a dry run resolves every
   lane — an expand *source* reports `pending` downstream);
   `shape_*` pit two pipeline shapes against each other (e.g. the
-  skip_cache quartet). Scenarios report **work counters** alongside
+  use_cache=False quartet). Scenarios report **work counters** alongside
   times — Arrow rows written per step, reuse lookups, disk-table cache
   misses, SQL statements (`sqlite_stmts`), `util_fn_calls`. Counters,
   not timing, are how you show a shape or
@@ -328,7 +329,7 @@ downstream lane), not 1.
   with a closure list. Keep scenario names stable — `compare` aligns by
   name.
 - Counters are visibility, not assertions: when a guarantee is
-  load-bearing ("skip_cache never materializes"), pin it in pytest too
+  load-bearing ("use_cache=False never materializes"), pin it in pytest too
   (`tests/test_skip_cache.py` shows the closure-counting trick).
 - Harness caveat: `WorkCounters` wraps `lane_store` **module
   attributes** — it sees all current call sites because they resolve at

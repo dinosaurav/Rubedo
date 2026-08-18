@@ -58,7 +58,7 @@ p = pipeline(
 )
 
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def discover(params: dict):
     """Search afresh, yielding stable OpenAlex ids rather than full records."""
     query = urllib.parse.urlencode({

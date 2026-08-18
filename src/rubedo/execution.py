@@ -37,7 +37,7 @@ from .planning import (
     expand_child_identity,
     ROOT_LANE,
 )
-from .spec import StepSpec
+from .spec import StepSpec, _is_dict_annotation, _param_annotation
 from .store import _from_arrow_table, _try_arrow, _to_arrow_table
 
 if TYPE_CHECKING:
@@ -97,7 +97,7 @@ class _RateLimiter:
 class _RunMemo:
     """Per-run memo so an ephemeral step runs at most once per coordinate.
 
-    Reentrant lock: chained skip_cache steps resolve recursively on the
+    Reentrant lock: chained use_cache=False steps resolve recursively on the
     same worker thread. Exceptions are memoized too, so every consumer of
     a failed util sees the same failure.
     """
@@ -211,8 +211,77 @@ def _resolve_parent_value(ref, params: Optional[dict], memo: _RunMemo):
     )
 
 
+def _fused_row_kernel_parent(step: StepSpec, kwargs: Dict[str, Any]) -> Optional[str]:
+    """Parent kwarg to apply as a row kernel, or None.
+
+    A fused map never mints. When it has exactly one parent whose value
+    is a table and whose parameter is annotated ``dict``, call the fn
+    once per inner row and stack — not one call with the DataFrame, and
+    not N coordinates.
+    """
+    if step.use_cache is not False or step.shape != "map" or step.declarative:
+        return None
+    parent_kwargs = [k for k in kwargs if k != "params"]
+    if len(parent_kwargs) != 1:
+        return None
+    name = parent_kwargs[0]
+    if not _try_arrow(kwargs[name]):
+        return None
+    if _is_dict_annotation(_param_annotation(step.fn, name)):
+        return name
+    return None
+
+
+def _apply_fused_row_kernel(
+    step: StepSpec, parent_kw: str, parent_value: Any, extra_kwargs: Dict[str, Any]
+) -> Any:
+    """Apply a fused map to each inner row of a table parent; never mint."""
+    import pyarrow as pa
+
+    tbl, kind = _to_arrow_table(parent_value)
+    rows = tbl.to_pylist()
+    if not rows:
+        return parent_value
+
+    out: List[Any] = []
+    saw_dict = False
+    saw_scalar = False
+    for row in rows:
+        result = step.fn(**{parent_kw: row, **extra_kwargs})
+        if isinstance(result, Filtered):
+            raise RuntimeError(
+                f"use_cache=False step '{step.name}' returned Filtered: filtering "
+                "is a cacheable decision, so filter steps must be materialized"
+            )
+        if _try_arrow(result):
+            raise ValueError(
+                f"use_cache=False step {step.name!r} returned a DataFrame/Table "
+                "from a per-row call; return a scalar (adds column "
+                f"{step.name!r}) or a dict (stacks a table), or annotate the "
+                "parent as a DataFrame to receive the frame in one call"
+            )
+        if isinstance(result, dict):
+            saw_dict = True
+            out.append(result)
+        else:
+            saw_scalar = True
+            out.append(result)
+    if saw_dict and saw_scalar:
+        raise ValueError(
+            f"use_cache=False step {step.name!r} mixed dict and scalar "
+            "returns across rows; return one or the other"
+        )
+    if saw_dict:
+        stacked = pa.Table.from_pylist(out)
+    else:
+        if step.name in tbl.column_names:
+            tbl = tbl.drop_columns(step.name)
+        stacked = tbl.append_column(step.name, pa.array(out))
+    return _from_arrow_table(stacked, kind)
+
+
 def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo):
-    """Lazily compute a skip_cache step's value, at most once per run."""
+    """Lazily compute a use_cache=False step's value, at most once per run."""
 
     def produce():
         step = ref.step
@@ -230,10 +299,14 @@ def _compute_ephemeral(ref: EphemeralRef, params: Optional[dict], memo: _RunMemo
         )
         if _step_accepts_params(step):
             kwargs["params"] = _build_step_params(step, params)
+        parent_kw = _fused_row_kernel_parent(step, kwargs)
+        if parent_kw is not None:
+            extra = {k: v for k, v in kwargs.items() if k != parent_kw}
+            return _apply_fused_row_kernel(step, parent_kw, kwargs[parent_kw], extra)
         result = step.fn(*args, **kwargs)
         if isinstance(result, Filtered):
             raise RuntimeError(
-                f"skip_cache step '{step.name}' returned Filtered: filtering "
+                f"use_cache=False step '{step.name}' returned Filtered: filtering "
                 "is a cacheable decision, so filter steps must be materialized"
             )
         return result

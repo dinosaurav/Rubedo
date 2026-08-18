@@ -25,7 +25,7 @@ that the second run recomputes only what actually changed.
 | [`hn_digest`](hn_digest/) | Hacker News + an LLM | filter → LLM → LLM aggregate | a source-shaped `@p.step` root, `Filtered`, `retries`/`rate_limit`, caching non-idempotent LLM calls |
 | [`github_health`](github_health/) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, aggregate |
 | [`weather_advisory`](weather_advisory/) | Open-Meteo (keyless) | chain → aggregate | two chained APIs, `stale_after` TTL |
-| [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → aggregate | `skip_cache` inline util + `executor="process"` CPU parallelism |
+| [`gutenberg_stats`](gutenberg_stats/) | Project Gutenberg | fetch → clean → analyze → aggregate | `use_cache=False` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](orders_rollup/) | SQLite (self-contained) | map → aggregate | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](executor_showdown/) | dwyl/english-words (GitHub) | map → aggregate | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare the elapsed time |
 | [`dask_executor`](dask_executor/) | local Dask cluster (optional install) | expand → map → aggregate | a zero-argument external executor factory; Dask runs step bodies and Rubedo fully reuses the second run |

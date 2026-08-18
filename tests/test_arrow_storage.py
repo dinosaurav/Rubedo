@@ -114,7 +114,7 @@ def test_text_path_unchanged():
 
 def test_dataframe_step_caches_and_reuses():
     """The headline Phase 1 win: a step that returns a DataFrame is cached
-    as Arrow IPC and reused across runs, not requiring skip_cache=True.
+    as Arrow IPC and reused across runs, not requiring use_cache=False.
 
     Run twice, expect the second run to reuse (no re-execution), and the
     output_for() helper to hand back a DataFrame of the same shape."""

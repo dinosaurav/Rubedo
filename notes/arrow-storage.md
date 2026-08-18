@@ -330,7 +330,7 @@ selection — is already independent of it.
    `content_type`.
 3. One test that round-trips a polars DataFrame through the store.
 **Value**: DataFrame-returning steps become cacheable. The ACRIS detect
-pipeline (7 steps all `skip_cache=True` today) becomes cached end-to-end;
+pipeline (7 steps all `use_cache=False` today) becomes cached end-to-end;
 threshold changes recompute only the affected pattern step.
 
 ### Phase 2 — The refactor (the bulk of this work) ✅ Done

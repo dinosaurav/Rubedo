@@ -6,7 +6,7 @@ Deterministic sampling helpers construct scopes; ``origin`` metadata is
 diagnostic only (persisted for reproducibility, never hashed).
 
 MVP anchors are non-root ``shape="map"`` steps.
-``skip_cache`` anchors are rejected: those steps are never materialized or
+``use_cache=False`` anchors are rejected: those steps are never materialized or
 recorded on ``RunCoordinateStatus``, so a cohort anchored there would be
 invisible in the ledger and unsafe to treat as a durable experiment boundary.
 """
@@ -396,10 +396,10 @@ def normalize_partial_invocation(
                 "coordinate namespaces; they may still appear *downstream* of an "
                 "anchor"
             )
-        if step.skip_cache:
+        if step.use_cache is False:
             raise ValueError(
-                f"scope anchor '{anchor_name}' is skip_cache — rejected. "
-                "skip_cache steps are never materialized or recorded on "
+                f"scope anchor '{anchor_name}' has use_cache=False — rejected. "
+                "use_cache=False steps are never materialized or recorded on "
                 "RunCoordinateStatus, so a cohort anchored there would be "
                 "invisible in the ledger and unsafe as a durable experiment "
                 "boundary; anchor at a materialized map step instead"

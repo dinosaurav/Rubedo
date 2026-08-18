@@ -27,7 +27,7 @@ def setup_teardown():
             f.write('three')
         yield env.data_dir
 
-@step(check_cache=False)
+@step(force=True)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):

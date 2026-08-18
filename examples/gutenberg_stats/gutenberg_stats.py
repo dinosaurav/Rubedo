@@ -7,7 +7,7 @@
 Real API: Project Gutenberg (public, no key). Then two Rubedo features worth
 showing together:
 
-  - `clean` is skip_cache=True: a quick, idempotent helper that strips the
+  - `clean` is use_cache=False: a quick, idempotent helper that strips the
     Gutenberg boilerplate. It is never materialized — its identity fuses into
     analyze's cache key and it runs in-memory only when analyze actually runs.
   - `analyze` is executor="process": the token crunching is CPU-bound, so it
@@ -52,7 +52,7 @@ def fetch(books: dict) -> dict:
     return {"title": row["title"], "text": text}
 
 
-@p.step(skip_cache=True)
+@p.step(use_cache=False)
 def clean(fetch: dict) -> dict:
     """Strip the *** START/END *** Gutenberg boilerplate. Quick, pure, inline."""
     text = fetch["text"]

@@ -27,7 +27,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(check_cache=False)
+@step(force=True)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -181,7 +181,7 @@ def test_plan_shows_filtered_chain():
 def test_skip_cache_step_cannot_filter():
     create_file("f.txt", "anything")
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def util(scan):
         return Filtered("nope")
 

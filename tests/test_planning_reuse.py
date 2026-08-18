@@ -243,7 +243,7 @@ def test_partial_recompute_on_input_change():
         with open(os.path.join(TEST_FOLDER, name), "w") as f:
             f.write(content)
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

@@ -17,12 +17,12 @@ from rubedo import Filtered, pipeline
 
 p = pipeline(name="enrich-orders")
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)

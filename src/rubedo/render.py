@@ -40,7 +40,7 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
         lines = ["graph TD"]
         for s in topo:
             label = f"{s.name}<br/>{s.version}" if s.version else s.name
-            shape = f'{s.name}(["{label}"])' if s.skip_cache else f'{s.name}["{label}"]'
+            shape = f'{s.name}(["{label}"])' if s.use_cache is False else f'{s.name}["{label}"]'
             lines.append(f"    {shape}")
         for s in topo:
             for dep in s.depends_on:
@@ -60,8 +60,10 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
     for s in topo:
         deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
         policies = []
-        if s.skip_cache:
-            policies.append("skip_cache")
+        if s.use_cache is False:
+            policies.append("use_cache=False")
+        if s.force:
+            policies.append("force")
         if s.retries:
             policies.append(f"retries={s.retries}")
         if s.rate_limit:

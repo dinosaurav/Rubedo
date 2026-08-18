@@ -33,7 +33,7 @@ def make_shout_pipeline():
     # hand-countable (no extra scan-step materialization inflating the byte
     # totals below). Yields bytes so outputs spill to the content-addressed
     # object store (small strings would be inline JSON, not on disk).
-    @step(check_cache=False)
+    @step(force=True)
     def shout():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -109,7 +109,7 @@ def test_shared_object_with_one_live_reference_is_not_reclaimable():
     create_file("a.txt", "same")
     create_file("b.txt", "same\n")
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

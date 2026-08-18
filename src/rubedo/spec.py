@@ -3,7 +3,20 @@ Pipeline and step specification definitions.
 """
 import inspect
 import re
-from typing import Callable, Optional, Dict, Any, Tuple, Type, List, Literal, Union, get_type_hints
+from typing import (
+    Callable,
+    Optional,
+    Dict,
+    Any,
+    Tuple,
+    Type,
+    List,
+    Literal,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 from pydantic import BaseModel
 from dataclasses import dataclass
 
@@ -49,6 +62,21 @@ def parse_duration(spec: str) -> float:
 SHAPES = ("map", "expand", "aggregate", "fold", "join", "join_table")
 COLLECTIVE_SHAPES = frozenset({"aggregate", "fold", "join", "join_table"})
 JOIN_SHAPES = frozenset({"join", "join_table"})
+# These shapes are the cache unit: pipeline cache_default does not fuse them,
+# and use_cache=False is rejected at decoration.
+CACHE_REQUIRED_SHAPES = frozenset({"expand", "aggregate", "fold", "join", "join_table"})
+
+
+def resolve_use_cache(
+    shape: str, declared: Optional[bool], cache_default: bool
+) -> bool:
+    """Resolved store-or-not for a step. Explicit `use_cache=` wins;
+    expand/join/aggregate/fold always store; maps inherit `cache_default`."""
+    if declared is not None:
+        return declared
+    if shape in CACHE_REQUIRED_SHAPES:
+        return True
+    return cache_default
 
 
 def _is_table_annotation(ann: Any) -> bool:
@@ -67,6 +95,37 @@ def _is_table_annotation(ann: Any) -> bool:
     if name == "Table" and "pyarrow" in mod:
         return True
     return False
+
+
+def _is_dict_annotation(ann: Any) -> bool:
+    """True if ``ann`` is ``dict`` / ``Dict[...]`` (including Optional)."""
+    if ann is inspect.Parameter.empty or ann is None:
+        return False
+    if isinstance(ann, str):
+        return ann == "dict" or ann.startswith("dict[") or ann.startswith("Dict[")
+    origin = get_origin(ann)
+    if ann is dict or origin is dict:
+        return True
+    if origin is Union:
+        args = [a for a in get_args(ann) if a is not type(None)]
+        return len(args) == 1 and _is_dict_annotation(args[0])
+    return False
+
+
+def _param_annotation(fn: Optional[Callable], param_name: str) -> Any:
+    """Resolved annotation for ``param_name``, or empty if missing."""
+    if fn is None:
+        return inspect.Parameter.empty
+    try:
+        hints = get_type_hints(fn)
+        if param_name in hints:
+            return hints[param_name]
+    except Exception:
+        pass
+    try:
+        return inspect.signature(fn).parameters[param_name].annotation
+    except (KeyError, ValueError, TypeError):
+        return inspect.Parameter.empty
 
 
 def _table_input_from_fn(fn: Optional[Callable], parent_params: List[str]) -> bool:
@@ -121,8 +180,8 @@ class StepSpec:
     retry_backoff: float = 1.0
     rate_limit: Optional[Tuple[int, float]] = None  # (count, period_seconds)
     stale_after: Optional[float] = None  # seconds; None = never stale
-    skip_cache: bool = False  # inline util: never materialized, fused into consumers
-    check_cache: bool = True  # when False, always re-execute (still commits, like --force for one step)
+    use_cache: Optional[bool] = None  # None = inherit pipeline cache_default; False = fused util
+    force: bool = False  # always re-execute this step (still commits; per-step run(force=True))
     shape: str = "map"  # map | expand | aggregate | fold | join | join_table
     as_table: bool = False  # output is one table-valued cache entry
     table_input: bool = False  # aggregate: pass parent lanes as pa.Table
@@ -179,6 +238,10 @@ class PipelineSpec:
     # without importing it.
     secrets: Tuple[str, ...] = ()
     env: Tuple[str, ...] = ()
+    # Default for maps that omit use_cache=. True (library default) stores;
+    # False fuses unset maps into their consumers (compiler / spreadsheet
+    # pipelines). expand/join/aggregate/fold always store regardless.
+    cache_default: bool = True
 
 
 def _hash_source(fn: Callable) -> Optional[str]:
@@ -214,8 +277,8 @@ def step(
     retry_backoff: float = 1.0,
     rate_limit: Optional[str] = None,
     stale_after: Optional[str] = None,
-    skip_cache: bool = False,
-    check_cache: bool = True,
+    use_cache: Optional[bool] = None,
+    force: bool = False,
     shape: Optional[str] = None,
     as_table: bool = False,
     executor: ExecutorSpec = "thread",
@@ -316,25 +379,32 @@ def step(
     bytes refresh its clock. Natural for scraped or otherwise
     time-sensitive data.
 
-    `skip_cache` marks an inline util: the step is never materialized or
-    recorded — its identity (version/code/config) fuses into its
-    consumers' cache keys, and it executes lazily (memoized per run)
-    only when a consumer actually runs. Intended for quick, idempotent
-    helpers that exist to keep other steps readable. Values pass in
-    memory without a serialization round-trip, and execution policies
-    (`retries`, `rate_limit`) are not applied — if a step needs those,
-    it deserves materialization.
+    `use_cache` controls whether this step is stored. `True` materializes
+    (the library default for maps, via `pipeline(cache_default=True)`).
+    `False` marks an inline util: never materialized or recorded — its
+    identity (version/code/config) fuses into its consumers' cache keys,
+    and it executes lazily (memoized per run) only when a consumer
+    actually runs. Intended for quick, idempotent helpers that exist to
+    keep other steps readable. Values pass in memory without a
+    serialization round-trip, and execution policies (`retries`,
+    `rate_limit`) are not applied — if a step needs those, it deserves
+    materialization. `None` (omit) inherits the pipeline's
+    `cache_default`. A fused map never mints lanes. If its one parent is
+    a table and the parent parameter is annotated ``dict``, the engine
+    applies the function to each inner row and stacks the result (a
+    scalar becomes a column named after the step; a dict becomes a table
+    of those rows). Annotate a DataFrame/Table to receive the frame in
+    one call. expand / join / aggregate / fold always store;
+    `use_cache=False` on those shapes raises.
 
-    `check_cache` (default `True`) controls whether a step's plan phase
-    checks the cache for a reusable output. When `False`, the step
-    always re-executes — but still commits its result to cache, so
-    downstream steps can reuse and a subsequent run with
-    `check_cache=True` sees the fresh output. This is the per-step
-    equivalent of `force=True`: right for source roots that must
-    re-scan the world every run (a filesystem crawl, an API poll) but
-    whose outputs are stable when the upstream hasn't changed
-    (content-addressed lanes collapse onto the same addresses, so
-    downstream reuse is unaffected).
+    `force=True` is the per-step equivalent of `run(force=True)`: plan
+    skips the reuse lookup and always re-executes, but still commits, so
+    downstream steps can reuse and a later run without `force` sees the
+    fresh output. Right for source roots that must re-scan the world
+    every run (a filesystem crawl, an API poll) but whose outputs are
+    stable when the upstream hasn't changed (content-addressed lanes
+    collapse onto the same addresses, so downstream reuse is
+    unaffected). This is not `use_cache=False` — force still stores.
 
     `on_failed` controls the partial fan-in behavior for collective
     steps (aggregate/join). `"use_passed"` (default) allows the step to
@@ -440,9 +510,9 @@ def step(
                 f"Step '{step_name}': join_on requires shape='join' or 'join_table'"
             )
 
-        if resolved == "expand" and skip_cache:
+        if resolved == "expand" and use_cache is False:
             raise ValueError(
-                f"Step '{step_name}': skip_cache is not supported with shape='expand'"
+                f"Step '{step_name}': use_cache=False is not supported with shape='expand'"
             )
         if resolved == "expand" and len(depends_on_list) > 1:
             raise ValueError(
@@ -471,10 +541,15 @@ def step(
                 f"Step '{step_name}': executor must be 'thread', 'process', "
                 f"or a zero-argument pool factory, got {executor!r}"
             )
-        if resolved in ("aggregate", "fold") and skip_cache:
+        if resolved in ("aggregate", "fold") and use_cache is False:
             raise ValueError(
-                f"Step '{step_name}': skip_cache is meaningless with shape={resolved!r} "
+                f"Step '{step_name}': use_cache=False is meaningless with shape={resolved!r} "
                 "(collective steps must be materialized)"
+            )
+        if resolved in JOIN_SHAPES and use_cache is False:
+            raise ValueError(
+                f"Step '{step_name}': use_cache=False is not supported with "
+                f"shape={resolved!r} (join outputs must be materialized)"
             )
         if group_key is not None and resolved not in ("aggregate", "fold"):
             raise ValueError(
@@ -489,19 +564,19 @@ def step(
             )
         if retries < 0:
             raise ValueError(f"Step '{step_name}': retries must be >= 0")
-        if skip_cache and stale_after is not None:
+        if use_cache is False and stale_after is not None:
             raise ValueError(
-                f"Step '{step_name}': stale_after is meaningless with skip_cache — "
+                f"Step '{step_name}': stale_after is meaningless with use_cache=False — "
                 "nothing is stored to expire"
             )
-        if not check_cache and skip_cache:
+        if force and use_cache is False:
             raise ValueError(
-                f"Step '{step_name}': check_cache=False is contradictory with skip_cache "
-                "— a skip_cache step is never materialized, so there is no cache to skip"
+                f"Step '{step_name}': force=True is contradictory with use_cache=False "
+                "— a fused step is never materialized, so there is no cache to skip"
             )
-        if not check_cache and stale_after is not None:
+        if force and stale_after is not None:
             raise ValueError(
-                f"Step '{step_name}': stale_after is meaningless with check_cache=False "
+                f"Step '{step_name}': stale_after is meaningless with force=True "
                 "— the step always re-executes anyway"
             )
         if on_failed not in ("use_passed", "block"):
@@ -596,8 +671,8 @@ def step(
             retry_backoff=retry_backoff,
             rate_limit=parsed_rate,
             stale_after=parsed_stale,
-            skip_cache=skip_cache,
-            check_cache=check_cache,
+            use_cache=use_cache,
+            force=force,
             shape=resolved,
             as_table=resolved_as_table,
             table_input=table_input,
@@ -636,10 +711,10 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
             entry["source"] = source
         if s.depends_on_aliases:
             entry["depends_on_aliases"] = dict(s.depends_on_aliases)
-        if s.skip_cache:
-            entry["skip_cache"] = True
-        if not s.check_cache:
-            entry["check_cache"] = False
+        if s.use_cache is False:
+            entry["use_cache"] = False
+        if s.force:
+            entry["force"] = True
         if s.retries:
             entry["retries"] = s.retries
             entry["retry_on"] = [e.__name__ for e in s.retry_on]
@@ -702,4 +777,6 @@ def definition(spec: PipelineSpec) -> Dict[str, Any]:
     }
     if spec.retention is not None:
         snapshot["retention"] = spec.retention
+    if not spec.cache_default:
+        snapshot["cache_default"] = False
     return snapshot

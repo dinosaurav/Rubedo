@@ -29,7 +29,7 @@ Rubedo is that the second run recomputes only what actually changed.
 | [`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest) | Hacker News + an LLM | filter → LLM → LLM aggregate | a source-shaped `@p.step` root, `Filtered`, caching non-idempotent LLM calls |
 | [`github_health`](https://github.com/dinosaurav/Rubedo/tree/main/examples/github_health) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, aggregate |
 | [`weather_advisory`](https://github.com/dinosaurav/Rubedo/tree/main/examples/weather_advisory) | Open-Meteo (keyless) | chain → aggregate | two chained APIs, `stale_after` TTL |
-| [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → aggregate | `skip_cache` inline util + `executor="process"` CPU parallelism |
+| [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → aggregate | `use_cache=False` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → aggregate | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown) | dwyl/english-words (GitHub) | map → aggregate | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare elapsed time |
 | [`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor) | local Dask cluster (optional install) | expand → map → aggregate | a zero-argument external `executor=` factory; Dask runs the step bodies and Rubedo fully reuses the second run |
@@ -73,7 +73,7 @@ clock instead.
 
 **[`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats)**
 — downloads public-domain books from Project Gutenberg and computes
-readability stats. `clean` is `skip_cache=True` (a quick, idempotent
+readability stats. `clean` is `use_cache=False` (a quick, idempotent
 boilerplate-stripper fused into `analyze`'s cache key, never materialized
 itself); `analyze` is `executor="process"` because the token-crunching is
 genuinely CPU-bound.

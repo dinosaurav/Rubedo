@@ -81,7 +81,7 @@ def test_fold_check_cache_false_reexecutes():
         yield {"value": 1}
 
     @step(
-        shape="fold", fold_init=0, depends_on=["source"], check_cache=False
+        shape="fold", fold_init=0, depends_on=["source"], force=True
     )
     def total(acc, source):
         calls.append(source["value"])

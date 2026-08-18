@@ -58,7 +58,7 @@ Two independent axes on `@step`:
 step re-runs; identical bytes refresh the clock, different bytes supersede
 and downstream recomputes.
 
-`skip_cache=True` marks a cheap, deterministic helper that is never
+`use_cache=False` marks a cheap, deterministic helper that is never
 materialized — its identity fuses into its consumers. Don't skip anything
 expensive, flaky, or non-deterministic. Full rules for `version` / `code` /
 TTL / skip: [When code changes](versioning.md).
@@ -88,14 +88,14 @@ The traps, caching stories, and `p.join(...)` live in the
 
 ## Sources
 
-A source is a step that yields items — not a class. `check_cache=False`
+A source is a step that yields items — not a class. `force=True`
 on a source that watches the outside world (folder, CSV, table), so it
 re-enumerates every run. Without that, the fan-out is cached and new files
 don't show up.
 
 ```python
 # folder — one lane per file (read the bytes, not just the path)
-@p.step(check_cache=False)
+@p.step(force=True)
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
@@ -103,13 +103,13 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 # CSV — one lane per row
-@p.step(check_cache=False)
+@p.step(force=True)
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
 # SQL — one lane per row
-@p.step(check_cache=False)
+@p.step(force=True)
 def orders():
     with engine.connect() as conn:
         for row in conn.execute(text("SELECT * FROM orders")).mappings():
@@ -154,7 +154,7 @@ all three. Planning never reads payload values (except `group_key` /
 `join_on` fields). Execution never touches the ledger. Commit is the only
 writer, on the main thread.
 
-A `check_cache=False` source always plans as `execute` (no cached
+A `force=True` source always plans as `execute` (no cached
 enumeration to preview); everything downstream shows `pending` until the
 source actually runs. That's why `created=2` after editing one file is two
 *steps* for one file, not two files.

@@ -244,7 +244,7 @@ lane to key on, the anchor is addressed against the constant `@root`
 replays its children as `reuse` until the step's identity (code version,
 params) changes. That is right for a fixed in-code list; wrong for a
 folder or table you expect to change. Sources that watch external state
-declare `check_cache=False` so the generator re-runs every `p.run()` —
+declare `force=True` so the generator re-runs every `p.run()` —
 lanes stay content-addressed, so a rescan that finds nothing new still
 reuses everything downstream. See [sources.md](sources.md).
 
@@ -279,7 +279,7 @@ table-valued cache entry (must return a DataFrame/`pa.Table`). Census
 load / normalize / join-as-table:
 
 ```python
-@step(as_table=True, check_cache=False)
+@step(as_table=True, force=True)
 def patients():
     return pl.read_csv("patients.csv")     # 1 lane; cache = hash of frame
 
@@ -287,6 +287,11 @@ def patients():
 def normalize(patients: pl.DataFrame):     # 1 lane; zip; param is the frame
     return patients.with_columns(...)
 ```
+
+A fused map (`use_cache=False`) over that table still does not mint. If
+the parent parameter is annotated `dict`, the engine applies the
+function to each inner row and stacks a column (scalar) or a table
+(dict). Annotate a DataFrame to keep one vectorized call.
 
 Returning a DataFrame **without** `as_table=True` errors — don't guess
 explode vs keep. Expand + DataFrame also errors unless `row_key=` is set

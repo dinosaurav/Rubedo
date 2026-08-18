@@ -250,7 +250,7 @@ def test_broad_deep_parity_partial():
     home_d = make_home(os.path.join(os.path.abspath(ENV_FOLDER), "deep"))
 
     def build_steps(version: str):
-        @step(check_cache=False)
+        @step(force=True)
         def scan_h():
             for name in sorted(os.listdir(TEST_FOLDER)):
                 path = os.path.join(TEST_FOLDER, name)
@@ -376,7 +376,7 @@ def test_current_remains_latest_full_after_partial():
 def test_retention_protects_latest_full_against_partial():
     create_file("ret.txt", "keep-me")
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan_bytes():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -476,7 +476,7 @@ def test_invalid_anchors_and_targets():
     def sum_step(parse: dict):
         return {"n": len(parse)}
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def util(parse: dict):
         return parse
 
@@ -498,7 +498,7 @@ def test_invalid_anchors_and_targets():
     with pytest.raises(ValueError, match="aggregate|shape|map anchors"):
         pipe.run(scope=RunScope.explicit(anchor="sum", lanes=["@all"]))
 
-    with pytest.raises(ValueError, match="skip_cache"):
+    with pytest.raises(ValueError, match="use_cache=False"):
         pipe.run(scope=RunScope.explicit(anchor="util", lanes=[coord]))
 
     with pytest.raises(ValueError, match="unknown target"):
@@ -580,7 +580,7 @@ def test_plan_scope_stays_pending_when_source_must_enumerate():
     for i in range(2):
         create_file(f"pending{i}.txt", f"pending{i}")
 
-    @step(check_cache=False)
+    @step(force=True)
     def live_scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

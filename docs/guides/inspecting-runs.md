@@ -101,11 +101,11 @@ The possible actions:
   output — and therefore this lane's own address — isn't knowable without
   actually running it. This is normal downstream of anything that hasn't
   resolved yet: in the example above, `input_files` is a root `expand`
-  with `check_cache=False`, so it always plans as `execute` (it re-scans
+  with `force=True`, so it always plans as `execute` (it re-scans
   external state every run and has no cached enumeration for the dry-run
   to preview against). Nothing downstream can be addressed until it runs
   and its children's content hashes are known. A root *without*
-  `check_cache=False` is anchor-cached against `@root` and would instead
+  `force=True` is anchor-cached against `@root` and would instead
   plan its children as `reuse` when the anchor is live — see
   [`../concepts/sources.md`](../concepts/sources.md).
 - **`filtered`** — a parent lane was declined with `Filtered(...)`; this

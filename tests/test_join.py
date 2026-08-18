@@ -624,13 +624,13 @@ def test_join_mode_union_match_appears_orphans_missing_lane():
     write_csv("a_csv.csv", "id,val\n1,A\n")
     write_csv("b_csv.csv", "id,val\n")  # empty — a is unmatched
 
-    @step(name="a_csv", check_cache=False)
+    @step(name="a_csv", force=True)
     def scan_a():
         path = os.path.join(DATA, "a_csv.csv")
         with open(path, newline="") as f:
             yield from csv.DictReader(f)
 
-    @step(name="b_csv", check_cache=False)
+    @step(name="b_csv", force=True)
     def scan_b():
         path = os.path.join(DATA, "b_csv.csv")
         with open(path, newline="") as f:

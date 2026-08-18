@@ -38,7 +38,7 @@ def assert_run(pipe):
     return summary
 
 
-@step(check_cache=False)
+@step(force=True)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -290,8 +290,8 @@ def test_aggregate_plan():
     assert any(i.action == "pending" for i in sum_items2)
 
 def test_registration_errors():
-    with pytest.raises(ValueError, match="skip_cache is meaningless with shape='aggregate'"):
-        @step(name="sum", depends_on=["x"], shape="aggregate", skip_cache=True)
+    with pytest.raises(ValueError, match="use_cache=False is meaningless with shape='aggregate'"):
+        @step(name="sum", depends_on=["x"], shape="aggregate", use_cache=False)
         def sum_v1(x):
             pass
 

@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `definition()` snapshots `shape` (not the in/out pair). Dev-stage:
   `rm -rf .rubedo` if an existing home still has the old snapshot fields.
 
+- **`use_cache` / `force` / `cache_default`.** `skip_cache=True` is now
+  `use_cache=False`; omit `use_cache=` to inherit `pipeline(cache_default=True)`
+  (maps only — expand/join/aggregate/fold always store). `check_cache=False`
+  is now `@step(force=True)`, the per-step form of `run(force=True)`: skip
+  reuse, still commit. `definition()` records resolved `use_cache` (and
+  `cache_default` when False). No compat shim. Dev-stage: `rm -rf .rubedo`
+  if snapshots still have `skip_cache` / `check_cache`.
+
+- **Fused row kernel.** `use_cache=False` never mints. A fused map whose
+  one parent is a table and whose parent parameter is annotated `dict`
+  is applied per inner row and stacked (scalar → column named after the
+  step; dict → table of those rows). Annotate a DataFrame/Table for one
+  vectorized call. Dict-lane parents still zip.
+
 ## [0.5.1] - 2026-08-15
 
 ### Changed

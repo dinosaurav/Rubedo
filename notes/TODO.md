@@ -595,7 +595,7 @@ formulas are `as_table` + `select`/`with_columns`.
   never materialized, fused identity, incompatible with collective/
   fan-out shapes — and any expansion must preserve those guarantees or
   be a separate feature. (Note: "always rerun" is already shipped as
-  `check_cache=False` — force execution while still materializing; do
+  `force=True` — force execution while still materializing; do
   not add a synonym without a semantic distinction.)
 - **Per-step spill override** (`@step(spills=[...])`) — the one piece of
   item 27 that didn't ship: force named fields to the object store,
@@ -686,7 +686,7 @@ The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
   enters cache identity; out-of-scope lanes are absent (not filtered);
   targets restrict to ancestor closure. MVP anchors: non-root
   `in_shape='one'`/`out_shape='one'` (reject root/aggregate/fold/join/
-  expand/`skip_cache`). `home.current()` and retention protect the
+  expand/`use_cache=False`). `home.current()` and retention protect the
   latest full `kind='process'` run so partial trials cannot displace
   it. Docs: `docs/guides/trials.md`. Run-to-run diff: see Done
   entry above.
@@ -764,7 +764,7 @@ The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
   but the API has the unauthenticated local-use invalidate endpoint.
   Plus a fourth drift found during verification: "sources re-run every
   run" was false everywhere — roots are anchor-cached
-  (tests/test_expand.py pins it) and `check_cache=False` is the rescan
+  (tests/test_expand.py pins it) and `force=True` is the rescan
   opt-in, but docs/concepts/sources.md's recipes omitted it (a
   folder/CSV/SQL/S3 source as documented would never notice new items).
   All recipes and prose fixed across sources.md, README, AGENTS.md,

@@ -382,7 +382,7 @@ def test_join_rejects_skip_cache_parent():
     def left():
         return {"k": "x"}
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def right(left):
         return left
 
@@ -393,7 +393,7 @@ def test_join_rejects_skip_cache_parent():
     def j(left, right):
         return {}
 
-    with pytest.raises(ValueError, match="skip_cache parent"):
+    with pytest.raises(ValueError, match="use_cache=False parent"):
         pipeline(name="jz", steps=[left, right, j], home=TEST_HOME).spec
 
 
@@ -402,7 +402,7 @@ def test_group_key_rejects_skip_cache_parent():
     def src():
         return {"g": "a"}
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def u(src):
         return src
 
@@ -489,7 +489,7 @@ def test_ephemeral_coords_compute_in_parallel():
     def read(scan):
         return scan["text"]
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def util(read):
         barrier.wait()
         return read

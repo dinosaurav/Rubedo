@@ -62,7 +62,7 @@ POSITIVE = {"amazing", "wonderful", "love", "great", "good", "excellent"}
 NEGATIVE = {"terrible", "awful", "bad", "hate", "garbage", "poor"}
 
 
-@step(check_cache=False)
+@step(force=True)
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -98,7 +98,7 @@ if __name__ == "__main__":
 
 There's no `folder=` kwarg — ingestion is a parentless generator that
 yields each file's content (that payload is what gets hashed).
-`check_cache=False` re-lists the folder every run so edits show up.
+`force=True` re-lists the folder every run so edits show up.
 `classify`'s argument name `scan` is the parent; `name` defaults to the
 function name and `version` to `"0"`. A generator infers `expand`; a
 plain `def` infers `map`. See [How it works](concepts/model.md).
@@ -122,7 +122,7 @@ created=7 reused=0 filtered=1
 ```
 
 `scan` plans as a single `execute` — this tutorial declares
-`check_cache=False`, so the source re-lists the folder every run and the
+`force=True`, so the source re-lists the folder every run and the
 dry-run has no cached enumeration to preview against. Its actual lanes
 (one per file) are unknowable until it runs. `classify` shows `pending`,
 not `execute`: its output address depends on lanes `scan` hasn't minted
@@ -147,10 +147,10 @@ created=0 reused=7 filtered=1
 ```
 
 `p.plan()` prints the exact same coarse shape as the first run — a
-`check_cache=False` `expand` root always plans as `execute` (it never
+`force=True` `expand` root always plans as `execute` (it never
 caches its own enumeration to preview against, by design: that's what lets
 it notice a folder edit) and everything downstream stays `pending`, even
-immediately after a completed run. (A root *without* `check_cache=False`
+immediately after a completed run. (A root *without* `force=True`
 is anchor-cached like any `expand` and would instead plan every lane as
 `reuse` here — see [How it works](concepts/model.md).) This is
 deliberate: `p.plan()` is a pure

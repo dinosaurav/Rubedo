@@ -14,7 +14,10 @@ interface StepDef {
   name: string;
   version: string;
   depends_on: string[];
+  use_cache?: boolean;
   skip_cache?: boolean;
+  force?: boolean;
+  check_cache?: boolean;
   retries?: number;
   rate_limit?: string;
   stale_after_seconds?: number;
@@ -84,12 +87,21 @@ function conceptualShape(s: StepDef): string {
   return 'map';
 }
 
+function isFused(s: StepDef): boolean {
+  return s.use_cache === false || s.skip_cache === true;
+}
+
+function isForced(s: StepDef): boolean {
+  return s.force === true || s.check_cache === false;
+}
+
 function policyBadges(s: StepDef): string[] {
   const badges: string[] = [];
   const shape = conceptualShape(s);
   if (shape !== 'map') badges.push(shape);
   if (s.as_table) badges.push('table');
-  if (s.skip_cache) badges.push('util');
+  if (isFused(s)) badges.push('util');
+  if (isForced(s)) badges.push('force');
   if (s.retries) badges.push(`retries ${s.retries}`);
   if (s.rate_limit) badges.push(s.rate_limit);
   if (s.stale_after_seconds) badges.push(`ttl ${s.stale_after_seconds}s`);
@@ -291,9 +303,9 @@ export default function DagView({
                style={{ cursor: 'pointer', opacity: state === 'waiting' ? 0.45 : 1, transition: 'opacity 0.3s ease' }}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
-                    stroke={s.skip_cache ? 'var(--text-muted)' : stateColor}
+                    stroke={isFused(s) ? 'var(--text-muted)' : stateColor}
                     strokeWidth={state === 'done' ? 2 : 1.5}
-                    strokeDasharray={s.skip_cache ? '5 4' : state === 'waiting' ? '4 3' : undefined}
+                    strokeDasharray={isFused(s) ? '5 4' : state === 'waiting' ? '4 3' : undefined}
                     className={state === 'active' ? 'pulse-border' : ''}
                     style={{ transition: 'stroke 0.3s ease, opacity 0.3s ease' }} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
@@ -360,7 +372,8 @@ function StepDetail({ step, pipelineId }: { step: StepDef; pipelineId?: string }
     { label: 'workers', value: String(step.workers) },
     { label: 'code', value: step.code ?? 'warn' },
   ];
-  if (step.skip_cache) specs.push({ label: 'skip_cache', value: 'true' });
+  if (isFused(step)) specs.push({ label: 'use_cache', value: 'false' });
+  if (isForced(step)) specs.push({ label: 'force', value: 'true' });
   if (step.retries) specs.push({ label: 'retries', value: String(step.retries) });
   if (step.rate_limit) specs.push({ label: 'rate_limit', value: step.rate_limit });
   if (step.stale_after_seconds !== undefined) specs.push({ label: 'stale_after', value: `${step.stale_after_seconds}s` });

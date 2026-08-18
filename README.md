@@ -38,7 +38,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)   # rescan the folder every run
+@p.step(force=True)   # rescan the folder every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -58,7 +58,7 @@ print(f"created={summary.created_count} reused={summary.reused_count}")
 
 **What this is doing**
 
-1. **`scan`** lists a folder and yields one item per file. `check_cache=False` means it re-reads the folder every run, so new and edited files show up.
+1. **`scan`** lists a folder and yields one item per file. `force=True` means it re-reads the folder every run, so new and edited files show up.
 2. **`count_lines`** runs once per file. The argument name `scan` is the parent — Rubedo builds the graph from the function signature. No YAML, no DAG file.
 3. **`plan()`, then `run()`.** `plan()` is a dry-run: what would recompute, and why. `run()` executes.
 
@@ -79,7 +79,7 @@ Prefer steps defined away from the pipeline that uses them? `pipeline(steps=[...
 ```python
 from rubedo import step, pipeline
 
-@step(check_cache=False)
+@step(force=True)
 def scan(): ...
 
 @step
@@ -100,7 +100,7 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step(check_cache=False)   # re-read the CSV every run
+@p.step(force=True)   # re-read the CSV every run
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -133,7 +133,7 @@ def check_price_positive(val: dict):
 def enrich(row: dict): ...
 ```
 
-Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `skip_cache=True` fuses a cheap helper into its consumers and never materializes it — don't skip anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)).
+Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `use_cache=False` fuses a cheap helper into its consumers and never materializes it — don't skip anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)).
 
 ## Find a row. Invalidate just that.
 
@@ -159,7 +159,7 @@ Two independent axes on `@step`:
 
 ## Inspecting runs
 
-`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything. A `check_cache=False` source always plans as `execute`; everything downstream shows `pending` until it actually runs — that's why the tutorial's first-run plan looks coarse.
+`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything. A `force=True` source always plans as `execute`; everything downstream shows `pending` until it actually runs — that's why the tutorial's first-run plan looks coarse.
 
 Everything a run wrote is queryable through **`Home`**:
 

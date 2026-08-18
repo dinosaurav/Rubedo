@@ -124,7 +124,7 @@ that its parents are roots. Conceptually a source is the root
 Any step with no `depends_on` originates lanes, and its `shape` sets how
 many: an `expand` root yields N (a source-shaped root — anchor-cached
 like any expand, so the generator is not re-run while its identity is
-unchanged; sources that watch external state declare `check_cache=False`
+unchanged; sources that watch external state declare `force=True`
 to re-enumerate each run) or a `map` root mints a single `@root` lane
 whose input is its params.
 A pipeline needs at least one root to originate lanes.

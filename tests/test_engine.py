@@ -18,7 +18,7 @@ TEST_HOME = None
 # file's content. The `path` field in the output lets tests find "the lane
 # for a.txt" without the coordinate being that literal string (coordinates
 # are content-addressed: row-<hash>).
-@step(check_cache=False)
+@step(force=True)
 def scan():
     for name in sorted(os.listdir(TEST_FOLDER)):
         path = os.path.join(TEST_FOLDER, name)

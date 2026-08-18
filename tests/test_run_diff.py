@@ -398,7 +398,7 @@ def test_added_removed_failed_filtered_and_explicit_lanes():
     create_file("drop.txt", "x")
     create_file("fail.txt", "will-fail")
 
-    @step(check_cache=False)
+    @step(force=True)
     def live_scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

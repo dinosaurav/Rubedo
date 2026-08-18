@@ -160,7 +160,7 @@ def test_join_table_rejects_skip_cache_parent():
     def left():
         return pl.DataFrame({"k": [1]})
 
-    @step(skip_cache=True, as_table=True)
+    @step(use_cache=False, as_table=True)
     def right(left):
         return left
 
@@ -168,7 +168,7 @@ def test_join_table_rejects_skip_cache_parent():
     def joined(left, right):
         return left
 
-    with pytest.raises(ValueError, match="skip_cache parent"):
+    with pytest.raises(ValueError, match="use_cache=False parent"):
         pipeline(name="jt-skip", steps=[left, right, joined], home=TEST_HOME).spec
 
 
