@@ -560,8 +560,8 @@ def pipeline(
     (never the results — cache identity is order-independent): "broad"
     (default) completes each step across all lanes before the next one
     starts; "deep" lets each lane race ahead through consecutive 1:1 steps
-    as soon as its own inputs commit, while aggregate/join (and, for now,
-    expand and multi-parent maps) still synchronize on all lanes.
+    as soon as its own inputs commit, while aggregate/join/join_table
+    (and expand and multi-parent maps) still synchronize on all lanes.
 
     home, if given, is a `Home` instance pointing this pipeline's
     ledger/object store at a custom root instead of the default

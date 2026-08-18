@@ -1,4 +1,4 @@
-"""skip_cache: inline utils fused into their consumers' cache identity."""
+"""use_cache=False: inline utils fused into their consumers' cache identity."""
 
 import os
 
@@ -8,8 +8,8 @@ from conftest import isolated_test_env
 from rubedo import pipeline, step
 from rubedo.models import MaterializationEdge, RunCoordinateStatus
 
-TEST_FOLDER = ".test_skipcache_data"
-ENV_FOLDER = ".test_skipcache_env"
+TEST_FOLDER = ".test_use_cache_data"
+ENV_FOLDER = ".test_use_cache_env"
 
 TEST_HOME = None
 
@@ -17,7 +17,7 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    with isolated_test_env("skipcache") as env:
+    with isolated_test_env("use_cache") as env:
         TEST_HOME = env.home
         yield
 
@@ -36,7 +36,7 @@ def scan():
 
 
 def build_pipeline(calls, util_version="1"):
-    """read (materialized) -> parse (skip_cache util) -> report (materialized)."""
+    """read (materialized) -> parse (use_cache=False util) -> report (materialized)."""
 
     @step
     def read(scan):
@@ -236,7 +236,7 @@ def test_registration_validations():
     def orphan():
         pass
 
-    # skip_cache-has-no-consumer validation runs lazily on first `.spec`
+    # use_cache=False-has-no-consumer validation runs lazily on first `.spec`
     # access.
     with pytest.raises(ValueError, match="no consumer"):
         pipeline(name="bad", steps=[orphan], home=TEST_HOME).spec

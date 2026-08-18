@@ -82,9 +82,10 @@ Anchor accepts a step name, `StepSpec`, or decorated step callable
 ### Anchor rules
 
 Anchors must be **non-root**, `shape="map"` map
-steps. Aggregate / fold / join / expand / root anchors are rejected —
-they mint different coordinate namespaces. They may still appear
-*downstream* of an anchor.
+steps. Aggregate / fold / join / join_table / expand / root anchors are
+rejected — they mint different coordinate namespaces (or, for
+`join_table`, one `@all` table). They may still appear *downstream* of
+an anchor.
 
 **`use_cache=False` anchors are rejected.** Those steps are never materialized
 or recorded on `RunCoordinateStatus`, so a cohort anchored there would be

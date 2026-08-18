@@ -6,15 +6,23 @@ The whole line landed: content-addressed lanes → `expand` (cached) →
 item 1 (Joins) and the `expand`/`flat_map` bullet. Read `invariants.md` for
 vocabulary first; the sequencing section at the bottom traces what was built.
 
+**Current surface (TODO 39–41).** One `shape=` —
+`map` / `expand` / `aggregate` / `fold` / `join` / `join_table` — plus
+`as_table=True` grain (a DataFrame is a value in a coordinate, not an
+implicit explode). `join_table` is the same join keys/mode as pair-lane
+`join`, one `@all` table. The "Before this item" framing below is the
+pre-producer world this design replaced; it is not how the engine looks
+today.
+
 ## The move
 
-Today the DAG is **coordinate-preserving**: every coordinate (lane key) is
-minted by the `Source` at scan time, and steps are only `map` (1:1) or
-`aggregate` (N:1). This privileges two things — `Source` (the sole
-coordinate-creator) and a source-only removal census (the sole
-change-detector) — and it blocks everything data-dependent: `expand` (fetch
-an RSS feed, *then* yield a lane per article) and `join` (both need
-coordinate creation, and join needs two independent roots).
+Before this item shipped the DAG was **coordinate-preserving**: every
+coordinate (lane key) was minted by the `Source` at scan time, and steps
+were only `map` (1:1) or `aggregate` (N:1). That privileged two things —
+`Source` (the sole coordinate-creator) and a source-only removal census
+(the sole change-detector) — and it blocked everything data-dependent:
+`expand` (fetch an RSS feed, *then* yield a lane per article) and `join`
+(both need coordinate creation, and join needs two independent roots).
 
 The generalization: **stop privileging `Source`. There are only producers
 that emit keyed items; a `Source` is the producer that emits from no input.**
@@ -34,7 +42,9 @@ produce(inputs: {coord -> value}) -> Iterable[(coord, value)]
 | filter  | 1           | no          | 1 → {0,1}   | preserves |
 | expand  | 1           | no          | 1 → N       | **mints** |
 | aggregate | 1 (grouped) | **yes**     | N → groups  | mints (group key) |
+| fold    | 1           | **yes**     | N → groups  | mints (group key) sequential |
 | join    | 2+ roots    | **yes**     | N×M → pairs | **mints** |
+| join_table | 2+ roots | **yes**     | N×M → 1 table | one `@all` |
 
 Two axes carry all the meaning: **collective?** (can this be computed one
 input lane at a time, or does it need the whole input set first — a DAG

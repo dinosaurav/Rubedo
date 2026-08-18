@@ -153,7 +153,7 @@ def test_join_table_duplicate_keys_warn_and_cartesian():
     assert summary.output_for("joined")["@all"].height == 2
 
 
-def test_join_table_rejects_skip_cache_parent():
+def test_join_table_rejects_use_cache_false_parent():
     pl = pytest.importorskip("polars")
 
     @step(as_table=True)

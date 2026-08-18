@@ -127,8 +127,8 @@ add closure counters (a list the step fn appends to) for anything the
 harness can't see from `lane_store` traffic.
 
 Counters make a shape's work *visible*; they are not assertions. When a
-shape guarantee is load-bearing ("skip_cache never materializes"),
-pin it in pytest — `tests/test_skip_cache.py` already does this with
+shape guarantee is load-bearing ("use_cache=False never materializes"),
+pin it in pytest — `tests/test_use_cache.py` already does this with
 the same closure-counting trick.
 
 Working state uses `.test_bench_data` / `.test_bench_env` at the repo

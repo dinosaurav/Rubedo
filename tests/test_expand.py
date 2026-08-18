@@ -267,7 +267,7 @@ def test_root_expand_is_a_source():
     assert vals == {0, 2, 4}
 
 
-def test_expand_rejects_skip_cache():
+def test_expand_rejects_use_cache_false():
     with pytest.raises(ValueError, match="use_cache=False is not supported"):
         step(name="bad", depends_on=["a"], shape="expand", use_cache=False)(
             lambda a: None

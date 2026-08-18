@@ -341,7 +341,7 @@ do not re-litigate):**
   idempotently (item 7's 412-is-success).
 - **Shapes: `map`/`aggregate`/`fold`/`join`; `expand` stays by-value**
   (the expand path mints coordinates and the anchor main-side).
-- **Ephemeral parents stay by value.** `EphemeralRef`/skip_cache outputs
+- **Ephemeral parents stay by value.** `EphemeralRef`/`use_cache=False` outputs
   aren't in the store by definition; refs are per-parent, so mixed
   submissions are the normal case, not an error.
 
@@ -425,7 +425,7 @@ nullable" (or the N-way equal treatment of every side) have no honest
 shape — you cannot reconstruct unmatched lanes from an inner join +
 union without lying about coordinates and parent sets.
 
-**Shipped.** `join_mode="intersect"|"union"` on `in_shape="join"`
+**Shipped.** `join_mode="intersect"|"union"` on `shape="join"`
 (default intersect). Union key universe, `None` pads, `@missing` coords,
 join-only hash slots, failed≈unmatched warning, docs + tests. See the
 settled-semantics block below for the design record.
@@ -437,8 +437,9 @@ nullable" (or the N-way equal treatment of every side) have no honest
 shape — you cannot reconstruct unmatched lanes from an inner join +
 union without lying about coordinates and parent sets.
 
-**Settled semantics (symmetric, N-way).** Still `in_shape="join"` /
-`out_shape="many"` / `join_on={parent: field}`. One new knob:
+**Settled semantics (symmetric, N-way).** `shape="join"` /
+`join_on={parent: field}` (pair lanes; `shape="join_table"` for one
+table). One new knob:
 
 ```python
 @step(join_on={"order": "cust", "customer": "cid"}, join_mode="union")
@@ -454,7 +455,7 @@ def enrich(order, customer):  # customer may be None
 All `join_on` sides are equal — no left/right, no preserve set. N-way
 union is the natural full-outer generalization. Anti-join = union +
 `Filtered` when a side is `None`. Rejected alternatives: `how=` /
-`preserve=` / `keys=` (poorly scoped names); `in_shape="outer_join"`
+`preserve=` / `keys=` (poorly scoped names); `shape="outer_join"`
 (same execution path as join — fold earned a separate shape because
 execution differs; outer does not).
 
@@ -560,7 +561,7 @@ home's snapshots still have `in_shape`/`out_shape`.
 ## 40. `shape="join_table"`  **[SHIPPED 2026-08-17]**
 
 One `@all` coordinate whose value is the joined frame. Same `join_on` /
-`join_mode` / null-key raise / dup-key warn+cartesian / skip_cache-parent
+`join_mode` / null-key raise / dup-key warn+cartesian / `use_cache=False`-parent
 rules as pair-lane `join`. `p.join(...)` stays pair-lane;
 `p.join_table(...)` is the declarative table form. `join_on=` still infers
 `join`, not `join_table`. Identity is the parents' content hashes.
@@ -589,13 +590,14 @@ formulas are `as_table` + `select`/`with_columns`.
   tree-reduce falls out once bucketing exists (fold per bucket, then
   fold the bucket outputs). Owner: useful for some flows, not near-term
   (2026-07-12); membership rule is the design session.
-- **skip_cache expansion** (owner note 2026-07-18: "skip_cache needs
-  some work"). Needs a concrete problem statement before any design.
+- **`use_cache=False` expansion** (owner note 2026-07-18: "skip_cache needs
+  some work" — the knob is now `use_cache=False`). Needs a concrete problem
+  statement before any design.
   The current contract is intentionally narrow — lazy, per-run memoized,
-  never materialized, fused identity, incompatible with collective/
-  fan-out shapes — and any expansion must preserve those guarantees or
-  be a separate feature. (Note: "always rerun" is already shipped as
-  `force=True` — force execution while still materializing; do
+  never materialized, fused identity, never mints, incompatible with
+  collective/fan-out shapes — and any expansion must preserve those
+  guarantees or be a separate feature. (Note: "always rerun" is already
+  shipped as `force=True` — force execution while still materializing; do
   not add a synonym without a semantic distinction.)
 - **Per-step spill override** (`@step(spills=[...])`) — the one piece of
   item 27 that didn't ship: force named fields to the object store,
@@ -643,8 +645,8 @@ The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
   structural relationship to a parent's coordinate string, and join/
   aggregate coordinates aren't paths either. Built the simpler mechanism
   instead: `planning.singleton_coordinate_steps` statically classifies
-  steps whose dependency chain never crosses an `out_shape="many"` step
-  (or an aggregate/fold with no `group_key`) as guaranteed
+  source-less map roots, ungrouped `aggregate`/`fold`/`join_table`, and
+  maps whose every dependency is itself singleton as guaranteed
   single-coordinate for the whole run; `_plan_step` resolves such a dep
   via its one existing materialization (a plain dict lookup, not a walk)
   and broadcasts it to every real per-row target, instead of requiring
@@ -685,7 +687,7 @@ The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
   the cohort in `Run.selection_json` (no schema change). Scope never
   enters cache identity; out-of-scope lanes are absent (not filtered);
   targets restrict to ancestor closure. MVP anchors: non-root
-  `in_shape='one'`/`out_shape='one'` (reject root/aggregate/fold/join/
+  `shape="map"` (reject root/aggregate/fold/join/join_table/
   expand/`use_cache=False`). `home.current()` and retention protect the
   latest full `kind='process'` run so partial trials cannot displace
   it. Docs: `docs/guides/trials.md`. Run-to-run diff: see Done
@@ -804,12 +806,14 @@ The full pre-restructure changelog lives in `notes/archive/TODO-obsolete.md`
   re-derived trap list (the old `sqlite_where` trap is gone — verified
   no dialect-conditional DDL remains); item 13's premise updated for
   inline outputs (refs only pay for spilled values — demand-gated).
-- **2026-07-18 — `fold` (item 28 Phase 2):** `in_shape="fold"` shipped —
+- **2026-07-18 — `fold` (item 28 Phase 2):** `shape="fold"` shipped —
   streaming accumulator, aggregate-identical caching/planning/ledger,
   coordinate-sorted execution, `fold_init` required + JSON-validated +
-  snapshotted, unary (one parent), `arrow_aggregate` rejected.
+  snapshotted, unary (one parent), table-input annotation rejected
+  (fold is sequential, not a table fan-in).
   `tests/test_fold.py`. Item 28 is fully shipped (Phase 1 landed
-  2026-07-17 as `in_shape`/`out_shape` + `aggregate` rename).
+  2026-07-17 as the `in_shape`/`out_shape` split + `aggregate` rename,
+  later collapsed back to one `shape=` by items 39–41).
 - **2026-07-18 — TODO restructure:** old TODO archived verbatim to
   `notes/archive/TODO-obsolete.md`; items 26 (retired) and 27/28 (shipped —
   27 minus the `spills=` valve, now Parked) dropped from the live list;
