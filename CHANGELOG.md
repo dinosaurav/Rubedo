@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **One `shape=` (TODO 39–41).** `StepSpec` stores `shape`
+  (`map`/`expand`/`aggregate`/`fold`/`join`/`join_table`) instead of
+  `in_shape`/`out_shape`. Maps zip parent coordinates; only expand, pair
+  `join`, and grouped aggregate/fold mint new lanes. `as_table=True` keeps
+  a DataFrame as one cache entry (returning a frame without it errors).
+  Expand must `yield` or `return` a list/tuple — a dict or str no longer
+  fans out keys/characters, and expand + DataFrame errors unless
+  `row_key=` mints dict lanes from a table. Aggregate table input is
+  inferred from a `pa.Table`/`pl.DataFrame` annotation (`arrow_aggregate`
+  deleted). `shape="join_table"` / `p.join_table(...)` is one table-valued
+  coordinate with the same join invariants as pair-lane `join`.
+  `definition()` snapshots `shape` (not the in/out pair). Dev-stage:
+  `rm -rf .rubedo` if an existing home still has the old snapshot fields.
+
+- **`use_cache` / `force` / `cache_default`.** `skip_cache=True` is now
+  `use_cache=False`; omit `use_cache=` to inherit `pipeline(cache_default=True)`
+  (maps only — expand/join/aggregate/fold always store). `check_cache=False`
+  is now `@step(force=True)`, the per-step form of `run(force=True)`: skip
+  reuse, still commit. `definition()` records resolved `use_cache` (and
+  `cache_default` when False). No compat shim. Dev-stage: `rm -rf .rubedo`
+  if snapshots still have `skip_cache` / `check_cache`.
+
+- **Fused row kernel.** `use_cache=False` never mints. A fused map whose
+  one parent is a table and whose parent parameter is annotated `dict`
+  is applied per inner row and stacked (scalar → column named after the
+  step; dict → table of those rows). Annotate a DataFrame/Table for one
+  vectorized call. Dict-lane parents still zip.
+
+- **Docs catch-up.** `/llms.txt`, the landing snippets, How-it-works
+  shapes table, enrichment guide, TODO current-API prose, test names, and
+  remaining `skip_cache` / `check_cache` / `in_shape` wording now match
+  `shape=` / `use_cache` / `force` / `cache_default`.
+
 ## [0.5.1] - 2026-08-15
 
 ### Changed

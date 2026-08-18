@@ -10,7 +10,7 @@ search:
     book — folder, CSV, SQL, cloud LIST-only, multi-source.
 
 A source is a step that yields items — not a class, not a protocol. A
-parentless generator (`shape="expand"` / `out_shape="many"`, inferred)
+parentless generator (`shape="expand"`, inferred)
 `yield`s one payload per item, and each payload mints its own
 content-addressed lane (`row-<hash>`). The engine never imports your code,
 so there's nothing to subclass or register.
@@ -30,13 +30,13 @@ def double(rows):
     return rows["n"] * 2
 ```
 
-A source watching the outside world wants `check_cache=False`. By default
+A source watching the outside world wants `force=True`. By default
 a root generator's fan-out is **anchor-cached** like any expand (see
 [shapes.md](shapes.md#expand-1n-fan-out)): the generator runs once and is
 then skipped until its identity (code version, params) changes — right for
 a fixed in-code list like `rows` above, wrong for a folder or table you
 expect to change, where only a fresh enumeration can notice new, edited,
-or deleted items. `check_cache=False` re-runs the generator on every
+or deleted items. `force=True` re-runs the generator on every
 `p.run()`; the lanes it mints stay content-addressed, so a rescan that
 finds nothing new still reuses everything downstream. The recipes below
 all watch external state, so they all declare it. (The definition snapshot
@@ -60,7 +60,7 @@ from rubedo import pipeline
 
 p = pipeline(name="docs")
 
-@p.step(check_cache=False)   # rescan the folder every run
+@p.step(force=True)   # rescan the folder every run
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
@@ -87,7 +87,7 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step(check_cache=False)   # re-read the CSV every run
+@p.step(force=True)   # re-read the CSV every run
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -96,6 +96,19 @@ def leads():
 def enrich(leads: dict):
     return {"email": leads["email"], "summary": call_llm(leads["notes"])}
 ```
+
+For a large CSV you want as **one table** (census load — one cache slot,
+vectorized work) rather than one lane per row:
+
+```python
+@p.step(as_table=True, force=True)
+def patients():
+    return pl.read_csv("patients.csv")
+```
+
+Inner rows of that frame are not coordinates until a later `expand`
+(with `row_key=` if identity should follow a column). See
+[shapes.md](shapes.md#tables-vs-lanes).
 
 ## SQL table
 
@@ -107,7 +120,7 @@ from rubedo import pipeline
 
 p = pipeline(name="orders-rollup")
 
-@p.step(check_cache=False)   # re-query the table every run
+@p.step(force=True)   # re-query the table every run
 def orders():
     engine = create_engine("postgresql://...")
     with engine.connect() as conn:
@@ -141,7 +154,7 @@ from rubedo import pipeline
 
 p = pipeline(name="ingest")
 
-@p.step(check_cache=False)   # re-LIST the bucket every run
+@p.step(force=True)   # re-LIST the bucket every run
 def objects():
     client = boto3.client("s3")
     paginator = client.get_paginator("list_objects_v2")
@@ -215,12 +228,12 @@ is just another parentless generator step; nothing extra to declare:
 ```python
 p = pipeline(name="enrich")
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)

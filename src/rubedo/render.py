@@ -9,20 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .planning import topological_sort
-from .spec import PipelineSpec, StepSpec
-
-
-_SHAPE_LABELS = {
-    ("one", "one"): "map",
-    ("one", "many"): "expand",
-    ("aggregate", "one"): "aggregate",
-    ("fold", "one"): "fold",
-    ("join", "many"): "join",
-}
+from .spec import COLLECTIVE_SHAPES, PipelineSpec, StepSpec
 
 
 def _shape_label(s: StepSpec) -> str:
-    return _SHAPE_LABELS.get((s.in_shape, s.out_shape), f"{s.in_shape}/{s.out_shape}")
+    return s.shape
 
 
 def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
@@ -49,7 +40,7 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
         lines = ["graph TD"]
         for s in topo:
             label = f"{s.name}<br/>{s.version}" if s.version else s.name
-            shape = f'{s.name}(["{label}"])' if s.skip_cache else f'{s.name}["{label}"]'
+            shape = f'{s.name}(["{label}"])' if s.use_cache is False else f'{s.name}["{label}"]'
             lines.append(f"    {shape}")
         for s in topo:
             for dep in s.depends_on:
@@ -69,8 +60,10 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
     for s in topo:
         deps = f" <- {', '.join(s.depends_on)}" if s.depends_on else " (root)"
         policies = []
-        if s.skip_cache:
-            policies.append("skip_cache")
+        if s.use_cache is False:
+            policies.append("use_cache=False")
+        if s.force:
+            policies.append("force")
         if s.retries:
             policies.append(f"retries={s.retries}")
         if s.rate_limit:
@@ -82,7 +75,7 @@ def describe(spec: PipelineSpec, format: Optional[str] = None) -> str:
             policies.append("code=auto")
         if s.params_model is not None:
             policies.append(f"params={s.params_model.__name__}")
-        if s.in_shape in ("aggregate", "fold", "join") and s.on_failed == "block":
+        if s.shape in COLLECTIVE_SHAPES and s.on_failed == "block":
             policies.append("on_failed=block")
         policy_str = f"  [{', '.join(policies)}]" if policies else ""
         lines.append(f"  {s.name} ({s.version}){deps}{policy_str}")
@@ -138,7 +131,7 @@ def _ascii_layers(
 
     layers: List[List[_AsciiNode]] = [[] for _ in range(max_depth + 1)]
     for s in topo:
-        label = s.name if (s.in_shape, s.out_shape) == ("one", "one") else f"{s.name} [{_shape_label(s)}]"
+        label = s.name if s.shape == "map" else f"{s.name} [{_shape_label(s)}]"
         layers[depth[s.name]].append(
             _AsciiNode(id=("s", s.name), width=len(label) + 4, label=label)
         )

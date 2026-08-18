@@ -34,7 +34,7 @@ def create_file(name, content):
         f.write(content)
 
 
-@step(check_cache=False)
+@step(force=True)
 def scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
     for name in sorted(os.listdir(TEST_FOLDER)):
@@ -55,7 +55,7 @@ def make_pipeline():
     def summarize(extract):
         return {"company": extract["company"], "double": extract["amount"] * 2}
 
-    @step(depends_on=["summarize"], in_shape="aggregate")
+    @step(depends_on=["summarize"], shape="aggregate")
     def total(summarize):
         return {"sum": sum(v["double"] for v in summarize.values())}
 

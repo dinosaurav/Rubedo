@@ -242,7 +242,7 @@ def plan(
     A root *expand* step (a parentless generator) plans as "reuse" for each
     cached child lane if the ROOT_LANE-keyed anchor is present, or one
     "execute" for @root if it isn't (first run) or the step has
-    check_cache=False.
+    ``force=True``.
 
     ``scope`` / ``targets`` restrict the plan the same way ``run()`` would:
     ancestors plan normally; at the scope anchor only requested coordinates
@@ -520,7 +520,7 @@ def run_pipeline(
         by_step={
             s.name: {"created": 0, "reused": 0, "failed": 0, "blocked": 0, "filtered": 0}
             for s in topo_steps
-            if not s.skip_cache
+            if s.use_cache is not False
         },
         singleton_steps=singleton_coordinate_steps(topo_steps),
     )

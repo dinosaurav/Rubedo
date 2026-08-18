@@ -28,10 +28,10 @@ def create_file(name, content):
 
 def make_pipeline(pipe_id="pl"):
     # Folder recipe: walk TEST_FOLDER, yield each file's content.
-    # check_cache=False: a filesystem scan must re-scan every run to
+    # force=True: a filesystem scan must re-scan every run to
     # detect changes — otherwise it reuses the cached child lanes and
     # edits/deletions are invisible.
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

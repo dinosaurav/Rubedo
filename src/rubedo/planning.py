@@ -49,7 +49,7 @@ def _field_values_from_ref(ref, field: str) -> List[str]:
 @dataclass
 class RootItem:
     """A synthetic lane item for a source-less root map: its single `@root`
-    lane, or (for a root skip_cache step) the per-coordinate placeholder
+    lane, or (for a root use_cache=False step) the per-coordinate placeholder
     used to key its ephemeral memo. Not part of the public API — a root
     step (no `depends_on`) mints its own lanes directly: an expand root
     yields N via its generator, a map root mints this one synthetic lane."""
@@ -97,7 +97,7 @@ class _ArrowRowRef:
 
 @dataclass
 class EphemeralRef:
-    """A skip_cache step's stand-in for a materialization.
+    """A use_cache=False step's stand-in for a materialization.
 
     Carries the step's identity (not its output — it hasn't run) so that
     consumers' cache keys can be computed statically, plus everything needed
@@ -194,7 +194,7 @@ def singleton_coordinate_steps(topo_steps: List[StepSpec]) -> frozenset:
     group), or a map step whose every dependency is itself singleton
     (a 1:1 step propagates its parent's one coordinate unchanged).
 
-    Everything else — expand (``out_shape="many"``), join, a group_key'd
+    Everything else — expand, join, a group_key'd
     aggregate, or a map step with any non-singleton dependency — is not
     singleton: it may produce many coordinates, so exact-coordinate
     matching against its own lanes must stay strict (see the "disjoint
@@ -208,10 +208,10 @@ def singleton_coordinate_steps(topo_steps: List[StepSpec]) -> frozenset:
     """
     singleton: set = set()
     for step in topo_steps:
-        if step.in_shape == "one" and step.out_shape == "one":
+        if step.shape == "map":
             if all(dep in singleton for dep in step.depends_on):
                 singleton.add(step.name)
-        elif step.in_shape in ("aggregate", "fold") and step.group_key is None:
+        elif step.shape in ("aggregate", "fold", "join_table") and step.group_key is None:
             singleton.add(step.name)
     return frozenset(singleton)
 
@@ -532,6 +532,72 @@ def _warn_join_failed_as_unmatched(
     )
 
 
+def _plan_join_table(
+    session: Session,
+    home: "Home",
+    step: StepSpec,
+    coord_step_mats: Dict[Tuple[str, str], Union[MatRef, EphemeralRef, Literal["blocked", "failed", "pending", "filtered"]]],
+    params_hash: str,
+    force: bool,
+    accepts_params: bool,
+    pipeline_id: str = "",
+) -> List[StepDecision]:
+    """Plan a table join: one coordinate, parents must be table-valued.
+
+    Identity is the parents' content hashes (same as a multi-parent map).
+    Null-key / duplicate-key checks run at execute when the tables are loaded.
+    """
+    parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
+    failed_parents: List[str] = []
+    blocked_parents: List[str] = []
+    pending = False
+
+    for (coord, d), ref in coord_step_mats.items():
+        if d not in parent_mats:
+            continue
+        if ref == "blocked":
+            blocked_parents.append(f"{d}:{coord}")
+        elif ref == "failed":
+            failed_parents.append(f"{d}:{coord}")
+        elif ref == "pending":
+            pending = True
+        elif ref == "filtered" or getattr(ref, "filtered", False):
+            pass
+        elif ref is not None:
+            parent_mats[d][coord] = ref
+
+    if pending:
+        return [StepDecision(coordinate="@all", action="pending")]
+
+    if all(not lanes for lanes in parent_mats.values()) and (failed_parents or blocked_parents):
+        return [
+            StepDecision(
+                coordinate="@all",
+                action="blocked",
+                failed_parents=failed_parents,
+                blocked_parents=blocked_parents,
+            )
+        ]
+
+    if step.on_failed == "block" and (failed_parents or blocked_parents):
+        return [
+            StepDecision(
+                coordinate="@all",
+                action="blocked",
+                failed_parents=failed_parents,
+                blocked_parents=blocked_parents,
+            )
+        ]
+
+    return [
+        _aggregate_group_decision(
+            session, home, step, "@all", parent_mats, params_hash, force, accepts_params,
+            failed_parents=failed_parents, blocked_parents=blocked_parents,
+            pipeline_id=pipeline_id,
+        )
+    ]
+
+
 def _plan_join(
     session: Session,
     home: "Home",
@@ -748,22 +814,22 @@ def _plan_step(
     sets); the decisions are byte-identical to what whole-step planning
     would produce for those coordinates at the same ledger state.
 
-    `force` is the run-level override (``--force``); `step.check_cache=False`
+    `force` is the run-level override (``--force``); `step.force=True`
     is the per-step equivalent. Both make plan skip reuse and emit "execute",
     but the commit path is unaffected — results still land in cache.
     """
-    # check_cache=False on the step is a per-step force: skip reuse, still commit.
+    # step.force is a per-step force: skip reuse, still commit.
     if home is None:
         from .home import Home
 
         home = Home.default()
-    force = force or not step.check_cache
-    if lanes is not None and step.in_shape != "one":
+    force = force or step.force
+    if lanes is not None and step.shape not in ("map", "expand"):
         raise ValueError(
-            f"lane-subset planning requires in_shape='one' (step '{step.name}' "
-            f"is in_shape='{step.in_shape}')"
+            f"lane-subset planning requires shape='map' or 'expand' (step '{step.name}' "
+            f"is shape={step.shape!r})"
         )
-    if step.in_shape in ("aggregate", "fold"):
+    if step.shape in ("aggregate", "fold"):
         parent_mats: Dict[str, Dict[str, Union[MatRef, EphemeralRef]]] = {dep: {} for dep in step.depends_on}
         failed_parents: List[str] = []
         blocked_parents: List[str] = []
@@ -826,7 +892,13 @@ def _plan_step(
             for gcoord, gmats in sorted(groups.items())
         ]
 
-    if step.in_shape == "join":
+    if step.shape == "join_table":
+        return _plan_join_table(
+            session, home, step, coord_step_mats, params_hash, force, accepts_params,
+            pipeline_id=pipeline_id,
+        )
+
+    if step.shape == "join":
         return _plan_join(
             session, home, step, coord_step_mats, params_hash, force, accepts_params,
             pipeline_id=pipeline_id,
@@ -904,7 +976,7 @@ def _plan_step(
                     # Declarative union: a lane only needs to exist in one
                     # parent, not all — skip missing parents
                     continue
-                raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use in_shape='join'")
+                raise ValueError("parents produce disjoint lane sets — a multi-parent map step requires aligned coordinates; use shape='join'")
             if parent_mat == "blocked":
                 blocked_parents.append(dep)
             elif parent_mat == "failed":
@@ -916,7 +988,7 @@ def _plan_step(
             else:
                 parent_mats[dep] = parent_mat
 
-        if step.skip_cache:
+        if step.use_cache is False:
             if failed_parents or blocked_parents:
                 coord_step_mats[(coord, step.name)] = "blocked"
             elif filtered_parents:
@@ -973,7 +1045,7 @@ def _plan_step(
             decisions.append(StepDecision(coordinate=coord, action="pending", item=it))
             continue
 
-        if step.out_shape == "many" and step.in_shape == "one":
+        if step.shape == "expand":
             if step.depends_on:
                 parent_hash = parent_mats[step.depends_on[0]].output_content_hash  # type: ignore
             else:

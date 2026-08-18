@@ -38,7 +38,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)   # rescan the folder every run
+@p.step(force=True)   # rescan the folder every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -58,7 +58,7 @@ print(f"created={summary.created_count} reused={summary.reused_count}")
 
 **What this is doing**
 
-1. **`scan`** lists a folder and yields one item per file. `check_cache=False` means it re-reads the folder every run, so new and edited files show up.
+1. **`scan`** lists a folder and yields one item per file. `force=True` means it re-reads the folder every run, so new and edited files show up.
 2. **`count_lines`** runs once per file. The argument name `scan` is the parent — Rubedo builds the graph from the function signature. No YAML, no DAG file.
 3. **`plan()`, then `run()`.** `plan()` is a dry-run: what would recompute, and why. `run()` executes.
 
@@ -79,7 +79,7 @@ Prefer steps defined away from the pipeline that uses them? `pipeline(steps=[...
 ```python
 from rubedo import step, pipeline
 
-@step(check_cache=False)
+@step(force=True)
 def scan(): ...
 
 @step
@@ -100,7 +100,7 @@ from rubedo import pipeline
 
 p = pipeline(name="enrich-leads")
 
-@p.step(check_cache=False)   # re-read the CSV every run
+@p.step(force=True)   # re-read the CSV every run
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -118,9 +118,9 @@ A step consumes up to two things, each with its own slot in the cache key: **dat
 
 ## Sources, shapes, policies
 
-There's no `Source` protocol. A parentless generator is a source (`out_shape="many"` inferred). Folder / CSV / SQL recipes live in [How it works](https://rubedo.run/docs/concepts/model/#sources); cloud LIST-only and the rest are in [sources.md](docs/concepts/sources.md).
+There's no `Source` protocol. A parentless generator is a source (`shape="expand"` inferred). Folder / CSV / SQL recipes live in [How it works](https://rubedo.run/docs/concepts/model/#sources); cloud LIST-only and the rest are in [sources.md](docs/concepts/sources.md).
 
-**Shapes.** Default is `map` (1:1). `aggregate` / `fold` fan in; `expand` fans out; `join` is an N-way equijoin (`join_mode="intersect"` inner, `"union"` symmetric outer). A parentless non-generator is a source-less `@root` lane whose input is its params. Broadcast, traps, and `p.join(...)` / `p.union(...)`: [shapes](docs/concepts/shapes.md). Practical join: [Enrich and join tables](docs/guides/data-enrichment.md).
+**Shapes.** Default is `map` (1:1 zip with parent coordinates). `aggregate` / `fold` fan in; `expand` fans out; `join` is an N-way equijoin (`join_mode="intersect"` inner, `"union"` symmetric outer); `join_table` is the same join as one table-valued coordinate. `as_table=True` stores a DataFrame as a value, not an explode. A parentless non-generator is a source-less `@root` lane whose input is its params. Broadcast, traps, and `p.join(...)` / `p.join_table(...)`: [shapes](docs/concepts/shapes.md). Practical join: [Enrich and join tables](docs/guides/data-enrichment.md).
 
 **Policies** — none of these enter cache identity:
 
@@ -133,7 +133,7 @@ def check_price_positive(val: dict):
 def enrich(row: dict): ...
 ```
 
-Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `skip_cache=True` fuses a cheap helper into its consumers and never materializes it — don't skip anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)).
+Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `use_cache=False` fuses a cheap helper into its consumers and never materializes it — don't fuse anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)). `force=True` re-executes a step every run but still stores (a folder scan, not a fused util).
 
 ## Find a row. Invalidate just that.
 
@@ -159,7 +159,7 @@ Two independent axes on `@step`:
 
 ## Inspecting runs
 
-`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything. A `check_cache=False` source always plans as `execute`; everything downstream shows `pending` until it actually runs — that's why the tutorial's first-run plan looks coarse.
+`p.plan()` is a read-only dry-run: it tells you what `p.run()` would do to every lane and why (reuse, execute, blocked, filtered, stale, code-drift) without writing anything. A `force=True` source always plans as `execute`; everything downstream shows `pending` until it actually runs — that's why the tutorial's first-run plan looks coarse.
 
 Everything a run wrote is queryable through **`Home`**:
 
@@ -219,13 +219,16 @@ The data plane is columnar: each step's outputs live in a per-step, append-only 
 - **Reuse lookups are O(matches), not O(history).** Each loaded table carries an in-memory `address → row` index; warm lookups **1.6×** faster and sparse lookups **2.8×** faster in the micro benchmarks.
 - **Liveness is one SQLite query per run.** The set of fulfilled addresses loads once at run start — a `.plan()` over a 5K-lane store went from 0.35s to 0.22s when this landed.
 - **Tables stay in memory while they're needed.** A parent step's table is flushed to disk only once no future segment reads it.
-- **Data can stay in Arrow end-to-end.** An aggregate can request fan-in as a `pa.Table` (`arrow_aggregate=True`); that's also why any output field is searchable and joinable with no index declaration.
+- **Data can stay in Arrow end-to-end.** Annotate an aggregate's parent
+  `pa.Table` / `pl.DataFrame` to receive fan-in as a table; `as_table=True`
+  stores a DataFrame as one cache entry. That's also why any output field
+  is searchable and joinable with no index declaration.
 
 [`benchmarks/`](benchmarks/) is the before/after harness. Scenarios report **work counters** alongside timings — see [`benchmarks/README.md`](benchmarks/README.md).
 
 ## Project status
 
-Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the five shapes, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
+Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the six shapes, `as_table` grain, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
 
 ## Contributing
 

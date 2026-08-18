@@ -41,7 +41,7 @@ def assert_run(pipe):
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)
@@ -267,8 +267,8 @@ def test_root_expand_is_a_source():
     assert vals == {0, 2, 4}
 
 
-def test_expand_rejects_skip_cache():
-    with pytest.raises(ValueError, match="skip_cache is not supported"):
-        step(name="bad", depends_on=["a"], shape="expand", skip_cache=True)(
+def test_expand_rejects_use_cache_false():
+    with pytest.raises(ValueError, match="use_cache=False is not supported"):
+        step(name="bad", depends_on=["a"], shape="expand", use_cache=False)(
             lambda a: None
         )

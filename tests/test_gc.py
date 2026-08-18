@@ -51,7 +51,7 @@ def _shout(folder=TEST_FOLDER):
     # not off address stability, so a plain content-addressed expand root
     # (no separate scan step) is enough here. Yields bytes so outputs spill
     # to the content-addressed object store (small strings would be inline).
-    @step(check_cache=False)
+    @step(force=True)
     def shout():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -71,7 +71,7 @@ def _norm_chain(folder=TEST_FOLDER):
     returns bytes so it spills to the object store (scan's small dict is
     inline JSON)."""
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -387,7 +387,7 @@ def test_dry_run_matches_delete_and_budget_prunes_oldest_first():
 def _scan():
     """Folder recipe: walk TEST_FOLDER, yield each file's content."""
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(TEST_FOLDER)):
             path = os.path.join(TEST_FOLDER, name)

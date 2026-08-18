@@ -84,7 +84,7 @@ try/except the retry loop uses, an assertion failure is subject to the same
 `retry_on` filtering as any other exception (see the warning above).
 
 Use assertions for data-quality gates you want enforced every time a lane
-*actually executes* (skip_cache steps don't support them, and a `reuse`
+*actually executes* (`use_cache=False` steps don't support them, and a `reuse`
 decision never re-runs assertions — they ran once, when the output was
 first created).
 
@@ -213,7 +213,7 @@ input, not once per run** — the next run reuses the filtered verdict just
 like it would reuse a normal result. When the input changes, the address
 changes too, and the step decides fresh.
 
-`skip_cache=True` steps cannot return `Filtered` — filtering is a cacheable
+`use_cache=False` steps cannot return `Filtered` — filtering is a cacheable
 decision, so a filter step must be materialized.
 
 A `aggregate` or `join` step unconditionally drops a filtered parent lane and

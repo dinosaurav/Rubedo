@@ -151,7 +151,7 @@ def fetch(books: dict) -> dict:
     return {"id": books["id"], "title": books["title"], "text": text}
 
 
-@step(skip_cache=True)
+@step(use_cache=False)
 def clean(fetch: dict) -> dict:
     """Strip Gutenberg boilerplate; fused into downstream cache keys."""
     text = fetch["text"]
@@ -316,7 +316,7 @@ def digest(phrases: dict) -> dict:
     }
 
 
-@step(in_shape="aggregate", depends_on=["digest"])
+@step(shape="aggregate", depends_on=["digest"])
 def report(digest: dict) -> str:
     rows = sorted(
         digest.values(),

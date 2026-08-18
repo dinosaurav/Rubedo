@@ -13,30 +13,26 @@ Most steps are 1:1: one item in, one item out. The other shapes cover
 fan-in, fan-out, and joins — still just Python functions, with a different
 count of lanes in and out.
 
-A step's `in_shape`/`out_shape` decide how many output lanes it produces
-from its input lanes. There are five conceptual shapes: `map` (1:1),
-`aggregate` (N:1), `fold` (N:1, sequential), `expand` (1:N), and
+A step's `shape` decides how many output lanes it produces from its input
+lanes. There are six shapes: `map` (1:1 zip with parent coordinates),
+`aggregate` (N:1), `fold` (N:1, sequential), `expand` (1:N minting),
 `join` (N-way equijoin, minting pair lanes — inner or symmetric outer via
-`join_mode`). Every shape is a special case of the same underlying idea —
+`join_mode`), and `join_table` (same join keys/mode, one table-valued
+coordinate). Producer grain is separate: `as_table=True` stores one
+DataFrame per existing coordinate (usually a singleton `@root`); it does
+not mint lanes. Every shape is a special case of the same underlying idea —
 a producer that takes some input lanes and emits some output lanes — but
 each has a distinct planning and caching story worth knowing on its own.
 See [`../development/producer-model.md`](../development/producer-model.md)
 for the design behind the taxonomy.
 
-The five conceptual shapes map to `in_shape`/`out_shape` pairs: `map` (`one`/`one`),
-`aggregate` (`aggregate`/`one`), `fold` (`fold`/`one`), `expand` (`one`/`many`),
-`join` (`join`/`many`). The legacy `shape=` kwarg is kept as an alias:
-`shape="map"`/`shape="expand"`/`shape="join"` each translate
-to the corresponding pair and are never stored on the spec.
-
-Most of the time you don't pass `shape=` (or `in_shape=`/`out_shape=`) at
-all: it's inferred from what the code already says — a generator function
-defaults to `expand` (`out_shape="many"`), `join_on=` defaults it to `join`,
-`group_key=` defaults it to `aggregate` (`in_shape="aggregate"`),
-and anything else is `map` (`one`/`one`, the default). An explicit `shape=`
-(or `in_shape=`/`out_shape=`) always overrides the
-inference, and an explicit value that contradicts the code (a generator
-decorated `shape="map"`, say) raises rather than silently misbehaving. See
+Most of the time you don't pass `shape=` at all: it's inferred from what
+the code already says — a generator function defaults to `expand`,
+`join_on=` defaults it to `join` (pass `shape="join_table"` to keep one
+table), `group_key=` defaults it to `aggregate`, `fold_init=` to `fold`,
+and anything else is `map`. An explicit `shape=` that contradicts the
+code (a generator decorated `shape="map"`, say) raises rather than
+silently misbehaving. See
 [API reference: `@step`](../reference/api/step.md)
 for the full inference rules, including how a step's `depends_on` is
 likewise inferred from its parameter names.
@@ -71,8 +67,7 @@ item — which is most transformation, extraction, and enrichment logic.
 
 ### The source-less `map` root
 
-A root (`no depends_on`) is usually `expand`-shaped (`out_shape="many"`,
-the `shape="expand"` alias) — the ingestion shape
+A root (`no depends_on`) is usually `expand`-shaped — the ingestion shape
 (see [sources.md](sources.md)). But a plain `map` root with **no**
 `depends_on` is also legal, and mints a single lane whose input is its
 `params` (or a constant, if the function takes none):
@@ -105,7 +100,7 @@ step, and every row sees the same value:
 @p.step
 def threshold(params): return params["min_score"]      # mints '@root'
 
-@p.step(out_shape="many")
+@p.step
 def rows():
     yield from read_csv("scores.csv")
 
@@ -135,14 +130,14 @@ receives every lane as one `{coordinate: value}` dict and returns a single
 output at the fixed coordinate `@all`:
 
 ```python
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 ```
 
 (A plain `@all` aggregate is the one shape that's always explicit: nothing
 in the code implies it. The parent comes from the parameter name, like
-any other step. Pass `in_shape="aggregate"` explicitly.)
+any other step. Pass `shape="aggregate"` explicitly.)
 
 A plain (`group_key=None`) aggregate's result is itself always one value
 for the whole run, so it can be named alongside a real per-row dependency
@@ -155,7 +150,7 @@ producer.
 Add `group_key="field"` to fan in **per group** instead of all at once — one
 output per distinct value of a field, read from the parent output struct
 at plan time (so planning stays value-free).
-`group_key=` implies `in_shape="aggregate"` on its own:
+`group_key=` implies `shape="aggregate"` on its own:
 
 ```python
 @p.step(group_key="region")
@@ -182,18 +177,18 @@ that: split a PDF into chunks, process each independently, fold back into a
 whole document).
 
 An aggregate step can also request its fan-in as a single Arrow table
-instead of a `{coordinate: value}` dict — `@p.step(in_shape="aggregate",
-arrow_aggregate=True)` hands the function a `pa.Table` built from the
-parent's surviving lanes, skipping the Python-dict round trip. It requires
-`in_shape="aggregate"` (an `arrow_aggregate=True` map or expand step raises
-at build time).
+instead of a `{coordinate: value}` dict — annotate the parent parameter
+`pa.Table` / `pl.DataFrame` / `pd.DataFrame` and the engine hands over a
+table built from the parent's surviving lanes. Table *output* is a
+separate flag: `as_table=True` (the step must return a DataFrame/Table;
+returning one without the flag errors).
 
 ## `fold` — N:1 (sequential fan-in with accumulator)
 
-Like `aggregate`, `fold` is an N:1 fan-in (`out_shape="one"`, exactly one parent), but instead of receiving all lanes at once as a dict, the step function receives an **accumulator** and one parent value at a time. The accumulator is initialized to `fold_init` and passed from lane to lane. 
+Like `aggregate`, `fold` is an N:1 fan-in (exactly one parent), but instead of receiving all lanes at once as a dict, the step function receives an **accumulator** and one parent value at a time. The accumulator is initialized to `fold_init` and passed from lane to lane. 
 
 ```python
-@p.step(in_shape="fold", fold_init=0)
+@p.step(shape="fold", fold_init=0)
 def total_lines(accum: int, count_lines: dict):
     return accum + count_lines["line_count"]
 ```
@@ -220,8 +215,7 @@ def headline(articles: dict) -> str:
     return articles["title"].upper()
 ```
 
-(`articles` is a generator, so its `out_shape="many"` (the `shape="expand"`
-alias) is inferred; its
+(`articles` is a generator, so its `shape="expand"` is inferred; its
 `fetch` parameter names the parent step.)
 
 **The caching insight is the reason `expand` exists.** An expand can't cache
@@ -241,8 +235,7 @@ periodic re-scrape on top of that.
 
 An `expand` step with **no** `depends_on` is a root — it yields the
 pipeline's initial lanes. There is no separate ingestion concept: a
-parentless generator infers `out_shape="many"` (the `shape="expand"`
-alias) automatically and *is* the source.
+parentless generator infers `shape="expand"` automatically and *is* the source.
 
 Root expands are **anchor-cached** like any other expand. With no parent
 lane to key on, the anchor is addressed against the constant `@root`
@@ -250,7 +243,7 @@ lane to key on, the anchor is addressed against the constant `@root`
 replays its children as `reuse` until the step's identity (code version,
 params) changes. That is right for a fixed in-code list; wrong for a
 folder or table you expect to change. Sources that watch external state
-declare `check_cache=False` so the generator re-runs every `p.run()` —
+declare `force=True` so the generator re-runs every `p.run()` —
 lanes stay content-addressed, so a rescan that finds nothing new still
 reuses everything downstream. See [sources.md](sources.md).
 
@@ -277,35 +270,33 @@ Reach for `expand` whenever the *number* of downstream items isn't known
 until you've fetched something — RSS feeds, paginated APIs, multi-page
 documents, search results.
 
-### Table-return expand (bulk fan-out)
+### Tables vs lanes
 
-Instead of `yield`-ing N payloads in a Python loop, an expand step can
-**return an Arrow table** (`pa.Table`, polars DataFrame, or pandas
-DataFrame). Each row becomes a content-addressed lane — the table IS the
-fan-out. This lets you go straight from `pl.read_csv("data.csv")`, a
-DuckDB query, or any Arrow producer to lanes, with no Python iteration:
+A DataFrame is a **value in a lane**, same as a dict. Returning one does
+not mint row coordinates. `as_table=True` opts the producer into one
+table-valued cache entry (must return a DataFrame/`pa.Table`). Census
+load / normalize / join-as-table:
 
 ```python
-import pyarrow as pa
-from rubedo import step
+@step(as_table=True, force=True)
+def patients():
+    return pl.read_csv("patients.csv")     # 1 lane; cache = hash of frame
 
-@step(out_shape="many")
-def load_csv():
-    return pa.table({
-        "name": ["alice", "bob", "carol"],
-        "score": [100, 200, 300],
-    })
+@step(as_table=True)
+def normalize(patients: pl.DataFrame):     # 1 lane; zip; param is the frame
+    return patients.with_columns(...)
 ```
 
-Each row becomes a `row-<hash>` lane whose output is a dict (the row's
-values). Downstream steps receive it as a `dict` parameter, just like a
-yielded payload. Identical rows collapse to one lane (same content → same
-hash). The anchor caching works identically to yield-based expand — on
-re-run, if the parent is unchanged, the expand fn is not called and
-children are reused.
+A fused map (`use_cache=False`) over that table still does not mint. If
+the parent parameter is annotated `dict`, the engine applies the
+function to each inner row and stacks a column (scalar) or a table
+(dict). Annotate a DataFrame to keep one vectorized call.
 
-Declare `out_shape="many"` (or `shape="expand"`) explicitly for table-return expand (a
-non-generator function doesn't auto-infer the shape).
+Returning a DataFrame **without** `as_table=True` errors — don't guess
+explode vs keep. Expand + DataFrame also errors unless `row_key=` is set
+(mint dict lanes whose identity is that column; missing/duplicate keys
+raise). Small sheets still `yield` rows. Map + `return [a, b]` is one
+list payload; expand + `return [a, b]` mints two lanes.
 
 ## `join` — N-way equijoin
 
@@ -348,7 +339,8 @@ def enrich_outer(order, customer):                             # customer may be
     }
 ```
 
-`join_on=` implies `in_shape="join"` / `out_shape="many"`; its keys are
+`join_on=` implies `shape="join"` (pair lanes); pass `shape="join_table"`
+to emit one table-valued `@all` coordinate instead. Keys are
 the parents (and must match the function's parameter names). N-way stars
 are first-class — `join_on={a: "uid", b: "uid", c: "uid"}` matches every
 side on the same field value. Different pairwise keys compose by chaining
@@ -387,6 +379,11 @@ new pair coordinate is **added** — not an in-place update.
 `p.join(name=..., join_on=..., join_mode=...)` builds the nested struct
 `{"orders": {...}, "customers": {...}}` with no function body (absent
 sides are `None` under union). Same caching rules.
+
+`p.join_table(...)` (or `@step(shape="join_table", join_on=...)`) is the
+same join invariants — `join_on`, `join_mode`, null keys raise, duplicate
+keys warn and cartesian — but one table-valued `@all` coordinate. Parents
+must be `as_table=True`. `join_on=` alone still infers pair-lane `join`.
 
 ## Putting it together
 

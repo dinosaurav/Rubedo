@@ -1,8 +1,8 @@
-"""Tests for expand steps that return an Arrow Table / DataFrame.
+"""Table grain vs lane minting: as_table keeps one cache entry; expand mints.
 
-An expand step can return a pa.Table, polars DataFrame, or pandas
-DataFrame instead of yielding.  Each row becomes a content-addressed
-lane — the table IS the fan-out, no Python loop.
+Returning a DataFrame without as_table=True errors. Expand returning a
+table errors unless row_key= is set (mint dict lanes, identity is the key).
+Expand returning a dict/str errors (no iterating keys/characters).
 """
 import pytest
 import pyarrow as pa
@@ -23,6 +23,7 @@ def isolated_env():
         TEST_HOME = env.home
         yield
 
+
 def _outputs(step_name):
     rows = [r for r in TEST_HOME.lanes.all_filled_rows() if r.get("step_name") == step_name]
     return {
@@ -31,156 +32,299 @@ def _outputs(step_name):
     }
 
 
-def test_root_expand_returns_pa_table():
-    @step(shape="expand")
+def _lane_keys(step_name):
+    return sorted(
+        r.get("lane_key")
+        for r in TEST_HOME.lanes.all_filled_rows()
+        if r.get("step_name") == step_name
+    )
+
+
+def test_map_as_table_keeps_one_lane():
+    @step(as_table=True)
     def load_data():
         return pa.table({
             "name": ["alice", "bob", "carol"],
             "score": [100, 200, 300],
         })
 
-    @step
-    def process(load_data: dict):
-        return {"greeting": f"hi {load_data['name']}", "doubled": load_data["score"] * 2}
-
-    pipe = pipeline(name="t1", steps=[load_data, process], home=TEST_HOME)
-    summary = pipe.run(workers=1)
-
-    assert summary.failed_count == 0
-    assert summary.created_count == 6  # 3 expand + 3 process
-
-    outs = _outputs("process")
-    assert len(outs) == 3
-    names = {v["greeting"] for v in outs.values()}
-    assert names == {"hi alice", "hi bob", "hi carol"}
-
-
-def test_root_expand_table_rerun_reuses():
-    @step(shape="expand")
-    def load_data():
-        return pa.table({
-            "name": ["alice", "bob"],
-            "score": [100, 200],
-        })
-
-    @step
-    def process(load_data: dict):
-        return load_data["name"].upper()
-
-    pipe = pipeline(name="t2", steps=[load_data, process], home=TEST_HOME)
-    s1 = pipe.run(workers=1)
-    assert s1.created_count == 4
-
-    s2 = pipe.run(workers=1)
-    # Root expand reuses via anchor — both children and process lanes reuse
-    assert s2.created_count == 0
-    assert s2.reused_count == 4  # 2 expand children + 2 process lanes
-
-
-def test_dependent_expand_returns_table():
-    @step
-    def source():
-        yield {"batch": "A"}
-        yield {"batch": "B"}
-
-    @step(shape="expand")
-    def expand_batch(source: dict):
-        n = 2 if source["batch"] == "A" else 1
-        return pa.table({
-            "item": [f"{source['batch']}_{i}" for i in range(n)],
-            "val": list(range(n)),
-        })
-
-    @step
-    def process(expand_batch: dict):
-        return {"item": expand_batch["item"], "val": expand_batch["val"]}
-
-    pipe = pipeline(name="t3", steps=[source, expand_batch, process], home=TEST_HOME)
-    s1 = pipe.run(workers=1)
-    assert s1.failed_count == 0
-    # 2 source + 3 expand children + 3 process = 8
-    assert s1.created_count == 8
-
-    outs = _outputs("process")
-    assert len(outs) == 3
-    items = {v["item"] for v in outs.values()}
-    assert items == {"A_0", "A_1", "B_0"}
-
-    # Re-run: anchor should skip the expand fn
-    s2 = pipe.run(workers=1)
-    assert s2.created_count == 0
-    assert s2.reused_count == 8
-
-
-def test_expand_table_dedup_identical_rows():
-    @step(shape="expand")
-    def load_data():
-        return pa.table({
-            "name": ["alice", "alice", "bob"],
-            "score": [100, 100, 200],
-        })
-
-    @step
-    def process(load_data: dict):
-        return load_data["name"]
-
-    pipe = pipeline(name="t4", steps=[load_data, process], home=TEST_HOME)
+    pipe = pipeline(name="t1", steps=[load_data], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
-    # 2 expand lanes (alice deduped) + 2 process = 4
-    assert summary.created_count == 4
+    assert summary.created_count == 1
+    assert _lane_keys("load_data") == ["@root"]
+    out = list(_outputs("load_data").values())[0]
+    assert out.column("name").to_pylist() == ["alice", "bob", "carol"]
 
-    outs = _outputs("process")
-    assert len(outs) == 2
+
+def test_map_as_table_rerun_reuses():
+    @step(as_table=True)
+    def load_data():
+        return pa.table({"name": ["alice", "bob"], "score": [100, 200]})
+
+    pipe = pipeline(name="t2", steps=[load_data], home=TEST_HOME)
+    s1 = pipe.run(workers=1)
+    assert s1.created_count == 1
+    s2 = pipe.run(workers=1)
+    assert s2.created_count == 0
+    assert s2.reused_count == 1
 
 
-def test_expand_table_rows_record_creating_run_id():
-    # The table path builds its own Arrow batch; its rows must carry the
-    # creating run's id just like the generator path's ledger-committed rows.
+def test_dataframe_without_as_table_errors():
+    @step
+    def load_data():
+        return pa.table({"name": ["alice"]})
+
+    pipe = pipeline(name="t-no-flag", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+    err = " ".join((f.get("error_message") or "") for f in summary.failures())
+    assert "as_table=True" in err
+
+
+def test_expand_return_table_without_row_key_errors():
     @step(shape="expand")
-    def table_load():
-        return pa.table({"name": ["alice", "bob"], "score": [1, 2]})
+    def load_data():
+        return pa.table({"name": ["alice", "bob"]})
 
+    pipe = pipeline(name="t-explode", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+
+
+def test_expand_return_dict_does_not_mint_keys():
     @step(shape="expand")
-    def gen_load():
-        yield {"name": "alice", "score": 1}
-        yield {"name": "bob", "score": 2}
+    def load_data():
+        return {"a": 1}
 
-    table_run = pipeline(name="prov-table", steps=[table_load], home=TEST_HOME).run(workers=1)
-    gen_run = pipeline(name="prov-gen", steps=[gen_load], home=TEST_HOME).run(workers=1)
-
-    def run_ids(step_name):
-        return {
-            r.get("run_id")
-            for r in TEST_HOME.lanes.all_filled_rows()
-            if r.get("step_name") == step_name
-        }
-
-    assert run_ids("table_load") == {table_run.run_id}
-    assert run_ids("gen_load") == {gen_run.run_id}
+    pipe = pipeline(name="t-dict", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+    assert _lane_keys("load_data") == []
 
 
-def test_expand_polars_table():
+def test_expand_return_str_does_not_mint_characters():
+    @step(shape="expand")
+    def load_data():
+        return "ab"
+
+    pipe = pipeline(name="t-str", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+
+
+def test_expand_return_list_mints_lanes():
+    @step(shape="expand")
+    def load_data():
+        return [{"name": "alice"}, {"name": "bob"}]
+
+    pipe = pipeline(name="t-list", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 0
+    assert summary.created_count == 2
+    names = {v["name"] for v in _outputs("load_data").values() if isinstance(v, dict)}
+    assert names == {"alice", "bob"}
+
+
+def test_census_as_table_chain_is_o1_coordinates():
+    """Two as_table loads → as_table merge → as_table agg: one lane each."""
     pl = pytest.importorskip("polars")
 
-    @step(shape="expand")
-    def load_data():
+    @step(as_table=True, force=True)
+    def patients():
+        return pl.DataFrame({"patient_id": [1, 2], "name": ["a", "b"]})
+
+    @step(as_table=True, force=True)
+    def claims():
+        return pl.DataFrame({"patient_id": [1, 1, 2], "dx": ["x", "y", "z"]})
+
+    @step(as_table=True)
+    def joined(patients, claims):
+        return patients.join(claims, on="patient_id")
+
+    @step(as_table=True)
+    def summary(joined):
+        return joined.group_by("dx").len()
+
+    pipe = pipeline(
+        name="census", steps=[patients, claims, joined, summary], home=TEST_HOME
+    )
+    s1 = pipe.run(workers=1)
+    assert s1.failed_count == 0
+    assert s1.created_count == 4
+    for name in ("patients", "claims", "joined", "summary"):
+        assert _lane_keys(name) == ["@root"]
+
+    s2 = pipe.run(workers=1)
+    assert s2.failed_count == 0
+    assert s2.created_count == 0
+    assert s2.reused_count == 4
+
+
+def test_expand_from_table_with_row_key():
+    pl = pytest.importorskip("polars")
+
+    @step(as_table=True)
+    def normalize():
         return pl.DataFrame({
-            "name": ["alice", "bob"],
-            "age": [30, 25],
+            "id": ["a", "b", "c"],
+            "score": [1, 2, 3],
         })
 
-    @step
-    def greet(load_data: dict):
-        return f"Hello {load_data['name']}, age {load_data['age']}"
+    @step(shape="expand", row_key="id")
+    def cells(normalize):
+        return normalize
 
-    pipe = pipeline(name="t5", steps=[load_data, greet], home=TEST_HOME)
+    @step
+    def greet(cells: dict):
+        return f"{cells['id']}:{cells['score']}"
+
+    pipe = pipeline(name="row-key", steps=[normalize, cells, greet], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 0
-    assert summary.created_count == 4
+    # 1 table + 3 expand children + 3 greet
+    assert summary.created_count == 7
+    greetings = set(_outputs("greet").values())
+    assert greetings == {"a:1", "b:2", "c:3"}
 
-    outs = _outputs("greet")
-    assert len(outs) == 2
-    greetings = set(outs.values())
-    assert "Hello alice, age 30" in greetings
-    assert "Hello bob, age 25" in greetings
+    s2 = pipe.run(workers=1)
+    assert s2.created_count == 0
+    assert s2.reused_count == 7
+
+
+def test_expand_from_table_row_key_identity_not_full_payload():
+    """Same row_key, different other fields: still the same child coordinate."""
+    pl = pytest.importorskip("polars")
+
+    @step(as_table=True, version="1")
+    def src():
+        return pl.DataFrame({"id": ["a"], "score": [1]})
+
+    @step(shape="expand", row_key="id")
+    def cells(src):
+        return src
+
+    p1 = pipeline(name="rk-id", steps=[src, cells], home=TEST_HOME)
+    p1.run(workers=1)
+    keys_v1 = _lane_keys("cells")
+
+    @step(as_table=True, version="2")
+    def src2():
+        return pl.DataFrame({"id": ["a"], "score": [99]})
+
+    @step(shape="expand", row_key="id")
+    def cells2(src2):
+        return src2
+
+    p2 = pipeline(name="rk-id", steps=[src2, cells2], home=TEST_HOME)
+    p2.run(workers=1)
+    keys_v2 = sorted(
+        r.get("lane_key")
+        for r in TEST_HOME.lanes.all_filled_rows()
+        if r.get("step_name") == "cells2"
+    )
+    assert keys_v1 == keys_v2
+
+
+def test_expand_from_table_duplicate_row_key_errors():
+    pl = pytest.importorskip("polars")
+
+    @step(as_table=True)
+    def src():
+        return pl.DataFrame({"id": ["a", "a"], "score": [1, 2]})
+
+    @step(shape="expand", row_key="id")
+    def cells(src):
+        return src
+
+    pipe = pipeline(name="rk-dup", steps=[src, cells], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+
+
+def test_expand_from_table_missing_row_key_errors():
+    pl = pytest.importorskip("polars")
+
+    @step(as_table=True)
+    def src():
+        return pl.DataFrame({"id": ["a", None], "score": [1, 2]})
+
+    @step(shape="expand", row_key="id")
+    def cells(src):
+        return src
+
+    pipe = pipeline(name="rk-miss", steps=[src, cells], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+
+
+def test_as_table_on_expand_raises_at_decoration():
+    with pytest.raises(ValueError, match="as_table=True is not valid with shape='expand'"):
+
+        @step(as_table=True)
+        def rows():
+            yield {"a": 1}
+
+
+def test_row_key_on_map_raises():
+    with pytest.raises(ValueError, match="row_key= is only valid with shape='expand'"):
+
+        @step(row_key="id")
+        def src():
+            return {"id": "a"}
+
+
+def test_as_table_returning_dict_errors():
+    @step(as_table=True)
+    def load_data():
+        return {"name": "alice"}
+
+    pipe = pipeline(name="t-dict-out", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+    err = " ".join((f.get("error_message") or "") for f in summary.failures())
+    assert "as_table=True" in err
+
+
+def test_map_return_list_is_one_payload():
+    @step
+    def load_data():
+        return [{"name": "alice"}, {"name": "bob"}]
+
+    pipe = pipeline(name="t-list-map", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 0
+    assert summary.created_count == 1
+    assert _lane_keys("load_data") == ["@root"]
+    assert summary.output_for("load_data")["@root"] == [
+        {"name": "alice"},
+        {"name": "bob"},
+    ]
+
+
+def test_definition_snapshots_as_table_row_key_and_table_input():
+    import pyarrow as pa
+    from rubedo.spec import definition
+
+    @step(as_table=True)
+    def patients():
+        return pa.table({"id": [1]})
+
+    @step(shape="expand", row_key="id")
+    def cells(patients):
+        return patients
+
+    @step(shape="aggregate")
+    def total(cells: pa.Table):
+        return {"n": cells.num_rows}
+
+    snap = definition(
+        pipeline(name="def-grain", steps=[patients, cells, total], home=TEST_HOME).spec
+    )
+    by_name = {s["name"]: s for s in snap["steps"]}
+    assert by_name["patients"]["as_table"] is True
+    assert by_name["cells"]["shape"] == "expand"
+    assert by_name["cells"]["row_key"] == "id"
+    assert by_name["total"]["table_input"] is True
+    assert "in_shape" not in by_name["cells"]
+    assert "out_shape" not in by_name["cells"]

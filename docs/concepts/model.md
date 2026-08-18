@@ -58,24 +58,34 @@ Two independent axes on `@step`:
 step re-runs; identical bytes refresh the clock, different bytes supersede
 and downstream recomputes.
 
-`skip_cache=True` marks a cheap, deterministic helper that is never
-materialized — its identity fuses into its consumers. Don't skip anything
-expensive, flaky, or non-deterministic. Full rules for `version` / `code` /
-TTL / skip: [When code changes](versioning.md).
+`use_cache=False` marks a cheap, deterministic helper that is never
+materialized — its identity fuses into its consumers, and a fused map
+never mints lanes. Don't fuse anything expensive, flaky, or
+non-deterministic. Omit `use_cache=` to inherit
+`pipeline(cache_default=True)`. `force=True` is the other knob: re-execute,
+still store — right for a folder scan. Full rules for `version` / `code` /
+TTL / `use_cache=False` / `force`: [When code changes](versioning.md).
 
 ## Shapes
 
 Most of the time you don't pass `shape=` — it's inferred. A generator is
-`expand`, `join_on=` is `join`, `group_key=` is `aggregate`, anything else
-is `map`. An explicit value that contradicts the code raises.
+`expand`, `join_on=` is `join` (pass `shape="join_table"` for one table),
+`group_key=` is `aggregate`, `fold_init=` is `fold`, anything else is
+`map`. An explicit value that contradicts the code raises.
 
 | Shape | In → out | When |
 |---|---|---|
-| `map` | 1:1 | Almost every transform. A parentless non-generator is a **source-less root**: one `@root` lane whose input is its params. |
-| `expand` | 1:N | The step `yield`s payloads; each becomes a `row-<hash>` child. A parentless generator is a **source**. |
+| `map` | 1:1 | Almost every transform. Zips parent coordinates; never mints. A parentless non-generator is a **source-less root**: one `@root` lane whose input is its params. |
+| `expand` | 1:N | The step `yield`s (or `return`s a list); each payload becomes a `row-<hash>` child. A parentless generator is a **source**. |
 | `aggregate` | N:1 | Fan-in over surviving parent lanes (`@all`), or `group_key="field"` for one output per field value. |
 | `fold` | N:1 | Like aggregate, but an accumulator (`fold_init`) plus one parent value at a time. |
 | `join` | N-way | Equijoin on `join_on={parent: field}`, minting `a\|b\|…` pair lanes. `join_mode="intersect"` (inner, default) or `"union"` (symmetric outer; absences are `None`). Anti-join = union, then `Filtered`. |
+| `join_table` | N-way | Same join keys/mode, one table-valued `@all` coordinate. `join_on=` still infers pair-lane `join`. |
+
+**Grain.** `as_table=True` stores a DataFrame as one cache entry in the
+step's existing coordinate(s) — it does not mint row lanes. Returning a
+frame without the flag errors. Annotate an aggregate's parent
+`pa.Table` / `pl.DataFrame` to receive fan-in as a table.
 
 **Broadcast.** A source-less root (or an ungrouped aggregate) can be named
 alongside a real per-row dependency — every row sees the same value. Two
@@ -88,14 +98,14 @@ The traps, caching stories, and `p.join(...)` live in the
 
 ## Sources
 
-A source is a step that yields items — not a class. `check_cache=False`
+A source is a step that yields items — not a class. `force=True`
 on a source that watches the outside world (folder, CSV, table), so it
 re-enumerates every run. Without that, the fan-out is cached and new files
 don't show up.
 
 ```python
 # folder — one lane per file (read the bytes, not just the path)
-@p.step(check_cache=False)
+@p.step(force=True)
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
@@ -103,13 +113,13 @@ def scan():
             yield {"path": name, "text": open(path).read()}
 
 # CSV — one lane per row
-@p.step(check_cache=False)
+@p.step(force=True)
 def leads():
     with open("data/leads.csv", newline="") as f:
         yield from csv.DictReader(f)
 
 # SQL — one lane per row
-@p.step(check_cache=False)
+@p.step(force=True)
 def orders():
     with engine.connect() as conn:
         for row in conn.execute(text("SELECT * FROM orders")).mappings():
@@ -154,7 +164,7 @@ all three. Planning never reads payload values (except `group_key` /
 `join_on` fields). Execution never touches the ledger. Commit is the only
 writer, on the main thread.
 
-A `check_cache=False` source always plans as `execute` (no cached
+A `force=True` source always plans as `execute` (no cached
 enumeration to preview); everything downstream shows `pending` until the
 source actually runs. That's why `created=2` after editing one file is two
 *steps* for one file, not two files.

@@ -37,6 +37,11 @@ def isolated_env():
 
 def test_step_shape_defaults_and_aliases():
     assert step_shape({}) == "map"
+    assert step_shape({"shape": "expand"}) == "expand"
+    assert step_shape({"shape": "aggregate"}) == "aggregate"
+    assert step_shape({"shape": "fold"}) == "aggregate"
+    assert step_shape({"shape": "join"}) == "join"
+    assert step_shape({"shape": "join_table"}) == "aggregate"
     assert step_shape({"out_shape": "many"}) == "expand"
     assert step_shape({"in_shape": "aggregate"}) == "aggregate"
     assert step_shape({"in_shape": "fold"}) == "aggregate"
@@ -183,7 +188,7 @@ def test_expand_plus_aggregate_section_summary():
     def parse(scan: dict):
         return {"path": scan["path"], "n": scan["n"]}
 
-    @step(depends_on=["parse"], in_shape="aggregate")
+    @step(depends_on=["parse"], shape="aggregate")
     def total(parse: dict):
         return sum(v["n"] for v in parse.values())
 
@@ -402,7 +407,7 @@ def test_post_aggregate_maps_form_fold_table():
     def bump(items: dict):
         return items["n"] * 10
 
-    @step(depends_on=["bump"], in_shape="aggregate")
+    @step(depends_on=["bump"], shape="aggregate")
     def total(bump: dict):
         return sum(bump.values())
 

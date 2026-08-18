@@ -30,7 +30,7 @@ from .scheduler import SCHEDULES
 from .scope import RunScope, StepRef
 from .spec import PipelineSpec, StepSpec
 from .spec import definition as _definition
-from .spec import step as _step_decorator
+from .spec import resolve_use_cache, step as _step_decorator
 
 # Reserved for the engine's own env vars (RUBEDO_HOME, RUBEDO_DB_PATH, ...):
 # see store.py/db.py. secrets=/env= may not declare a RUBEDO_*-prefixed name.
@@ -114,6 +114,7 @@ def _build_spec(
     retention: Optional[int],
     secrets: Tuple[str, ...] = (),
     env: Tuple[str, ...] = (),
+    cache_default: bool = True,
 ) -> PipelineSpec:
     """Validate the accumulated steps and construct the PipelineSpec.
 
@@ -172,13 +173,22 @@ def _build_spec(
     ]
     seen = {s.name: s for s in steps}
 
+    # Resolve use_cache (None → pipeline cache_default, except shapes that
+    # must store). replace() so the decorator-returned StepSpec objects
+    # stay unresolved and reusable across pipelines with different defaults.
+    steps = [
+        replace(s, use_cache=resolve_use_cache(s.shape, s.use_cache, cache_default))
+        for s in steps
+    ]
+    seen = {s.name: s for s in steps}
+
     # Post-inference validation: a collective step must have at least one
     # parent. Checked here (not at decoration time) because one declared
     # without depends_on= gets its parent from signature inference above.
     for s in steps:
-        if s.in_shape in ("aggregate", "fold") and not s.depends_on:
+        if s.shape in ("aggregate", "fold") and not s.depends_on:
             raise ValueError(
-                f"Step '{s.name}': in_shape={s.in_shape!r} requires at least one parent "
+                f"Step '{s.name}': shape={s.shape!r} requires at least one parent "
                 "in depends_on (or a parameter naming a parent step)"
             )
 
@@ -189,24 +199,36 @@ def _build_spec(
     consumed = {dep for s in steps for dep in s.depends_on}
     name_to_step = seen  # already validated unique above
     for s in steps:
-        if s.skip_cache and s.name not in consumed:
+        if s.use_cache is False and s.name not in consumed:
             raise ValueError(
-                f"Step '{s.name}' has skip_cache but no consumer: its output "
+                f"Step '{s.name}' has use_cache=False but no consumer: its output "
                 "would never be computed or stored"
             )
-        if s.in_shape == "join":
+        if s.use_cache is False and s.force:
+            raise ValueError(
+                f"Step '{s.name}': force=True is contradictory with use_cache=False "
+                "— a fused step is never materialized, so there is no cache to skip"
+            )
+        if s.use_cache is False and s.stale_after is not None:
+            raise ValueError(
+                f"Step '{s.name}': stale_after is meaningless with use_cache=False — "
+                "nothing is stored to expire"
+            )
+        if s.shape in ("join", "join_table"):
             for dep in s.join_on or {}:
                 parent = name_to_step.get(dep)
-                if parent and parent.skip_cache:
+                if parent and parent.use_cache is False:
                     raise ValueError(
-                        f"Step '{s.name}': in_shape='join' cannot have a skip_cache parent ('{dep}')"
+                        f"Step '{s.name}': shape={s.shape!r} cannot have a "
+                        f"use_cache=False parent ('{dep}')"
                     )
-        if s.in_shape in ("aggregate", "fold") and s.group_key is not None:
+        if s.shape in ("aggregate", "fold") and s.group_key is not None:
             for dep in s.depends_on:
                 parent = name_to_step.get(dep)
-                if parent and parent.skip_cache:
+                if parent and parent.use_cache is False:
                     raise ValueError(
-                        f"Step '{s.name}': group_key requires materialized parents, but '{dep}' is skip_cache"
+                        f"Step '{s.name}': group_key requires materialized parents, "
+                        f"but '{dep}' has use_cache=False"
                     )
 
     return PipelineSpec(
@@ -216,6 +238,7 @@ def _build_spec(
         retention=retention,
         secrets=secrets,
         env=env,
+        cache_default=cache_default,
     )
 
 
@@ -227,8 +250,9 @@ class Pipeline:
     column stores it verbatim; renaming a pipeline orphans its history.
 
     Settings that apply to every run of this pipeline live here at
-    construction (`schedule=`, `home=`, alongside `retention=` and
-    `params_model=`); `run()`/`plan()` keep only per-invocation things.
+    construction (`schedule=`, `home=`, `cache_default=`, alongside
+    `retention=` and `params_model=`); `run()`/`plan()` keep only
+    per-invocation things.
 
     secrets=/env= declare the pipeline's environment surface — executable
     documentation of what it needs to run, and (for a future cloud worker)
@@ -251,11 +275,17 @@ class Pipeline:
         home: Optional[Home] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[List[str]] = None,
+        cache_default: bool = True,
     ):
         if isinstance(home, str):
             raise TypeError("pipeline home must be a Home instance; use Home(path)")
         if schedule not in SCHEDULES:
             raise ValueError(f"schedule must be one of {SCHEDULES}, got {schedule!r}")
+        if not isinstance(cache_default, bool):
+            raise ValueError(
+                f"pipeline '{name}': cache_default must be True or False, "
+                f"got {cache_default!r}"
+            )
         if retention is not None and (
             isinstance(retention, bool) or not isinstance(retention, int) or retention < 1
         ):
@@ -273,6 +303,7 @@ class Pipeline:
         self.home = home
         self.secrets = secrets_t
         self.env = env_t
+        self.cache_default = cache_default
         self._steps: List[StepSpec] = list(steps or [])
         self._spec: Optional[PipelineSpec] = None
 
@@ -312,7 +343,7 @@ class Pipeline:
         """
         if len(join_on) < 2:
             raise ValueError(
-                f"Step '{name}': in_shape='join' requires at least two parents in "
+                f"Step '{name}': shape='join' requires at least two parents in "
                 "join_on (N-way star join on a shared value)"
             )
         if join_mode not in ("intersect", "union"):
@@ -326,8 +357,44 @@ class Pipeline:
             version=version,
             depends_on=list(join_on.keys()),
             depends_on_explicit=True,
-            in_shape="join",
-            out_shape="many",
+            shape="join",
+            join_on=join_on,
+            join_mode=join_mode,  # type: ignore[arg-type]
+            declarative=True,
+            on_failed=on_failed,  # type: ignore[arg-type]
+        )
+        self._steps.append(s)
+        self._spec = None
+        return s
+
+    def join_table(self, *, name: str, join_on: Dict[str, str], version: str = "0",
+                   on_failed: str = "use_passed",
+                   join_mode: str = "intersect"):
+        """Declarative table join — one coordinate whose value is the
+        joined table. Same ``join_on`` / ``join_mode`` / null /
+        duplicate-key rules as pair-lane ``join``, without minting pair
+        lanes. Parents must be table-valued (``as_table=True``).
+
+        Requires ``name=``.
+        """
+        if len(join_on) < 2:
+            raise ValueError(
+                f"Step '{name}': shape='join_table' requires at least two parents in "
+                "join_on (N-way star join on a shared value)"
+            )
+        if join_mode not in ("intersect", "union"):
+            raise ValueError(
+                f"Step '{name}': join_mode must be 'intersect' or 'union', "
+                f"got {join_mode!r}"
+            )
+        s = StepSpec(
+            name=name,
+            fn=None,  # type: ignore[arg-type]
+            version=version,
+            depends_on=list(join_on.keys()),
+            depends_on_explicit=True,
+            shape="join_table",
+            as_table=True,
             join_on=join_on,
             join_mode=join_mode,  # type: ignore[arg-type]
             declarative=True,
@@ -356,8 +423,7 @@ class Pipeline:
             version=version,
             depends_on=list(depends_on),
             depends_on_explicit=True,
-            in_shape="one",
-            out_shape="one",
+            shape="map",
             declarative=True,
             on_failed=on_failed,  # type: ignore[arg-type]
         )
@@ -377,6 +443,7 @@ class Pipeline:
                 self.retention,
                 self.secrets,
                 self.env,
+                self.cache_default,
             )
         return self._spec
 
@@ -478,13 +545,14 @@ def pipeline(
     home: Optional[Home] = None,
     secrets: Optional[List[str]] = None,
     env: Optional[List[str]] = None,
+    cache_default: bool = True,
 ) -> Pipeline:
     """Construct a pipeline. `name` is the only required argument and is
     the pipeline's sole identity.
 
     Steps attach either via the `steps=[...]` kwarg or by decorating
     functions with the returned object's `@p.step` — both can
-    be mixed freely, and validation (at least one root, skip_cache/join/
+    be mixed freely, and validation (at least one root, use_cache/join/
     group_key consistency) runs lazily on first `.run()`/`.plan()`/
     `.describe()`/`.definition()` call, not here.
 
@@ -492,8 +560,8 @@ def pipeline(
     (never the results — cache identity is order-independent): "broad"
     (default) completes each step across all lanes before the next one
     starts; "deep" lets each lane race ahead through consecutive 1:1 steps
-    as soon as its own inputs commit, while aggregate/join (and, for now,
-    expand and multi-parent maps) still synchronize on all lanes.
+    as soon as its own inputs commit, while aggregate/join/join_table
+    (and expand and multi-parent maps) still synchronize on all lanes.
 
     home, if given, is a `Home` instance pointing this pipeline's
     ledger/object store at a custom root instead of the default
@@ -501,6 +569,12 @@ def pipeline(
 
     retention=N keeps only this pipeline's last N terminal runs' outputs
     (see `Pipeline`/`_build_spec` for the full retention semantics).
+
+    cache_default is inherited by maps that omit `use_cache=`. True
+    (the default) stores every map; False fuses unset maps into their
+    consumers — compilers that emit mostly cheap formulas set this and
+    mark loads/expands/LLM steps `use_cache=True`. expand, join,
+    aggregate, and fold always store. A fused map still needs a consumer.
 
     secrets=/env= declare this pipeline's environment surface (see
     `Pipeline`'s docstring) — pure documentation locally, validated eagerly
@@ -515,4 +589,5 @@ def pipeline(
         home=home,
         secrets=secrets,
         env=env,
+        cache_default=cache_default,
     )

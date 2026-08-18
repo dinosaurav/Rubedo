@@ -70,7 +70,7 @@ def classify(orders: dict):
     return {"customer": row["customer"], "amount": amount, "tier": tier}
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def rollup(classify: dict) -> str:
     """Total revenue and order count per tier."""
     totals: dict[str, tuple[int, float]] = {}

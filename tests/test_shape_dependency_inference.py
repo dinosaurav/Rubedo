@@ -4,7 +4,7 @@ Three inferences, all resolving to the same explicit StepSpec the API
 already builds — the engine, planner, and ledger never know inference
 existed:
   - a generator function defaults to shape="expand"
-  - join_on=/group_key= default in_shape to "join"/"aggregate"
+  - join_on=/group_key= default shape to "join"/"aggregate"
   - an omitted depends_on= is inferred from fn's parameter names once every
     sibling step is known (`pipeline.py::_build_spec`), each non-`params`
     parameter naming a registered step (signature order); *args/**kwargs
@@ -41,12 +41,12 @@ def test_generator_function_infers_expand_shape():
         yield {"v": 1}
         yield {"v": 2}
 
-    assert rows.out_shape == "many"
+    assert rows.shape == "expand"
     assert rows.depends_on == []
 
 
 def test_explicit_non_expand_shape_on_generator_raises():
-    with pytest.raises(ValueError, match="generator function must have out_shape='many'"):
+    with pytest.raises(ValueError, match="generator function must have shape='expand'"):
 
         @step(shape="map")
         def rows():
@@ -55,23 +55,23 @@ def test_explicit_non_expand_shape_on_generator_raises():
 
 def test_join_on_infers_join_shape_without_explicit_shape():
     s = step(depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(lambda a, b: None)
-    assert s.in_shape == "join"
+    assert s.shape == "join"
 
 
 def test_group_key_infers_reduce_shape_without_explicit_shape():
     s = step(depends_on=["a"], group_key="g")(lambda a: None)
-    assert s.in_shape == "aggregate"
+    assert s.shape == "aggregate"
 
 
 def test_conflicting_explicit_shape_with_join_on_raises():
-    with pytest.raises(ValueError, match="join_on requires in_shape='join'"):
+    with pytest.raises(ValueError, match="join_on= requires shape='join'"):
         step(shape="map", depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(
             lambda a, b: None
         )
 
 
 def test_conflicting_explicit_shape_with_group_key_raises():
-    with pytest.raises(ValueError, match="group_key requires in_shape='aggregate' or 'fold'"):
+    with pytest.raises(ValueError, match="group_key= requires shape='aggregate' or 'fold'"):
         step(shape="map", depends_on=["a"], group_key="g")(lambda a: None)
 
 
@@ -99,7 +99,7 @@ def test_parentless_generator_behaves_as_a_source_with_zero_kwargs():
 
     p = pipeline(name="root-src", steps=[rows], home=TEST_HOME)
     assert p.spec.steps[0].depends_on == []
-    assert p.spec.steps[0].out_shape == "many"
+    assert p.spec.steps[0].shape == "expand"
 
     summary = p.run()
     assert summary.created_count == 2
@@ -216,7 +216,7 @@ def test_depends_on_dict_alias_on_aggregate():
         yield {"v": 1}
         yield {"v": 2}
 
-    @step(depends_on={"raw": "scan"}, in_shape="aggregate")
+    @step(depends_on={"raw": "scan"}, shape="aggregate")
     def total(raw):
         return {"sum": sum(v["v"] for v in raw.values())}
 

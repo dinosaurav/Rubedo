@@ -29,7 +29,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)   # rescan the folder every run
+@p.step(force=True)   # rescan the folder every run
 def scan():
     import os
     for name in sorted(os.listdir("input")):
@@ -49,7 +49,7 @@ print(summary.created_count, summary.reused_count)
 **What this is doing**
 
 1. **`scan`** lists a folder and yields one item per file.
-   `check_cache=False` re-reads every run, so new and edited files show up.
+   `force=True` re-reads every run, so new and edited files show up.
 2. **`count_lines`** runs once per file. The argument name `scan` is the
    parent — no YAML, no DAG file.
 3. **`plan()`, then `run()`.** `plan()` writes nothing. `run()` executes.

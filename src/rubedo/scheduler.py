@@ -101,11 +101,11 @@ def _scanned_for(step: StepSpec) -> List[RootItem]:
 def _deep_eligible(step: StepSpec) -> bool:
     """Can a lane flow through this step without waiting for its siblings?
 
-    1:1 map steps (including root maps and skip_cache utils) and root
+    1:1 map steps (including root maps and use_cache=False utils) and root
     expands (independent sources that yield their own lanes). aggregate/join
     consume whole lane sets (true barriers).
     """
-    if step.in_shape == "one" and len(step.depends_on) <= 1:
+    if step.shape in ("map", "expand") and len(step.depends_on) <= 1:
         return True
     return False
 
@@ -323,7 +323,7 @@ def _run_segment(
                 dispatch(step, d)
         if consumers.get(step.name):
             # Cells that resolved without executing (reuse/blocked/filtered
-            # markers from _record_planned, EphemeralRefs a skip_cache plan
+            # markers from _record_planned, EphemeralRefs a use_cache=False plan
             # installed) unblock their consumers right away.
             if lanes is None:
                 resolved = [

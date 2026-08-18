@@ -6,15 +6,23 @@ The whole line landed: content-addressed lanes → `expand` (cached) →
 item 1 (Joins) and the `expand`/`flat_map` bullet. Read `invariants.md` for
 vocabulary first; the sequencing section at the bottom traces what was built.
 
+**Current surface (TODO 39–41).** One `shape=` —
+`map` / `expand` / `aggregate` / `fold` / `join` / `join_table` — plus
+`as_table=True` grain (a DataFrame is a value in a coordinate, not an
+implicit explode). `join_table` is the same join keys/mode as pair-lane
+`join`, one `@all` table. The "Before this item" framing below is the
+pre-producer world this design replaced; it is not how the engine looks
+today.
+
 ## The move
 
-Today the DAG is **coordinate-preserving**: every coordinate (lane key) is
-minted by the `Source` at scan time, and steps are only `map` (1:1) or
-`aggregate` (N:1). This privileges two things — `Source` (the sole
-coordinate-creator) and a source-only removal census (the sole
-change-detector) — and it blocks everything data-dependent: `expand` (fetch
-an RSS feed, *then* yield a lane per article) and `join` (both need
-coordinate creation, and join needs two independent roots).
+Before this item shipped the DAG was **coordinate-preserving**: every
+coordinate (lane key) was minted by the `Source` at scan time, and steps
+were only `map` (1:1) or `aggregate` (N:1). That privileged two things —
+`Source` (the sole coordinate-creator) and a source-only removal census
+(the sole change-detector) — and it blocked everything data-dependent:
+`expand` (fetch an RSS feed, *then* yield a lane per article) and `join`
+(both need coordinate creation, and join needs two independent roots).
 
 The generalization: **stop privileging `Source`. There are only producers
 that emit keyed items; a `Source` is the producer that emits from no input.**
@@ -34,7 +42,9 @@ produce(inputs: {coord -> value}) -> Iterable[(coord, value)]
 | filter  | 1           | no          | 1 → {0,1}   | preserves |
 | expand  | 1           | no          | 1 → N       | **mints** |
 | aggregate | 1 (grouped) | **yes**     | N → groups  | mints (group key) |
+| fold    | 1           | **yes**     | N → groups  | mints (group key) sequential |
 | join    | 2+ roots    | **yes**     | N×M → pairs | **mints** |
+| join_table | 2+ roots | **yes**     | N×M → 1 table | one `@all` |
 
 Two axes carry all the meaning: **collective?** (can this be computed one
 input lane at a time, or does it need the whole input set first — a DAG
@@ -167,7 +177,7 @@ core must never leak into the simple case.
 4. **Multi-root pipeline API — RESOLVED: no pipeline-level API at all.** Item
    14 settled it: a root is just any step with no `depends_on`, and a
    pipeline may declare as many as it likes (a parentless generator `@step`
-   infers an `out_shape="many"` (the `shape="expand"` alias) root
+   infers a `shape="expand"` root
    automatically). `join`/multi-parent steps
    `depends_on` whichever roots they need — no dict, no per-step routing
    kwarg. See 4a below.
@@ -208,7 +218,7 @@ so it is premature abstraction. Instead ship the capability first and let the
 census follow when a concrete need (expand *caching*) pulls it in.
 
 **Expand emit contract (as shipped):**
-- `@step(out_shape="many")` (the `shape="expand"` alias); the fn yields bare payload values — no subkey, no
+- `@step(shape="expand")`; the fn yields bare payload values — no subkey, no
   pair.
 - Minted coordinate: content-addressed by decision A, always —
   `row-<hash(value)[:12]>` (`expand_child_coord`, `planning.py`). Identical
@@ -261,7 +271,7 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    deleted the `@source` sugar itself, leaving a plain parentless
    `@step`); the content-addressing behavior described above is unchanged,
    just moved into plain generator code.)*
-1. **`expand`** (`out_shape="many"` — alias `shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
+1. **`expand`** (`shape="expand"`, 1:N minting) — ✅ **DONE, cached**. A step
    yields bare payload values (no subkey, no pair); each distinct value mints
    a content-addressed `row-<hash>` lane with address `hash(step, version,
    child-content-hash[, params])` — the child's identity is its own content,
@@ -298,7 +308,7 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
    was later removed as well: today there is no removal report anywhere, only
    silent orphaning. If "what orphaned?" is ever wanted, it's the
    orphan/lane-following tooling in `TODO.md` item 5, not a census.
-3. **`group_key` aggregate** — ✅ **DONE**. `@step(in_shape="aggregate",
+3. **`group_key` aggregate** — ✅ **DONE**. `@step(shape="aggregate",
    group_key="field")` partitions the aggregation's parent lanes by a named
    field of the parent output, emitting one output per
    group (coordinate = the group value); `group_key=None` is the old single
@@ -318,15 +328,14 @@ barrier). Decision deferred to that increment — and it is why `expand`, not
      shipped here (`pipeline(sources={name: Source})`, a named-sources dict,
      and `@step(source="name")` routing) is gone: item 14 deleted the
      `Source` protocol entirely, and with it the routing kwarg. Today
-     "multi-source" is just several parentless `@step(out_shape="many")`
-     (alias `shape="expand"`) roots
+     "multi-source" is just several parentless `@step(shape="expand")`
      declared in the same pipeline — no pipeline-level kwarg, no
      per-root routing. A downstream step names whichever root(s) it needs in
      `depends_on`; coordinates never collide because `coord_step_mats` is
      keyed by `(coord, step)`. Live-verified in
      `examples/newsroom/newsroom.py` (two source-shaped roots joined on
      publisher) and covered by `tests/test_join.py`.
-   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(in_shape="join",
+   - **4b. `join`** — ✅ **DONE, N-ary**. `@step(shape="join",
      depends_on=[a, b, ...], join_on={a: field, b: field, ...})` (alias
      `shape="join"`): an **N-way**
       equijoin matching each side's field by value

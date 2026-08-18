@@ -14,7 +14,10 @@ interface StepDef {
   name: string;
   version: string;
   depends_on: string[];
+  use_cache?: boolean;
   skip_cache?: boolean;
+  force?: boolean;
+  check_cache?: boolean;
   retries?: number;
   rate_limit?: string;
   stale_after_seconds?: number;
@@ -22,6 +25,10 @@ interface StepDef {
   code?: string;
   in_shape?: string;
   out_shape?: string;
+  shape?: string;
+  as_table?: boolean;
+  table_input?: boolean;
+  row_key?: string;
   source?: string;
   executor?: string;
   group_key?: string;
@@ -72,10 +79,29 @@ function countsLine(counts?: Record<string, number>): { label: string; color: st
     .map(([k, v]) => ({ label: `${v} ${k}`, color: COUNT_COLORS[k] ?? 'var(--text-muted)' }));
 }
 
+function conceptualShape(s: StepDef): string {
+  if (s.shape) return s.shape;
+  if (s.in_shape === 'aggregate' || s.in_shape === 'fold') return s.in_shape;
+  if (s.in_shape === 'join' || s.in_shape === 'join_table') return s.in_shape;
+  if (s.out_shape === 'many') return 'expand';
+  return 'map';
+}
+
+function isFused(s: StepDef): boolean {
+  return s.use_cache === false || s.skip_cache === true;
+}
+
+function isForced(s: StepDef): boolean {
+  return s.force === true || s.check_cache === false;
+}
+
 function policyBadges(s: StepDef): string[] {
   const badges: string[] = [];
-  if (s.in_shape === 'aggregate') badges.push('aggregate');
-  if (s.skip_cache) badges.push('util');
+  const shape = conceptualShape(s);
+  if (shape !== 'map') badges.push(shape);
+  if (s.as_table) badges.push('table');
+  if (isFused(s)) badges.push('util');
+  if (isForced(s)) badges.push('force');
   if (s.retries) badges.push(`retries ${s.retries}`);
   if (s.rate_limit) badges.push(s.rate_limit);
   if (s.stale_after_seconds) badges.push(`ttl ${s.stale_after_seconds}s`);
@@ -91,10 +117,11 @@ function computeExpectedTotal(
 ): number {
   const parents = (step.depends_on ?? []).filter((d) => byName[d]);
   if (parents.length === 0) {
-    if (step.out_shape === 'many') return sumCounts(stepCounts?.[step.name]);
+    if (conceptualShape(step) === 'expand') return sumCounts(stepCounts?.[step.name]);
     return 1;
   }
-  if (step.in_shape === 'aggregate') return 1;
+  const shape = conceptualShape(step);
+  if (shape === 'aggregate' || shape === 'fold' || shape === 'join_table') return 1;
   return parents.reduce((total, p) => total + survivingLanes(stepCounts?.[p]), 0);
 }
 
@@ -276,9 +303,9 @@ export default function DagView({
                style={{ cursor: 'pointer', opacity: state === 'waiting' ? 0.45 : 1, transition: 'opacity 0.3s ease' }}>
               <rect x={p.x} y={p.y} width={NODE_W} height={nodeH} rx={8}
                     fill="var(--bg-tertiary)"
-                    stroke={s.skip_cache ? 'var(--text-muted)' : stateColor}
+                    stroke={isFused(s) ? 'var(--text-muted)' : stateColor}
                     strokeWidth={state === 'done' ? 2 : 1.5}
-                    strokeDasharray={s.skip_cache ? '5 4' : state === 'waiting' ? '4 3' : undefined}
+                    strokeDasharray={isFused(s) ? '5 4' : state === 'waiting' ? '4 3' : undefined}
                     className={state === 'active' ? 'pulse-border' : ''}
                     style={{ transition: 'stroke 0.3s ease, opacity 0.3s ease' }} />
               <text x={p.x + 12} y={p.y + 22} fill="var(--text-primary)"
@@ -340,17 +367,20 @@ function StepDetail({ step, pipelineId }: { step: StepDef; pipelineId?: string }
   const specs: { label: string; value: string }[] = [
     { label: 'name', value: step.name },
     { label: 'version', value: step.version },
-    { label: 'in_shape', value: step.in_shape ?? 'one' },
-    { label: 'out_shape', value: step.out_shape ?? 'one' },
+    { label: 'shape', value: conceptualShape(step) },
     { label: 'depends_on', value: step.depends_on.length ? step.depends_on.join(', ') : '(root)' },
     { label: 'workers', value: String(step.workers) },
     { label: 'code', value: step.code ?? 'warn' },
   ];
-  if (step.skip_cache) specs.push({ label: 'skip_cache', value: 'true' });
+  if (isFused(step)) specs.push({ label: 'use_cache', value: 'false' });
+  if (isForced(step)) specs.push({ label: 'force', value: 'true' });
   if (step.retries) specs.push({ label: 'retries', value: String(step.retries) });
   if (step.rate_limit) specs.push({ label: 'rate_limit', value: step.rate_limit });
   if (step.stale_after_seconds !== undefined) specs.push({ label: 'stale_after', value: `${step.stale_after_seconds}s` });
   if (step.executor && step.executor !== 'thread') specs.push({ label: 'executor', value: step.executor });
+  if (step.as_table) specs.push({ label: 'as_table', value: 'true' });
+  if (step.table_input) specs.push({ label: 'table_input', value: 'true' });
+  if (step.row_key) specs.push({ label: 'row_key', value: step.row_key });
   if (step.group_key) specs.push({ label: 'group_key', value: step.group_key });
   if (step.join_on) specs.push({ label: 'join_on', value: JSON.stringify(step.join_on) });
   if (step.on_failed && step.on_failed !== 'use_passed') specs.push({ label: 'on_failed', value: step.on_failed });

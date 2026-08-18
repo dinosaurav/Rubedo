@@ -663,7 +663,7 @@ class LaneStore:
     ) -> Optional["pa.Table"]:
         """Extract the ``output`` struct column for a set of lanes as a
         ``pa.Table`` — the struct fields become columns.  Used by
-        ``arrow_aggregate`` steps that want the parent's data as a table instead
+        ``table_input`` aggregate steps that want the parent's data as a table instead
         of a dict-of-lanes.
 
         Returns None if the step has no Arrow file or the output column is

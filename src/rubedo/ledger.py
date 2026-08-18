@@ -404,7 +404,7 @@ def _commit_execution_result(
 
             if outcome.arrow_batched:
                 # Arrow data already written to the lane store's arrow batch
-                # buffer by _expand_table_outcomes — skip serialize_output +
+                # buffer — skip serialize_output +
                 # append_filled.  Read the output value and identity from the
                 # arrow batch buffer for the MatRef.  Always "created" —
                 # re-running an expand root and producing the same content
@@ -528,7 +528,7 @@ def _commit_execution_result(
             # Lineage skips through ephemeral hops to the nearest
             # materialized ancestors; a reused or resurrected generation
             # already has its edges
-            if step.in_shape in ("aggregate", "fold"):
+            if step.shape in ("aggregate", "fold", "join_table"):
                 flat_parents = {
                     f"{dep}:{lane}": ref 
                     for dep, lanes in decision.parent_mats.items() 

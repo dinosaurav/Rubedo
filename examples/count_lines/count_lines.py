@@ -19,7 +19,7 @@ class CountLinesParams(BaseModel):
 p = pipeline(name="count-lines", params_model=CountLinesParams)
 
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def input_files():
     folder = os.path.join(os.path.dirname(__file__), "input")
     for name in os.listdir(folder):
@@ -58,7 +58,7 @@ def count_lines(read_lines: dict):
     }
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def total_lines(count_lines: dict):
     return sum(v["line_count"] for v in count_lines.values())
 

@@ -88,7 +88,7 @@ def score(fetch_repo: dict, activity: dict):
     }
 
 
-@p.step(in_shape="aggregate")
+@p.step(shape="aggregate")
 def report(score: dict) -> str:
     """Fan in every repo's score into one ranked table."""
     rows = sorted(score.values(), key=lambda s: s["health"], reverse=True)

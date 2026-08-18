@@ -27,8 +27,8 @@ Search is purely operational:
 
 - It never touches cache identity — what you can find has no effect on a
   step's output address and never forces a recompute.
-- It's incompatible with `skip_cache=True` — nothing is stored to search, so
-  a `skip_cache` output isn't selectable by content.
+- It's incompatible with `use_cache=False` — nothing is stored to search, so
+  a `use_cache=False` output isn't selectable by content.
 
 `group_key` (on a `aggregate` step) and `join_on` (on a `join` step) both read
 fields of the parent output at *plan* time to decide which lanes belong

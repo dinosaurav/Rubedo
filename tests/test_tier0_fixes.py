@@ -183,7 +183,7 @@ def test_broadcast_dep_ungrouped_aggregate():
         for i in range(4):
             yield {"i": i}
 
-    @step(name="total", depends_on=["source"], in_shape="aggregate")
+    @step(name="total", depends_on=["source"], shape="aggregate")
     def total_step(source):
         return sum(v["i"] for v in source.values())
 
@@ -373,16 +373,16 @@ def test_invalidate_scoped_to_pipeline():
         assert dead_cells[0].pipeline_id == "p2"
 
 
-# --- B5: skip_cache parents of join/group_key are rejected (validated
+# --- B5: use_cache=False parents of join/group_key are rejected (validated
 # lazily on first `.spec` access) ---
 
 
-def test_join_rejects_skip_cache_parent():
+def test_join_rejects_use_cache_false_parent():
     @step
     def left():
         return {"k": "x"}
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def right(left):
         return left
 
@@ -393,16 +393,16 @@ def test_join_rejects_skip_cache_parent():
     def j(left, right):
         return {}
 
-    with pytest.raises(ValueError, match="skip_cache parent"):
+    with pytest.raises(ValueError, match="use_cache=False parent"):
         pipeline(name="jz", steps=[left, right, j], home=TEST_HOME).spec
 
 
-def test_group_key_rejects_skip_cache_parent():
+def test_group_key_rejects_use_cache_false_parent():
     @step
     def src():
         return {"g": "a"}
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def u(src):
         return src
 
@@ -480,7 +480,7 @@ def test_ephemeral_coords_compute_in_parallel():
     create_file("f1.txt", "a")
     create_file("f2.txt", "b")
 
-    # Both lanes must be inside the skip_cache producer at the same time:
+    # Both lanes must be inside the use_cache=False producer at the same time:
     # the run memo's lock guards only the per-key state, not producer()
     # itself, so different coordinates' producers must run concurrently.
     barrier = threading.Barrier(2, timeout=5)
@@ -489,7 +489,7 @@ def test_ephemeral_coords_compute_in_parallel():
     def read(scan):
         return scan["text"]
 
-    @step(skip_cache=True)
+    @step(use_cache=False)
     def util(read):
         barrier.wait()
         return read

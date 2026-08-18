@@ -17,12 +17,12 @@ from rubedo import Filtered, pipeline
 
 p = pipeline(name="enrich-orders")
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def orders_src():
     with open("orders.csv", newline="") as f:
         yield from csv.DictReader(f)
 
-@p.step(check_cache=False)
+@p.step(force=True)
 def customers_src():
     with open("customers.csv", newline="") as f:
         yield from csv.DictReader(f)
@@ -64,7 +64,9 @@ side **before** the join so:
 - null / blank keys can be declined early (see below).
 
 Keep the raw columns if you still need them for audit — just don't join
-on them.
+on them. These normalize maps **must be stored**: `use_cache=False` is
+rejected as a join parent (and as a `group_key` parent). Join matching
+reads committed output fields at plan time; a fused util has none.
 
 ```python
 @p.step
@@ -172,6 +174,29 @@ reach for `join_on=` (or to restructure so they share a root). Details:
 4. **Pick** `intersect` vs `union` deliberately; handle `None` in the fn for union.
 5. **Heed** the duplicate-key `UserWarning` — cartesian fan-out is real.
 6. **Expect** remove+add when an outer match appears or disappears.
+7. **Store** the join parents — `use_cache=False` sides cannot feed a join.
+
+## Tables instead of pair lanes
+
+When both sides are already frames (`as_table=True`) and you want one
+joined table rather than `a|b` pair lanes, pass `shape="join_table"`
+(or `p.join_table(...)`). Same `join_on` / `join_mode` / null-key /
+duplicate-key rules; one `@all` coordinate. `join_on=` alone still
+infers pair-lane `join`. A function-bodied `join_table` receives the
+parent frames and performs the join; the declarative form does it for
+you.
+
+```python
+@p.step(as_table=True, force=True)
+def orders():
+    return pl.read_csv("orders.csv")
+
+@p.step(as_table=True, force=True)
+def customers():
+    return pl.read_csv("customers.csv")
+
+p.join_table(name="enrich", join_on={"orders": "cust", "customers": "cid"})
+```
 
 See [`examples/newsroom`](../examples.md) for join → expand → `group_key`
 end to end.

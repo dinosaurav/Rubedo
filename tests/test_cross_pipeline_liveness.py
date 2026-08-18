@@ -71,11 +71,11 @@ def _hash_of(row):
 
 
 def make_scan(folder):
-    """A rescanning expand root (check_cache=False — its anchor address is
+    """A rescanning expand root (force=True — its anchor address is
     otherwise keyed on the constant ROOT_LANE, so without this it would
     never notice the folder's content actually changed between runs)."""
 
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)
@@ -95,7 +95,7 @@ def make_pipe(name, folder, retention=None):
 
 
 def make_norm_scan(folder):
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for name in sorted(os.listdir(folder)):
             path = os.path.join(folder, name)

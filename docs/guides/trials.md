@@ -81,12 +81,13 @@ Anchor accepts a step name, `StepSpec`, or decorated step callable
 
 ### Anchor rules
 
-Anchors must be **non-root**, `in_shape="one"`, `out_shape="one"` map
-steps. Aggregate / fold / join / expand / root anchors are rejected —
-they mint different coordinate namespaces. They may still appear
-*downstream* of an anchor.
+Anchors must be **non-root**, `shape="map"` map
+steps. Aggregate / fold / join / join_table / expand / root anchors are
+rejected — they mint different coordinate namespaces (or, for
+`join_table`, one `@all` table). They may still appear *downstream* of
+an anchor.
 
-**`skip_cache` anchors are rejected.** Those steps are never materialized
+**`use_cache=False` anchors are rejected.** Those steps are never materialized
 or recorded on `RunCoordinateStatus`, so a cohort anchored there would be
 invisible in the ledger and unsafe as a durable experiment boundary.
 Anchor at a materialized map step instead.
@@ -109,8 +110,8 @@ warning event and contribute to `scope_requested` / `scope_reached` /
 
 `targets` omit downstream steps entirely (no RCS for them). Upstream of
 the anchor always runs normally. Broad and deep schedules produce
-identical addresses and statuses. `force` / `check_cache` / `params`
-semantics are unchanged but apply only to requested cells.
+identical addresses and statuses. `run(force=True)` / `@step(force=True)` /
+`params` semantics are unchanged but apply only to requested cells.
 
 `p.plan(scope=..., targets=...)` is read-only and mirrors the same
 restrictions. The returned `RunPlan` carries `kind`, `scope`, `targets`,

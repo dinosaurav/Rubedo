@@ -19,7 +19,7 @@ def _write_files(root):
 
 
 def _pipeline(home, data, name="query-surface"):
-    @step(check_cache=False)
+    @step(force=True)
     def scan():
         for filename in sorted(os.listdir(data)):
             path = data / filename

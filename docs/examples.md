@@ -29,12 +29,12 @@ Rubedo is that the second run recomputes only what actually changed.
 | [`hn_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/hn_digest) | Hacker News + an LLM | filter → LLM → LLM aggregate | a source-shaped `@p.step` root, `Filtered`, caching non-idempotent LLM calls |
 | [`github_health`](https://github.com/dinosaurav/Rubedo/tree/main/examples/github_health) | GitHub REST | fan-in diamond | chained retried/rate-limited calls, aggregate |
 | [`weather_advisory`](https://github.com/dinosaurav/Rubedo/tree/main/examples/weather_advisory) | Open-Meteo (keyless) | chain → aggregate | two chained APIs, `stale_after` TTL |
-| [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → aggregate | `skip_cache` inline util + `executor="process"` CPU parallelism |
+| [`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats) | Project Gutenberg | fetch → clean → analyze → aggregate | `use_cache=False` inline util + `executor="process"` CPU parallelism |
 | [`orders_rollup`](https://github.com/dinosaurav/Rubedo/tree/main/examples/orders_rollup) | SQLite (self-contained) | map → aggregate | a table recipe: a source-shaped `@p.step` root doing a plain SELECT loop |
 | [`executor_showdown`](https://github.com/dinosaurav/Rubedo/tree/main/examples/executor_showdown) | dwyl/english-words (GitHub) | map → aggregate | `executor="thread"` vs `executor="process"` on real CPU-bound work — run both and compare elapsed time |
 | [`dask_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/dask_executor) | local Dask cluster (optional install) | expand → map → aggregate | a zero-argument external `executor=` factory; Dask runs the step bodies and Rubedo fully reuses the second run |
 | [`ray_executor`](https://github.com/dinosaurav/Rubedo/tree/main/examples/ray_executor) | Project Gutenberg + local Ray (`ray` in the dev group) | fetch → chapters → 3× Ray → group digest → aggregate | real books split into chapters; lexicon / stylometry / PMI collocations on Ray; second run fully reuses |
-| [`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed) | local files (self-contained) | expand | `shape="expand"` (`out_shape="many"`) — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
+| [`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed) | local files (self-contained) | expand | `shape="expand"` — one feed fans into a lane per article, the expansion cached so a re-run re-scrapes nothing |
 | [`newsroom`](https://github.com/dinosaurav/Rubedo/tree/main/examples/newsroom) | local CSVs (self-contained) | join → expand → aggregate | every producer shape at once: multiple source-shaped `@p.step` roots, N-way `shape="join"`, `shape="expand"`, and a `group_key` aggregate |
 | [`pdf_digest`](https://github.com/dinosaurav/Rubedo/tree/main/examples/pdf_digest) | a PDF + a vision & a text LLM | map root → expand → LLM → aggregate → 2× LLM | a source-less `map` root (the PDF path is a param, no `Source`), a cheap vision LLM on figure pages, and a picture-aware vs. text-only summary comparison |
 | [`paper_scout`](https://github.com/dinosaurav/Rubedo/tree/main/examples/paper_scout) | OpenAlex (keyless) | sampled rate-limited fetch → aggregate → policy A/B | `RunScope.sample_n`, `targets=`, `home.runs`, `RunSummary.diff`, a cautious `12/min` API budget, and sample → compare → rollout reuse |
@@ -73,7 +73,7 @@ clock instead.
 
 **[`gutenberg_stats`](https://github.com/dinosaurav/Rubedo/tree/main/examples/gutenberg_stats)**
 — downloads public-domain books from Project Gutenberg and computes
-readability stats. `clean` is `skip_cache=True` (a quick, idempotent
+readability stats. `clean` is `use_cache=False` (a quick, idempotent
 boilerplate-stripper fused into `analyze`'s cache key, never materialized
 itself); `analyze` is `executor="process"` because the token-crunching is
 genuinely CPU-bound.
@@ -116,7 +116,7 @@ group, so `uv run python examples/ray_executor/ray_executor.py` just works.
 
 **[`expand_feed`](https://github.com/dinosaurav/Rubedo/tree/main/examples/expand_feed)**
 — `tech.json → fetch → articles (expand) → headline (map)`: `shape="expand"`
-(`out_shape="many"`) is the 1:N shape, where a step yields a payload per
+is the 1:N shape, where a step yields a payload per
 item and each becomes
 its own content-addressed downstream lane. The whole expansion is cached
 against its parent, so a re-run of the "scrape" step re-expands nothing.
@@ -125,7 +125,7 @@ against its parent, so a re-run of the "scrape" step re-expands nothing.
 — every producer shape at once. Two source-shaped `@p.step` CSV roots (`feeds`,
 `publishers`) meet in an N-way `shape="join"` on the publisher name (minting `feed|publisher`
 pair lanes), each feed then `shape="expand"`s into a lane per article, and a
-final `in_shape="aggregate"` step with
+final `shape="aggregate"` step with
 `group_key="region"` folds the articles into
 one digest per region. Entirely self-contained — no network calls.
 

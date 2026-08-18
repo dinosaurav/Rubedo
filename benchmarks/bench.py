@@ -97,7 +97,7 @@ class WorkCounters:
     written (per step), flushes, disk-table cache misses, reuse lookups.
 
     Timing tells you a change is faster; counters tell you it did less
-    (or, for shape comparisons like skip_cache, that a shape does zero
+    (or, for shape comparisons like use_cache=False, that a shape does zero
     extra work).  Implemented by wrapping ``lane_store`` module
     attributes — every engine call site resolves them at call time, so
     the wrappers see all traffic.  Use as a context manager; counts are
@@ -247,7 +247,7 @@ def make_pipeline():
     def enrich(extract: dict):
         return {"path": extract["path"], "score": extract["words"] * 2 + extract["chars"]}
 
-    @step(depends_on=["enrich"], in_shape="aggregate")
+    @step(depends_on=["enrich"], shape="aggregate")
     def summarize(enrich: dict):
         return {"total": sum(v["score"] for v in enrich.values()), "lanes": len(enrich)}
 
@@ -641,12 +641,12 @@ def bench_plan_deep_hotcache(p, repeats):
 # ---------------------------------------------------------------------------
 
 
-def make_util_pipeline(n_rows: int, skip_cache: bool, util_calls: List[int]):
-    """Big expand source → a util map (the skip_cache knob) → consumer.
+def make_util_pipeline(n_rows: int, fused: bool, util_calls: List[int]):
+    """Big expand source → a util map (the use_cache=False knob) → consumer.
 
-    skip_cache is invalid on expand/reduce shapes (spec validation), so
+    use_cache=False is invalid on expand/reduce shapes (spec validation), so
     "a big expand I never want to cache" is expressed as the expand's
-    downstream util being skip_cache — the expand's lanes stay the cache
+    downstream util being fused — the expand's lanes stay the cache
     anchors.  ``util_calls`` observes actual fn executions."""
     from rubedo import pipeline, step
 
@@ -655,7 +655,7 @@ def make_util_pipeline(n_rows: int, skip_cache: bool, util_calls: List[int]):
         for i in range(n_rows):
             yield {"i": i, "text": f"payload {i} " + "lorem ipsum dolor " * 6}
 
-    @step(skip_cache=skip_cache)
+    @step(use_cache=not fused)
     def normalize(gen: dict):
         util_calls.append(1)
         return {"i": gen["i"], "t": gen["text"].strip().upper()}
@@ -667,21 +667,21 @@ def make_util_pipeline(n_rows: int, skip_cache: bool, util_calls: List[int]):
     return pipeline(name="bench_util", steps=[gen, normalize, report], home=ENV_DIR)
 
 
-def _bench_util_shape(p, repeats, skip_cache: bool, warm: bool):
+def _bench_util_shape(p, repeats, fused: bool, warm: bool):
     times = []
     counters: Dict[str, int] = {}
     n = p["n_files"]
 
     if warm:
         fresh_env()
-        make_util_pipeline(n, skip_cache, []).run(workers=1)
+        make_util_pipeline(n, fused, []).run(workers=1)
     for _ in range(repeats):
         if warm:
             drop_table_cache()  # fresh process on a warm store
         else:
             fresh_env()
         calls: List[int] = []
-        pipe = make_util_pipeline(n, skip_cache, calls)
+        pipe = make_util_pipeline(n, fused, calls)
         t, counters = timed_counted(lambda: pipe.run(workers=1))
         counters["util_fn_calls"] = len(calls)
         times.append(t)
@@ -691,30 +691,30 @@ def _bench_util_shape(p, repeats, skip_cache: bool, warm: bool):
 @scenario("shape_util_cached_cold", repeats=3)
 def bench_util_cached_cold(p, repeats):
     """Materialized util downstream of a big expand, first run — the
-    baseline the skip_cache variant is compared against."""
-    return _bench_util_shape(p, repeats, skip_cache=False, warm=False)
+    baseline the fused (use_cache=False) variant is compared against."""
+    return _bench_util_shape(p, repeats, fused=False, warm=False)
 
 
 @scenario("shape_util_skipcache_cold", repeats=3)
 def bench_util_skipcache_cold(p, repeats):
-    """skip_cache util, first run — expect zero rows_written for the
+    """Fused util, first run — expect zero rows_written for the
     util step (fused into its consumer, never materialized)."""
-    return _bench_util_shape(p, repeats, skip_cache=True, warm=False)
+    return _bench_util_shape(p, repeats, fused=True, warm=False)
 
 
 @scenario("shape_util_cached_warm", repeats=3)
 def bench_util_cached_warm(p, repeats):
     """Materialized util, unchanged rerun — pays a reuse lookup for the
     util step's own lanes."""
-    return _bench_util_shape(p, repeats, skip_cache=False, warm=True)
+    return _bench_util_shape(p, repeats, fused=False, warm=True)
 
 
 @scenario("shape_util_skipcache_warm", repeats=3)
 def bench_util_skipcache_warm(p, repeats):
-    """skip_cache util, unchanged rerun — expect zero util_fn_calls (the
+    """Fused util, unchanged rerun — expect zero util_fn_calls (the
     consumer reuses, so the fused util never runs) and no util-step
     lookups or writes."""
-    return _bench_util_shape(p, repeats, skip_cache=True, warm=True)
+    return _bench_util_shape(p, repeats, fused=True, warm=True)
 
 
 # ---------------------------------------------------------------------------

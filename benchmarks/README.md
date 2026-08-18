@@ -85,17 +85,17 @@ land in the JSON and in the `run` output (`work: ...` line); `compare`
 prints any counter that changed between two results — the "it got
 faster but now does different work" signal.
 
-The built-in quartet covers the skip_cache question:
+The built-in quartet covers the use_cache=False question:
 
 | scenario | expectation |
 | --- | --- |
-| `shape_util_cached_cold` / `shape_util_skipcache_cold` | first run; skip_cache writes **zero** Arrow rows for the util step |
-| `shape_util_cached_warm` / `shape_util_skipcache_warm` | unchanged rerun; skip_cache has **zero** `util_fn_calls` and no util-step lookups |
+| `shape_util_cached_cold` / `shape_util_skipcache_cold` | first run; use_cache=False writes **zero** Arrow rows for the util step |
+| `shape_util_cached_warm` / `shape_util_skipcache_warm` | unchanged rerun; use_cache=False has **zero** `util_fn_calls` and no util-step lookups |
 
-Note the shape being tested: `skip_cache` is rejected by spec
+Note the shape being tested: `use_cache=False` is rejected by spec
 validation on `expand` (its lanes are the cache anchors) and on
 `aggregate` — so "a big expand I never want to cache" is expressed as the
-expand's downstream util map being `skip_cache`.
+expand's downstream util map being `use_cache=False`.
 
 ### Writing your own shape scenario
 
@@ -127,8 +127,8 @@ add closure counters (a list the step fn appends to) for anything the
 harness can't see from `lane_store` traffic.
 
 Counters make a shape's work *visible*; they are not assertions. When a
-shape guarantee is load-bearing ("skip_cache never materializes"),
-pin it in pytest — `tests/test_skip_cache.py` already does this with
+shape guarantee is load-bearing ("use_cache=False never materializes"),
+pin it in pytest — `tests/test_use_cache.py` already does this with
 the same closure-counting trick.
 
 Working state uses `.test_bench_data` / `.test_bench_env` at the repo

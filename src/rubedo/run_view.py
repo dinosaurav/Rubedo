@@ -13,7 +13,7 @@ materialization edges into a cardinality-aware forest:
 
 Design choice (see HANDOFF): **definition-first, edges for expand
 lineage**. ``Run.definition_json`` records ``depends_on`` /
-``in_shape``/``out_shape``; expand children are content-addressed
+``shape`` (and legacy ``in_shape``/``out_shape``); expand children are content-addressed
 ``row-<hash>`` lanes, so parent→child nesting uses ``MaterializationEdge``.
 
 The pure entry point is :func:`project_run_view`. I/O lives in
@@ -99,13 +99,23 @@ class StepMeta:
 
 
 def step_shape(entry: Mapping[str, Any]) -> str:
-    """Infer conceptual shape from a definition step entry."""
+    """Infer conceptual shape from a definition step entry.
+
+    New snapshots store ``shape``. Historical ledger rows still have
+    ``in_shape``/``out_shape``; both are accepted. Fold and ``join_table``
+    render as aggregate (one coordinate / summary strip), not pair-join.
+    """
+    shape = entry.get("shape")
+    if shape in ("map", "expand", "aggregate", "join"):
+        return shape
+    if shape in ("fold", "join_table"):
+        return "aggregate"
     in_s = entry.get("in_shape") or "one"
     out_s = entry.get("out_shape") or "one"
     if in_s in ("aggregate", "fold"):
         return "aggregate"
-    if in_s == "join":
-        return "join"
+    if in_s in ("join", "join_table"):
+        return "join" if in_s == "join" else "aggregate"
     if out_s == "many":
         return "expand"
     return "map"

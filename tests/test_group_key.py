@@ -85,7 +85,7 @@ def test_group_key_none_is_one_all_group():
     def classify(scan):
         return {"category": scan["text"].strip()}
 
-    @step(depends_on=["classify"], in_shape="aggregate")
+    @step(depends_on=["classify"], shape="aggregate")
     def rollup(classify):
         return {"n": len(classify)}
 
@@ -157,12 +157,12 @@ def test_group_key_missing_field_raises():
 
 
 def test_group_key_infers_aggregate_shape_but_an_explicit_conflict_still_raises():
-    # group_key= alone (no shape=) infers in_shape="aggregate" (TODO 22) — no
+    # group_key= alone (no shape=) infers shape="aggregate" (TODO 22) — no
     # error. An explicit, conflicting shape still raises.
     inferred = step(name="ok", version="1", depends_on=["x"], group_key="category")(
         lambda x: None
     )
-    assert inferred.in_shape == "aggregate"
+    assert inferred.shape == "aggregate"
 
-    with pytest.raises(ValueError, match="group_key requires in_shape='aggregate' or 'fold'"):
+    with pytest.raises(ValueError, match="group_key= requires shape='aggregate' or 'fold'"):
         step(name="bad", version="1", shape="map", group_key="category")(lambda: None)

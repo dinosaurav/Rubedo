@@ -7,12 +7,12 @@ search:
 
 !!! note "Long form"
     Start at [How it works](model.md#when-code-changes). This page is the
-    full `version` / `code` / `stale_after` / `skip_cache` reference.
+    full `version` / `code` / `stale_after` / `use_cache=False` reference.
 
 A cached output is only useful if you can trust *why* it's being reused.
 Two independent axes on `@step` — `version` and `code` — plus two policies
 for outputs that shouldn't live forever (`stale_after`) or shouldn't be
-materialized at all (`skip_cache`). None of these overlap: each answers a
+materialized at all (`use_cache=False`). None of these overlap: each answers a
 different question about when a step's output stops being valid.
 
 ## `version` — the semantic identity
@@ -135,11 +135,11 @@ anchor (see [shapes.md](shapes.md#expand-1n-fan-out)).
 def enrich(row: dict): ...
 ```
 
-## `skip_cache` — inline utils
+## `use_cache=False` — inline utils
 
-`skip_cache=True` marks a step as an **inline util**: a quick, deterministic
+`use_cache=False` marks a step as an **inline util**: a quick, deterministic
 helper you factor out purely to keep another step's code readable, not
-because its output deserves its own row in the ledger. A `skip_cache` step:
+because its output deserves its own row in the ledger. A `use_cache=False` step:
 
 - **Is never materialized or recorded.** No Arrow lane-store row, no
   lineage edge, nothing to `trace()` or search.
@@ -152,7 +152,7 @@ because its output deserves its own row in the ledger. A `skip_cache` step:
   util ever being stored.
 - **Executes lazily, memoized per run.** It only actually runs the first
   time a consumer needs its value for a given coordinate in a given run
-  (`_RunMemo`, reentrant across chained `skip_cache` steps) — a fully
+  (`_RunMemo`, reentrant across chained `use_cache=False` steps) — a fully
   cached run where every consumer reuses skips the util entirely, and a run
   where three different steps all depend on the same util computes it once
   and reuses the in-memory result for the rest.
@@ -160,12 +160,12 @@ because its output deserves its own row in the ledger. A `skip_cache` step:
   and its consumer, with no store round-trip.
 
 ```python
-@step(skip_cache=True)
+@step(use_cache=False)
 def normalize(row: dict) -> dict:
     return {k: v.strip().lower() for k, v in row.items()}
 ```
 
-A `skip_cache` step must have a consumer — the constructor rejects one with
+A `use_cache=False` step must have a consumer — the constructor rejects one with
 no downstream step, since its output would never be computed or stored at
 all. It also can't be an `aggregate` (a reduction's whole point is to be
 materialized), an `expand` (nothing to anchor an ungrounded fan-out
@@ -174,9 +174,33 @@ committed to match on), and none of `stale_after` or the retry/
 rate-limit policies apply to it — there's no stored output for a TTL to
 attach to, and no materialization step for a retry to wrap.
 
+A fused map **never mints lanes**. If its one parent is a table
+(`as_table=True`) and the parent parameter is annotated `dict`, the
+engine calls the function once per inner row and stacks the result —
+a scalar becomes a column named after the step; a dict becomes a table
+of those rows. That is Excel `TRIM`/`LOWER` without explode. Annotate
+`pl.DataFrame` / `pa.Table` to receive the frame in one call
+(`with_columns`) instead. Unannotated table parents are also one call.
+Dict-lane parents still zip existing coordinates, one util call per
+lane.
+
+```python
+@step(as_table=True)
+def census():
+    return pl.read_csv("people.csv")
+
+@step(use_cache=False)
+def name_clean(census: dict) -> str:
+    return census["name"].strip().lower()   # column "name_clean", one @root
+
+@step(as_table=True)
+def out(name_clean: pl.DataFrame):
+    return name_clean
+```
+
 ### When *not* to use it
 
-`skip_cache` trades durability for zero storage and zero ledger overhead —
+`use_cache=False` trades durability for zero storage and zero ledger overhead —
 worth it only when the step is genuinely cheap, fast, and deterministic. If
 a step is:
 
@@ -186,8 +210,25 @@ a step is:
 - **non-deterministic** (scraping, sampling, anything where "what did this
   actually return" is a fact worth keeping),
 
-it deserves materialization, not `skip_cache` — you want that output
+it deserves materialization, not `use_cache=False` — you want that output
 addressed, cached, retried, rate-limited, searchable, and inspectable via
-`trace()`, all of which `skip_cache` deliberately gives up. Reach for
-`skip_cache` only for the boring glue code you'd otherwise inline directly
+`trace()`, all of which `use_cache=False` deliberately gives up. Reach for
+`use_cache=False` only for the boring glue code you'd otherwise inline directly
 into a bigger step just to avoid the ledger noise of one more row per lane.
+
+Omit `use_cache=` to inherit `pipeline(cache_default=...)`. The library
+default is `True` (every map stores). Compilers that emit mostly cheap
+formulas pass `cache_default=False` and mark loads, expands, and LLM
+steps `use_cache=True`. expand / join / aggregate / fold always store;
+a fused map still needs a consumer. `definition()` records the resolved
+`use_cache` (and `cache_default` when it is `False`).
+
+## `force` — re-execute, still store
+
+`@step(force=True)` is the per-step form of `run(force=True)`: plan skips
+the reuse lookup and always runs the function, then commits. Downstream
+steps still reuse when the output identity is unchanged. Right for a
+folder scan or API poll that must see the world every run. This is not
+`use_cache=False` — force still writes a ledger row. `run(force=True)`
+re-executes **every** step for that invocation; the step flag is sticky
+on one step, every run.
