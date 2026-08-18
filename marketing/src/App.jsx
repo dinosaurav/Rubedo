@@ -14,7 +14,7 @@ const HERO_CODE = `from rubedo import pipeline
 
 p = pipeline(name="triage")
 
-@p.step(check_cache=False)  # rescan urls.txt every run
+@p.step(force=True)  # rescan urls.txt every run
 def inbox():
     for url in open("urls.txt"):
         yield {"url": url.strip(), "text": download(url)}
@@ -31,7 +31,7 @@ from rubedo import pipeline
 
 p = pipeline(name="count-lines")
 
-@p.step(check_cache=False)  # rescan the folder every run
+@p.step(force=True)  # rescan the folder every run
 def scan():
     for name in sorted(os.listdir("input")):
         path = os.path.join("input", name)
@@ -311,7 +311,7 @@ function App() {
                 steps={[
                   {
                     title: 'scan',
-                    body: 'Lists a folder and yields one item per file. check_cache=False means it re-reads the folder every run, so new and edited files show up.',
+                    body: 'Lists a folder and yields one item per file. force=True means it re-reads the folder every run, so new and edited files show up.',
                   },
                   {
                     title: 'count_lines',

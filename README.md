@@ -120,7 +120,7 @@ A step consumes up to two things, each with its own slot in the cache key: **dat
 
 There's no `Source` protocol. A parentless generator is a source (`shape="expand"` inferred). Folder / CSV / SQL recipes live in [How it works](https://rubedo.run/docs/concepts/model/#sources); cloud LIST-only and the rest are in [sources.md](docs/concepts/sources.md).
 
-**Shapes.** Default is `map` (1:1). `aggregate` / `fold` fan in; `expand` fans out; `join` is an N-way equijoin (`join_mode="intersect"` inner, `"union"` symmetric outer). A parentless non-generator is a source-less `@root` lane whose input is its params. Broadcast, traps, and `p.join(...)` / `p.union(...)`: [shapes](docs/concepts/shapes.md). Practical join: [Enrich and join tables](docs/guides/data-enrichment.md).
+**Shapes.** Default is `map` (1:1 zip with parent coordinates). `aggregate` / `fold` fan in; `expand` fans out; `join` is an N-way equijoin (`join_mode="intersect"` inner, `"union"` symmetric outer); `join_table` is the same join as one table-valued coordinate. `as_table=True` stores a DataFrame as a value, not an explode. A parentless non-generator is a source-less `@root` lane whose input is its params. Broadcast, traps, and `p.join(...)` / `p.join_table(...)`: [shapes](docs/concepts/shapes.md). Practical join: [Enrich and join tables](docs/guides/data-enrichment.md).
 
 **Policies** — none of these enter cache identity:
 
@@ -133,7 +133,7 @@ def check_price_positive(val: dict):
 def enrich(row: dict): ...
 ```
 
-Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `use_cache=False` fuses a cheap helper into its consumers and never materializes it — don't skip anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)).
+Retries, rate limits, assertions, `executor="process"` / a Future-shaped factory pool, `schedule="broad"|"deep"`, and `Filtered`: [Retries, rate limits, assertions](docs/guides/execution-policies.md). `use_cache=False` fuses a cheap helper into its consumers and never materializes it — don't fuse anything expensive, flaky, or non-deterministic ([When code changes](docs/concepts/versioning.md)). `force=True` re-executes a step every run but still stores (a folder scan, not a fused util).
 
 ## Find a row. Invalidate just that.
 
@@ -228,7 +228,7 @@ The data plane is columnar: each step's outputs live in a per-step, append-only 
 
 ## Project status
 
-Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the five shapes, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
+Pre-1.0 and moving fast: the API is unstable and there are **no migrations or backwards-compatibility shims** — schema changes mean deleting `.rubedo/` and re-running. The core model (content-addressed lanes, the six shapes, `as_table` grain, multi-source, the ledger protocol) is designed and built; hardening and polish are ongoing in [notes/TODO.md](notes/TODO.md).
 
 ## Contributing
 

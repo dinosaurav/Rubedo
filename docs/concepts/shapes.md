@@ -67,8 +67,7 @@ item — which is most transformation, extraction, and enrichment logic.
 
 ### The source-less `map` root
 
-A root (`no depends_on`) is usually `expand`-shaped (`shape="expand"`,
-the `shape="expand"` alias) — the ingestion shape
+A root (`no depends_on`) is usually `expand`-shaped — the ingestion shape
 (see [sources.md](sources.md)). But a plain `map` root with **no**
 `depends_on` is also legal, and mints a single lane whose input is its
 `params` (or a constant, if the function takes none):

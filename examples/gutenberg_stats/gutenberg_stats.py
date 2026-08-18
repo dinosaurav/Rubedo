@@ -1,8 +1,7 @@
 """Readability stats for public-domain books — real download + CPU parallelism.
 
     books.csv ─▶ fetch ─▶ clean ─▶ analyze ─▶ report (aggregate)
-                 (HTTP)   (skip_   (process    (rank)
-                          cache)    executor)
+                 (HTTP)   (use_cache=False)  (process executor)
 
 Real API: Project Gutenberg (public, no key). Then two Rubedo features worth
 showing together:

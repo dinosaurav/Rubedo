@@ -560,7 +560,7 @@ home's snapshots still have `in_shape`/`out_shape`.
 ## 40. `shape="join_table"`  **[SHIPPED 2026-08-17]**
 
 One `@all` coordinate whose value is the joined frame. Same `join_on` /
-`join_mode` / null-key raise / dup-key warn+cartesian / skip_cache-parent
+`join_mode` / null-key raise / dup-key warn+cartesian / `use_cache=False`-parent
 rules as pair-lane `join`. `p.join(...)` stays pair-lane;
 `p.join_table(...)` is the declarative table form. `join_on=` still infers
 `join`, not `join_table`. Identity is the parents' content hashes.
@@ -589,13 +589,14 @@ formulas are `as_table` + `select`/`with_columns`.
   tree-reduce falls out once bucketing exists (fold per bucket, then
   fold the bucket outputs). Owner: useful for some flows, not near-term
   (2026-07-12); membership rule is the design session.
-- **skip_cache expansion** (owner note 2026-07-18: "skip_cache needs
-  some work"). Needs a concrete problem statement before any design.
+- **`use_cache=False` expansion** (owner note 2026-07-18: "skip_cache needs
+  some work" — the knob is now `use_cache=False`). Needs a concrete problem
+  statement before any design.
   The current contract is intentionally narrow — lazy, per-run memoized,
-  never materialized, fused identity, incompatible with collective/
-  fan-out shapes — and any expansion must preserve those guarantees or
-  be a separate feature. (Note: "always rerun" is already shipped as
-  `force=True` — force execution while still materializing; do
+  never materialized, fused identity, never mints, incompatible with
+  collective/fan-out shapes — and any expansion must preserve those
+  guarantees or be a separate feature. (Note: "always rerun" is already
+  shipped as `force=True` — force execution while still materializing; do
   not add a synonym without a semantic distinction.)
 - **Per-step spill override** (`@step(spills=[...])`) — the one piece of
   item 27 that didn't ship: force named fields to the object store,

@@ -97,7 +97,7 @@ class WorkCounters:
     written (per step), flushes, disk-table cache misses, reuse lookups.
 
     Timing tells you a change is faster; counters tell you it did less
-    (or, for shape comparisons like skip_cache, that a shape does zero
+    (or, for shape comparisons like use_cache=False, that a shape does zero
     extra work).  Implemented by wrapping ``lane_store`` module
     attributes — every engine call site resolves them at call time, so
     the wrappers see all traffic.  Use as a context manager; counts are

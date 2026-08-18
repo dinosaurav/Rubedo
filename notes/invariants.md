@@ -134,6 +134,15 @@ Relationship between a run and a coordinate: created, reused, failed,
 blocked, filtered. "Filtered" means a step declined the coordinate — a
 cached, first-class verdict, not an error.
 
+**Inline util (`use_cache=False`):**
+A map that is never materialized. Its identity fuses into consumers
+(`EphemeralRef`); it runs lazily, memoized per run, only when a consumer
+executes. A fused map **never mints lanes** — over a table parent with a
+`dict` annotation it is a per-row kernel stacked into the next stored
+frame. expand / join / aggregate / fold always store; a fused map still
+needs a consumer. Omit `use_cache=` to inherit `pipeline(cache_default=)`.
+`force=True` is the other polarity: skip the reuse lookup, still commit.
+
 **Collective Steps & Fan-in:**
 Collective steps (`aggregate` / `fold` / `join` / `join_table`) default to partial fan-in
 (`on_failed="use_passed"`): if a parent lane fails or is blocked, the step
