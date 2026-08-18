@@ -256,3 +256,75 @@ def test_expand_from_table_missing_row_key_errors():
     pipe = pipeline(name="rk-miss", steps=[src, cells], home=TEST_HOME)
     summary = pipe.run(workers=1)
     assert summary.failed_count == 1
+
+
+def test_as_table_on_expand_raises_at_decoration():
+    with pytest.raises(ValueError, match="as_table=True is not valid with shape='expand'"):
+
+        @step(as_table=True)
+        def rows():
+            yield {"a": 1}
+
+
+def test_row_key_on_map_raises():
+    with pytest.raises(ValueError, match="row_key= is only valid with shape='expand'"):
+
+        @step(row_key="id")
+        def src():
+            return {"id": "a"}
+
+
+def test_as_table_returning_dict_errors():
+    @step(as_table=True)
+    def load_data():
+        return {"name": "alice"}
+
+    pipe = pipeline(name="t-dict-out", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+    err = " ".join((f.get("error_message") or "") for f in summary.failures())
+    assert "as_table=True" in err
+
+
+def test_map_return_list_is_one_payload():
+    @step
+    def load_data():
+        return [{"name": "alice"}, {"name": "bob"}]
+
+    pipe = pipeline(name="t-list-map", steps=[load_data], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 0
+    assert summary.created_count == 1
+    assert _lane_keys("load_data") == ["@root"]
+    assert summary.output_for("load_data")["@root"] == [
+        {"name": "alice"},
+        {"name": "bob"},
+    ]
+
+
+def test_definition_snapshots_as_table_row_key_and_table_input():
+    import pyarrow as pa
+    from rubedo.spec import definition
+
+    @step(as_table=True)
+    def patients():
+        return pa.table({"id": [1]})
+
+    @step(shape="expand", row_key="id")
+    def cells(patients):
+        return patients
+
+    @step(shape="aggregate")
+    def total(cells: pa.Table):
+        return {"n": cells.num_rows}
+
+    snap = definition(
+        pipeline(name="def-grain", steps=[patients, cells, total], home=TEST_HOME).spec
+    )
+    by_name = {s["name"]: s for s in snap["steps"]}
+    assert by_name["patients"]["as_table"] is True
+    assert by_name["cells"]["shape"] == "expand"
+    assert by_name["cells"]["row_key"] == "id"
+    assert by_name["total"]["table_input"] is True
+    assert "in_shape" not in by_name["cells"]
+    assert "out_shape" not in by_name["cells"]

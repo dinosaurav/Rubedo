@@ -176,3 +176,74 @@ def test_join_on_does_not_infer_join_table():
     s = step(depends_on=["a", "b"], join_on={"a": "k", "b": "k"})(lambda a, b: None)
     assert s.shape == "join"
     assert s.as_table is False
+
+
+def test_join_table_dict_parent_fails():
+    @step
+    def left():
+        yield {"k": 1, "l": "a"}
+
+    @step
+    def right():
+        yield {"k": 1, "r": "x"}
+
+    @step(shape="join_table", join_on={"left": "k", "right": "k"})
+    def joined(left, right):
+        return left
+
+    pipe = pipeline(name="jt-dict", steps=[left, right, joined], home=TEST_HOME)
+    summary = pipe.run(workers=1)
+    assert summary.failed_count == 1
+    err = " ".join((f.get("error_message") or "") for f in summary.failures())
+    assert "as_table=True" in err or "table-valued" in err
+
+
+def test_p_join_table_declarative_union():
+    pl = pytest.importorskip("polars")
+
+    p = pipeline(name="jt-decl-union", home=TEST_HOME)
+
+    @p.step(as_table=True)
+    def left():
+        return pl.DataFrame({"k": [1, 2], "l": ["a", "b"]})
+
+    @p.step(as_table=True)
+    def right():
+        return pl.DataFrame({"k": [1, 3], "r": ["x", "z"]})
+
+    p.join_table(
+        name="joined",
+        join_on={"left": "k", "right": "k"},
+        join_mode="union",
+    )
+
+    summary = p.run(workers=1)
+    assert summary.failed_count == 0
+    out = summary.output_for("joined")["@all"]
+    assert out.height == 3
+
+
+def test_join_table_describe_and_definition():
+    pl = pytest.importorskip("polars")
+    from rubedo.spec import definition
+
+    p = pipeline(name="jt-desc", home=TEST_HOME)
+
+    @p.step(as_table=True)
+    def left():
+        return pl.DataFrame({"k": [1]})
+
+    @p.step(as_table=True)
+    def right():
+        return pl.DataFrame({"k": [1]})
+
+    p.join_table(name="joined", join_on={"left": "k", "right": "k"})
+
+    text = p.describe(format="ascii")
+    assert "[join_table]" in text
+    snap = definition(p.spec)
+    by_name = {s["name"]: s for s in snap["steps"]}
+    assert by_name["joined"]["shape"] == "join_table"
+    assert by_name["joined"]["as_table"] is True
+    assert by_name["joined"]["join_on"] == {"left": "k", "right": "k"}
+    assert "in_shape" not in by_name["joined"]
