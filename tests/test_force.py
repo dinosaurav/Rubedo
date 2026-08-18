@@ -12,7 +12,7 @@ import pytest
 from rubedo import step, pipeline
 from conftest import isolated_test_env
 
-ENV_FOLDER = ".test_check_cache_env"
+ENV_FOLDER = ".test_force_env"
 
 TEST_HOME = None
 
@@ -20,7 +20,7 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    with isolated_test_env("check_cache", with_data=False) as env:
+    with isolated_test_env("force", with_data=False) as env:
         TEST_HOME = env.home
         yield
 

@@ -178,7 +178,7 @@ def test_plan_shows_filtered_chain():
     assert actions[("@root", "summarize")] == "filtered"
 
 
-def test_skip_cache_step_cannot_filter():
+def test_use_cache_false_step_cannot_filter():
     create_file("f.txt", "anything")
 
     @step(use_cache=False)

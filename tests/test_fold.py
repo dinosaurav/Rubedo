@@ -73,7 +73,7 @@ def test_fold_groups_and_resets_its_accumulator():
     assert pipe.run(workers=1).reused_count == 5
 
 
-def test_fold_check_cache_false_reexecutes():
+def test_fold_force_reexecutes():
     calls = []
 
     @step

@@ -373,11 +373,11 @@ def test_invalidate_scoped_to_pipeline():
         assert dead_cells[0].pipeline_id == "p2"
 
 
-# --- B5: skip_cache parents of join/group_key are rejected (validated
+# --- B5: use_cache=False parents of join/group_key are rejected (validated
 # lazily on first `.spec` access) ---
 
 
-def test_join_rejects_skip_cache_parent():
+def test_join_rejects_use_cache_false_parent():
     @step
     def left():
         return {"k": "x"}
@@ -397,7 +397,7 @@ def test_join_rejects_skip_cache_parent():
         pipeline(name="jz", steps=[left, right, j], home=TEST_HOME).spec
 
 
-def test_group_key_rejects_skip_cache_parent():
+def test_group_key_rejects_use_cache_false_parent():
     @step
     def src():
         return {"g": "a"}
@@ -480,7 +480,7 @@ def test_ephemeral_coords_compute_in_parallel():
     create_file("f1.txt", "a")
     create_file("f2.txt", "b")
 
-    # Both lanes must be inside the skip_cache producer at the same time:
+    # Both lanes must be inside the use_cache=False producer at the same time:
     # the run memo's lock guards only the per-key state, not producer()
     # itself, so different coordinates' producers must run concurrently.
     barrier = threading.Barrier(2, timeout=5)

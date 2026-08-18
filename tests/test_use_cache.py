@@ -8,8 +8,8 @@ from conftest import isolated_test_env
 from rubedo import pipeline, step
 from rubedo.models import MaterializationEdge, RunCoordinateStatus
 
-TEST_FOLDER = ".test_skipcache_data"
-ENV_FOLDER = ".test_skipcache_env"
+TEST_FOLDER = ".test_use_cache_data"
+ENV_FOLDER = ".test_use_cache_env"
 
 TEST_HOME = None
 
@@ -17,7 +17,7 @@ TEST_HOME = None
 @pytest.fixture(autouse=True)
 def isolated_env():
     global TEST_HOME
-    with isolated_test_env("skipcache") as env:
+    with isolated_test_env("use_cache") as env:
         TEST_HOME = env.home
         yield
 

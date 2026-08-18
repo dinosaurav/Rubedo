@@ -330,7 +330,7 @@ downstream lane), not 1.
   name.
 - Counters are visibility, not assertions: when a guarantee is
   load-bearing ("use_cache=False never materializes"), pin it in pytest too
-  (`tests/test_skip_cache.py` shows the closure-counting trick).
+  (`tests/test_use_cache.py` shows the closure-counting trick).
 - Harness caveat: `WorkCounters` wraps `lane_store` **module
   attributes** — it sees all current call sites because they resolve at
   call time (`lane_store.append_filled(...)` or function-local `from

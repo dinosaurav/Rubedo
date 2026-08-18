@@ -37,9 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vectorized call. Dict-lane parents still zip.
 
 - **Docs catch-up.** `/llms.txt`, the landing snippets, How-it-works
-  shapes table, enrichment guide, and remaining `skip_cache` /
-  `check_cache` / `in_shape` wording now match `shape=` / `use_cache` /
-  `force` / `cache_default`.
+  shapes table, enrichment guide, TODO current-API prose, test names, and
+  remaining `skip_cache` / `check_cache` / `in_shape` wording now match
+  `shape=` / `use_cache` / `force` / `cache_default`.
 
 ## [0.5.1] - 2026-08-15
 
