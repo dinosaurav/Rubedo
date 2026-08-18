@@ -7,39 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Breaking step-interface rewrite (TODO 39–41). No compat shim. Dev-stage:
+`rm -rf .rubedo` — old `definition()` snapshots still have `in_shape` /
+`out_shape` / `skip_cache` / `check_cache`.
+
+### Added
+- **`shape="join_table"` / `p.join_table(...)`.** Same `join_on` /
+  `join_mode` / null-key / duplicate-key rules as pair-lane `join`, one
+  table-valued `@all` coordinate. Parents must be `as_table=True`.
+  `join_on=` still infers pair-lane `join`.
+- **`as_table=True`.** A DataFrame / `pa.Table` is one cache entry in the
+  step's existing coordinate(s) — not an implicit explode. Returning a
+  frame without the flag errors.
+- **`row_key=` on expand.** Mint dict lanes from a table parent; identity
+  is that column (missing/duplicate keys raise), not full-payload hash
+  collapse.
+- **`pipeline(cache_default=...)`.** Maps that omit `use_cache=` inherit
+  it. Library default `True` (every map stores). Compilers that emit
+  cheap formulas pass `False` and mark loads / expands / LLM steps
+  `use_cache=True`. expand / join / aggregate / fold always store.
+- **Fused row kernel.** A `use_cache=False` map whose one parent is a
+  table and whose parent parameter is annotated `dict` runs per inner
+  row and stacks the result (scalar → column named after the step; dict
+  → table of those rows). Annotate a DataFrame/Table for one vectorized
+  call. Dict-lane parents still zip.
+
 ### Changed
-- **One `shape=` (TODO 39–41).** `StepSpec` stores `shape`
-  (`map`/`expand`/`aggregate`/`fold`/`join`/`join_table`) instead of
-  `in_shape`/`out_shape`. Maps zip parent coordinates; only expand, pair
-  `join`, and grouped aggregate/fold mint new lanes. `as_table=True` keeps
-  a DataFrame as one cache entry (returning a frame without it errors).
-  Expand must `yield` or `return` a list/tuple — a dict or str no longer
-  fans out keys/characters, and expand + DataFrame errors unless
-  `row_key=` mints dict lanes from a table. Aggregate table input is
-  inferred from a `pa.Table`/`pl.DataFrame` annotation (`arrow_aggregate`
-  deleted). `shape="join_table"` / `p.join_table(...)` is one table-valued
-  coordinate with the same join invariants as pair-lane `join`.
-  `definition()` snapshots `shape` (not the in/out pair). Dev-stage:
-  `rm -rf .rubedo` if an existing home still has the old snapshot fields.
+- **One `shape=`.** `StepSpec.shape` is `map` / `expand` / `aggregate` /
+  `fold` / `join` / `join_table` instead of `in_shape`/`out_shape`.
+  Inference is unchanged in spirit: a generator is `expand`, `join_on=`
+  is `join`, `group_key=` is `aggregate`, `fold_init=` is `fold`; a
+  plain `@all` aggregate still needs `shape="aggregate"`. Maps zip
+  parent coordinates and never mint. Only expand, pair `join`, and
+  grouped aggregate/fold mint lanes. `definition()` snapshots `shape`
+  (if not map), `as_table`, `table_input`, `row_key`.
+- **Expand minting.** The fn must `yield` or `return` a list/tuple. A
+  dict or str no longer fans out keys/characters. Expand + DataFrame
+  errors unless `row_key=` is set.
+- **Aggregate table input.** Inferred from a parent-parameter annotation
+  (`pa.Table` / `pl.DataFrame` / `pd.DataFrame`). `arrow_aggregate=` is
+  gone.
+- **`use_cache=False` (was `skip_cache=True`).** Fused map: never
+  materialized, identity folds into consumers, never mints. Maps only;
+  a fused step still needs a consumer. Join / `group_key` parents cannot
+  be fused (plan reads committed output fields).
+- **`force=True` (was `check_cache=False`).** Per-step form of
+  `run(force=True)`: skip reuse, still commit. Right for a folder scan
+  or API poll. This is not `use_cache=False`.
+- **Docs.** README, How it works, shapes, sources, enrichment, `/llms.txt`,
+  and the landing snippets match `shape=` / `use_cache` / `force` /
+  `cache_default`.
 
-- **`use_cache` / `force` / `cache_default`.** `skip_cache=True` is now
-  `use_cache=False`; omit `use_cache=` to inherit `pipeline(cache_default=True)`
-  (maps only — expand/join/aggregate/fold always store). `check_cache=False`
-  is now `@step(force=True)`, the per-step form of `run(force=True)`: skip
-  reuse, still commit. `definition()` records resolved `use_cache` (and
-  `cache_default` when False). No compat shim. Dev-stage: `rm -rf .rubedo`
-  if snapshots still have `skip_cache` / `check_cache`.
-
-- **Fused row kernel.** `use_cache=False` never mints. A fused map whose
-  one parent is a table and whose parent parameter is annotated `dict`
-  is applied per inner row and stacked (scalar → column named after the
-  step; dict → table of those rows). Annotate a DataFrame/Table for one
-  vectorized call. Dict-lane parents still zip.
-
-- **Docs catch-up.** `/llms.txt`, the landing snippets, How-it-works
-  shapes table, enrichment guide, TODO current-API prose, test names, and
-  remaining `skip_cache` / `check_cache` / `in_shape` wording now match
-  `shape=` / `use_cache` / `force` / `cache_default`.
+### Removed
+- `in_shape=` / `out_shape=` (`one`/`many`) and the `shape=` alias that
+  translated into that pair.
+- `skip_cache=` / `check_cache=`.
+- `arrow_aggregate=`.
 
 ## [0.5.1] - 2026-08-15
 
