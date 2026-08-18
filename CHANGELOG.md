@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-18
+
 Breaking step-interface rewrite (TODO 39–41). No compat shim. Dev-stage:
 `rm -rf .rubedo` — old `definition()` snapshots still have `in_shape` /
 `out_shape` / `skip_cache` / `check_cache`.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rubedo"
-version = "0.5.1"
+version = "0.6.0"
 description = "A Python library for batch pipelines that remember every step — content-addressed caching so you don't re-pay LLM calls, scrapes, or APIs"
 readme = "README.md"
 authors = [
